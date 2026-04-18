@@ -4,6 +4,7 @@ use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::Serialize;
 
 pub mod config;
+pub mod correlate;
 pub mod db;
 pub mod emulator;
 pub mod ingester;

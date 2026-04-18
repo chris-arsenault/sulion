@@ -29,6 +29,15 @@ async fn main() -> anyhow::Result<()> {
         "ingester started",
     );
 
+    // SessionStart-hook correlation socket.
+    let correlate_pool = pool.clone();
+    let correlate_sock = cfg.correlate_sock_path.clone();
+    tokio::spawn(async move {
+        if let Err(err) = shuttlecraft::correlate::run(correlate_pool, correlate_sock).await {
+            tracing::error!(%err, "correlate socket exited");
+        }
+    });
+
     let state = AppState::new(pool);
     let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
     axum::serve(listener, app(state)).await?;

@@ -19,6 +19,8 @@ RUN groupadd --gid ${DEV_GID} dev \
   && chown -R dev:dev /run/shuttlecraft
 
 COPY dist/shuttlecraft /usr/local/bin/shuttlecraft
+COPY hooks/session-start.sh /opt/shuttlecraft/hooks/session-start.sh
+RUN chmod +x /opt/shuttlecraft/hooks/session-start.sh
 
 USER dev
 WORKDIR /home/dev

@@ -46,6 +46,23 @@ UID/GID of the container's `dev` user must match dataset ownership. All dev stat
 
 Backend injects `SHUTTLECRAFT_PTY_ID=<pty_id>` into the PTY shell environment. A Claude Code `SessionStart` hook reads that env var and posts `{pty_id, claude_session_uuid}` to `/run/shuttlecraft/correlate.sock`. The backend records the association. When the user starts a new Claude session in the same PTY, the hook fires again and updates the current-claude-session pointer.
 
+The hook script ships in this repo at `scripts/claude-hooks/session-start.sh`. Install it once per dataset:
+
+```bash
+mkdir -p /tank/dev/shuttlecraft/home/.claude
+cat > /tank/dev/shuttlecraft/home/.claude/settings.json <<'EOF'
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "/opt/shuttlecraft/hooks/session-start.sh" }] }
+    ]
+  }
+}
+EOF
+```
+
+The container image places the hook at `/opt/shuttlecraft/hooks/session-start.sh`. Hook failure is silent — if the socket is gone, Claude continues without correlation (the session is still ingested from the JSONL file; only the pty↔claude-session link is missing).
+
 ## Local development
 
 ```
