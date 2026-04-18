@@ -33,6 +33,10 @@ sqlx = { version = "0.8", default-features = false, features = [
     "uuid",
     "json",
 ] }
+portable-pty = "0.8"
+libc = "0.2"
+bytes = "1"
+futures = "0.3"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

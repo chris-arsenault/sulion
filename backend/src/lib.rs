@@ -5,6 +5,7 @@ use serde::Serialize;
 
 pub mod config;
 pub mod db;
+pub mod pty;
 
 #[derive(Clone)]
 pub struct AppState {
