@@ -1,7 +1,7 @@
 // Mirrors the Rust SessionView in backend/src/routes.rs. Keep in sync
 // manually — a small enough surface that codegen would be overkill.
 
-export type SessionState = "live" | "dead" | "deleted";
+export type SessionState = "live" | "dead" | "deleted" | "orphaned";
 
 export interface SessionView {
   id: string;
@@ -23,6 +23,10 @@ export interface CreateSessionRequest {
   working_dir?: string;
   cols?: number;
   rows?: number;
+  /** When set, the new shell boots straight into `claude --resume <uuid>`
+   * and drops to an interactive bash after Claude exits. Used by the
+   * Resume action on orphaned/ended sessions. */
+  claude_resume_uuid?: string;
 }
 
 export interface RepoView {

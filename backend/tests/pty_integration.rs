@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use shuttlecraft::db;
-use shuttlecraft::pty::{default_shell, read_meta, PtyManager, PtyState, SpawnParams};
+use shuttlecraft::pty::{
+    default_shell, read_meta, reconcile_orphans_on_startup, PtyManager, PtyState, SpawnParams,
+};
 
 fn test_db_url() -> Option<String> {
     std::env::var("SHUTTLECRAFT_TEST_DB").ok()
@@ -168,6 +170,35 @@ async fn list_returns_live_and_dead_but_not_deleted() {
     assert!(!ids.contains(&deleted.id), "deleted must not appear");
 
     mgr.delete(live.id).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore]
+async fn startup_reconciliation_transitions_live_rows_to_orphaned() {
+    let pool = fresh_pool().await;
+    // Insert a fake 'live' row simulating a PTY from the prior backend.
+    let id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pty_sessions (id, repo, working_dir, state, created_at) \
+         VALUES ($1, $2, $3, 'live', NOW() - INTERVAL '1 hour')",
+    )
+    .bind(id)
+    .bind("prior")
+    .bind("/tmp")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let reconciled = reconcile_orphans_on_startup(&pool).await.unwrap();
+    assert_eq!(reconciled, 1);
+
+    let meta = read_meta(&pool, id).await.unwrap().unwrap();
+    assert_eq!(meta.state, PtyState::Orphaned);
+    assert!(meta.ended_at.is_some());
+
+    // Running it again with no live rows is a no-op.
+    let reconciled = reconcile_orphans_on_startup(&pool).await.unwrap();
+    assert_eq!(reconciled, 0);
 }
 
 #[tokio::test]

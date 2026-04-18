@@ -90,6 +90,7 @@ impl From<PtyMetadata> for SessionView {
             pty::PtyState::Live => "live",
             pty::PtyState::Dead => "dead",
             pty::PtyState::Deleted => "deleted",
+            pty::PtyState::Orphaned => "orphaned",
         };
         Self {
             id: m.id,
@@ -126,6 +127,11 @@ struct CreateSessionReq {
     cols: Option<u16>,
     #[serde(default)]
     rows: Option<u16>,
+    /// If set, the shell boots straight into `claude --resume <uuid>`
+    /// and falls back to an interactive bash after Claude exits. Used
+    /// by the "Resume" action on orphaned sessions.
+    #[serde(default)]
+    claude_resume_uuid: Option<Uuid>,
 }
 
 async fn create_session(
@@ -149,11 +155,25 @@ async fn create_session(
         )));
     }
 
+    // When resuming a prior Claude session, boot bash directly into the
+    // resume command and fall back to an interactive shell after. The
+    // uuid is `Uuid`-typed so no shell injection is possible.
+    let (shell, args) = match req.claude_resume_uuid {
+        Some(uuid) => (
+            PathBuf::from("/bin/bash"),
+            vec![
+                "-c".to_string(),
+                format!("claude --resume {uuid} ; exec bash"),
+            ],
+        ),
+        None => (pty::default_shell(), Vec::new()),
+    };
+
     let params = SpawnParams {
         repo: req.repo.clone(),
         working_dir,
-        shell: pty::default_shell(),
-        args: Vec::new(),
+        shell,
+        args,
         cols: req.cols.unwrap_or(120),
         rows: req.rows.unwrap_or(32),
     };

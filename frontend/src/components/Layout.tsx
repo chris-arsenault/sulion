@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
+import { SessionEndedPane } from "./SessionEndedPane";
 import { Sidebar } from "./Sidebar";
 import { TerminalPane } from "./TerminalPane";
 import { TimelinePane } from "./TimelinePane";
@@ -9,11 +10,24 @@ import "./Layout.css";
 /** Root three-region layout. Sidebar (left) + main area (terminal top /
  * timeline bottom) separated by a draggable divider. */
 export function Layout() {
-  const { selectedSessionId } = useSessions();
-  // Terminal occupies the top portion; timeline the bottom. Divider is
-  // a simple CSS-controlled flex ratio for now; real drag behavior added
-  // in #9/#10 as the panes get weight.
+  const { selectedSessionId, sessions } = useSessions();
   const [terminalFraction, setTerminalFraction] = useState(0.55);
+
+  const selected = useMemo(
+    () => sessions.find((s) => s.id === selectedSessionId) ?? null,
+    [sessions, selectedSessionId],
+  );
+
+  // If the selected session exists but isn't live, we can't attach a
+  // terminal — show the SessionEndedPane instead. The timeline pane
+  // still works because Claude session events persist in Postgres.
+  const topPane = (() => {
+    if (!selectedSessionId) return null;
+    if (selected && selected.state !== "live") {
+      return <SessionEndedPane session={selected} />;
+    }
+    return <TerminalPane sessionId={selectedSessionId} />;
+  })();
 
   return (
     <div className="layout">
@@ -21,9 +35,9 @@ export function Layout() {
         <Sidebar />
       </aside>
       <main className="layout__main">
-        {selectedSessionId ? (
+        {selectedSessionId && topPane ? (
           <SplitPanes
-            top={<TerminalPane sessionId={selectedSessionId} />}
+            top={topPane}
             bottom={<TimelinePane sessionId={selectedSessionId} />}
             topFraction={terminalFraction}
             onDrag={setTerminalFraction}

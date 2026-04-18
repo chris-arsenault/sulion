@@ -215,7 +215,8 @@ function SessionRow({
   onDelete: () => void;
 }) {
   const claudeLabel = (() => {
-    if (s.state === "dead") return "dead";
+    if (s.state === "dead") return "ended";
+    if (s.state === "orphaned") return "orphaned";
     if (s.state === "deleted") return "—";
     if (!s.current_claude_session_uuid) return "claude starting";
     return `claude ${s.current_claude_session_uuid.slice(0, 6)}`;

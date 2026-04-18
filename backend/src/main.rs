@@ -18,6 +18,14 @@ async fn main() -> anyhow::Result<()> {
     db::run_migrations(&pool).await?;
     tracing::info!("migrations applied");
 
+    // Any row still marked 'live' belongs to a shell the prior backend
+    // was supervising — the process died with its parent and nobody
+    // captured exit. Roll those to 'orphaned'.
+    let orphaned = shuttlecraft::pty::reconcile_orphans_on_startup(&pool).await?;
+    if orphaned > 0 {
+        tracing::info!(count = orphaned, "reconciled orphaned PTY sessions");
+    }
+
     // Background ingester — the sole reader of the JSONL transcripts.
     let ingester_pool = pool.clone();
     let ingester_cfg = IngesterConfig::new(cfg.claude_projects_dir.clone());

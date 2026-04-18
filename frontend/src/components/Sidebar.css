@@ -179,6 +179,13 @@
   background: #6b7280;
 }
 
+/* Orphaned = process was alive when the backend restarted. Distinct
+   colour so it's obvious something abnormal happened without needing
+   to read the label. */
+.sidebar__dot--orphaned {
+  background: #a855f7;
+}
+
 .sidebar__session-main {
   display: flex;
   flex-direction: column;

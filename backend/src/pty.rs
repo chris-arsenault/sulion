@@ -30,6 +30,11 @@ pub enum PtyState {
     Live,
     Dead,
     Deleted,
+    /// Process was running when the backend last stopped and never got
+    /// a supervisor signal — we can't resume it, but the row (and its
+    /// linked Claude session) is still useful for "resume claude in a
+    /// fresh PTY" workflows.
+    Orphaned,
 }
 
 impl PtyState {
@@ -38,6 +43,7 @@ impl PtyState {
             PtyState::Live => "live",
             PtyState::Dead => "dead",
             PtyState::Deleted => "deleted",
+            PtyState::Orphaned => "orphaned",
         }
     }
 
@@ -46,9 +52,23 @@ impl PtyState {
             "live" => Some(PtyState::Live),
             "dead" => Some(PtyState::Dead),
             "deleted" => Some(PtyState::Deleted),
+            "orphaned" => Some(PtyState::Orphaned),
             _ => None,
         }
     }
+}
+
+/// On startup, any `live` rows correspond to PTYs whose processes died
+/// with the prior backend. Reconcile them to `orphaned`.
+pub async fn reconcile_orphans_on_startup(pool: &Pool) -> anyhow::Result<u64> {
+    let result = sqlx::query(
+        "UPDATE pty_sessions \
+         SET state = 'orphaned', ended_at = COALESCE(ended_at, NOW()) \
+         WHERE state = 'live'",
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 #[derive(Debug, Clone)]
