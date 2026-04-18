@@ -21,12 +21,6 @@ services:
       # chown it to 7321:7321.
       - /mnt/apps/apps/shuttlecraft:/home/dev
       - shuttlecraft_run:/run/shuttlecraft
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 20
-      start_period: 30s
 
   frontend:
     image: ghcr.io/chris-arsenault/shuttlecraft/frontend:${IMAGE_TAG}
