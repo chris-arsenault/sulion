@@ -47,11 +47,23 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
   && apt-get install -y --no-install-recommends gh \
   && rm -rf /var/lib/apt/lists/*
 
-# Claude Code itself — pre-installed system-wide so a fresh PTY can
-# `claude login` without any bootstrap. Users who want a different
-# version can override locally via `npm install -g
-# @anthropic-ai/claude-code` (prefix is set to ~/.local, see entrypoint).
-RUN npm install -g @anthropic-ai/claude-code
+# Agent CLIs pre-installed system-wide so a fresh PTY can
+# `claude login` / `codex login` without any bootstrap. Users who
+# want a different version override locally via `npm i -g …` (prefix
+# is set to ~/.local in the entrypoint, so user installs shadow these).
+RUN npm install -g @anthropic-ai/claude-code @openai/codex
+
+# shuttlecraft-managed shell aliases. Goes in /etc/bash.bashrc which
+# Debian sources for interactive non-login shells — which is what a
+# PTY gets. User can still override in their own ~/.bashrc (runs
+# AFTER /etc/bash.bashrc). Keep this list tight; aliases are a
+# product surface, not a dumping ground.
+RUN { \
+      echo ''; \
+      echo '# shuttlecraft: agent shortcuts'; \
+      echo 'alias cl="claude --dangerously-skip-permissions"'; \
+      echo 'alias co="codex --yolo"'; \
+    } >> /etc/bash.bashrc
 
 # 7321 is a deliberately unusual UID/GID to avoid colliding with the
 # ~1000 range that most consumer apps claim. Must match the ownership

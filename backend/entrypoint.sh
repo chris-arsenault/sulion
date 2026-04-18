@@ -60,23 +60,41 @@ PS1='\[\e[36m\]\u@shuttlecraft\[\e[0m\]:\[\e[33m\]\w\[\e[0m\]\$ '
 EOF
 fi
 
-# Pre-wire the SessionStart hook the first time the dataset sees a
-# .claude/ dir. Never overwrite an existing user-customised file.
+# Make sure the SessionStart hook is registered in .claude/settings.json.
+# Claude itself writes to this file during `claude login`, so a simple
+# "write if absent" race loses. Merge with jq instead: add our hook
+# command if no existing entry references it; otherwise no-op. Other
+# keys in the file (auth, user customisations) are preserved verbatim.
 SETTINGS="${HOME_DIR}/.claude/settings.json"
+HOOK_CMD="/opt/shuttlecraft/hooks/session-start.sh"
+
 if [[ ! -f "${SETTINGS}" ]]; then
-  cat > "${SETTINGS}" <<'JSON'
+  cat > "${SETTINGS}" <<JSON
 {
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "/opt/shuttlecraft/hooks/session-start.sh" }
+          { "type": "command", "command": "${HOOK_CMD}" }
         ]
       }
     ]
   }
 }
 JSON
+elif ! jq -e --arg cmd "${HOOK_CMD}" \
+       'any(.hooks.SessionStart[]?.hooks[]?; .command == $cmd)' \
+       "${SETTINGS}" > /dev/null 2>&1; then
+  TMP="$(mktemp)"
+  if jq --arg cmd "${HOOK_CMD}" '
+        .hooks //= {}
+        | .hooks.SessionStart //= []
+        | .hooks.SessionStart += [{"hooks": [{"type": "command", "command": $cmd}]}]
+      ' "${SETTINGS}" > "${TMP}"; then
+    mv "${TMP}" "${SETTINGS}"
+  else
+    rm -f "${TMP}"
+  fi
 fi
 
 exec /usr/local/bin/shuttlecraft
