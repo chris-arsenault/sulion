@@ -106,19 +106,42 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
 
     const onData = term.onData((data) => conn.sendInput(data));
 
-    // Ctrl+C: copy if selection, else pass through (SIGINT). Matches
-    // Windows Terminal.
+    // Key handler: intercept Ctrl+C (copy/SIGINT split) and Ctrl+V
+    // family (paste). Without intercepting Ctrl+V, xterm's default is
+    // to send \x16 (SYN) to the PTY as a control byte AND call
+    // preventDefault on the keydown — which stops the browser from
+    // firing the native `paste` event, so our paste listener never
+    // sees it. Returning false here tells xterm to skip its default
+    // processing (no preventDefault), letting the browser fire paste
+    // normally. The textarea paste listener below then handles it once.
+    //
+    // Ctrl+Shift+V: xterm has its own built-in paste binding that
+    // programmatically reads navigator.clipboard and calls term.paste.
+    // The browser ALSO dispatches a native paste event on this combo.
+    // That's two paste paths firing. Returning false kills xterm's
+    // binding, leaving only the native-event path we already handle.
     term.attachCustomKeyEventHandler((ev: KeyboardEvent): boolean => {
       if (ev.type !== "keydown") return true;
-      const ctrlOnly = ev.ctrlKey && !ev.metaKey && !ev.altKey && !ev.shiftKey;
-      if (ctrlOnly && (ev.key === "c" || ev.key === "C")) {
+      const ctrl = ev.ctrlKey && !ev.metaKey && !ev.altKey;
+      if (!ctrl) return true;
+
+      // Ctrl+C with selection → copy; without selection → let default
+      // through so the shell gets SIGINT. Matches Windows Terminal.
+      if (!ev.shiftKey && (ev.key === "c" || ev.key === "C")) {
         const sel = term.getSelection();
         if (sel.length > 0) {
           void copyToClipboard(sel);
           term.clearSelection();
           return false;
         }
+        return true;
       }
+
+      // Ctrl+V (with or without shift): yield to the native paste event.
+      if (ev.key === "v" || ev.key === "V") {
+        return false;
+      }
+
       return true;
     });
 
