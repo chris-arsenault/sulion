@@ -1,3 +1,10 @@
+import { Layout } from "./components/Layout";
+import { SessionProvider } from "./state/SessionStore";
+
 export function App() {
-  return <div>shuttlecraft</div>;
+  return (
+    <SessionProvider>
+      <Layout />
+    </SessionProvider>
+  );
 }

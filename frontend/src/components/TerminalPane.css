@@ -1,0 +1,12 @@
+.terminal-pane {
+  background: #0b0d12;
+  color: #e5e7eb;
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
+
+.terminal-pane__placeholder {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  opacity: 0.5;
+}

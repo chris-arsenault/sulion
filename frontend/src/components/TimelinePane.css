@@ -1,0 +1,12 @@
+.timeline-pane {
+  background: #12151b;
+  color: #d1d5db;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  border-top: 1px solid #1f232b;
+}
+
+.timeline-pane__placeholder {
+  opacity: 0.5;
+}

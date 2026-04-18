@@ -1,0 +1,101 @@
+.sidebar {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.sidebar__header {
+  padding: 4px 4px 12px;
+  border-bottom: 1px solid #1f232b;
+  margin-bottom: 8px;
+}
+
+.sidebar__logo {
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: #93c5fd;
+}
+
+.sidebar__section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6b7280;
+  margin: 12px 4px 4px;
+}
+
+.sidebar__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sidebar__muted {
+  color: #4b5563;
+  font-style: italic;
+  padding: 4px 6px;
+}
+
+.sidebar__repo {
+  padding: 4px 6px;
+  color: #d1d5db;
+}
+
+.sidebar__session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: #d1d5db;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.sidebar__session:hover {
+  background: #1f232b;
+}
+
+.sidebar__session--active {
+  background: #1e3a8a;
+  color: #e0f2fe;
+}
+
+.sidebar__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.sidebar__dot--live {
+  background: #22c55e;
+}
+
+.sidebar__dot--dead {
+  background: #f59e0b;
+}
+
+.sidebar__dot--deleted {
+  background: #6b7280;
+}
+
+.sidebar__session-repo {
+  font-weight: 500;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__session-id {
+  color: #6b7280;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  margin-left: auto;
+}
