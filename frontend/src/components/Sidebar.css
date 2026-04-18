@@ -4,9 +4,14 @@
   flex-direction: column;
   gap: 4px;
   font-size: 13px;
+  height: 100%;
+  overflow-y: auto;
 }
 
 .sidebar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 4px 4px 12px;
   border-bottom: 1px solid #1f232b;
   margin-bottom: 8px;
@@ -18,36 +23,124 @@
   color: #93c5fd;
 }
 
-.sidebar__section-title {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #6b7280;
-  margin: 12px 4px 4px;
+.sidebar__icon-button {
+  background: transparent;
+  color: #d1d5db;
+  border: 1px solid #1f232b;
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  cursor: pointer;
+  line-height: 1;
 }
 
-.sidebar__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.sidebar__icon-button:hover {
+  background: #1f232b;
+  color: #fff;
+}
+
+.sidebar__icon-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sidebar__error {
+  margin: 8px 0;
+  padding: 6px 8px;
+  background: #441c1c;
+  color: #fecaca;
+  border-radius: 4px;
+  font-size: 12px;
 }
 
 .sidebar__muted {
   color: #4b5563;
   font-style: italic;
-  padding: 4px 6px;
+  padding: 4px 8px;
 }
 
-.sidebar__repo {
+.sidebar__tree {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.sidebar__group {
+  margin-bottom: 4px;
+}
+
+.sidebar__group-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+}
+
+.sidebar__group-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 4px 6px;
+  background: transparent;
   color: #d1d5db;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  border-radius: 4px;
+}
+
+.sidebar__group-toggle:hover {
+  background: #1f232b;
+}
+
+.sidebar__chevron {
+  display: inline-block;
+  width: 12px;
+  color: #6b7280;
+  transition: transform 0.1s;
+}
+
+.sidebar__chevron--open {
+  transform: rotate(90deg);
+  color: #93c5fd;
+}
+
+.sidebar__group-name {
+  font-weight: 500;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__group-count {
+  color: #6b7280;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.sidebar__list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 4px 16px;
+}
+
+.sidebar__row {
+  display: flex;
+  align-items: center;
+  padding: 0;
+  margin: 0;
 }
 
 .sidebar__session {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 6px 8px;
   border: none;
   background: transparent;
@@ -55,6 +148,7 @@
   font: inherit;
   cursor: pointer;
   border-radius: 4px;
+  text-align: left;
 }
 
 .sidebar__session:hover {
@@ -85,17 +179,100 @@
   background: #6b7280;
 }
 
-.sidebar__session-repo {
-  font-weight: 500;
-  flex-shrink: 1;
+.sidebar__session-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.sidebar__session-id {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sidebar__session-id {
+.sidebar__session-meta {
   color: #6b7280;
   font-size: 11px;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__session--active .sidebar__session-meta {
+  color: #93c5fd;
+}
+
+.sidebar__delete {
+  background: transparent;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 4px 6px;
+  font-size: 14px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.sidebar__row:hover .sidebar__delete {
+  opacity: 1;
+}
+
+.sidebar__delete:hover {
+  color: #fecaca;
+}
+
+.sidebar__form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  margin: 4px 0;
+  background: #1a1d23;
+  border-radius: 4px;
+}
+
+.sidebar__form input {
+  background: #0f1115;
+  border: 1px solid #1f232b;
+  color: #e5e7eb;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.sidebar__form input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+.sidebar__form-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.sidebar__form-actions button {
+  background: #1f232b;
+  color: #d1d5db;
+  border: none;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.sidebar__form-actions button[type="submit"] {
+  background: #2563eb;
+  color: #fff;
+}
+
+.sidebar__form-actions button:hover {
+  filter: brightness(1.15);
 }
