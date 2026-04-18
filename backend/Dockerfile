@@ -1,15 +1,52 @@
 FROM debian:bookworm-slim
 
+# Base shell + dev workbench tools. The PTYs that the backend forks
+# inherit this image's filesystem, so every tool the user needs in
+# their Claude sessions has to be available here.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    wget \
     bash \
     git \
     openssh-client \
-    nodejs \
-    npm \
     tini \
+    vim \
+    nano \
+    less \
+    jq \
+    ripgrep \
+    fd-find \
+    ca-certificates \
+    gnupg \
   && rm -rf /var/lib/apt/lists/*
+
+# Debian ships fd as fdfind to avoid a name collision; expose the
+# expected `fd` binary too.
+RUN ln -s /usr/bin/fdfind /usr/local/bin/fd
+
+# Node 20 LTS — Debian's packaged `nodejs` lags behind and breaks a lot
+# of modern npm installs (including `@anthropic-ai/claude-code`).
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+  && apt-get update && apt-get install -y --no-install-recommends nodejs \
+  && rm -rf /var/lib/apt/lists/*
+
+# GitHub CLI from the official apt source — not in Debian's main repos.
+RUN mkdir -p -m 755 /etc/apt/keyrings \
+  && wget -nv -O- https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+       | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+  && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+       > /etc/apt/sources.list.d/github-cli.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends gh \
+  && rm -rf /var/lib/apt/lists/*
+
+# Claude Code itself — pre-installed system-wide so a fresh PTY can
+# `claude login` without any bootstrap. Users who want a different
+# version can override locally via `npm install -g
+# @anthropic-ai/claude-code` (prefix is set to ~/.local, see entrypoint).
+RUN npm install -g @anthropic-ai/claude-code
 
 # 7321 is a deliberately unusual UID/GID to avoid colliding with the
 # ~1000 range that most consumer apps claim. Must match the ownership
