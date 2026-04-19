@@ -11,7 +11,7 @@ const PIN_STORAGE_KEY = "shuttlecraft.sidebar.pinned.v1";
 /** Root layout: sidebar + WorkArea. On mobile the sidebar becomes a
  * drawer. The split / tab system lives inside WorkArea. */
 export function Layout() {
-  const { openTab } = useTabs();
+  const openTab = useTabs((store) => store.openTab);
   const isMobile = useMediaQuery("(max-width: 767px)");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [pinned, setPinned] = useState<boolean>(() => {

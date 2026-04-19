@@ -1,55 +1,4 @@
 import type { TimelineBlock, TimelineEvent } from "../../api/types";
-import type { Maybe } from "../../lib/types";
-
-// ─── Helpers over the canonical block model ────────────────────────
-//
-// Historically these helpers probed `event.payload.message.content`
-// with shape checks. That tied every renderer to Claude Code's
-// specific JSONL layout. With the canonical-blocks migration the
-// backend parses each event into a stable `TimelineBlock[]`, and
-// these helpers read from there. When we plug in a second agent
-// (Codex, etc.) the payload shape is irrelevant — the block list is
-// identical.
-//
-// For any event the ingester hasn't backfilled yet, `event.blocks` is
-// empty; we fall back to legacy payload probing so pre-migration rows
-// keep rendering. Remove the fallback once the backfill completes.
-
-/** Legacy payload shape, kept only for the fallback path on events
- * that predate canonical-block backfill. New code should read
- * `event.blocks` directly. */
-export interface EventPayload {
-  type?: string;
-  timestamp?: string;
-  uuid?: string;
-  sessionId?: string;
-  parentUuid?: string | null;
-  isSidechain?: boolean;
-  isMeta?: boolean;
-  isCompactSummary?: boolean;
-  message?: MessagePayload;
-  subtype?: string;
-  [key: string]: unknown;
-}
-
-export interface MessagePayload {
-  role?: "user" | "assistant" | string;
-  content?: string | LegacyContentBlock[];
-  stop_reason?: string;
-  usage?: Record<string, unknown>;
-}
-
-type LegacyContentBlock =
-  | { type: "text"; text: string }
-  | { type: "thinking"; thinking?: string; signature?: string }
-  | { type: "tool_use"; id?: string; name?: string; input?: unknown }
-  | {
-      type: "tool_result";
-      tool_use_id?: string;
-      content?: string | LegacyContentBlock[];
-      is_error?: boolean;
-    }
-  | { type: string; [key: string]: unknown };
 
 /** Shape matched by callers that group tool_use → tool_result pairs. */
 export interface ToolUseBlock {
@@ -85,88 +34,38 @@ const BOOKKEEPING_KINDS = new Set<string>([
   "attachment",
 ]);
 
-export function payloadOf(event: TimelineEvent): EventPayload {
-  if (event.payload && typeof event.payload === "object") {
-    return event.payload as EventPayload;
-  }
-  return {};
-}
-
-/** Canonical blocks with backward-compat fallback for events predating
- * the canonical-block migration. */
 function blocksOf(event: TimelineEvent): TimelineBlock[] {
-  if (Array.isArray(event.blocks) && event.blocks.length > 0) {
-    return event.blocks;
-  }
-  return legacyBlocksFromPayload(event);
+  return Array.isArray(event.blocks) ? event.blocks : [];
 }
 
-function legacyBlocksFromPayload(event: TimelineEvent): TimelineBlock[] {
-  const content = payloadOf(event).message?.content;
-  if (typeof content === "string") {
-    return [{ ord: 0, kind: "text", text: content }];
-  }
-  if (!Array.isArray(content)) return [];
-  const out: TimelineBlock[] = [];
-  let ord = 0;
-  for (const b of content) {
-    if (b.type === "text") {
-      out.push({ ord: ord++, kind: "text", text: (b as { text?: string }).text ?? "" });
-    } else if (b.type === "thinking") {
-      out.push({
-        ord: ord++,
-        kind: "thinking",
-        text: (b as { thinking?: string }).thinking ?? "",
-      });
-    } else if (b.type === "tool_use") {
-      const name = (b as { name?: string }).name ?? "";
-      out.push({
-        ord: ord++,
-        kind: "tool_use",
-        tool_id: (b as { id?: string }).id ?? "",
-        tool_name: name,
-        tool_name_canonical: name.toLowerCase(),
-        tool_input: (b as { input?: unknown }).input ?? null,
-      });
-    } else if (b.type === "tool_result") {
-      const tr = b as {
-        tool_use_id?: string;
-        content?: string | LegacyContentBlock[];
-        is_error?: boolean;
-      };
-      let text: Maybe<string>;
-      if (typeof tr.content === "string") text = tr.content;
-      else if (Array.isArray(tr.content)) {
-        text = tr.content
-          .filter((c): c is { type: "text"; text: string } => c.type === "text")
-          .map((c) => c.text)
-          .join("\n");
-      }
-      out.push({
-        ord: ord++,
-        kind: "tool_result",
-        tool_id: tr.tool_use_id ?? "",
-        text,
-        is_error: tr.is_error ?? false,
-      });
-    } else {
-      out.push({ ord: ord++, kind: "unknown", raw: b });
-    }
-  }
-  return out;
+export function eventSpeaker(event: TimelineEvent): string {
+  if (event.speaker) return event.speaker;
+  if (event.kind === "assistant") return "assistant";
+  if (event.kind === "user") return "user";
+  if (event.kind === "system") return "system";
+  if (event.kind === "summary") return "summary";
+  return "other";
+}
+
+export function isAssistantEvent(event: TimelineEvent): boolean {
+  return eventSpeaker(event) === "assistant";
+}
+
+export function isSystemEvent(event: TimelineEvent): boolean {
+  return eventSpeaker(event) === "system";
+}
+
+export function isSummaryEvent(event: TimelineEvent): boolean {
+  return eventSpeaker(event) === "summary";
 }
 
 export function isBookkeepingEvent(event: TimelineEvent): boolean {
   if (BOOKKEEPING_KINDS.has(event.kind)) return true;
-  if (event.kind === "system") {
-    const p = payloadOf(event);
-    if (p.isMeta === true) return true;
-  }
-  return false;
+  return isSystemEvent(event) && event.is_meta === true;
 }
 
 export function isSidechainEvent(event: TimelineEvent): boolean {
-  return payloadOf(event).isSidechain === true;
+  return event.is_sidechain === true;
 }
 
 /** A flattened chunk of text suitable for a preview line or block header.
@@ -183,37 +82,8 @@ export function flattenEventContent(event: TimelineEvent): string {
   for (const b of blocksOf(event)) {
     if (b.kind === "text" && b.text) parts.push(b.text);
     else if (b.kind === "tool_use") parts.push(`[tool_use: ${b.tool_name_canonical ?? ""}]`);
-    else if (b.kind === "tool_result")
+    else if (b.kind === "tool_result") {
       parts.push(`[tool_result]${b.text ? ` ${b.text}` : ""}`);
-    // thinking intentionally excluded
-  }
-  return parts.join(" ");
-}
-
-/** Legacy shape-based flattener kept for callers that receive an
- * already-extracted content array (summary panels, markdown export for
- * raw tool_result content). Requires non-null content — callers with
- * optional sources pass `content ?? ""` so the absent case is handled
- * at the call site rather than hidden inside the helper. */
-export function flattenContent(
-  content: string | LegacyContentBlock[],
-): string {
-  if (typeof content === "string") return content;
-  const parts: string[] = [];
-  for (const block of content) {
-    if (block.type === "text" && typeof block.text === "string") {
-      parts.push(block.text);
-    } else if (block.type === "tool_use" && block.name) {
-      parts.push(`[tool_use: ${block.name}]`);
-    } else if (block.type === "tool_result") {
-      const tr = block as { content?: string | LegacyContentBlock[] };
-      const nested =
-        typeof tr.content === "string"
-          ? tr.content
-          : tr.content
-            ? flattenContent(tr.content)
-            : "";
-      parts.push(`[tool_result]${nested ? ` ${nested}` : ""}`);
     }
   }
   return parts.join(" ");
@@ -227,15 +97,18 @@ function trim(s: string, max: number): string {
 
 /** True when a user event is actually a tool_result container and should
  * fold into the preceding assistant turn rather than open a new turn. */
-export function isToolResultUser(event: TimelineEvent): boolean {
-  if (event.kind !== "user") return false;
+export function isToolResultEvent(event: TimelineEvent): boolean {
   return blocksOf(event).some((b) => b.kind === "tool_result");
+}
+
+export function isToolResultUser(event: TimelineEvent): boolean {
+  return eventSpeaker(event) === "user" && isToolResultEvent(event);
 }
 
 /** True when a user event carries an actual typed prompt. */
 export function isRealUserPrompt(event: TimelineEvent): boolean {
-  if (event.kind !== "user") return false;
-  if (isToolResultUser(event)) return false;
+  if (eventSpeaker(event) !== "user") return false;
+  if (isToolResultEvent(event)) return false;
   return true;
 }
 

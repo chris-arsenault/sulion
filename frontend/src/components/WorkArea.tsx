@@ -7,7 +7,9 @@
 // showing every open tab mixed together, no divider.
 
 import { useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 
+import type { SessionView } from "../api/types";
 import type { PaneId, TabData } from "../state/TabStore";
 import { useTabs } from "../state/TabStore";
 import { useSessions } from "../state/SessionStore";
@@ -28,7 +30,13 @@ import { PromptTab } from "./PromptTab";
 import "./WorkArea.css";
 
 export function WorkArea() {
-  const { panes, activeByPane, tabs } = useTabs();
+  const { panes, activeByPane, tabs } = useTabs(
+    useShallow((store) => ({
+      panes: store.panes,
+      activeByPane: store.activeByPane,
+      tabs: store.tabs,
+    })),
+  );
   const isMobile = useMediaQuery("(max-width: 767px)");
   const [topFraction, setTopFraction] = useState(0.55);
   // No more automatic prune: tabs survive their session's deletion and
@@ -139,7 +147,13 @@ function Pane({
   tabs: Record<string, TabData>;
   mobile?: boolean;
 }) {
-  const { activateTab, closeTab, moveTab } = useTabs();
+  const { activateTab, closeTab, moveTab } = useTabs(
+    useShallow((store) => ({
+      activateTab: store.activateTab,
+      closeTab: store.closeTab,
+      moveTab: store.moveTab,
+    })),
+  );
   const [dragTargetActive, setDragTargetActive] = useState(false);
 
   return (
@@ -291,9 +305,14 @@ function TabHandle({
 }) {
   // Derive the label live from session / repo state so renames reflect
   // without touching every open tab's persisted title.
-  const { sessions } = useSessions();
-  const { closeTab, moveTab } = useTabs();
-  const { open: openCtx } = useContextMenu();
+  const sessions = useSessions((store) => store.sessions);
+  const { closeTab, moveTab } = useTabs(
+    useShallow((store) => ({
+      closeTab: store.closeTab,
+      moveTab: store.moveTab,
+    })),
+  );
+  const openCtx = useContextMenu((store) => store.open);
   const label = useMemo(() => liveLabel(tab, sessions), [tab, sessions]);
 
   const onContextMenu = contextMenuHandler(openCtx, () => {
@@ -370,7 +389,7 @@ function TabHandle({
  * straight through to the tab without a store round-trip. */
 function liveLabel(
   tab: TabData,
-  sessions: ReturnType<typeof useSessions>["sessions"],
+  sessions: SessionView[],
 ): string {
   const session =
     tab.sessionId ? sessions.find((s) => s.id === tab.sessionId) ?? null : null;
@@ -454,7 +473,12 @@ function TabContent({ tab }: { tab: TabData }) {
 }
 
 function TerminalOrEndedPane({ sessionId }: { sessionId: string }) {
-  const { sessions, sessionsLoaded } = useSessions();
+  const { sessions, sessionsLoaded } = useSessions(
+    useShallow((store) => ({
+      sessions: store.sessions,
+      sessionsLoaded: store.sessionsLoaded,
+    })),
+  );
   const s = sessions.find((x) => x.id === sessionId) ?? null;
   // Sessions not loaded yet → render the terminal optimistically; the
   // WS will connect once things stabilise.

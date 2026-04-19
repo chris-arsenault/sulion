@@ -94,8 +94,8 @@ function ClickablePath({
   rel: string;
   display: string;
 }) {
-  const { openTab } = useTabs();
-  const repos = useRepos().repos;
+  const openTab = useTabs((store) => store.openTab);
+  const repos = useRepos((store) => store.repos);
   const dirty = repos[repo]?.git?.dirty_by_path[rel];
   return (
     <span className="tr-path__clickable">
@@ -131,7 +131,7 @@ function InlinePath({
   rel: string;
   display: string;
 }) {
-  const { openTab } = useTabs();
+  const openTab = useTabs((store) => store.openTab);
   return (
     <button
       type="button"

@@ -3,6 +3,7 @@
 // listens for and pipes the body into the PTY via term.paste().
 
 import { useEffect, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { deleteLibraryEntry, getLibraryEntry } from "../api/client";
 import type { LibraryEntry } from "../api/types";
@@ -12,7 +13,13 @@ import "./LibraryTab.css";
 export function PromptTab({ repo, slug }: { repo: string; slug: string }) {
   const [entry, setEntry] = useState<LibraryEntry | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const { closeTab, tabs, activeByPane } = useTabs();
+  const { closeTab, tabs, activeByPane } = useTabs(
+    useShallow((store) => ({
+      closeTab: store.closeTab,
+      tabs: store.tabs,
+      activeByPane: store.activeByPane,
+    })),
+  );
 
   useEffect(() => {
     let cancelled = false;

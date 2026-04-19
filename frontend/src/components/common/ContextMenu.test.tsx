@@ -3,14 +3,14 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import {
-  ContextMenuProvider,
+  ContextMenuHost,
   type MenuItem,
   contextMenuHandler,
   useContextMenu,
 } from "./ContextMenu";
 
 function Surface({ items }: { items: MenuItem[] }) {
-  const { open } = useContextMenu();
+  const open = useContextMenu((store) => store.open);
   const onCtx = contextMenuHandler(open, () => items);
   return (
     <div data-testid="surface" onContextMenu={onCtx} style={{ padding: 40 }}>
@@ -21,9 +21,10 @@ function Surface({ items }: { items: MenuItem[] }) {
 
 function setup(items: MenuItem[]) {
   return render(
-    <ContextMenuProvider>
+    <>
       <Surface items={items} />
-    </ContextMenuProvider>,
+      <ContextMenuHost />
+    </>,
   );
 }
 

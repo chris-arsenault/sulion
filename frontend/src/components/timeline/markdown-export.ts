@@ -5,7 +5,8 @@
 import type { TimelineEvent } from "../../api/types";
 import type { ToolPair, Turn } from "./grouping";
 import {
-  payloadOf,
+  isAssistantEvent,
+  isToolResultEvent,
   textBlocksIn,
   userPromptText,
 } from "./types";
@@ -26,8 +27,8 @@ export function formatTurn(turn: Turn): string {
 
   for (const ev of turn.events) {
     if (ev === turn.userPrompt) continue;
-    if (ev.kind === "user") continue; // tool_result wrappers surface via pairs
-    if (ev.kind === "assistant") {
+    if (isToolResultEvent(ev)) continue; // surfaced via pairs
+    if (isAssistantEvent(ev)) {
       parts.push(formatAssistantEvent(ev, pairById));
     }
     // Skip system/summary/unknown — they're noise in the markdown export.
@@ -50,19 +51,14 @@ export function formatAssistantEvent(
   pairById: Map<string, ToolPair>,
 ): string {
   const parts: string[] = [];
-  const content = payloadOf(event).message?.content;
-  if (!Array.isArray(content)) {
-    const txt = formatAssistantText(event);
-    return txt;
-  }
-  for (const block of content) {
-    if (block.type === "text" && typeof (block as { text?: string }).text === "string") {
-      const t = (block as { text: string }).text.trim();
+  for (const block of event.blocks) {
+    if (block.kind === "text") {
+      const t = (block.text ?? "").trim();
       if (t) parts.push(t);
       continue;
     }
-    if (block.type === "tool_use") {
-      const id = (block as { id?: string }).id;
+    if (block.kind === "tool_use") {
+      const id = block.tool_id;
       const pair = id ? pairById.get(id) : undefined;
       if (pair) parts.push(formatToolPair(pair));
       continue;
@@ -98,26 +94,26 @@ function toolOneLine(pair: ToolPair): string {
     typeof input[k] === "string" ? (input[k] as string) : undefined;
   let summary = "";
   switch (pair.name) {
-    case "Edit":
-    case "Write":
-    case "MultiEdit":
-    case "Read":
-      summary = pick("file_path") ?? "";
+    case "edit":
+    case "write":
+    case "multi_edit":
+    case "read":
+      summary = pick("path") ?? "";
       break;
-    case "Bash":
+    case "bash":
       summary = pick("command") ?? "";
       break;
-    case "Grep":
-    case "Glob":
+    case "grep":
+    case "glob":
       summary = pick("pattern") ?? "";
       break;
-    case "Task":
-      summary = pick("description") ?? pick("subagent_type") ?? "";
+    case "task":
+      summary = pick("description") ?? pick("agent") ?? "";
       break;
-    case "WebFetch":
+    case "web_fetch":
       summary = pick("url") ?? "";
       break;
-    case "WebSearch":
+    case "web_search":
       summary = pick("query") ?? "";
       break;
   }
@@ -126,13 +122,13 @@ function toolOneLine(pair: ToolPair): string {
 
 function formatToolInput(pair: ToolPair): string {
   const input = pair.input;
-  if (pair.name === "Edit" || pair.name === "Write") {
+  if (pair.name === "edit" || pair.name === "write") {
     return formatEditInput(pair);
   }
-  if (pair.name === "MultiEdit") {
+  if (pair.name === "multi_edit") {
     return formatMultiEditInput(pair);
   }
-  if (pair.name === "Bash") {
+  if (pair.name === "bash") {
     const cmd =
       typeof (input as { command?: unknown })?.command === "string"
         ? ((input as { command: string }).command)
@@ -140,7 +136,7 @@ function formatToolInput(pair: ToolPair): string {
     if (!cmd) return "";
     return fence("bash", cmd);
   }
-  if (pair.name === "TodoWrite") {
+  if (pair.name === "todo_write") {
     const todos = (input as { todos?: Array<{ status?: string; content?: string }> })
       ?.todos;
     if (!Array.isArray(todos) || todos.length === 0) return "";
@@ -157,8 +153,8 @@ function formatToolInput(pair: ToolPair): string {
 
 function formatEditInput(pair: ToolPair): string {
   const input = pair.input as Record<string, unknown>;
-  const oldStr = typeof input.old_string === "string" ? input.old_string : "";
-  const newStr = typeof input.new_string === "string" ? input.new_string : "";
+  const oldStr = typeof input.old_text === "string" ? input.old_text : "";
+  const newStr = typeof input.new_text === "string" ? input.new_text : "";
   if (!oldStr && !newStr) return "";
   const diff = unifiedDiff(oldStr, newStr);
   return fence("diff", diff);
@@ -171,8 +167,8 @@ function formatMultiEditInput(pair: ToolPair): string {
     : [];
   if (edits.length === 0) return "";
   const diffs = edits.map((e) => {
-    const o = typeof e.old_string === "string" ? e.old_string : "";
-    const n = typeof e.new_string === "string" ? e.new_string : "";
+    const o = typeof e.old_text === "string" ? e.old_text : "";
+    const n = typeof e.new_text === "string" ? e.new_text : "";
     return unifiedDiff(o, n);
   });
   return fence("diff", diffs.join("\n\n---\n\n"));

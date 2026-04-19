@@ -55,7 +55,8 @@ describe("api client", () => {
           created_at: "2025-01-01T00:00:00Z",
           ended_at: null,
           exit_code: null,
-          current_claude_session_uuid: null,
+          current_session_uuid: null,
+          current_session_agent: null,
         },
         201,
       );
@@ -78,7 +79,8 @@ describe("api client", () => {
     stubFetch(async (url) => {
       expect(url).toBe("/api/sessions/s/history?after=5&limit=10&kind=user");
       return jsonResponse({
-        claude_session_uuid: null,
+        session_uuid: null,
+        session_agent: null,
         events: [],
         next_after: null,
       });

@@ -114,8 +114,8 @@ export function StatsStrip() {
             <dd>{s.db.events_rowcount.toLocaleString()}</dd>
           </div>
           <div>
-            <dt>claude sessions</dt>
-            <dd>{s.db.claude_sessions_rowcount.toLocaleString()}</dd>
+            <dt>agent sessions</dt>
+            <dd>{s.db.agent_sessions_rowcount.toLocaleString()}</dd>
           </div>
           <div>
             <dt>pty sessions</dt>

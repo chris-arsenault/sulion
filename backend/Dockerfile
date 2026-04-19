@@ -74,13 +74,14 @@ ARG DEV_UID=7321
 ARG DEV_GID=7321
 RUN groupadd --gid ${DEV_GID} dev \
   && useradd --uid ${DEV_UID} --gid ${DEV_GID} --shell /bin/bash --home-dir /home/dev dev \
-  && mkdir -p /run/shuttlecraft /opt/shuttlecraft/hooks \
+  && mkdir -p /run/shuttlecraft /opt/shuttlecraft/hooks /opt/shuttlecraft/bin \
   && chown -R dev:dev /run/shuttlecraft
 
 COPY dist/shuttlecraft /usr/local/bin/shuttlecraft
+COPY bin/codex /opt/shuttlecraft/bin/codex
 COPY hooks/session-start.sh /opt/shuttlecraft/hooks/session-start.sh
 COPY entrypoint.sh /opt/shuttlecraft/entrypoint.sh
-RUN chmod +x /opt/shuttlecraft/hooks/session-start.sh /opt/shuttlecraft/entrypoint.sh
+RUN chmod +x /opt/shuttlecraft/bin/codex /opt/shuttlecraft/hooks/session-start.sh /opt/shuttlecraft/entrypoint.sh
 
 USER dev
 WORKDIR /home/dev

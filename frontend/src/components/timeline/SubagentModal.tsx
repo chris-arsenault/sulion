@@ -8,7 +8,7 @@ import { createPortal } from "react-dom";
 import type { TimelineEvent } from "../../api/types";
 import { groupIntoTurns } from "./grouping";
 import { TurnDetail } from "./TurnDetail";
-import { isSidechainEvent, payloadOf } from "./types";
+import { isSidechainEvent } from "./types";
 import "./SubagentModal.css";
 
 interface Props {
@@ -116,10 +116,8 @@ export function collectSubagentEvents(
   // Events with explicit tool_use_id reference belong without further chain
   // walks. Kick-start the lineage with their uuids too.
   for (const ev of events) {
-    const p = payloadOf(ev);
-    const tid = (p as { tool_use_id?: string }).tool_use_id;
-    if (tid === toolUseId && p.uuid && typeof p.uuid === "string") {
-      uuidsInLineage.add(p.uuid);
+    if (ev.related_tool_use_id === toolUseId && ev.event_uuid) {
+      uuidsInLineage.add(ev.event_uuid);
     }
   }
 
@@ -131,10 +129,9 @@ export function collectSubagentEvents(
     added = false;
     for (const ev of events) {
       if (!isSidechainEvent(ev)) continue;
-      const p = payloadOf(ev);
-      const uuid = typeof p.uuid === "string" ? p.uuid : null;
+      const uuid = ev.event_uuid;
       if (!uuid || uuidsInLineage.has(uuid)) continue;
-      const parent = typeof p.parentUuid === "string" ? p.parentUuid : null;
+      const parent = ev.parent_event_uuid;
       if (parent && uuidsInLineage.has(parent)) {
         uuidsInLineage.add(uuid);
         added = true;
@@ -143,9 +140,7 @@ export function collectSubagentEvents(
   }
 
   return events.filter((ev) => {
-    const p = payloadOf(ev);
-    if (typeof p.uuid === "string" && uuidsInLineage.has(p.uuid)) return true;
-    const tid = (p as { tool_use_id?: string }).tool_use_id;
-    return tid === toolUseId;
+    if (ev.event_uuid && uuidsInLineage.has(ev.event_uuid)) return true;
+    return ev.related_tool_use_id === toolUseId;
   });
 }

@@ -6,16 +6,13 @@
 //     open(e, items);
 //   }}
 //
-// A single <ContextMenuProvider> at the app root renders the menu in a
+// A single <ContextMenuHost> at the app root renders the menu in a
 // portal. Submenus open one level deep, flip horizontally/vertically
 // to stay in the viewport, and are keyboard-navigable (arrows / Enter
 // / Esc / ←→ for submenu).
 
 import {
-  createContext,
   type ReactNode,
-  useCallback,
-  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -23,6 +20,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { create } from "zustand";
 
 import "./ContextMenu.css";
 
@@ -63,35 +61,27 @@ interface ContextMenuHandle {
   close: () => void;
 }
 
-const Ctx = createContext<ContextMenuHandle | null>(null);
-
-export function ContextMenuProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<MenuState | null>(null);
-
-  const open = useCallback((at: OpenAt, items: MenuItem[]) => {
-    setState({ anchor: at, items });
-  }, []);
-  const close = useCallback(() => setState(null), []);
-
-  const value = useMemo<ContextMenuHandle>(() => ({ open, close }), [open, close]);
-
-  return (
-    <Ctx.Provider value={value}>
-      {children}
-      {state &&
-        createPortal(
-          <MenuRoot state={state} onClose={close} />,
-          document.body,
-        )}
-    </Ctx.Provider>
-  );
+interface ContextMenuStore extends ContextMenuHandle {
+  state: MenuState | null;
 }
 
-export function useContextMenu(): ContextMenuHandle {
-  const ctx = useContext(Ctx);
-  if (!ctx)
-    throw new Error("useContextMenu called outside <ContextMenuProvider>");
-  return ctx;
+const initialState = { state: null as MenuState | null };
+
+export const useContextMenuStore = create<ContextMenuStore>()((set) => ({
+  ...initialState,
+  open: (at, items) => set({ state: { anchor: at, items } }),
+  close: () => set({ state: null }),
+}));
+
+export function useContextMenu<T>(selector: (state: ContextMenuStore) => T): T {
+  return useContextMenuStore(selector);
+}
+
+export function ContextMenuHost() {
+  const state = useContextMenu((store) => store.state);
+  const close = useContextMenu((store) => store.close);
+  if (!state) return null;
+  return createPortal(<MenuRoot state={state} onClose={close} />, document.body);
 }
 
 /** Convenience: returns an onContextMenu handler that opens the menu
@@ -110,6 +100,10 @@ export function contextMenuHandler(
     e.stopPropagation();
     open({ clientX: e.clientX, clientY: e.clientY }, items);
   };
+}
+
+export function resetContextMenuStore() {
+  useContextMenuStore.setState(initialState);
 }
 
 // ─── Menu rendering ────────────────────────────────────────────────

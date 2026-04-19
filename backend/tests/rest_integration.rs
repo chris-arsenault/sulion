@@ -172,7 +172,8 @@ async fn history_returns_events_after_ingest_and_correlate() {
         &h.state.pool,
         &shuttlecraft::correlate::CorrelateMsg {
             pty_id,
-            claude_session_uuid: claude_uuid,
+            session_uuid: claude_uuid,
+            agent: "claude-code".to_string(),
         },
     )
     .await
@@ -181,23 +182,94 @@ async fn history_returns_events_after_ingest_and_correlate() {
     // Insert events directly (bypassing the JSONL ingester — the REST
     // handler doesn't care where the rows came from).
     let events = [
-        (0_i64, "user", json!({"msg": "hello"})),
-        (120_i64, "assistant", json!({"msg": "hi!"})),
-        (240_i64, "tool_use", json!({"name": "Read"})),
+        (
+            0_i64,
+            "user",
+            json!({"msg": "hello"}),
+            Some("user"),
+            Some("text"),
+            Some("evt-user-1"),
+            None::<&str>,
+            None::<&str>,
+            false,
+            false,
+            None::<&str>,
+        ),
+        (
+            120_i64,
+            "assistant",
+            json!({"msg": "hi!"}),
+            Some("assistant"),
+            Some("text"),
+            Some("evt-assistant-1"),
+            None::<&str>,
+            None::<&str>,
+            false,
+            false,
+            None::<&str>,
+        ),
+        (
+            240_i64,
+            "tool_use",
+            json!({"name": "Read"}),
+            Some("assistant"),
+            Some("tool_use"),
+            Some("evt-tool-1"),
+            Some("evt-assistant-1"),
+            None::<&str>,
+            false,
+            false,
+            None::<&str>,
+        ),
     ];
-    for (offset, kind, payload) in &events {
+    for (
+        offset,
+        kind,
+        payload,
+        speaker,
+        content_kind,
+        event_uuid,
+        parent_event_uuid,
+        related_tool_use_id,
+        is_sidechain,
+        is_meta,
+        subtype,
+    ) in &events
+    {
         sqlx::query(
-            "INSERT INTO events (session_uuid, byte_offset, timestamp, kind, payload) \
-             VALUES ($1, $2, NOW(), $3, $4)",
+            "INSERT INTO events \
+             (session_uuid, byte_offset, timestamp, kind, payload, agent, speaker, content_kind, \
+              event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype, search_text) \
+             VALUES ($1, $2, NOW(), $3, $4, 'claude-code', $5, $6, $7, $8, $9, $10, $11, $12, '')",
         )
         .bind(claude_uuid)
         .bind(offset)
         .bind(kind)
         .bind(payload)
+        .bind(speaker)
+        .bind(content_kind)
+        .bind(event_uuid)
+        .bind(parent_event_uuid)
+        .bind(related_tool_use_id)
+        .bind(is_sidechain)
+        .bind(is_meta)
+        .bind(subtype)
         .execute(&h.state.pool)
         .await
         .unwrap();
     }
+    sqlx::query(
+        "INSERT INTO event_blocks \
+         (session_uuid, byte_offset, ord, kind, text, tool_id, tool_name, tool_name_canonical, tool_input, is_error, raw) \
+         VALUES \
+         ($1, 0, 0, 'text', 'hello', NULL, NULL, NULL, NULL, NULL, NULL), \
+         ($1, 120, 0, 'text', 'hi!', NULL, NULL, NULL, NULL, NULL, NULL), \
+         ($1, 240, 0, 'tool_use', NULL, 'toolu_1', 'Read', 'read', '{\"path\":\"/etc/hosts\"}'::jsonb, NULL, '{\"debug\":true}'::jsonb)",
+    )
+    .bind(claude_uuid)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
 
     // GET history — no filter
     let body: serde_json::Value = h
@@ -209,8 +281,32 @@ async fn history_returns_events_after_ingest_and_correlate() {
         .json()
         .await
         .unwrap();
-    assert_eq!(body["claude_session_uuid"], claude_uuid.to_string());
+    assert_eq!(body["session_uuid"], claude_uuid.to_string());
+    assert_eq!(body["session_agent"], "claude-code");
     assert_eq!(body["events"].as_array().unwrap().len(), 3);
+    let first = body["events"][0].as_object().unwrap();
+    assert!(
+        !first.contains_key("payload"),
+        "history response must not expose raw events.payload"
+    );
+    assert_eq!(body["events"][0]["speaker"], "user");
+    assert_eq!(body["events"][0]["content_kind"], "text");
+    assert_eq!(body["events"][0]["event_uuid"], "evt-user-1");
+    assert_eq!(body["events"][0]["blocks"][0]["kind"], "text");
+    assert_eq!(body["events"][0]["blocks"][0]["text"], "hello");
+    assert_eq!(body["events"][2]["parent_event_uuid"], "evt-assistant-1");
+    assert_eq!(
+        body["events"][2]["blocks"][0]["tool_name_canonical"],
+        "read"
+    );
+    assert_eq!(
+        body["events"][2]["blocks"][0]["tool_input"]["path"],
+        "/etc/hosts"
+    );
+    assert!(
+        body["events"][2]["blocks"][0].get("raw").is_none(),
+        "history response must not expose raw event_blocks.raw"
+    );
 
     // Filter by kind
     let body: serde_json::Value = h
@@ -250,7 +346,7 @@ async fn history_returns_events_after_ingest_and_correlate() {
 
 #[tokio::test]
 #[ignore]
-async fn history_with_no_current_claude_session_returns_empty() {
+async fn history_with_no_current_session_returns_empty() {
     let h = Harness::new().await;
     std::fs::create_dir_all(h.repos_root().join("r")).unwrap();
     let created: serde_json::Value = h
@@ -275,7 +371,8 @@ async fn history_with_no_current_claude_session_returns_empty() {
         .await
         .unwrap();
     assert_eq!(body["events"].as_array().unwrap().len(), 0);
-    assert!(body["claude_session_uuid"].is_null());
+    assert!(body["session_uuid"].is_null());
+    assert!(body["session_agent"].is_null());
 
     h.shutdown_sessions().await;
 }

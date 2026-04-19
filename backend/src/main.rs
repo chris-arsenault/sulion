@@ -4,6 +4,17 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if argv
+        .get(1)
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s == "codex-launcher")
+    {
+        let cfg = shuttlecraft::codex::parse_launcher_args(&argv[2..])?;
+        let code = shuttlecraft::codex::run_launcher(cfg).await?;
+        std::process::exit(code);
+    }
+
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(
@@ -41,13 +52,15 @@ async fn main() -> anyhow::Result<()> {
     // counters without a second process observing them.
     let ingester = std::sync::Arc::new(Ingester::new());
     let ingester_pool = pool.clone();
-    let ingester_cfg = IngesterConfig::new(cfg.claude_projects_dir.clone());
+    let ingester_cfg = IngesterConfig::new(cfg.claude_projects_dir.clone())
+        .with_codex_sessions_dir(cfg.codex_sessions_dir.clone());
     let ingester_task = ingester.clone();
     tokio::spawn(async move {
         ingester_task.run(ingester_pool, ingester_cfg).await;
     });
     tracing::info!(
-        projects = %cfg.claude_projects_dir.display(),
+        claude_projects = %cfg.claude_projects_dir.display(),
+        codex_sessions = %cfg.codex_sessions_dir.display(),
         "ingester started",
     );
 

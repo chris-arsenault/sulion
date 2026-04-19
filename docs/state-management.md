@@ -1,28 +1,29 @@
 # Frontend state management
 
-Single paradigm: **React context** for app-wide stores, **component-local
-`useState`** for everything else. No Zustand, no Redux.
+Single paradigm: **Zustand for app-wide state**, **component-local
+`useState` / `useReducer`** for tab-internal working state. No React
+context stores.
 
 ## Stores
 
 | Store | Purpose |
 |---|---|
-| `SessionStore` | PTY sessions list + selection highlight. Polls `/api/sessions`. |
-| `RepoStore` | Per-repo git + file tree state. Polls `/api/repos/:name/git`. |
-| `TabStore` | Tab **registry** only (see below). |
-| `ContextMenuProvider` | Ephemeral menu state for the open popover. |
+| `SessionStore` | PTY sessions list, repo list, selected-session URL sync, unread tracking, polling. |
+| `RepoStore` | Per-repo git status, file tree state, expansion state, polling. |
+| `TabStore` | Thin tab registry only. |
+| `ContextMenuStore` | Ephemeral open/close state for the global context-menu layer. |
 
-Everything else — terminal scroll, timeline filters, tab-internal
-state, form values — lives in the component that owns it via
-`useState`/`useReducer`.
+Each store is a singleton Zustand store with selector-based reads.
+Consumers are expected to subscribe to narrow slices or stable actions,
+not whole-store objects.
 
 ## The tab registry: thin by design
 
-This is the load-bearing architectural decision.
+This is still the load-bearing architectural decision.
 
 **Each tab is its own subtree with its own state, analogous to a
-separate process in a desktop application.** The registry only routes;
-the tabs run.
+separate process in a desktop application.** The registry routes; the
+tabs run.
 
 The registry (`TabStore`) holds the minimum needed to know that a tab
 exists and where it is:
@@ -30,15 +31,15 @@ exists and where it is:
 ```ts
 interface TabData {
   id: string;
-  kind: "terminal" | "timeline" | "file" | "diff" | "search";
-  sessionId?: string;  // for session-bound tabs
-  repo?: string;       // for repo-bound tabs
-  path?: string;       // for file/diff tabs
+  kind: "terminal" | "timeline" | "file" | "diff" | "search" | "ref" | "prompt";
+  sessionId?: string;
+  repo?: string;
+  path?: string;
+  slug?: string;
 }
 ```
 
-Plus pane membership (`panes: { top: string[], bottom: string[] }`)
-and active-per-pane (`activeByPane`).
+Plus pane membership (`panes`) and active-per-pane (`activeByPane`).
 
 The registry does **not** hold:
 
@@ -48,68 +49,44 @@ The registry does **not** hold:
 - Search query, scope, hit list
 - Diff expanded-file set, stage-pending state
 
-Those all live inside their respective tab components and die when the
-tab unmounts. A closed-and-reopened file tab re-fetches. A
-closed-and-reopened search tab starts fresh. This is correct: mount
-lifecycle = process lifecycle.
+Those live inside their owning components and die with the tab's mount
+lifecycle unless there is a concrete cross-surface need to promote
+them.
 
-### What this rules out
+## Why Zustand
 
-- **Tab A reading Tab B's internal state.** If the Search tab wanted
-  to "default scope to whatever session you're currently viewing", it
-  would be reaching across tab boundaries. Instead, the user picks
-  scope explicitly.
-- **Persisting tab-internal state in the registry.** The registry
-  knows *what* a tab is (a search tab), not *what the tab is doing*
-  (current query). If a particular tab wants to persist its own
-  internal state across mounts, it writes to its own localStorage
-  key — that's its business, not the registry's.
+The stores are shared widely enough that selector-based subscriptions
+matter, and the app was already paying the cost of global state
+coordination. Zustand gives:
 
-## Why context, not Zustand
+- One state model across tab/session/repo/context-menu domains
+- Stable action references without provider plumbing
+- Narrow subscriptions so unrelated store updates do not fan out across
+  the tree
+- Simpler test setup once singleton resets are wired centrally
 
-The registry is thin. When `openTab` or `closeTab` fires, the full
-registry state change is small and context consumers are a bounded
-set (WorkArea + TabStrip + TabHandle + Sidebar writers). Zustand's
-selector-based fine-grained subscriptions would matter more if the
-registry were fat — but keeping it thin was the correct fix, not
-switching tools.
+The thin-registry rule still matters. Zustand is used for subscription
+granularity and explicit state ownership, not as permission to hoist
+tab-internal state into a global store.
 
-Uniform context keeps:
+## Promotion rules
 
-- One paradigm for contributors to learn
-- Tests wrap with providers consistently
-- No extra dependency
+Default to local state. Promote data into a store only when at least
+one of these is true:
 
-## When to write local state vs. a store
+1. Two or more surfaces genuinely need the same state.
+2. An outside actor must be able to dispatch into that state.
+3. The state must survive component rearrangement because it describes
+   app structure rather than tab internals.
 
-Default to local. Promote to a store only when:
-
-1. **Two sibling components genuinely need the same state** (not
-   "could be wired through a prop"). A form's value field belongs to
-   the form component; a search tab's query belongs to the search
-   tab; a session's label belongs to the server and is exposed via
-   `SessionStore`.
-2. **An outside actor must be able to dispatch an action** (e.g.
-   sidebar clicks trigger `openTab`). Stores are good at this.
-
-If the only reason to hoist state is "maybe I'll need it elsewhere
-later", keep it local.
+If the only argument is "we might need this elsewhere later", keep it
+local.
 
 ## Testing
 
-Each store exposes a `<Provider>` wrapper. Tests compose them:
+Stores are singleton state, so tests reset them centrally in
+`frontend/src/test/setup.ts` before and after each test. Components no
+longer need provider wrappers just to resolve store hooks.
 
-```tsx
-<SessionProvider>
-  <RepoProvider>
-    <TabProvider>
-      <ContextMenuProvider>
-        <ComponentUnderTest />
-      </ContextMenuProvider>
-    </TabProvider>
-  </RepoProvider>
-</SessionProvider>
-```
-
-Each provider starts fresh per test (context state is lexically
-scoped to the provider instance). No singleton resets needed.
+For the context menu, tests that need the menu DOM should render a
+`<ContextMenuHost />` alongside the component under test.

@@ -6,13 +6,17 @@ import type { ReactElement } from "react";
 import type { Turn, ToolPair } from "./grouping";
 import { TurnRow } from "./TurnRow";
 import { makeEvent, textBlock } from "./test-helpers";
-import { ContextMenuProvider } from "../common/ContextMenu";
+import { ContextMenuHost } from "../common/ContextMenu";
 
-// TurnRow reaches for the ContextMenu primitive unconditionally (for the
-// right-click "Pin as reference" affordance). Wrap every render in the
-// provider so the hook can resolve.
+// TurnRow reaches for the singleton context-menu store
+// unconditionally. Include the host so menus render when opened.
 function render(ui: ReactElement) {
-  return rawRender(<ContextMenuProvider>{ui}</ContextMenuProvider>);
+  return rawRender(
+    <>
+      {ui}
+      <ContextMenuHost />
+    </>,
+  );
 }
 
 function userEv(text: string) {

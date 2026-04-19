@@ -24,9 +24,9 @@ export function FileTab({ repo, path }: { repo: string; path: string }) {
   const [data, setData] = useState<FileResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [raw, setRaw] = useState(false);
-  const repoState = useRepos().repos[repo];
+  const repoState = useRepos((store) => store.repos[repo]);
   const dirty = repoState?.git?.dirty_by_path[path];
-  const { openTab } = useTabs();
+  const openTab = useTabs((store) => store.openTab);
 
   useEffect(() => {
     let cancelled = false;

@@ -21,7 +21,7 @@ function statsPayload(overrides: Record<string, unknown> = {}) {
     db: {
       database_size_bytes: 50 * 1024 * 1024,
       events_rowcount: 1234,
-      claude_sessions_rowcount: 7,
+      agent_sessions_rowcount: 7,
       pty_sessions_rowcount: 5,
       ingester_state_rowcount: 7,
     },

@@ -1,23 +1,5 @@
-// Central session/repo state. Exposes a single context consumed by the
-// sidebar, terminal pane, and timeline pane. Fetches on mount and polls
-// the session list every few seconds so multiple browser tabs stay in
-// sync. Selection is URL-driven via ?session=<id>.
-//
-// Design choices documented in the #7 ticket:
-//   - React context + useReducer rather than a store library; the
-//     surface is small enough that another dep would be overhead.
-//   - Sessions + repos polled independently; failures logged to console
-//     but don't clear last-known-good state.
-
-import {
-  type ReactNode,
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { useEffect } from "react";
+import { create } from "zustand";
 
 import {
   ApiError,
@@ -35,185 +17,223 @@ import type {
   SessionView,
   UpdateSessionRequest,
 } from "../api/types";
-import { useLastViewed } from "./useLastViewed";
+import {
+  clearLastViewedStorage,
+  isSessionUnread,
+  loadLastViewedMap,
+  markLastViewed,
+  saveLastViewedMap,
+  type LastViewedMap,
+} from "./useLastViewed";
 
-const POLL_SESSIONS_MS = 3000;
+const POLL_SESSIONS_MS = 3_000;
 const POLL_REPOS_MS = 10_000;
 
 export interface SessionStore {
   sessions: SessionView[];
   repos: RepoView[];
   selectedSessionId: string | null;
+  lastError: string | null;
+  sessionsLoaded: boolean;
+  lastViewed: LastViewedMap;
   selectSession: (id: string | null) => void;
   createSession: (req: CreateSessionRequest) => Promise<SessionView>;
   deleteSession: (id: string) => Promise<void>;
   updateSession: (id: string, patch: UpdateSessionRequest) => Promise<void>;
   createRepo: (req: CreateRepoRequest) => Promise<RepoView>;
   refresh: () => Promise<void>;
-  lastError: string | null;
-  /** Unread indicator derived from server-reported last_event_at vs.
-   * client-side last-viewed timestamps in localStorage (ticket #23). */
   isUnread: (sessionId: string, lastEventAt: string | null) => boolean;
-  /** True once the first /api/sessions response has come back. Consumers
-   * that prune state against the session list (tabs, etc.) must wait
-   * for this — otherwise mount-time empty state wipes persisted work. */
-  sessionsLoaded: boolean;
+  loadSessions: () => Promise<void>;
+  loadRepos: () => Promise<void>;
 }
 
-const Ctx = createContext<SessionStore | null>(null);
+function initialState(): Pick<
+  SessionStore,
+  "sessions" | "repos" | "selectedSessionId" | "lastError" | "sessionsLoaded" | "lastViewed"
+> {
+  return {
+    sessions: [],
+    repos: [],
+    selectedSessionId: readSessionIdFromUrl(),
+    lastError: null,
+    sessionsLoaded: false,
+    lastViewed: loadLastViewedMap(),
+  };
+}
 
-export function SessionProvider({ children }: { children: ReactNode }) {
-  const [sessions, setSessions] = useState<SessionView[]>([]);
-  const [sessionsLoaded, setSessionsLoaded] = useState(false);
-  const [repos, setRepos] = useState<RepoView[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() =>
-    readSessionIdFromUrl(),
-  );
-  const [lastError, setLastError] = useState<string | null>(null);
-  const lastViewed = useLastViewed();
+export const useSessionStore = create<SessionStore>()((set, get) => ({
+  ...initialState(),
 
-  const loadSessions = useCallback(async () => {
+  async loadSessions() {
     try {
       const data = await listSessions();
-      setSessions(data.sessions);
-      setSessionsLoaded(true);
+      set({ sessions: data.sessions, sessionsLoaded: true });
     } catch (err) {
       console.error("listSessions failed", err);
-      if (err instanceof ApiError) setLastError(err.message);
+      if (err instanceof ApiError) set({ lastError: err.message });
     }
-  }, []);
+  },
 
-  const loadRepos = useCallback(async () => {
+  async loadRepos() {
     try {
       const data = await listRepos();
-      setRepos(data.repos);
+      set({ repos: data.repos });
     } catch (err) {
       console.error("listRepos failed", err);
-      if (err instanceof ApiError) setLastError(err.message);
+      if (err instanceof ApiError) set({ lastError: err.message });
     }
-  }, []);
+  },
 
-  useEffect(() => {
-    void loadSessions();
-    void loadRepos();
-    const sTimer = setInterval(() => void loadSessions(), POLL_SESSIONS_MS);
-    const rTimer = setInterval(() => void loadRepos(), POLL_REPOS_MS);
-    return () => {
-      clearInterval(sTimer);
-      clearInterval(rTimer);
-    };
-  }, [loadSessions, loadRepos]);
+  selectSession(id) {
+    set((state) => {
+      if (!id) return { selectedSessionId: null };
+      const nextViewed = markLastViewed(state.lastViewed, id);
+      saveLastViewedMap(nextViewed);
+      return { selectedSessionId: id, lastViewed: nextViewed };
+    });
+    writeSessionIdToUrl(id);
+  },
 
-  // Mirror URL ?session=<id> → state when the user navigates (back/forward).
-  useEffect(() => {
-    const onPopState = () => setSelectedSessionId(readSessionIdFromUrl());
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, []);
-
-  const selectSession = useCallback(
-    (id: string | null) => {
-      setSelectedSessionId(id);
-      writeSessionIdToUrl(id);
-      if (id) lastViewed.markViewed(id);
-    },
-    [lastViewed],
-  );
-
-  const createSession = useCallback(
-    async (req: CreateSessionRequest) => {
-      const created = await apiCreateSession(req);
-      setSessions((prev) => [created, ...prev]);
-      selectSession(created.id);
-      return created;
-    },
-    [selectSession],
-  );
-
-  const deleteSession = useCallback(
-    async (id: string) => {
-      await apiDeleteSession(id);
-      setSessions((prev) => prev.filter((s) => s.id !== id));
-      if (selectedSessionId === id) selectSession(null);
-    },
-    [selectedSessionId, selectSession],
-  );
-
-  const updateSession = useCallback(
-    async (id: string, patch: UpdateSessionRequest) => {
-      // Optimistic: apply locally first, roll back on error.
-      let prev: SessionView[] = [];
-      setSessions((current) => {
-        prev = current;
-        return current.map((s) =>
-          s.id === id
-            ? {
-                ...s,
-                ...(patch.label !== undefined ? { label: patch.label } : {}),
-                ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}),
-                ...(patch.color !== undefined ? { color: patch.color } : {}),
-              }
-            : s,
-        );
-      });
-      try {
-        await apiUpdateSession(id, patch);
-      } catch (err) {
-        setSessions(prev);
-        throw err;
-      }
-    },
-    [],
-  );
-
-  const createRepo = useCallback(async (req: CreateRepoRequest) => {
-    const created = await apiCreateRepo(req);
-    setRepos((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+  async createSession(req) {
+    const created = await apiCreateSession(req);
+    set((state) => {
+      const nextViewed = markLastViewed(state.lastViewed, created.id);
+      saveLastViewedMap(nextViewed);
+      return {
+        sessions: [created, ...state.sessions],
+        selectedSessionId: created.id,
+        lastViewed: nextViewed,
+      };
+    });
+    writeSessionIdToUrl(created.id);
     return created;
-  }, []);
+  },
 
-  const refresh = useCallback(async () => {
-    await Promise.all([loadSessions(), loadRepos()]);
-  }, [loadSessions, loadRepos]);
+  async deleteSession(id) {
+    await apiDeleteSession(id);
+    const { selectedSessionId } = get();
+    set((state) => ({
+      sessions: state.sessions.filter((session) => session.id !== id),
+      selectedSessionId: selectedSessionId === id ? null : state.selectedSessionId,
+    }));
+    if (selectedSessionId === id) writeSessionIdToUrl(null);
+  },
 
-  const value = useMemo<SessionStore>(
-    () => ({
-      sessions,
-      repos,
-      selectedSessionId,
-      selectSession,
-      createSession,
-      deleteSession,
-      updateSession,
-      createRepo,
-      refresh,
-      lastError,
-      isUnread: lastViewed.isUnread,
-      sessionsLoaded,
-    }),
-    [
-      sessions,
-      repos,
-      selectedSessionId,
-      selectSession,
-      createSession,
-      deleteSession,
-      updateSession,
-      createRepo,
-      refresh,
-      lastError,
-      lastViewed.isUnread,
-      sessionsLoaded,
-    ],
-  );
+  async updateSession(id, patch) {
+    const prevSessions = get().sessions;
+    set((state) => ({
+      sessions: state.sessions.map((session) =>
+        session.id === id
+          ? {
+              ...session,
+              ...(patch.label !== undefined ? { label: patch.label } : {}),
+              ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}),
+              ...(patch.color !== undefined ? { color: patch.color } : {}),
+            }
+          : session,
+      ),
+    }));
+    try {
+      await apiUpdateSession(id, patch);
+    } catch (err) {
+      set({ sessions: prevSessions });
+      throw err;
+    }
+  },
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  async createRepo(req) {
+    const created = await apiCreateRepo(req);
+    set((state) => ({
+      repos: [...state.repos, created].sort((a, b) => a.name.localeCompare(b.name)),
+    }));
+    return created;
+  },
+
+  async refresh() {
+    await Promise.all([get().loadSessions(), get().loadRepos()]);
+  },
+
+  isUnread(sessionId, lastEventAt) {
+    return isSessionUnread(get().lastViewed, sessionId, lastEventAt);
+  },
+}));
+
+let consumerCount = 0;
+let sessionsTimer: ReturnType<typeof setInterval> | null = null;
+let reposTimer: ReturnType<typeof setInterval> | null = null;
+let popstateAttached = false;
+
+function syncSelectedSessionFromUrl() {
+  useSessionStore.setState({ selectedSessionId: readSessionIdFromUrl() });
 }
 
-export function useSessions(): SessionStore {
-  const ctx = useContext(Ctx);
-  if (!ctx) throw new Error("useSessions called outside SessionProvider");
-  return ctx;
+function startSessionStore() {
+  if (typeof window === "undefined") return;
+  consumerCount += 1;
+  if (consumerCount > 1) return;
+
+  void useSessionStore.getState().loadSessions();
+  void useSessionStore.getState().loadRepos();
+  sessionsTimer = window.setInterval(
+    () => void useSessionStore.getState().loadSessions(),
+    POLL_SESSIONS_MS,
+  );
+  reposTimer = window.setInterval(
+    () => void useSessionStore.getState().loadRepos(),
+    POLL_REPOS_MS,
+  );
+  if (!popstateAttached) {
+    window.addEventListener("popstate", syncSelectedSessionFromUrl);
+    popstateAttached = true;
+  }
+}
+
+function stopSessionStore() {
+  if (typeof window === "undefined") return;
+  consumerCount = Math.max(0, consumerCount - 1);
+  if (consumerCount > 0) return;
+
+  if (sessionsTimer) {
+    clearInterval(sessionsTimer);
+    sessionsTimer = null;
+  }
+  if (reposTimer) {
+    clearInterval(reposTimer);
+    reposTimer = null;
+  }
+  if (popstateAttached) {
+    window.removeEventListener("popstate", syncSelectedSessionFromUrl);
+    popstateAttached = false;
+  }
+}
+
+export function useSessions<T>(selector: (state: SessionStore) => T): T {
+  useEffect(() => {
+    startSessionStore();
+    return stopSessionStore;
+  }, []);
+  return useSessionStore(selector);
+}
+
+export function resetSessionStore() {
+  consumerCount = 0;
+  if (sessionsTimer) {
+    clearInterval(sessionsTimer);
+    sessionsTimer = null;
+  }
+  if (reposTimer) {
+    clearInterval(reposTimer);
+    reposTimer = null;
+  }
+  if (typeof window !== "undefined" && popstateAttached) {
+    window.removeEventListener("popstate", syncSelectedSessionFromUrl);
+  }
+  popstateAttached = false;
+  useSessionStore.setState(initialState());
+}
+
+export function resetSessionStoreStorage() {
+  clearLastViewedStorage();
 }
 
 function readSessionIdFromUrl(): string | null {

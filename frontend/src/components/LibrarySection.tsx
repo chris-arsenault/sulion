@@ -42,8 +42,8 @@ export function LibrarySection({
   const [entries, setEntries] = useState<LibraryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creatingPrompt, setCreatingPrompt] = useState(false);
-  const { openTab } = useTabs();
-  const { open: openCtx } = useContextMenu();
+  const openTab = useTabs((store) => store.openTab);
+  const openCtx = useContextMenu((store) => store.open);
 
   const refresh = useCallback(async () => {
     try {

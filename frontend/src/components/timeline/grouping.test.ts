@@ -1,50 +1,24 @@
 import { describe, expect, it } from "vitest";
 
-import type { TimelineEvent } from "../../api/types";
 import { groupIntoTurns, prefilter } from "./grouping";
+import { makeEvent, textBlock, thinkingBlock, toolResultBlock, toolUseBlock } from "./test-helpers";
 
 let nextOffset = 0;
-function mk(
-  kind: string,
-  payload: Record<string, unknown>,
-  timestamp = "2025-01-01T00:00:00Z",
-): TimelineEvent {
+function mk(kind: string, overrides: Parameters<typeof makeEvent>[1] = {}, timestamp = "2025-01-01T00:00:00Z") {
   nextOffset += 100;
-  return { byte_offset: nextOffset, timestamp, kind, payload };
+  return makeEvent(kind, { byte_offset: nextOffset, timestamp, ...overrides });
 }
 
-function userPrompt(text: string, ts?: string): TimelineEvent {
-  return mk(
-    "user",
-    {
-      type: "user",
-      message: { role: "user", content: [{ type: "text", text }] },
-    },
-    ts,
-  );
+function userPrompt(text: string, ts?: string) {
+  return mk("user", { blocks: [textBlock(0, text)] }, ts);
 }
 
-function toolResultUser(toolUseId: string, content: string, is_error = false): TimelineEvent {
-  return mk("user", {
-    type: "user",
-    message: {
-      role: "user",
-      content: [
-        { type: "tool_result", tool_use_id: toolUseId, content, is_error },
-      ],
-    },
-  });
+function toolResultUser(toolUseId: string, content: string, is_error = false) {
+  return mk("user", { blocks: [toolResultBlock(0, toolUseId, content, is_error)] });
 }
 
-function assistant(blocks: unknown[], ts?: string): TimelineEvent {
-  return mk(
-    "assistant",
-    {
-      type: "assistant",
-      message: { role: "assistant", content: blocks },
-    },
-    ts,
-  );
+function assistant(blocks: ReturnType<typeof textBlock>[], ts?: string) {
+  return mk("assistant", { blocks }, ts);
 }
 
 describe("groupIntoTurns", () => {
@@ -52,9 +26,9 @@ describe("groupIntoTurns", () => {
     nextOffset = 0;
     const events = [
       userPrompt("hello"),
-      assistant([{ type: "text", text: "hi" }]),
+      assistant([textBlock(0, "hi")]),
       userPrompt("second"),
-      assistant([{ type: "text", text: "ok" }]),
+      assistant([textBlock(0, "ok")]),
     ];
     const turns = groupIntoTurns(events);
     expect(turns).toHaveLength(2);
@@ -67,10 +41,10 @@ describe("groupIntoTurns", () => {
     const events = [
       userPrompt("read a file"),
       assistant([
-        { type: "tool_use", id: "t1", name: "Read", input: { file_path: "/a.txt" } },
+        toolUseBlock(0, "t1", "read", { path: "/a.txt" }, "Read"),
       ]),
       toolResultUser("t1", "file contents"),
-      assistant([{ type: "text", text: "done" }]),
+      assistant([textBlock(0, "done")]),
       userPrompt("next"),
     ];
     const turns = groupIntoTurns(events);
@@ -84,9 +58,9 @@ describe("groupIntoTurns", () => {
     const events = [
       userPrompt("prompt"),
       assistant([
-        { type: "tool_use", id: "ok1", name: "Read", input: { file_path: "/a" } },
-        { type: "tool_use", id: "err1", name: "Bash", input: { command: "bad" } },
-        { type: "tool_use", id: "pend1", name: "Grep", input: { pattern: "x" } },
+        toolUseBlock(0, "ok1", "read", { path: "/a" }, "Read"),
+        toolUseBlock(1, "err1", "bash", { command: "bad" }, "Bash"),
+        toolUseBlock(2, "pend1", "grep", { pattern: "x" }, "Grep"),
       ]),
       toolResultUser("ok1", "ok content"),
       toolResultUser("err1", "stderr text", true),
@@ -106,11 +80,11 @@ describe("groupIntoTurns", () => {
     nextOffset = 0;
     const events = [
       userPrompt("p"),
-      assistant([{ type: "thinking", thinking: "reasoning 1" }]),
-      assistant([{ type: "text", text: "hi" }]),
+      assistant([thinkingBlock(0, "reasoning 1")]),
+      assistant([textBlock(0, "hi")]),
       assistant([
-        { type: "thinking", thinking: "reasoning 2" },
-        { type: "text", text: "done" },
+        thinkingBlock(0, "reasoning 2"),
+        textBlock(1, "done"),
       ]),
     ];
     const [turn] = groupIntoTurns(events);
@@ -121,9 +95,9 @@ describe("groupIntoTurns", () => {
     nextOffset = 0;
     const events = [
       userPrompt("p"),
-      assistant([{ type: "thinking", thinking: "" }]),
-      assistant([{ type: "thinking", thinking: "   " }]),
-      assistant([{ type: "thinking", thinking: "real content" }]),
+      assistant([thinkingBlock(0, "")]),
+      assistant([thinkingBlock(0, "   ")]),
+      assistant([thinkingBlock(0, "real content")]),
     ];
     const [turn] = groupIntoTurns(events);
     expect(turn!.thinkingCount).toBe(1);
@@ -132,7 +106,8 @@ describe("groupIntoTurns", () => {
   it("creates a synthetic orphan turn for events before any user prompt", () => {
     nextOffset = 0;
     const events = [
-      assistant([{ type: "text", text: "boot" }]),
+      assistant([textBlock(0, "boot")]),
+      // first real prompt opens a second turn
       userPrompt("first real prompt"),
     ];
     const turns = groupIntoTurns(events);
@@ -145,7 +120,7 @@ describe("groupIntoTurns", () => {
     nextOffset = 0;
     const events = [
       userPrompt("p", "2025-01-01T00:00:00Z"),
-      assistant([{ type: "text", text: "t" }], "2025-01-01T00:00:05Z"),
+      assistant([textBlock(0, "t")], "2025-01-01T00:00:05Z"),
     ];
     const [turn] = groupIntoTurns(events);
     expect(turn!.durationMs).toBe(5000);
@@ -157,11 +132,11 @@ describe("prefilter", () => {
     nextOffset = 0;
     const events = [
       userPrompt("p"),
-      mk("file-history-snapshot", { type: "file-history-snapshot" }),
-      mk("permission-mode", { type: "permission-mode" }),
-      mk("last-prompt", { type: "last-prompt" }),
-      mk("queue-operation", { type: "queue-operation" }),
-      mk("attachment", { type: "attachment" }),
+      mk("file-history-snapshot"),
+      mk("permission-mode"),
+      mk("last-prompt"),
+      mk("queue-operation"),
+      mk("attachment"),
     ];
     const out = prefilter(events, { showBookkeeping: false, showSidechain: false });
     expect(out).toHaveLength(1);
@@ -172,7 +147,7 @@ describe("prefilter", () => {
     nextOffset = 0;
     const events = [
       userPrompt("p"),
-      mk("file-history-snapshot", { type: "file-history-snapshot" }),
+      mk("file-history-snapshot"),
     ];
     const out = prefilter(events, { showBookkeeping: true, showSidechain: false });
     expect(out).toHaveLength(2);
@@ -183,9 +158,8 @@ describe("prefilter", () => {
     const events = [
       userPrompt("p"),
       mk("assistant", {
-        type: "assistant",
-        isSidechain: true,
-        message: { content: [{ type: "text", text: "sub" }] },
+        is_sidechain: true,
+        blocks: [textBlock(0, "sub")],
       }),
     ];
     const out = prefilter(events, { showBookkeeping: false, showSidechain: false });
@@ -196,8 +170,8 @@ describe("prefilter", () => {
     nextOffset = 0;
     const events = [
       userPrompt("p"),
-      mk("system", { type: "system", isMeta: true }),
-      mk("system", { type: "system", isMeta: false, message: { content: "real system" } }),
+      mk("system", { is_meta: true }),
+      mk("system", { is_meta: false, blocks: [textBlock(0, "real system")] }),
     ];
     const out = prefilter(events, { showBookkeeping: false, showSidechain: false });
     expect(out).toHaveLength(2); // user + non-meta system

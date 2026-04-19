@@ -1,8 +1,6 @@
 // Shown in place of the TerminalPane when the selected session isn't
-// `live`. Orphaned sessions offer a one-click Resume (spawns a new PTY
-// that boots straight into `claude --resume <old-uuid>`). Dead/deleted
-// sessions just offer cleanup. The timeline pane is unaffected — the
-// Claude session's events remain in Postgres.
+// `live`. Orphaned supported-agent sessions offer a one-click Resume
+// into a fresh PTY. Dead/deleted sessions just offer cleanup.
 
 import { useState } from "react";
 
@@ -15,22 +13,28 @@ interface Props {
 }
 
 export function SessionEndedPane({ session }: Props) {
-  const { createSession, deleteSession, selectSession } = useSessions();
+  const createSession = useSessions((store) => store.createSession);
+  const deleteSession = useSessions((store) => store.deleteSession);
+  const selectSession = useSessions((store) => store.selectSession);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const resumeAgent = session.current_session_agent;
 
   const canResume =
-    session.state === "orphaned" && session.current_claude_session_uuid != null;
+    session.state === "orphaned" &&
+    session.current_session_uuid != null &&
+    (resumeAgent === "claude-code" || resumeAgent === "codex");
 
   const onResume = async () => {
-    if (!session.current_claude_session_uuid) return;
+    if (!session.current_session_uuid) return;
     setBusy(true);
     setError(null);
     try {
       await createSession({
         repo: session.repo,
         working_dir: session.working_dir,
-        claude_resume_uuid: session.current_claude_session_uuid,
+        resume_session_uuid: session.current_session_uuid,
+        resume_agent: resumeAgent ?? "claude-code",
       });
       // createSession already selects the new session via the store.
     } catch (e) {
@@ -61,7 +65,7 @@ export function SessionEndedPane({ session }: Props) {
 
   const explanation = (() => {
     if (session.state === "orphaned") {
-      return "The shell was running when the backend restarted. Its process is gone and the live terminal buffer is lost, but the Claude transcript is preserved in the timeline below.";
+      return "The shell was running when the backend restarted. Its process is gone and the live terminal buffer is lost, but the transcript is preserved in the timeline below.";
     }
     if (session.state === "dead") {
       return `The shell exited${
@@ -69,6 +73,13 @@ export function SessionEndedPane({ session }: Props) {
       }. No live terminal to attach to.`;
     }
     return "This session is no longer available.";
+  })();
+
+  const resumeTitle = (() => {
+    if (resumeAgent === "codex") {
+      return "Spawn a new PTY and run `codex resume` against this Codex session";
+    }
+    return "Spawn a new PTY and run `claude --resume` against this Claude session";
   })();
 
   return (
@@ -91,11 +102,14 @@ export function SessionEndedPane({ session }: Props) {
               <code>{session.working_dir}</code>
             </dd>
           </div>
-          {session.current_claude_session_uuid && (
+          {session.current_session_uuid && (
             <div>
-              <dt>Last Claude session</dt>
+              <dt>Last session</dt>
               <dd>
-                <code>{session.current_claude_session_uuid.slice(0, 8)}</code>
+                <code>
+                  {(session.current_session_agent ?? "session")}{" "}
+                  {session.current_session_uuid.slice(0, 8)}
+                </code>
               </dd>
             </div>
           )}
@@ -108,7 +122,7 @@ export function SessionEndedPane({ session }: Props) {
               className="sep__btn sep__btn--primary"
               onClick={onResume}
               disabled={busy}
-              title="Spawn a new PTY and run `claude --resume` against this Claude session"
+              title={resumeTitle}
             >
               {busy ? "Resuming…" : "Resume with new PTY"}
             </button>

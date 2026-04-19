@@ -28,7 +28,7 @@ interface Props {
 export function TurnRow({ turn, selected, showThinking, onSelect, repo }: Props) {
   const preview = turnPreview(turn);
   const badges = toolBadges(turn.toolPairs);
-  const { open: openCtx } = useContextMenu();
+  const openCtx = useContextMenu((store) => store.open);
 
   const onContextMenu = contextMenuHandler(openCtx, () => {
     const items: MenuItem[] = [];

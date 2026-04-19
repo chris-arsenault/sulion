@@ -4,6 +4,7 @@
 // and commit" flows, which is the whole pitch.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { getRepoDiff, stageRepoPath } from "../api/client";
 import { useRepos } from "../state/RepoStore";
@@ -14,7 +15,12 @@ export function DiffTab({ repo, path }: { repo: string; path?: string }) {
   const [fileDiffs, setFileDiffs] = useState<FileDiff[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const reposStore = useRepos();
+  const { dirtyMap, refreshRepo } = useRepos(
+    useShallow((store) => ({
+      dirtyMap: store.repos[repo]?.git?.dirty_by_path ?? {},
+      refreshRepo: store.refresh,
+    })),
+  );
   const workerRef = useRef<Worker | null>(null);
 
   useEffect(() => {
@@ -44,12 +50,10 @@ export function DiffTab({ repo, path }: { repo: string; path?: string }) {
 
   useEffect(load, [load]);
 
-  const dirtyMap = reposStore.repos[repo]?.git?.dirty_by_path ?? {};
-
   const onStage = async (p: string, stage: boolean) => {
     try {
       await stageRepoPath(repo, p, stage);
-      reposStore.refresh(repo);
+      refreshRepo(repo);
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "stage failed");

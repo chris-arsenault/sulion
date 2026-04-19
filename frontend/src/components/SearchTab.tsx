@@ -26,7 +26,7 @@ export function SearchTab() {
   const [done, setDone] = useState(false);
   const workerRef = useRef<Worker | null>(null);
 
-  const { openTab } = useTabs();
+  const openTab = useTabs((store) => store.openTab);
 
   useEffect(() => {
     const w = new Worker(

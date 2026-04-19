@@ -26,9 +26,9 @@ import { useEffect, useState } from "react";
 import type { TimelineEvent } from "../../api/types";
 import type { ToolPair, Turn } from "./grouping";
 import {
+  eventSpeaker,
   hasToolError,
-  isToolResultUser,
-  payloadOf,
+  isToolResultEvent,
   toolUsesIn,
 } from "./types";
 
@@ -201,8 +201,10 @@ function cloneDefault(): TimelineFilters {
 // ─── predicates ───────────────────────────────────────────────────────
 
 function speakerOf(ev: TimelineEvent): SpeakerFacet | null {
-  if (ev.kind === "assistant") return "assistant";
-  if (ev.kind === "user") return isToolResultUser(ev) ? "tool_result" : "user";
+  const speaker = eventSpeaker(ev);
+  if (speaker === "assistant") return "assistant";
+  if (isToolResultEvent(ev)) return "tool_result";
+  if (speaker === "user") return "user";
   return null;
 }
 
@@ -211,13 +213,12 @@ function eventMatchesFilePath(ev: TimelineEvent, needle: string): boolean {
   const lower = needle.toLowerCase();
   for (const use of toolUsesIn(ev)) {
     const input = (use.input ?? {}) as Record<string, unknown>;
-    for (const key of ["file_path", "path", "pattern", "command"]) {
+    for (const key of ["path", "pattern", "command", "query", "url"]) {
       const v = input[key];
       if (typeof v === "string" && v.toLowerCase().includes(lower)) return true;
     }
   }
-  const pjson = JSON.stringify(payloadOf(ev)).toLowerCase();
-  return pjson.includes(lower);
+  return false;
 }
 
 /** Turn-level include-only filtering. Drops turns that fail the

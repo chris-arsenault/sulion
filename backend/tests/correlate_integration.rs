@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use shuttlecraft::codex::{run_launcher, LauncherConfig};
 use shuttlecraft::correlate::{self, CorrelateMsg};
 use shuttlecraft::db;
 use shuttlecraft::pty::{PtyManager, SpawnParams};
@@ -55,7 +56,8 @@ async fn apply_upserts_claude_session_and_points_pty() {
         &pool,
         &CorrelateMsg {
             pty_id: pty.id,
-            claude_session_uuid: claude_uuid,
+            session_uuid: claude_uuid,
+            agent: "claude-code".to_string(),
         },
     )
     .await
@@ -70,7 +72,7 @@ async fn apply_upserts_claude_session_and_points_pty() {
     assert_eq!(pty_link, Some(pty.id));
 
     let (current,): (Option<Uuid>,) =
-        sqlx::query_as("SELECT current_claude_session_uuid FROM pty_sessions WHERE id = $1")
+        sqlx::query_as("SELECT current_session_uuid FROM pty_sessions WHERE id = $1")
             .bind(pty.id)
             .fetch_one(&pool)
             .await
@@ -102,7 +104,8 @@ async fn second_claude_session_in_same_pty_updates_pointer() {
         &pool,
         &CorrelateMsg {
             pty_id: pty.id,
-            claude_session_uuid: first,
+            session_uuid: first,
+            agent: "claude-code".to_string(),
         },
     )
     .await
@@ -111,14 +114,15 @@ async fn second_claude_session_in_same_pty_updates_pointer() {
         &pool,
         &CorrelateMsg {
             pty_id: pty.id,
-            claude_session_uuid: second,
+            session_uuid: second,
+            agent: "claude-code".to_string(),
         },
     )
     .await
     .unwrap();
 
     let (current,): (Option<Uuid>,) =
-        sqlx::query_as("SELECT current_claude_session_uuid FROM pty_sessions WHERE id = $1")
+        sqlx::query_as("SELECT current_session_uuid FROM pty_sessions WHERE id = $1")
             .bind(pty.id)
             .fetch_one(&pool)
             .await
@@ -186,7 +190,7 @@ async fn socket_listener_accepts_json_line_and_updates_db() {
     assert!(ack.contains("ok"), "expected 'ok' ack, got {ack:?}");
 
     let (current,): (Option<Uuid>,) =
-        sqlx::query_as("SELECT current_claude_session_uuid FROM pty_sessions WHERE id = $1")
+        sqlx::query_as("SELECT current_session_uuid FROM pty_sessions WHERE id = $1")
             .bind(pty.id)
             .fetch_one(&pool)
             .await
@@ -195,5 +199,97 @@ async fn socket_listener_accepts_json_line_and_updates_db() {
 
     listener_task.abort();
     mgr.delete(pty.id).await.ok();
+    let _ = std::fs::remove_file(&sock);
+}
+
+#[tokio::test]
+#[ignore]
+async fn codex_launcher_correlates_session_uuid_from_open_rollout_file() {
+    let pool = fresh_pool().await;
+    let pty_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pty_sessions (id, repo, working_dir, state, created_at) \
+         VALUES ($1, $2, $3, 'live', NOW())",
+    )
+    .bind(pty_id)
+    .bind("r")
+    .bind("/tmp")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let sock = tmp_sock();
+    let sock_for_listener = sock.clone();
+    let listener_pool = pool.clone();
+    let listener_task = tokio::spawn(async move {
+        let _ = correlate::run(listener_pool, sock_for_listener).await;
+    });
+
+    for _ in 0..50 {
+        if sock.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(sock.exists(), "socket never created");
+
+    let tmp = tempfile::tempdir().unwrap();
+    let sessions_dir = tmp.path().join("sessions");
+    let day_dir = sessions_dir.join("2026").join("04").join("19");
+    std::fs::create_dir_all(&day_dir).unwrap();
+
+    let session_uuid = Uuid::new_v4();
+    let rollout_path = day_dir.join(format!("rollout-2026-04-19T01-53-43-{session_uuid}.jsonl"));
+    assert_eq!(
+        shuttlecraft::ingester::parse_codex_session_uuid(&rollout_path),
+        Some(session_uuid)
+    );
+
+    let fake_codex = tmp.path().join("fake-codex.sh");
+    std::fs::write(
+        &fake_codex,
+        "#!/usr/bin/env bash\nset -euo pipefail\nexec 3>>\"$1\"\nprintf '{\"kind\":\"response_item\"}\\n' >&3\nsleep 0.6\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&fake_codex).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake_codex, perms).unwrap();
+    }
+
+    let code = run_launcher(LauncherConfig {
+        codex_bin: fake_codex,
+        pty_id,
+        sessions_dir: sessions_dir.clone(),
+        correlate_sock: sock.clone(),
+        args: vec![rollout_path.into_os_string()],
+    })
+    .await
+    .unwrap();
+    assert_eq!(code, 0);
+
+    let (current_uuid, current_agent): (Option<Uuid>, Option<String>) = sqlx::query_as(
+        "SELECT current_session_uuid, current_session_agent \
+           FROM pty_sessions WHERE id = $1",
+    )
+    .bind(pty_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(current_uuid, Some(session_uuid));
+    assert_eq!(current_agent.as_deref(), Some("codex"));
+
+    let (linked_pty, stored_agent): (Option<Uuid>, String) =
+        sqlx::query_as("SELECT pty_session_id, agent FROM claude_sessions WHERE session_uuid = $1")
+            .bind(session_uuid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(linked_pty, Some(pty_id));
+    assert_eq!(stored_agent, "codex");
+
+    listener_task.abort();
     let _ = std::fs::remove_file(&sock);
 }

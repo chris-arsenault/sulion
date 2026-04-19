@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { TimelineEvent } from "../../api/types";
+import type { TimelineBlock, TimelineEvent } from "../../api/types";
 import {
   formatAssistantEvent,
   formatAssistantText,
@@ -8,23 +8,22 @@ import {
   formatTurn,
 } from "./markdown-export";
 import type { ToolPair, Turn } from "./grouping";
+import { makeEvent, textBlock, thinkingBlock, toolUseBlock } from "./test-helpers";
 
 let offset = 0;
-function mk(kind: string, payload: Record<string, unknown>): TimelineEvent {
+function mk(kind: string, overrides: Parameters<typeof makeEvent>[1]) {
   offset += 100;
-  return { byte_offset: offset, timestamp: "2025-01-01T00:00:00Z", kind, payload };
-}
-function mkUserPrompt(text: string): TimelineEvent {
-  return mk("user", {
-    type: "user",
-    message: { role: "user", content: [{ type: "text", text }] },
+  return makeEvent(kind, {
+    byte_offset: offset,
+    timestamp: "2025-01-01T00:00:00Z",
+    ...overrides,
   });
 }
-function mkAssistant(blocks: unknown[]): TimelineEvent {
-  return mk("assistant", {
-    type: "assistant",
-    message: { role: "assistant", content: blocks },
-  });
+function mkUserPrompt(text: string) {
+  return mk("user", { blocks: [textBlock(0, text)] });
+}
+function mkAssistant(blocks: TimelineBlock[]) {
+  return mk("assistant", { blocks });
 }
 
 function turnFrom(prompt: TimelineEvent, events: TimelineEvent[], pairs: ToolPair[]): Turn {
@@ -45,17 +44,17 @@ describe("markdown-export", () => {
   describe("formatAssistantText", () => {
     it("returns plain text content joined by blank lines", () => {
       const e = mkAssistant([
-        { type: "text", text: "First paragraph." },
-        { type: "text", text: "Second paragraph." },
+        textBlock(0, "First paragraph."),
+        textBlock(1, "Second paragraph."),
       ]);
       expect(formatAssistantText(e)).toBe("First paragraph.\n\nSecond paragraph.");
     });
 
     it("ignores tool_use and thinking blocks", () => {
       const e = mkAssistant([
-        { type: "text", text: "reply text" },
-        { type: "tool_use", id: "t", name: "Read", input: {} },
-        { type: "thinking", thinking: "noise" },
+        textBlock(0, "reply text"),
+        toolUseBlock(1, "t", "read", {}, "Read"),
+        thinkingBlock(2, "noise"),
       ]);
       expect(formatAssistantText(e)).toBe("reply text");
     });
@@ -64,9 +63,9 @@ describe("markdown-export", () => {
   describe("formatToolPair", () => {
     const mkPair = (overrides: Partial<ToolPair>): ToolPair => ({
       id: "t",
-      name: "Read",
+      name: "read",
       input: {},
-      use: { type: "tool_use", id: "t", name: "Read" } as never,
+      use: { type: "tool_use", id: "t", name: "read" } as never,
       useEvent: mkAssistant([]),
       result: null,
       resultEvent: null,
@@ -77,21 +76,21 @@ describe("markdown-export", () => {
 
     it("Bash renders as ```bash fence", () => {
       const out = formatToolPair(
-        mkPair({ name: "Bash", input: { command: "ls -la" } }),
+        mkPair({ name: "bash", input: { command: "ls -la" } }),
       );
       expect(out).toContain("```bash");
       expect(out).toContain("ls -la");
-      expect(out).toContain("**Tool:** `Bash`");
+      expect(out).toContain("**Tool:** `bash`");
     });
 
     it("Edit renders as ```diff fence with -/+ lines", () => {
       const out = formatToolPair(
         mkPair({
-          name: "Edit",
+          name: "edit",
           input: {
-            file_path: "/src/foo.ts",
-            old_string: "hello",
-            new_string: "hello world",
+            path: "/src/foo.ts",
+            old_text: "hello",
+            new_text: "hello world",
           },
         }),
       );
@@ -104,7 +103,7 @@ describe("markdown-export", () => {
     it("TodoWrite renders as a markdown task list", () => {
       const out = formatToolPair(
         mkPair({
-          name: "TodoWrite",
+          name: "todo_write",
           input: {
             todos: [
               { status: "completed", content: "done thing" },
@@ -122,7 +121,7 @@ describe("markdown-export", () => {
     it("Error pair adds '(error)' marker to header", () => {
       const out = formatToolPair(
         mkPair({
-          name: "Bash",
+          name: "bash",
           input: { command: "oops" },
           result: {
             type: "tool_result",
@@ -139,7 +138,7 @@ describe("markdown-export", () => {
 
     it("Pending pair marks pending in header and omits result", () => {
       const out = formatToolPair(
-        mkPair({ name: "Bash", input: { command: "ls" }, isPending: true }),
+        mkPair({ name: "bash", input: { command: "ls" }, isPending: true }),
       );
       expect(out).toContain("_(pending)_");
       expect(out).not.toContain("Result");
@@ -148,7 +147,7 @@ describe("markdown-export", () => {
     it("Body containing triple-backticks escapes the fence to four", () => {
       const out = formatToolPair(
         mkPair({
-          name: "Bash",
+          name: "bash",
           input: { command: "echo '```'" },
         }),
       );
@@ -161,15 +160,15 @@ describe("markdown-export", () => {
       offset = 0;
       const prompt = mkUserPrompt("edit foo.ts");
       const asst = mkAssistant([
-        { type: "text", text: "I'll do that." },
-        { type: "tool_use", id: "t1", name: "Edit", input: { file_path: "/foo", old_string: "a", new_string: "b" } },
-        { type: "text", text: "Done." },
+        textBlock(0, "I'll do that."),
+        toolUseBlock(1, "t1", "edit", { path: "/foo", old_text: "a", new_text: "b" }, "Edit"),
+        textBlock(2, "Done."),
       ]);
       const pair: ToolPair = {
         id: "t1",
-        name: "Edit",
-        input: { file_path: "/foo", old_string: "a", new_string: "b" },
-        use: { type: "tool_use", id: "t1", name: "Edit" } as never,
+        name: "edit",
+        input: { path: "/foo", old_text: "a", new_text: "b" },
+        use: { type: "tool_use", id: "t1", name: "edit" } as never,
         useEvent: asst,
         result: { type: "tool_result", tool_use_id: "t1", content: "done" },
         resultEvent: asst,
@@ -181,7 +180,7 @@ describe("markdown-export", () => {
       expect(out).toContain("**Prompt**");
       expect(out).toContain("> edit foo.ts");
       expect(out).toContain("I'll do that.");
-      expect(out).toContain("**Tool:** `Edit`");
+      expect(out).toContain("**Tool:** `edit`");
       expect(out).toContain("- a");
       expect(out).toContain("+ b");
       expect(out).toContain("Done.");
@@ -198,7 +197,7 @@ describe("markdown-export", () => {
 
     it("orphan turn (no user prompt) still formats assistant content", () => {
       offset = 0;
-      const asst = mkAssistant([{ type: "text", text: "boot" }]);
+      const asst = mkAssistant([textBlock(0, "boot")]);
       const t: Turn = {
         id: asst.byte_offset,
         userPrompt: null,
@@ -219,15 +218,15 @@ describe("markdown-export", () => {
     it("interleaves text and tool calls in block order", () => {
       offset = 0;
       const asst = mkAssistant([
-        { type: "text", text: "first" },
-        { type: "tool_use", id: "t", name: "Bash", input: { command: "ls" } },
-        { type: "text", text: "second" },
+        textBlock(0, "first"),
+        toolUseBlock(1, "t", "bash", { command: "ls" }, "Bash"),
+        textBlock(2, "second"),
       ]);
       const pair: ToolPair = {
         id: "t",
-        name: "Bash",
+        name: "bash",
         input: { command: "ls" },
-        use: { type: "tool_use", id: "t", name: "Bash" } as never,
+        use: { type: "tool_use", id: "t", name: "bash" } as never,
         useEvent: asst,
         result: null,
         resultEvent: null,

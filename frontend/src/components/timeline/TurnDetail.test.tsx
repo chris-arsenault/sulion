@@ -2,32 +2,25 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import type { Turn, ToolPair } from "./grouping";
 import type { TimelineEvent } from "../../api/types";
+import type { Turn, ToolPair } from "./grouping";
 import { TurnDetail } from "./TurnDetail";
+import { makeEvent, textBlock, thinkingBlock, toolUseBlock } from "./test-helpers";
 
-function userEv(text: string, byte = 100): TimelineEvent {
-  return {
+function userEv(text: string, byte = 100) {
+  return makeEvent("user", {
     byte_offset: byte,
     timestamp: "2025-01-01T00:00:00Z",
-    kind: "user",
-    payload: {
-      type: "user",
-      message: { role: "user", content: [{ type: "text", text }] },
-    },
-  };
+    blocks: [textBlock(0, text)],
+  });
 }
 
-function assistantEv(blocks: unknown[], byte = 200): TimelineEvent {
-  return {
+function assistantEv(blocks: ReturnType<typeof textBlock>[], byte = 200) {
+  return makeEvent("assistant", {
     byte_offset: byte,
     timestamp: "2025-01-01T00:00:02Z",
-    kind: "assistant",
-    payload: {
-      type: "assistant",
-      message: { role: "assistant", content: blocks },
-    },
-  };
+    blocks,
+  });
 }
 
 function mkTurn(prompt: TimelineEvent, events: TimelineEvent[], overrides: Partial<Turn> = {}): Turn {
@@ -48,7 +41,7 @@ function mkTurn(prompt: TimelineEvent, events: TimelineEvent[], overrides: Parti
 describe("TurnDetail", () => {
   it("renders the user prompt in the sticky header", () => {
     const prompt = userEv("inspect me");
-    const turn = mkTurn(prompt, [assistantEv([{ type: "text", text: "ok" }])]);
+    const turn = mkTurn(prompt, [assistantEv([textBlock(0, "ok")])]);
     render(<TurnDetail turn={turn} showThinking={true} />);
     expect(screen.getByText("inspect me")).toBeDefined();
   });
@@ -56,7 +49,7 @@ describe("TurnDetail", () => {
   it("renders assistant text", () => {
     const prompt = userEv("p");
     const turn = mkTurn(prompt, [
-      assistantEv([{ type: "text", text: "here is the reply" }]),
+      assistantEv([textBlock(0, "here is the reply")]),
     ]);
     render(<TurnDetail turn={turn} showThinking={true} />);
     expect(screen.getByText("here is the reply")).toBeDefined();
@@ -68,8 +61,8 @@ describe("TurnDetail", () => {
       prompt,
       [
         assistantEv([
-          { type: "thinking", thinking: "private reasoning here" },
-          { type: "text", text: "public reply" },
+          thinkingBlock(0, "private reasoning here"),
+          textBlock(1, "public reply"),
         ]),
       ],
       { thinkingCount: 1 },
@@ -91,8 +84,8 @@ describe("TurnDetail", () => {
       prompt,
       [
         assistantEv([
-          { type: "thinking", thinking: "hidden" },
-          { type: "text", text: "visible" },
+          thinkingBlock(0, "hidden"),
+          textBlock(1, "visible"),
         ]),
       ],
       { thinkingCount: 1 },
@@ -104,12 +97,13 @@ describe("TurnDetail", () => {
 
   it("renders a successful tool pair collapsed by default (low-signal), with 'ok' status", () => {
     const prompt = userEv("p");
-    const use = { type: "tool_use", id: "t1", name: "Read", input: { file_path: "/a" } };
-    const asst = assistantEv([use]);
+    const useBlock = toolUseBlock(0, "t1", "read", { path: "/a" }, "Read");
+    const use = { type: "tool_use", id: "t1", name: "read", input: { path: "/a" } };
+    const asst = assistantEv([useBlock]);
     const pair: ToolPair = {
       id: "t1",
-      name: "Read",
-      input: { file_path: "/a" },
+      name: "read",
+      input: { path: "/a" },
       use: use as never,
       useEvent: asst,
       result: { type: "tool_result", tool_use_id: "t1", content: "file body" },
@@ -126,11 +120,12 @@ describe("TurnDetail", () => {
 
   it("expands errored tool pair by default and shows the error body", () => {
     const prompt = userEv("p");
-    const use = { type: "tool_use", id: "e1", name: "Bash", input: { command: "oops" } };
-    const asst = assistantEv([use]);
+    const useBlock = toolUseBlock(0, "e1", "bash", { command: "oops" }, "Bash");
+    const use = { type: "tool_use", id: "e1", name: "bash", input: { command: "oops" } };
+    const asst = assistantEv([useBlock]);
     const pair: ToolPair = {
       id: "e1",
-      name: "Bash",
+      name: "bash",
       input: { command: "oops" },
       use: use as never,
       useEvent: asst,
@@ -151,17 +146,18 @@ describe("TurnDetail", () => {
 
   it("coalesces consecutive assistant events into one block when intervening tools are hidden by filter", () => {
     const prompt = userEv("p");
-    const use1 = { type: "tool_use", id: "r1", name: "Read", input: { file_path: "/a" } };
+    const use1Block = toolUseBlock(1, "r1", "read", { path: "/a" }, "Read");
+    const use1 = { type: "tool_use", id: "r1", name: "read", input: { path: "/a" } };
     const a1 = assistantEv(
-      [{ type: "text", text: "first paragraph" }, use1],
+      [textBlock(0, "first paragraph"), use1Block],
       200,
     );
-    const a2 = assistantEv([{ type: "text", text: "second paragraph" }], 400);
-    const a3 = assistantEv([{ type: "text", text: "third paragraph" }], 500);
+    const a2 = assistantEv([textBlock(0, "second paragraph")], 400);
+    const a3 = assistantEv([textBlock(0, "third paragraph")], 500);
     const pair: ToolPair = {
       id: "r1",
-      name: "Read",
-      input: { file_path: "/a" },
+      name: "read",
+      input: { path: "/a" },
       use: use1 as never,
       useEvent: a1,
       result: { type: "tool_result", tool_use_id: "r1", content: "body" },
@@ -173,7 +169,7 @@ describe("TurnDetail", () => {
     // Read is hidden — the 3 assistant events should merge into one block.
     const filters = {
       hiddenSpeakers: new Set<"user" | "assistant" | "tool_result">(),
-      hiddenTools: new Set(["Read"]),
+      hiddenTools: new Set(["read"]),
       errorsOnly: false,
       showThinking: true,
       showBookkeeping: true,
@@ -193,15 +189,16 @@ describe("TurnDetail", () => {
 
   it("splits the assistant block when a visible tool separates two assistant events", () => {
     const prompt = userEv("p");
-    const use1 = { type: "tool_use", id: "b1", name: "Bash", input: { command: "ls" } };
+    const use1Block = toolUseBlock(1, "b1", "bash", { command: "ls" }, "Bash");
+    const use1 = { type: "tool_use", id: "b1", name: "bash", input: { command: "ls" } };
     const a1 = assistantEv(
-      [{ type: "text", text: "before tool" }, use1],
+      [textBlock(0, "before tool"), use1Block],
       200,
     );
-    const a2 = assistantEv([{ type: "text", text: "after tool" }], 400);
+    const a2 = assistantEv([textBlock(0, "after tool")], 400);
     const pair: ToolPair = {
       id: "b1",
-      name: "Bash",
+      name: "bash",
       input: { command: "ls" },
       use: use1 as never,
       useEvent: a1,
@@ -222,8 +219,8 @@ describe("TurnDetail", () => {
       prompt,
       [
         assistantEv([
-          { type: "thinking", thinking: "" },
-          { type: "text", text: "hi" },
+          thinkingBlock(0, ""),
+          textBlock(1, "hi"),
         ]),
       ],
       // thinkingCount comes from grouping and we test it elsewhere; set
@@ -237,16 +234,17 @@ describe("TurnDetail", () => {
 
   it("Task tool exposes View agent log button that fires onOpenSubagent", async () => {
     const prompt = userEv("spawn");
+    const useBlock = toolUseBlock(0, "t1", "task", { agent: "Explore", prompt: "find stuff" }, "Task");
     const use = {
       type: "tool_use",
       id: "t1",
-      name: "Task",
-      input: { subagent_type: "Explore", prompt: "find stuff" },
+      name: "task",
+      input: { agent: "Explore", prompt: "find stuff" },
     };
-    const asst = assistantEv([use]);
+    const asst = assistantEv([useBlock]);
     const pair: ToolPair = {
       id: "t1",
-      name: "Task",
+      name: "task",
       input: use.input,
       use: use as never,
       useEvent: asst,

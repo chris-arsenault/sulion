@@ -16,9 +16,16 @@
 set -euo pipefail
 
 HOME_DIR="${HOME:-/home/dev}"
+REAL_CODEX="$(command -v codex || true)"
+
+if [[ -n "${REAL_CODEX}" ]]; then
+  export SHUTTLECRAFT_REAL_CODEX="${REAL_CODEX}"
+fi
+export PATH="${HOME_DIR}/.local/bin:/opt/shuttlecraft/bin:${PATH}"
 
 mkdir -p \
   "${HOME_DIR}/.claude" \
+  "${HOME_DIR}/.codex" \
   "${HOME_DIR}/.ssh" \
   "${HOME_DIR}/.local/bin" \
   "${HOME_DIR}/.config/gh" \
@@ -49,7 +56,7 @@ HISTCONTROL=ignoreboth
 shopt -s histappend
 
 # PATH: user-local installs take precedence over system binaries.
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/.local/bin:/opt/shuttlecraft/bin:$PATH"
 
 # Quality-of-life
 alias ll='ls -la'

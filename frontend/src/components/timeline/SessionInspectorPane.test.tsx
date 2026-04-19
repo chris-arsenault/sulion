@@ -3,19 +3,14 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { Turn } from "./grouping";
-import type { TimelineEvent } from "../../api/types";
 import { SessionInspectorPane } from "./SessionInspectorPane";
+import { makeEvent, textBlock } from "./test-helpers";
 
-function userEv(text: string): TimelineEvent {
-  return {
+function userEv(text: string) {
+  return makeEvent("user", {
     byte_offset: 100,
-    timestamp: "2025-01-01T00:00:00Z",
-    kind: "user",
-    payload: {
-      type: "user",
-      message: { role: "user", content: [{ type: "text", text }] },
-    },
-  };
+    blocks: [textBlock(0, text)],
+  });
 }
 
 function turn(prompt: string): Turn {

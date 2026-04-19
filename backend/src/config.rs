@@ -7,6 +7,7 @@ pub struct Config {
     pub db_url: String,
     pub repos_root: PathBuf,
     pub claude_projects_dir: PathBuf,
+    pub codex_sessions_dir: PathBuf,
     pub correlate_sock_path: PathBuf,
 }
 
@@ -30,6 +31,14 @@ impl Config {
                     .into_owned()
             }),
         );
+        let codex_sessions_dir = PathBuf::from(
+            std::env::var("SHUTTLECRAFT_CODEX_SESSIONS").unwrap_or_else(|_| {
+                dirs_home()
+                    .join(".codex/sessions")
+                    .to_string_lossy()
+                    .into_owned()
+            }),
+        );
         let correlate_sock_path = PathBuf::from(
             std::env::var("SHUTTLECRAFT_CORRELATE_SOCK")
                 .unwrap_or_else(|_| "/run/shuttlecraft/correlate.sock".to_string()),
@@ -39,6 +48,7 @@ impl Config {
             db_url,
             repos_root,
             claude_projects_dir,
+            codex_sessions_dir,
             correlate_sock_path,
         })
     }

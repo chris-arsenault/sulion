@@ -63,15 +63,7 @@ vi.mock("../api/ws", () => ({
   connectPty: (...args: Parameters<typeof connectPtyMock>) => connectPtyMock(...args),
 }));
 
-import { TerminalPane as TerminalPaneRaw } from "./TerminalPane";
-import { SessionProvider } from "../state/SessionStore";
-// Wrap TerminalPane so its internal `useSessions` call has the context
-// it needs. Tests mock the network so the provider's polling is harmless.
-const TerminalPane = (props: { sessionId: string }) => (
-  <SessionProvider>
-    <TerminalPaneRaw {...props} />
-  </SessionProvider>
-);
+import { TerminalPane } from "./TerminalPane";
 
 describe("TerminalPane", () => {
   beforeEach(() => {

@@ -3,10 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { Sidebar } from "./Sidebar";
-import { ContextMenuProvider } from "./common/ContextMenu";
-import { RepoProvider } from "../state/RepoStore";
-import { SessionProvider } from "../state/SessionStore";
-import { TabProvider } from "../state/TabStore";
+import { ContextMenuHost } from "./common/ContextMenu";
 
 type Endpoint = "/api/sessions" | "/api/repos" | string;
 
@@ -131,15 +128,10 @@ describe("Sidebar", () => {
 
   function setup() {
     return render(
-      <SessionProvider>
-        <RepoProvider>
-          <TabProvider>
-            <ContextMenuProvider>
-              <Sidebar />
-            </ContextMenuProvider>
-          </TabProvider>
-        </RepoProvider>
-      </SessionProvider>,
+      <>
+        <Sidebar />
+        <ContextMenuHost />
+      </>,
     );
   }
 

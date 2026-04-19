@@ -66,6 +66,53 @@ impl Fixture {
     }
 }
 
+struct CodexFixture {
+    claude_root: tempfile::TempDir,
+    codex_root: tempfile::TempDir,
+    session_uuid: Uuid,
+}
+
+impl CodexFixture {
+    fn new() -> Self {
+        let claude_root = tempfile::tempdir().expect("tempdir");
+        let codex_root = tempfile::tempdir().expect("tempdir");
+        let session_uuid = Uuid::new_v4();
+        std::fs::create_dir_all(codex_root.path().join("2026").join("04").join("19")).unwrap();
+        Self {
+            claude_root,
+            codex_root,
+            session_uuid,
+        }
+    }
+
+    fn jsonl_path(&self) -> PathBuf {
+        self.codex_root
+            .path()
+            .join("2026")
+            .join("04")
+            .join("19")
+            .join(format!(
+                "rollout-2026-04-19T01-53-43-{}.jsonl",
+                self.session_uuid
+            ))
+    }
+
+    fn append(&self, chunk: &str) {
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.jsonl_path())
+            .expect("open for append");
+        f.write_all(chunk.as_bytes()).expect("write");
+        f.flush().ok();
+    }
+
+    fn config(&self) -> IngesterConfig {
+        IngesterConfig::new(self.claude_root.path().to_path_buf())
+            .with_codex_sessions_dir(self.codex_root.path().to_path_buf())
+    }
+}
+
 async fn event_count(pool: &db::Pool, session: Uuid) -> i64 {
     let (n,): (i64,) =
         sqlx::query_as("SELECT COUNT(*)::BIGINT FROM events WHERE session_uuid = $1")
@@ -106,6 +153,53 @@ async fn ingests_a_simple_event() {
             .await
             .unwrap();
     assert_eq!(kinds[0].0, "user");
+}
+
+#[tokio::test]
+#[ignore]
+async fn ingests_a_codex_rollout_event_from_codex_sessions_dir() {
+    let pool = fresh_pool().await;
+    let fx = CodexFixture::new();
+    fx.append(
+        r#"{"ts":"2026-04-19T01:53:43.100Z","kind":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello from codex"}]}}"#,
+    );
+    fx.append("\n");
+
+    Ingester::new().tick(&pool, &fx.config()).await.unwrap();
+
+    assert_eq!(event_count(&pool, fx.session_uuid).await, 1);
+
+    let (agent, project_hash): (String, Option<String>) =
+        sqlx::query_as("SELECT agent, project_hash FROM claude_sessions WHERE session_uuid = $1")
+            .bind(fx.session_uuid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(agent, "codex");
+    assert!(project_hash.is_none());
+
+    let event: (String, String, String) = sqlx::query_as(
+        "SELECT kind, COALESCE(speaker, ''), COALESCE(content_kind, '') \
+           FROM events WHERE session_uuid = $1 ORDER BY byte_offset LIMIT 1",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(event.0, "message");
+    assert_eq!(event.1, "assistant");
+    assert_eq!(event.2, "text");
+
+    let block: (String, String) = sqlx::query_as(
+        "SELECT kind, COALESCE(text, '') \
+           FROM event_blocks WHERE session_uuid = $1 ORDER BY byte_offset, ord LIMIT 1",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(block.0, "text");
+    assert_eq!(block.1, "hello from codex");
 }
 
 #[tokio::test]

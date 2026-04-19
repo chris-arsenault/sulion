@@ -55,7 +55,7 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
   const filterHook = useTimelineFilters();
   const { filters } = filterHook;
   const narrow = useMediaQuery("(max-width: 999px)");
-  const { sessions } = useSessions();
+  const sessions = useSessions((store) => store.sessions);
   const repo = sessions.find((s) => s.id === sessionId)?.repo;
 
   const [inspectorFraction, setInspectorFraction] = useState<number>(() => {

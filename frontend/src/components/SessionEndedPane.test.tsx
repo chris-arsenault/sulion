@@ -3,7 +3,6 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { SessionEndedPane } from "./SessionEndedPane";
-import { SessionProvider } from "../state/SessionStore";
 
 const orphanedSession = {
   id: "11111111-1111-1111-1111-111111111111",
@@ -13,7 +12,8 @@ const orphanedSession = {
   created_at: new Date(Date.now() - 3_600_000).toISOString(),
   ended_at: new Date().toISOString(),
   exit_code: null,
-  current_claude_session_uuid: "deadbeef-dead-beef-dead-beefdeadbeef",
+  current_session_uuid: "deadbeef-dead-beef-dead-beefdeadbeef",
+  current_session_agent: "claude-code",
   last_event_at: null,
   label: null,
   pinned: false,
@@ -25,7 +25,8 @@ const deadSession = {
   id: "22222222-2222-2222-2222-222222222222",
   state: "dead" as const,
   exit_code: 0,
-  current_claude_session_uuid: null,
+  current_session_uuid: null,
+  current_session_agent: null,
 };
 
 interface FetchState {
@@ -58,7 +59,8 @@ function installFetchMock(state: FetchState) {
             created_at: new Date().toISOString(),
             ended_at: null,
             exit_code: null,
-            current_claude_session_uuid: null,
+            current_session_uuid: null,
+            current_session_agent: null,
           },
           201,
         );
@@ -84,11 +86,7 @@ describe("SessionEndedPane", () => {
   });
 
   function setup(session: typeof orphanedSession | typeof deadSession) {
-    return render(
-      <SessionProvider>
-        <SessionEndedPane session={session} />
-      </SessionProvider>,
-    );
+    return render(<SessionEndedPane session={session} />);
   }
 
   it("renders the orphaned badge and explanation", () => {
@@ -106,7 +104,7 @@ describe("SessionEndedPane", () => {
     expect(screen.getByText(/exit/i)).toBeDefined();
   });
 
-  it("shows Resume for orphaned sessions with a claude uuid; clicking posts with claude_resume_uuid", async () => {
+  it("shows Resume for orphaned Claude sessions and posts generic resume fields", async () => {
     setup(orphanedSession);
     const user = userEvent.setup();
     const resumeBtn = screen.getByRole("button", { name: /resume/i });
@@ -117,14 +115,31 @@ describe("SessionEndedPane", () => {
     expect(state.createSessionCalls[0]).toMatchObject({
       repo: "ahara",
       working_dir: "/home/dev/repos/ahara",
-      claude_resume_uuid: "deadbeef-dead-beef-dead-beefdeadbeef",
+      resume_session_uuid: "deadbeef-dead-beef-dead-beefdeadbeef",
+      resume_agent: "claude-code",
     });
   });
 
-  it("does not show Resume on dead sessions with no claude uuid", () => {
+  it("does not show Resume on dead sessions with no correlated session", () => {
     setup(deadSession);
     expect(screen.queryByRole("button", { name: /resume/i })).toBeNull();
     expect(screen.getByRole("button", { name: /delete/i })).toBeDefined();
+  });
+
+  it("shows Resume for orphaned Codex sessions and posts the Codex agent", async () => {
+    setup({
+      ...orphanedSession,
+      current_session_agent: "codex",
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /resume/i }));
+    await waitFor(() => {
+      expect(state.createSessionCalls.length).toBe(1);
+    });
+    expect(state.createSessionCalls[0]).toMatchObject({
+      resume_session_uuid: "deadbeef-dead-beef-dead-beefdeadbeef",
+      resume_agent: "codex",
+    });
   });
 
   it("clicking Delete fires DELETE against the session id", async () => {

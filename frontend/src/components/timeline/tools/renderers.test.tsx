@@ -4,27 +4,15 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 
 import { ToolCallRenderer } from "./renderers";
-import { RepoProvider } from "../../../state/RepoStore";
-import { SessionProvider } from "../../../state/SessionStore";
-import { TabProvider, useTabs } from "../../../state/TabStore";
+import { useTabs } from "../../../state/TabStore";
 
-// Tests that exercise repo-rooted path rendering need the full
-// provider stack. Simpler tests that pass throwaway paths (/tmp/...)
-// don't need the wrapper because the clickable code path never
-// activates.
 function withProviders(ui: ReactNode): ReactNode {
-  return (
-    <SessionProvider>
-      <RepoProvider>
-        <TabProvider>{ui}</TabProvider>
-      </RepoProvider>
-    </SessionProvider>
-  );
+  return ui;
 }
 
 // Capture openTab calls coming out of the renderer's click path.
 function OpenTabSpy({ onCapture }: { onCapture: (openTab: unknown) => void }) {
-  const { openTab } = useTabs();
+  const openTab = useTabs((store) => store.openTab);
   onCapture(openTab);
   return null;
 }

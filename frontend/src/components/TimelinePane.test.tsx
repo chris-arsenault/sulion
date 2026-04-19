@@ -21,20 +21,17 @@ vi.mock("react-virtuoso", () => ({
 }));
 
 import { TimelinePane as TimelinePaneRaw } from "./TimelinePane";
-import { ContextMenuProvider } from "./common/ContextMenu";
-import { SessionProvider } from "../state/SessionStore";
+import { ContextMenuHost } from "./common/ContextMenu";
 import { makeEvent, textBlock } from "./timeline/test-helpers";
 
 // TimelinePane now reads the session list for the current session's
-// repo (used to scope the "Pin as reference" menu) and renders
-// TurnRow which needs the ContextMenuProvider. Wrap every render so
-// both hooks resolve.
+// repo (used to scope the "Pin as reference" menu) and TurnRow uses
+// the singleton context-menu store, so include the host layer.
 const TimelinePane = (props: { sessionId: string }) => (
-  <SessionProvider>
-    <ContextMenuProvider>
-      <TimelinePaneRaw {...props} />
-    </ContextMenuProvider>
-  </SessionProvider>
+  <>
+    <TimelinePaneRaw {...props} />
+    <ContextMenuHost />
+  </>
 );
 
 function stubHistoryFetch(

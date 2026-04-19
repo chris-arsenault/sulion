@@ -33,15 +33,37 @@ const HEARTBEAT_EVERY: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone)]
 pub struct IngesterConfig {
-    pub projects_dir: PathBuf,
+    pub claude_projects_dir: PathBuf,
+    pub codex_sessions_dir: Option<PathBuf>,
     pub poll_interval: Duration,
 }
 
 impl IngesterConfig {
-    pub fn new(projects_dir: PathBuf) -> Self {
+    pub fn new(claude_projects_dir: PathBuf) -> Self {
         Self {
-            projects_dir,
+            claude_projects_dir,
+            codex_sessions_dir: None,
             poll_interval: Duration::from_millis(500),
+        }
+    }
+
+    pub fn with_codex_sessions_dir(mut self, codex_sessions_dir: PathBuf) -> Self {
+        self.codex_sessions_dir = Some(codex_sessions_dir);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TranscriptSource {
+    ClaudeCode,
+    Codex,
+}
+
+impl TranscriptSource {
+    fn agent_id(self) -> &'static str {
+        match self {
+            TranscriptSource::ClaudeCode => "claude-code",
+            TranscriptSource::Codex => "codex",
         }
     }
 }
@@ -80,18 +102,37 @@ impl Ingester {
         // Startup log — confirms the path the ingester will actually
         // watch, so "why aren't my events appearing" has a trivially-
         // visible first answer.
-        let projects_exists = cfg.projects_dir.exists();
+        let claude_exists = cfg.claude_projects_dir.exists();
+        let codex_exists = cfg
+            .codex_sessions_dir
+            .as_ref()
+            .map(|p| p.exists())
+            .unwrap_or(false);
         tracing::info!(
-            projects = %cfg.projects_dir.display(),
-            exists = projects_exists,
+            claude_projects = %cfg.claude_projects_dir.display(),
+            claude_exists,
+            codex_sessions = %cfg
+                .codex_sessions_dir
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "(disabled)".to_string()),
+            codex_exists,
             poll_ms = cfg.poll_interval.as_millis() as u64,
             "ingester starting",
         );
-        if !projects_exists {
+        if !claude_exists {
             tracing::warn!(
-                projects = %cfg.projects_dir.display(),
-                "projects directory does not exist yet — ingester will keep polling",
+                projects = %cfg.claude_projects_dir.display(),
+                "Claude projects directory does not exist yet — ingester will keep polling",
             );
+        }
+        if let Some(codex_dir) = &cfg.codex_sessions_dir {
+            if !codex_exists {
+                tracing::warn!(
+                    sessions = %codex_dir.display(),
+                    "Codex sessions directory does not exist yet — ingester will keep polling",
+                );
+            }
         }
 
         let mut last_heartbeat = Instant::now();
@@ -115,12 +156,22 @@ impl Ingester {
 
             if last_heartbeat.elapsed() >= HEARTBEAT_EVERY {
                 tracing::info!(
-                    files_seen_total = self.files_seen_total.load(Ordering::Relaxed),
-                    events_inserted_total =
-                        self.events_inserted_total.load(Ordering::Relaxed),
-                    parse_errors_total = self.parse_errors_total.load(Ordering::Relaxed),
-                    projects = %cfg.projects_dir.display(),
-                    projects_exists = cfg.projects_dir.exists(),
+                        files_seen_total = self.files_seen_total.load(Ordering::Relaxed),
+                        events_inserted_total =
+                            self.events_inserted_total.load(Ordering::Relaxed),
+                        parse_errors_total = self.parse_errors_total.load(Ordering::Relaxed),
+                    claude_projects = %cfg.claude_projects_dir.display(),
+                    claude_exists = cfg.claude_projects_dir.exists(),
+                    codex_sessions = %cfg
+                        .codex_sessions_dir
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "(disabled)".to_string()),
+                    codex_exists = cfg
+                        .codex_sessions_dir
+                        .as_ref()
+                        .map(|p| p.exists())
+                        .unwrap_or(false),
                     "ingester heartbeat",
                 );
                 last_heartbeat = Instant::now();
@@ -135,10 +186,31 @@ impl Ingester {
     /// the ingester synchronously.
     pub async fn tick(&self, pool: &Pool, cfg: &IngesterConfig) -> anyhow::Result<TickSummary> {
         let mut summary = TickSummary::default();
-        if !cfg.projects_dir.exists() {
-            return Ok(summary);
+        self.tick_root(
+            pool,
+            &cfg.claude_projects_dir,
+            TranscriptSource::ClaudeCode,
+            &mut summary,
+        )
+        .await;
+        if let Some(codex_dir) = &cfg.codex_sessions_dir {
+            self.tick_root(pool, codex_dir, TranscriptSource::Codex, &mut summary)
+                .await;
         }
-        for entry in WalkDir::new(&cfg.projects_dir)
+        Ok(summary)
+    }
+
+    async fn tick_root(
+        &self,
+        pool: &Pool,
+        root: &Path,
+        source: TranscriptSource,
+        summary: &mut TickSummary,
+    ) {
+        if !root.exists() {
+            return;
+        }
+        for entry in WalkDir::new(root)
             .follow_links(false)
             .into_iter()
             .filter_map(Result::ok)
@@ -151,7 +223,7 @@ impl Ingester {
             }
             summary.files_seen += 1;
             self.files_seen_total.fetch_add(1, Ordering::Relaxed);
-            match process_file(pool, entry.path()).await {
+            match process_file(pool, entry.path(), source).await {
                 Ok(file_result) => {
                     summary.events_inserted += file_result.events_inserted;
                     summary.parse_errors += file_result.parse_errors;
@@ -163,6 +235,7 @@ impl Ingester {
                     // Per-file log only when something actually changed.
                     if file_result.events_inserted > 0 {
                         tracing::info!(
+                            agent = source.agent_id(),
                             path = %entry.path().display(),
                             inserted = file_result.events_inserted,
                             parse_errors = file_result.parse_errors,
@@ -173,6 +246,7 @@ impl Ingester {
                 }
                 Err(err) => {
                     tracing::warn!(
+                        agent = source.agent_id(),
                         path = %entry.path().display(),
                         %err,
                         "ingest file failed",
@@ -180,7 +254,6 @@ impl Ingester {
                 }
             }
         }
-        Ok(summary)
     }
 }
 
@@ -198,15 +271,29 @@ struct FileResult {
     committed_offset: i64,
 }
 
-async fn process_file(pool: &Pool, path: &Path) -> anyhow::Result<FileResult> {
+async fn process_file(
+    pool: &Pool,
+    path: &Path,
+    source: TranscriptSource,
+) -> anyhow::Result<FileResult> {
     let mut result = FileResult::default();
-    let Some(session_uuid) = parse_session_uuid(path) else {
-        tracing::debug!(path = %path.display(), "skipping: filename stem is not a uuid");
+    let Some(session_uuid) = parse_session_uuid(path, source) else {
+        tracing::debug!(
+            agent = source.agent_id(),
+            path = %path.display(),
+            "skipping: filename does not encode a supported session uuid",
+        );
         return Ok(result);
     };
-    let project_hash = parse_project_hash(path);
+    let project_hash = parse_project_hash(path, source);
 
-    upsert_claude_session(pool, session_uuid, project_hash.as_deref()).await?;
+    upsert_agent_session(
+        pool,
+        session_uuid,
+        source.agent_id(),
+        project_hash.as_deref(),
+    )
+    .await?;
 
     let committed = get_offset(pool, session_uuid).await?;
     let file_len = match std::fs::metadata(path) {
@@ -250,7 +337,7 @@ async fn process_file(pool: &Pool, path: &Path) -> anyhow::Result<FileResult> {
         }
         let line = &buf[line_start..i];
         let byte_offset = committed + line_start as i64;
-        match insert_event(pool, session_uuid, byte_offset, line).await {
+        match insert_event(pool, session_uuid, source, byte_offset, line).await {
             Ok(inserted) => {
                 if inserted {
                     result.events_inserted += 1;
@@ -282,28 +369,51 @@ enum InsertError {
     Db(sqlx::Error),
 }
 
-fn parse_session_uuid(path: &Path) -> Option<Uuid> {
+fn parse_session_uuid(path: &Path, source: TranscriptSource) -> Option<Uuid> {
+    match source {
+        TranscriptSource::ClaudeCode => parse_claude_session_uuid(path),
+        TranscriptSource::Codex => parse_codex_session_uuid(path),
+    }
+}
+
+fn parse_claude_session_uuid(path: &Path) -> Option<Uuid> {
     let stem = path.file_stem()?.to_str()?;
     Uuid::parse_str(stem).ok()
 }
 
-fn parse_project_hash(path: &Path) -> Option<String> {
-    path.parent()
-        .and_then(|p| p.file_name())
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_string())
+pub fn parse_codex_session_uuid(path: &Path) -> Option<Uuid> {
+    let stem = path.file_stem()?.to_str()?;
+    let start = stem.len().checked_sub(36)?;
+    let raw = stem.get(start..)?;
+    Uuid::parse_str(raw).ok()
 }
 
-async fn upsert_claude_session(
+fn parse_project_hash(path: &Path, source: TranscriptSource) -> Option<String> {
+    match source {
+        TranscriptSource::ClaudeCode => path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string()),
+        TranscriptSource::Codex => None,
+    }
+}
+
+async fn upsert_agent_session(
     pool: &Pool,
     session_uuid: Uuid,
+    agent: &str,
     project_hash: Option<&str>,
 ) -> anyhow::Result<()> {
     sqlx::query(
-        "INSERT INTO claude_sessions (session_uuid, project_hash) \
-         VALUES ($1, $2) ON CONFLICT (session_uuid) DO NOTHING",
+        "INSERT INTO claude_sessions (session_uuid, agent, project_hash) \
+         VALUES ($1, $2, $3) \
+         ON CONFLICT (session_uuid) DO UPDATE SET \
+           agent = EXCLUDED.agent, \
+           project_hash = COALESCE(claude_sessions.project_hash, EXCLUDED.project_hash)",
     )
     .bind(session_uuid)
+    .bind(agent)
     .bind(project_hash)
     .execute(pool)
     .await?;
@@ -349,6 +459,7 @@ async fn set_offset(
 async fn insert_event(
     pool: &Pool,
     session_uuid: Uuid,
+    source: TranscriptSource,
     byte_offset: i64,
     line: &[u8],
 ) -> Result<bool, InsertError> {
@@ -395,15 +506,16 @@ async fn insert_event(
     // doesn't recognise, we log and fall back to storing the raw row
     // with no blocks — the frontend will render via `unknown` blocks or
     // the legacy payload path.
-    use crate::canonical::EventParser;
-    let parsed = crate::canonical::ClaudeParser.parse(&value);
+    let parsed = parse_canonical_event(source.agent_id(), &value);
 
+    let search_text = parsed.search_text();
     let mut tx = pool.begin().await.map_err(InsertError::Db)?;
 
     let result = sqlx::query(
         "INSERT INTO events \
-             (session_uuid, byte_offset, timestamp, kind, payload, agent, speaker, content_kind) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             (session_uuid, byte_offset, timestamp, kind, payload, agent, speaker, content_kind, \
+              event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype, search_text) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
          ON CONFLICT (session_uuid, byte_offset) DO NOTHING",
     )
     .bind(session_uuid)
@@ -414,6 +526,13 @@ async fn insert_event(
     .bind(parsed.agent)
     .bind(parsed.speaker.as_str())
     .bind(parsed.content_kind.as_str())
+    .bind(parsed.event_uuid.as_deref())
+    .bind(parsed.parent_event_uuid.as_deref())
+    .bind(parsed.related_tool_use_id.as_deref())
+    .bind(parsed.is_sidechain)
+    .bind(parsed.is_meta)
+    .bind(parsed.subtype.as_deref())
+    .bind(&search_text)
     .execute(&mut *tx)
     .await
     .map_err(InsertError::Db)?;
@@ -430,13 +549,23 @@ async fn insert_event(
     // If this event hints that the current session is a compaction
     // continuation of another, record the parent linkage. Best-effort —
     // we tolerate format drift by checking several field names.
-    if let Some(parent) = detect_compaction_parent(&value, session_uuid) {
-        if let Err(err) = set_parent_session(pool, session_uuid, parent).await {
-            tracing::warn!(%err, session = %session_uuid, parent = %parent, "set_parent_session failed");
+    if source == TranscriptSource::ClaudeCode {
+        if let Some(parent) = detect_compaction_parent(&value, session_uuid) {
+            if let Err(err) = set_parent_session(pool, session_uuid, parent).await {
+                tracing::warn!(%err, session = %session_uuid, parent = %parent, "set_parent_session failed");
+            }
         }
     }
 
     Ok(inserted)
+}
+
+fn parse_canonical_event(agent: &str, value: &Value) -> crate::canonical::CanonicalEvent {
+    use crate::canonical::EventParser;
+    match agent {
+        "codex" => crate::canonical::CodexParser.parse(value),
+        _ => crate::canonical::ClaudeParser.parse(value),
+    }
 }
 
 async fn insert_blocks(
@@ -475,15 +604,19 @@ async fn insert_blocks(
 /// the frontend's "read from blocks only" invariant true even for rows
 /// that pre-date this migration. Cheap because the corpus is small.
 pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<usize> {
-    let rows: Vec<(Uuid, i64, serde_json::Value)> = sqlx::query_as(
-        "SELECT e.session_uuid, e.byte_offset, e.payload \
+    let rows: Vec<(Uuid, i64, String, serde_json::Value)> = sqlx::query_as(
+        "SELECT e.session_uuid, e.byte_offset, e.agent, e.payload \
          FROM events e \
-         WHERE NOT EXISTS ( \
+         WHERE ( \
+             e.search_text = '' OR \
+             e.speaker IS NULL OR \
+             e.content_kind IS NULL OR \
+             e.event_uuid IS NULL OR \
+             NOT EXISTS ( \
              SELECT 1 FROM event_blocks b \
               WHERE b.session_uuid = e.session_uuid \
                 AND b.byte_offset = e.byte_offset \
-         ) \
-         AND e.agent = 'claude-code'",
+         ))",
     )
     .fetch_all(pool)
     .await?;
@@ -493,25 +626,29 @@ pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<usize> {
         return Ok(0);
     }
 
-    use crate::canonical::EventParser;
-    let parser = crate::canonical::ClaudeParser;
-    for (session_uuid, byte_offset, payload) in rows {
-        let parsed = parser.parse(&payload);
-        if parsed.blocks.is_empty() {
-            continue;
-        }
+    for (session_uuid, byte_offset, agent, payload) in rows {
+        let parsed = parse_canonical_event(&agent, &payload);
         let mut tx = pool.begin().await?;
         // Update the cached discriminator columns while we're here;
-        // older rows may have the default 'claude-code' but NULL for
-        // speaker / content_kind.
+        // older rows may have the default 'claude-code' but stale or
+        // missing canonical metadata.
         sqlx::query(
-            "UPDATE events SET speaker = $3, content_kind = $4 \
+            "UPDATE events SET speaker = $3, content_kind = $4, \
+                    event_uuid = $5, parent_event_uuid = $6, related_tool_use_id = $7, \
+                    is_sidechain = $8, is_meta = $9, subtype = $10, search_text = $11 \
              WHERE session_uuid = $1 AND byte_offset = $2",
         )
         .bind(session_uuid)
         .bind(byte_offset)
         .bind(parsed.speaker.as_str())
         .bind(parsed.content_kind.as_str())
+        .bind(parsed.event_uuid.as_deref())
+        .bind(parsed.parent_event_uuid.as_deref())
+        .bind(parsed.related_tool_use_id.as_deref())
+        .bind(parsed.is_sidechain)
+        .bind(parsed.is_meta)
+        .bind(parsed.subtype.as_deref())
+        .bind(parsed.search_text())
         .execute(&mut *tx)
         .await?;
         insert_blocks(&mut tx, session_uuid, byte_offset, &parsed.blocks).await?;
@@ -588,18 +725,39 @@ mod tests {
     fn parse_session_uuid_from_filename() {
         let uuid = Uuid::new_v4();
         let path = PathBuf::from(format!("/tmp/abc/{uuid}.jsonl"));
-        assert_eq!(parse_session_uuid(&path), Some(uuid));
+        assert_eq!(
+            parse_session_uuid(&path, TranscriptSource::ClaudeCode),
+            Some(uuid)
+        );
     }
 
     #[test]
     fn parse_session_uuid_none_for_non_uuid_stem() {
         let path = PathBuf::from("/tmp/abc/not-a-uuid.jsonl");
-        assert_eq!(parse_session_uuid(&path), None);
+        assert_eq!(
+            parse_session_uuid(&path, TranscriptSource::ClaudeCode),
+            None
+        );
     }
 
     #[test]
     fn parse_project_hash_is_parent_dir() {
         let path = PathBuf::from("/tmp/my-project-hash/xxx.jsonl");
-        assert_eq!(parse_project_hash(&path), Some("my-project-hash".into()));
+        assert_eq!(
+            parse_project_hash(&path, TranscriptSource::ClaudeCode),
+            Some("my-project-hash".into())
+        );
+    }
+
+    #[test]
+    fn parse_codex_session_uuid_from_rollout_filename() {
+        let uuid = Uuid::new_v4();
+        let path = PathBuf::from(format!(
+            "/tmp/2026/04/19/rollout-2026-04-19T01-53-43-{uuid}.jsonl"
+        ));
+        assert_eq!(
+            parse_session_uuid(&path, TranscriptSource::Codex),
+            Some(uuid)
+        );
     }
 }

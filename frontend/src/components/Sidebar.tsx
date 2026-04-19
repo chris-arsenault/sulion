@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import type {
   DirEntryView,
@@ -46,9 +47,21 @@ export function Sidebar() {
     updateSession,
     createRepo,
     isUnread,
-  } = useSessions();
+  } = useSessions(
+    useShallow((store) => ({
+      sessions: store.sessions,
+      repos: store.repos,
+      selectedSessionId: store.selectedSessionId,
+      selectSession: store.selectSession,
+      createSession: store.createSession,
+      deleteSession: store.deleteSession,
+      updateSession: store.updateSession,
+      createRepo: store.createRepo,
+      isUnread: store.isUnread,
+    })),
+  );
 
-  const { openTab } = useTabs();
+  const openTab = useTabs((store) => store.openTab);
 
   const grouped = useMemo(() => groupByRepo(sessions, repos), [sessions, repos]);
 
@@ -258,8 +271,12 @@ function RepoGroup({
   onNewSessionCancel: () => void;
   isUnread: (sessionId: string, lastEventAt: string | null) => boolean;
 }) {
-  const { setExpanded } = useRepos();
-  const repoState = useRepos().repos[group.name];
+  const { setExpanded, repoState } = useRepos(
+    useShallow((store) => ({
+      setExpanded: store.setExpanded,
+      repoState: store.repos[group.name],
+    })),
+  );
   const git = repoState?.git ?? null;
   const [subOpen, setSubOpen] = useState({
     sessions: true,
@@ -467,12 +484,17 @@ function RepoBadge({
 // ─── File tree ──────────────────────────────────────────────────────
 
 function FileTree({ repoName }: { repoName: string }) {
-  const store = useRepos();
-  const state = store.repos[repoName];
+  const { state, loadDir, setShowAll } = useRepos(
+    useShallow((store) => ({
+      state: store.repos[repoName],
+      loadDir: store.loadDir,
+      setShowAll: store.setShowAll,
+    })),
+  );
 
   useEffect(() => {
-    store.loadDir(repoName, "");
-  }, [repoName, store]);
+    loadDir(repoName, "");
+  }, [loadDir, repoName]);
 
   const dirtyExpand = useMemo(
     () => dirtyAncestors(state?.git?.dirty_by_path ?? {}),
@@ -500,7 +522,7 @@ function FileTree({ repoName }: { repoName: string }) {
         <input
           type="checkbox"
           checked={state?.showAll ?? false}
-          onChange={(e) => store.setShowAll(repoName, e.target.checked)}
+          onChange={(e) => setShowAll(repoName, e.target.checked)}
         />
         show all (incl. ignored)
       </label>
@@ -553,11 +575,17 @@ function TreeRow({
   dirtyExpand: Set<string>;
   depth: number;
 }) {
-  const store = useRepos();
-  const state = store.repos[repoName];
+  const { state, loadDir, toggleDir, refresh } = useRepos(
+    useShallow((store) => ({
+      state: store.repos[repoName],
+      loadDir: store.loadDir,
+      toggleDir: store.toggleDir,
+      refresh: store.refresh,
+    })),
+  );
   const [dragOver, setDragOver] = useState(false);
-  const { open: openCtx } = useContextMenu();
-  const { openTab } = useTabs();
+  const openCtx = useContextMenu((store) => store.open);
+  const openTab = useTabs((store) => store.openTab);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const userExpanded = state?.expanded?.has(fullPath) ?? false;
@@ -571,13 +599,13 @@ function TreeRow({
 
   useEffect(() => {
     if (entry.kind === "dir" && isExpanded) {
-      store.loadDir(repoName, fullPath);
+      loadDir(repoName, fullPath);
     }
-  }, [entry.kind, fullPath, isExpanded, repoName, store]);
+  }, [entry.kind, fullPath, isExpanded, loadDir, repoName]);
 
   const onClickRow = () => {
     if (entry.kind === "dir") {
-      store.toggleDir(repoName, fullPath, isExpanded);
+      toggleDir(repoName, fullPath, isExpanded);
     } else {
       // Future: open file tab / diff tab. For now, no-op beyond select.
       window.dispatchEvent(
@@ -633,7 +661,7 @@ function TreeRow({
         kind: "item",
         id: "toggle",
         label: isExpanded ? "Collapse" : "Expand",
-        onSelect: () => store.toggleDir(repoName, fullPath, isExpanded),
+        onSelect: () => toggleDir(repoName, fullPath, isExpanded),
       });
       items.push({
         kind: "item",
@@ -665,7 +693,7 @@ function TreeRow({
         onSelect: async () => {
           try {
             await stageRepoPath(repoName, fullPath, !staged);
-            store.refresh(repoName);
+            refresh(repoName);
           } catch {
             /* swallowed; ref the error through the store next refresh */
           }
@@ -699,7 +727,7 @@ function TreeRow({
         );
       }
     }
-    store.refresh(repoName);
+    refresh(repoName);
     e.target.value = "";
   };
 
@@ -730,7 +758,7 @@ function TreeRow({
                 );
               }
             }
-            store.refresh(repoName);
+            refresh(repoName);
           },
         }
       : {};
@@ -870,8 +898,8 @@ function SessionRow({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
-  const { openTab } = useTabs();
-  const { open: openCtx } = useContextMenu();
+  const openTab = useTabs((store) => store.openTab);
+  const openCtx = useContextMenu((store) => store.open);
 
   const onRowContextMenu = contextMenuHandler(openCtx, () => {
     const items: MenuItem[] = [
@@ -1118,7 +1146,7 @@ function SessionMenu({
   }) => void | Promise<void>;
 }) {
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const { openTab } = useTabs();
+  const openTab = useTabs((store) => store.openTab);
 
   useEffect(() => {
     const handleDown = (e: MouseEvent) => {

@@ -12,49 +12,36 @@ import {
   useTimelineFilters,
   type TimelineFilters,
 } from "./filters";
+import { makeEvent, textBlock, toolResultBlock, toolUseBlock } from "./test-helpers";
 
 let offset = 0;
-function mk(kind: string, payload: Record<string, unknown>): TimelineEvent {
+function mk(kind: string, overrides: Parameters<typeof makeEvent>[1] = {}) {
   offset += 100;
-  return { byte_offset: offset, timestamp: "2025-01-01T00:00:00Z", kind, payload };
-}
-function mkUserPrompt(text: string): TimelineEvent {
-  return mk("user", {
-    type: "user",
-    message: { role: "user", content: [{ type: "text", text }] },
+  return makeEvent(kind, {
+    byte_offset: offset,
+    timestamp: "2025-01-01T00:00:00Z",
+    ...overrides,
   });
 }
-function mkAssistantText(text: string): TimelineEvent {
-  return mk("assistant", {
-    type: "assistant",
-    message: { role: "assistant", content: [{ type: "text", text }] },
-  });
+function mkUserPrompt(text: string) {
+  return mk("user", { blocks: [textBlock(0, text)] });
+}
+function mkAssistantText(text: string) {
+  return mk("assistant", { blocks: [textBlock(0, text)] });
 }
 function mkAssistantTool(
   id: string,
   name: string,
   input: Record<string, unknown> = {},
-): TimelineEvent {
-  return mk("assistant", {
-    type: "assistant",
-    message: {
-      role: "assistant",
-      content: [{ type: "tool_use", id, name, input }],
-    },
-  });
+) {
+  return mk("assistant", { blocks: [toolUseBlock(0, id, name, input)] });
 }
 function mkToolResult(
   tool_use_id: string,
   content: string,
   is_error = false,
-): TimelineEvent {
-  return mk("user", {
-    type: "user",
-    message: {
-      role: "user",
-      content: [{ type: "tool_result", tool_use_id, content, is_error }],
-    },
-  });
+) {
+  return mk("user", { blocks: [toolResultBlock(0, tool_use_id, content, is_error)] });
 }
 
 function buildTurn(events: TimelineEvent[]): Turn {
@@ -122,27 +109,27 @@ describe("hide semantics — simple and obvious", () => {
 
   describe("toolPairIsVisible", () => {
     it("returns true when the tool name is not hidden", () => {
-      expect(toolPairIsVisible(pair("Edit"), base())).toBe(true);
+      expect(toolPairIsVisible(pair("edit"), base())).toBe(true);
     });
 
     it("hides the pair when its tool name is in hiddenTools", () => {
-      const f = base({ hiddenTools: new Set(["Edit"]) });
-      expect(toolPairIsVisible(pair("Edit"), f)).toBe(false);
-      expect(toolPairIsVisible(pair("Bash"), f)).toBe(true);
+      const f = base({ hiddenTools: new Set(["edit"]) });
+      expect(toolPairIsVisible(pair("edit"), f)).toBe(false);
+      expect(toolPairIsVisible(pair("bash"), f)).toBe(true);
     });
 
     it("user-reported expectation: click Edit → Edit pair hidden, other pairs still visible", () => {
-      const f = base({ hiddenTools: new Set(["Edit"]) });
-      expect(toolPairIsVisible(pair("Edit"), f)).toBe(false);
-      expect(toolPairIsVisible(pair("Bash"), f)).toBe(true);
-      expect(toolPairIsVisible(pair("Read"), f)).toBe(true);
+      const f = base({ hiddenTools: new Set(["edit"]) });
+      expect(toolPairIsVisible(pair("edit"), f)).toBe(false);
+      expect(toolPairIsVisible(pair("bash"), f)).toBe(true);
+      expect(toolPairIsVisible(pair("read"), f)).toBe(true);
     });
 
     it("hiding multiple tools hides all of them, leaves others alone", () => {
-      const f = base({ hiddenTools: new Set(["Edit", "Bash"]) });
-      expect(toolPairIsVisible(pair("Edit"), f)).toBe(false);
-      expect(toolPairIsVisible(pair("Bash"), f)).toBe(false);
-      expect(toolPairIsVisible(pair("Read"), f)).toBe(true);
+      const f = base({ hiddenTools: new Set(["edit", "bash"]) });
+      expect(toolPairIsVisible(pair("edit"), f)).toBe(false);
+      expect(toolPairIsVisible(pair("bash"), f)).toBe(false);
+      expect(toolPairIsVisible(pair("read"), f)).toBe(true);
     });
   });
 
@@ -151,7 +138,7 @@ describe("hide semantics — simple and obvious", () => {
       offset = 0;
       return buildTurn([
         mkUserPrompt("edit foo.ts"),
-        mkAssistantTool("t1", "Edit", { file_path: "/src/foo.ts" }),
+        mkAssistantTool("t1", "edit", { path: "/src/foo.ts" }),
         mkToolResult("t1", "edit applied"),
         mkAssistantText("done"),
       ]);
@@ -167,7 +154,7 @@ describe("hide semantics — simple and obvious", () => {
     });
 
     it("hiding a tool does NOT drop the turn from the list — only hides the pair row", () => {
-      const f = base({ hiddenTools: new Set(["Edit"]) });
+      const f = base({ hiddenTools: new Set(["edit"]) });
       expect(turnPassesIncludeFilters(canonicalTurn(), f)).toBe(true);
     });
 
@@ -175,7 +162,7 @@ describe("hide semantics — simple and obvious", () => {
       offset = 0;
       const errTurn = buildTurn([
         mkUserPrompt("p"),
-        mkAssistantTool("e", "Bash", { command: "fail" }),
+        mkAssistantTool("e", "bash", { command: "fail" }),
         mkToolResult("e", "err", true),
       ]);
       const okTurn = canonicalTurn();
@@ -187,7 +174,7 @@ describe("hide semantics — simple and obvious", () => {
       offset = 0;
       const fooTurn = buildTurn([
         mkUserPrompt("p"),
-        mkAssistantTool("r", "Read", { file_path: "/src/foo.ts" }),
+        mkAssistantTool("r", "read", { path: "/src/foo.ts" }),
         mkToolResult("r", "content"),
       ]);
       expect(turnPassesIncludeFilters(fooTurn, base({ filePath: "foo" }))).toBe(true);
@@ -213,7 +200,7 @@ describe("hide semantics — simple and obvious", () => {
         hasActiveIncludeFilters(base({ hiddenSpeakers: new Set(["user"]) })),
       ).toBe(false);
       expect(
-        hasActiveIncludeFilters(base({ hiddenTools: new Set(["Edit"]) })),
+        hasActiveIncludeFilters(base({ hiddenTools: new Set(["edit"]) })),
       ).toBe(false);
       expect(
         hasActiveIncludeFilters(base({ showThinking: false })),
@@ -247,17 +234,17 @@ describe("useTimelineFilters", () => {
 
   it("toggleTool adds and removes the tool from hiddenTools", () => {
     const { result } = renderHook(() => useTimelineFilters());
-    act(() => result.current.toggleTool("Edit"));
-    expect(result.current.filters.hiddenTools.has("Edit")).toBe(true);
-    act(() => result.current.toggleTool("Edit"));
-    expect(result.current.filters.hiddenTools.has("Edit")).toBe(false);
+    act(() => result.current.toggleTool("edit"));
+    expect(result.current.filters.hiddenTools.has("edit")).toBe(true);
+    act(() => result.current.toggleTool("edit"));
+    expect(result.current.filters.hiddenTools.has("edit")).toBe(false);
   });
 
   it("reset returns to defaults", () => {
     const { result } = renderHook(() => useTimelineFilters());
     act(() => {
       result.current.toggleSpeaker("user");
-      result.current.toggleTool("Edit");
+      result.current.toggleTool("edit");
       result.current.setShowThinking(false);
       result.current.setFilePath("foo");
     });
@@ -282,7 +269,7 @@ describe("useTimelineFilters", () => {
       "shuttlecraft.timeline.filters.v2",
       JSON.stringify({
         hiddenSpeakers: ["user"],
-        hiddenTools: ["Edit"],
+        hiddenTools: ["edit"],
         errorsOnly: "maybe",
         showThinking: null,
         showBookkeeping: undefined,
@@ -298,6 +285,6 @@ describe("useTimelineFilters", () => {
     expect(typeof f.showSidechain).toBe("boolean");
     expect(typeof f.filePath).toBe("string");
     expect(f.hiddenSpeakers.has("user")).toBe(true);
-    expect(f.hiddenTools.has("Edit")).toBe(true);
+    expect(f.hiddenTools.has("edit")).toBe(true);
   });
 });

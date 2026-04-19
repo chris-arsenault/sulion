@@ -6,12 +6,16 @@
 //! this socket:
 //!
 //! ```json
-//! {"pty_id": "<uuid>", "claude_session_uuid": "<uuid>"}
+//! {"pty_id": "<uuid>", "session_uuid": "<uuid>", "agent": "claude-code"}
 //! ```
 //!
-//! The backend upserts the `claude_sessions` row, sets its `pty_session_id`
-//! to the PTY, and updates `pty_sessions.current_claude_session_uuid` so
-//! the UI can show "this PTY is running Claude session X."
+//! Older Claude hooks still send `claude_session_uuid`; we accept that as
+//! an alias and default the agent to `claude-code`.
+//!
+//! The backend upserts the session row, sets its `pty_session_id`
+//! to the PTY, and updates `pty_sessions.current_session_uuid` /
+//! `current_session_agent` so the UI can show "this PTY is running
+//! agent session X."
 
 use std::path::{Path, PathBuf};
 
@@ -25,7 +29,14 @@ use crate::db::Pool;
 #[derive(Debug, Deserialize)]
 pub struct CorrelateMsg {
     pub pty_id: Uuid,
-    pub claude_session_uuid: Uuid,
+    #[serde(alias = "claude_session_uuid")]
+    pub session_uuid: Uuid,
+    #[serde(default = "default_agent")]
+    pub agent: String,
+}
+
+fn default_agent() -> String {
+    "claude-code".to_string()
 }
 
 /// Bind the socket and run an accept loop. The socket file is removed
@@ -78,32 +89,42 @@ async fn handle_conn(pool: &Pool, stream: UnixStream) -> anyhow::Result<()> {
 /// Apply a correlation to the database. Idempotent and race-tolerant:
 /// the ingester or the hook might arrive first; both upsert.
 pub async fn apply(pool: &Pool, msg: &CorrelateMsg) -> anyhow::Result<()> {
-    // Upsert claude_sessions with the pty linkage.
+    // Upsert agent session with the pty linkage.
     sqlx::query(
-        "INSERT INTO claude_sessions (session_uuid, pty_session_id) \
-         VALUES ($1, $2) \
+        "INSERT INTO claude_sessions (session_uuid, agent, pty_session_id) \
+         VALUES ($1, $2, $3) \
          ON CONFLICT (session_uuid) DO UPDATE \
-           SET pty_session_id = EXCLUDED.pty_session_id",
+           SET agent = EXCLUDED.agent, \
+               pty_session_id = EXCLUDED.pty_session_id",
     )
-    .bind(msg.claude_session_uuid)
+    .bind(msg.session_uuid)
+    .bind(&msg.agent)
     .bind(msg.pty_id)
     .execute(pool)
     .await?;
 
-    // Point the PTY row at this (now-current) Claude session.
+    // Point the PTY row at this now-current agent session. Keep the
+    // legacy Claude-specific pointer populated only for Claude rows.
     sqlx::query(
         "UPDATE pty_sessions \
-         SET current_claude_session_uuid = $2 \
+         SET current_session_uuid = $2, \
+             current_session_agent = $3, \
+             current_claude_session_uuid = CASE \
+                 WHEN $3 = 'claude-code' THEN $2 \
+                 ELSE NULL \
+             END \
          WHERE id = $1",
     )
     .bind(msg.pty_id)
-    .bind(msg.claude_session_uuid)
+    .bind(msg.session_uuid)
+    .bind(&msg.agent)
     .execute(pool)
     .await?;
 
     tracing::info!(
         pty = %msg.pty_id,
-        claude = %msg.claude_session_uuid,
+        session = %msg.session_uuid,
+        agent = %msg.agent,
         "correlation recorded",
     );
     Ok(())
@@ -114,11 +135,21 @@ pub async fn apply(pool: &Pool, msg: &CorrelateMsg) -> anyhow::Result<()> {
 /// default hook but useful for diagnostics. Writes one JSON line to the
 /// given socket and reads the ACK.
 #[allow(dead_code)]
-pub fn send_blocking(sock: &Path, pty_id: Uuid, claude_session_uuid: Uuid) -> std::io::Result<()> {
+pub fn send_blocking(sock: &Path, pty_id: Uuid, session_uuid: Uuid) -> std::io::Result<()> {
+    send_blocking_for_agent(sock, pty_id, session_uuid, "claude-code")
+}
+
+pub fn send_blocking_for_agent(
+    sock: &Path,
+    pty_id: Uuid,
+    session_uuid: Uuid,
+    agent: &str,
+) -> std::io::Result<()> {
     use std::io::{Read, Write};
     let mut s = std::os::unix::net::UnixStream::connect(sock)?;
-    let line =
-        format!("{{\"pty_id\":\"{pty_id}\",\"claude_session_uuid\":\"{claude_session_uuid}\"}}\n");
+    let line = format!(
+        "{{\"pty_id\":\"{pty_id}\",\"session_uuid\":\"{session_uuid}\",\"agent\":\"{agent}\"}}\n"
+    );
     s.write_all(line.as_bytes())?;
     s.flush()?;
     let mut ack = [0u8; 4];
@@ -133,10 +164,11 @@ mod tests {
     #[test]
     fn parse_correlate_msg() {
         let pty = Uuid::new_v4();
-        let claude = Uuid::new_v4();
-        let json = format!(r#"{{"pty_id":"{pty}","claude_session_uuid":"{claude}"}}"#);
+        let session = Uuid::new_v4();
+        let json = format!(r#"{{"pty_id":"{pty}","claude_session_uuid":"{session}"}}"#);
         let parsed: CorrelateMsg = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.pty_id, pty);
-        assert_eq!(parsed.claude_session_uuid, claude);
+        assert_eq!(parsed.session_uuid, session);
+        assert_eq!(parsed.agent, "claude-code");
     }
 }

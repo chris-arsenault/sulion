@@ -1,8 +1,10 @@
 import type { TimelineEvent } from "../../api/types";
 import {
+  isAssistantEvent,
   isBookkeepingEvent,
   isRealUserPrompt,
   isSidechainEvent,
+  isToolResultEvent,
   thinkingBlocksIn,
   toolResultsIn,
   toolUsesIn,
@@ -99,13 +101,14 @@ export function groupIntoTurns(events: TimelineEvent[]): Turn[] {
     let useOrder = 0;
 
     for (const ev of turn.events) {
-      if (ev.kind === "assistant") {
+      if (isAssistantEvent(ev)) {
         for (const use of toolUsesIn(ev)) {
           const id = use.id ?? `noid-${useOrder}`;
           uses.set(id, { block: use, event: ev, order: useOrder++ });
         }
         if (hasUsefulThinking(ev)) turn.thinkingCount += 1;
-      } else if (ev.kind === "user") {
+      }
+      if (isToolResultEvent(ev)) {
         for (const result of toolResultsIn(ev)) {
           const id = result.tool_use_id ?? `noid-${useOrder}`;
           results.set(id, { block: result, event: ev });

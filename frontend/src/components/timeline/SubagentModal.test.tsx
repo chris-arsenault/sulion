@@ -2,51 +2,46 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import type { TimelineEvent } from "../../api/types";
 import { SubagentModal, collectSubagentEvents } from "./SubagentModal";
+import { makeEvent, textBlock, toolUseBlock } from "./test-helpers";
 
 function ev(
   byte_offset: number,
   kind: string,
-  payload: Record<string, unknown>,
-): TimelineEvent {
-  return {
+  overrides: Parameters<typeof makeEvent>[1],
+) {
+  return makeEvent(kind, {
     byte_offset,
     timestamp: "2025-01-01T00:00:00Z",
-    kind,
-    payload,
-  };
+    ...overrides,
+  });
 }
 
 describe("collectSubagentEvents", () => {
   it("collects sidechain events traceable to the Task tool_use via parentUuid", () => {
     // Main thread: user → assistant emits Task tool_use t1
     const mainAssistant = ev(100, "assistant", {
-      type: "assistant",
-      uuid: "asst-1",
-      message: { content: [{ type: "tool_use", id: "t1", name: "Task" }] },
+      event_uuid: "asst-1",
+      blocks: [toolUseBlock(0, "t1", "task", { agent: "Explore" }, "Task")],
     });
     // Sidechain root: first subagent event chained off the assistant
     const sub1 = ev(200, "assistant", {
-      type: "assistant",
-      uuid: "sub-1",
-      parentUuid: "asst-1",
-      isSidechain: true,
-      message: { content: [{ type: "text", text: "starting" }] },
+      event_uuid: "sub-1",
+      parent_event_uuid: "asst-1",
+      is_sidechain: true,
+      blocks: [textBlock(0, "starting")],
     });
     const sub2 = ev(300, "assistant", {
-      type: "assistant",
-      uuid: "sub-2",
-      parentUuid: "sub-1",
-      isSidechain: true,
-      message: { content: [{ type: "text", text: "working" }] },
+      event_uuid: "sub-2",
+      parent_event_uuid: "sub-1",
+      is_sidechain: true,
+      blocks: [textBlock(0, "working")],
     });
     const unrelated = ev(400, "assistant", {
-      type: "assistant",
-      uuid: "other",
-      parentUuid: "somewhere-else",
-      isSidechain: true,
-      message: { content: [{ type: "text", text: "nope" }] },
+      event_uuid: "other",
+      parent_event_uuid: "somewhere-else",
+      is_sidechain: true,
+      blocks: [textBlock(0, "nope")],
     });
 
     const out = collectSubagentEvents(
@@ -54,7 +49,7 @@ describe("collectSubagentEvents", () => {
       "t1",
       "asst-1",
     );
-    const uuids = out.map((e) => (e.payload as { uuid?: string }).uuid);
+    const uuids = out.map((e) => e.event_uuid);
     expect(uuids).toContain("sub-1");
     expect(uuids).toContain("sub-2");
     expect(uuids).not.toContain("other");
@@ -64,11 +59,10 @@ describe("collectSubagentEvents", () => {
 
   it("includes events referencing the Task tool_use_id explicitly", () => {
     const report = ev(500, "user", {
-      type: "user",
-      uuid: "report-1",
-      tool_use_id: "t1",
-      isSidechain: true,
-      message: { content: [{ type: "text", text: "report" }] },
+      event_uuid: "report-1",
+      related_tool_use_id: "t1",
+      is_sidechain: true,
+      blocks: [textBlock(0, "report")],
     });
     const out = collectSubagentEvents([report], "t1");
     expect(out).toHaveLength(1);
@@ -76,10 +70,9 @@ describe("collectSubagentEvents", () => {
 
   it("returns empty when no events match", () => {
     const bystander = ev(600, "assistant", {
-      type: "assistant",
-      uuid: "b",
-      isSidechain: false,
-      message: { content: [{ type: "text", text: "nope" }] },
+      event_uuid: "b",
+      is_sidechain: false,
+      blocks: [textBlock(0, "nope")],
     });
     expect(collectSubagentEvents([bystander], "t1").length).toBe(0);
   });
@@ -138,23 +131,20 @@ describe("SubagentModal", () => {
 
   it("renders sub-events grouped into turns when lineage is present", () => {
     const mainAsst = ev(100, "assistant", {
-      type: "assistant",
-      uuid: "asst-1",
-      message: { content: [{ type: "tool_use", id: "t1", name: "Task" }] },
+      event_uuid: "asst-1",
+      blocks: [toolUseBlock(0, "t1", "task", { agent: "Explore" }, "Task")],
     });
     const subPrompt = ev(200, "user", {
-      type: "user",
-      uuid: "sub-prompt",
-      parentUuid: "asst-1",
-      isSidechain: true,
-      message: { content: [{ type: "text", text: "subagent task" }] },
+      event_uuid: "sub-prompt",
+      parent_event_uuid: "asst-1",
+      is_sidechain: true,
+      blocks: [textBlock(0, "subagent task")],
     });
     const subAsst = ev(300, "assistant", {
-      type: "assistant",
-      uuid: "sub-asst",
-      parentUuid: "sub-prompt",
-      isSidechain: true,
-      message: { content: [{ type: "text", text: "subagent reply" }] },
+      event_uuid: "sub-asst",
+      parent_event_uuid: "sub-prompt",
+      is_sidechain: true,
+      blocks: [textBlock(0, "subagent reply")],
     });
     render(
       <SubagentModal

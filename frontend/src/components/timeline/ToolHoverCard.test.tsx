@@ -3,24 +3,19 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { ToolPair } from "./grouping";
-import type { TimelineEvent } from "../../api/types";
 import { ToolHoverCard } from "./ToolHoverCard";
+import { makeEvent } from "./test-helpers";
 
-function ev(): TimelineEvent {
-  return {
-    byte_offset: 100,
-    timestamp: "2025-01-01T00:00:00Z",
-    kind: "assistant",
-    payload: {},
-  };
+function ev() {
+  return makeEvent("assistant", { byte_offset: 100 });
 }
 
 function mkPair(overrides: Partial<ToolPair> = {}): ToolPair {
   return {
     id: "t1",
-    name: "Read",
-    input: { file_path: "/etc/hosts" },
-    use: { type: "tool_use", id: "t1", name: "Read" } as never,
+    name: "read",
+    input: { path: "/etc/hosts" },
+    use: { type: "tool_use", id: "t1", name: "read" } as never,
     useEvent: ev(),
     result: { type: "tool_result", tool_use_id: "t1", content: "127.0.0.1 localhost" },
     resultEvent: ev(),
@@ -48,7 +43,7 @@ describe("ToolHoverCard", () => {
       />,
     );
     expect(screen.getByTestId("tool-hover-card")).toBeDefined();
-    expect(screen.getByText("Read")).toBeDefined();
+    expect(screen.getAllByText("read")).toHaveLength(2);
     expect(screen.getByText(/127\.0\.0\.1 localhost/)).toBeDefined();
   });
 

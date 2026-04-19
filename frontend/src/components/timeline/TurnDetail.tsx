@@ -34,10 +34,13 @@ import { ThinkingFlyout } from "./ThinkingFlyout";
 import { ToolHoverCard } from "./ToolHoverCard";
 import { ToolCallRenderer } from "./tools/renderers";
 import {
-  flattenContent,
-  payloadOf,
+  isAssistantEvent,
+  isSummaryEvent,
+  isSystemEvent,
+  isToolResultEvent,
   textBlocksIn,
   thinkingBlocksIn,
+  toolUsesIn,
   userPromptText,
 } from "./types";
 import "./TurnDetail.css";
@@ -165,10 +168,7 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent, filters }: Prop
                 className="td__sub td__sub--summary"
               >
                 <span className="td__sub-label">summary</span>
-                <span>
-                  {flattenContent(payloadOf(chunk.event).message?.content ?? "") ||
-                    summaryTextOf(chunk.event)}
-                </span>
+                <span>{summaryTextOf(chunk.event)}</span>
               </div>
             );
           }
@@ -180,8 +180,7 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent, filters }: Prop
               >
                 <span className="td__sub-label">system</span>
                 <span>
-                  {payloadOf(chunk.event).subtype ?? "system"}{" "}
-                  {flattenContent(payloadOf(chunk.event).message?.content ?? "")}
+                  {chunk.event.subtype ?? "system"} {textBlocksIn(chunk.event).join(" ")}
                 </span>
               </div>
             );
@@ -193,8 +192,22 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent, filters }: Prop
             >
               <span className="td__sub-label">{chunk.event.kind}</span>
               <details>
-                <summary>raw</summary>
-                <pre>{JSON.stringify(chunk.event.payload, null, 2)}</pre>
+                <summary>details</summary>
+                <pre>
+                  {JSON.stringify(
+                    {
+                      event_uuid: chunk.event.event_uuid,
+                      parent_event_uuid: chunk.event.parent_event_uuid,
+                      related_tool_use_id: chunk.event.related_tool_use_id,
+                      subtype: chunk.event.subtype,
+                      speaker: chunk.event.speaker,
+                      content_kind: chunk.event.content_kind,
+                      blocks: chunk.event.blocks,
+                    },
+                    null,
+                    2,
+                  )}
+                </pre>
               </details>
             </div>
           );
@@ -250,20 +263,15 @@ function buildChunks(
   };
 
   for (const ev of turn.events) {
-    if (ev.kind === "user" && ev === turn.userPrompt) continue;
-    if (ev.kind === "user") continue; // tool_result wrapper — surfaced via pairs
+    if (ev === turn.userPrompt) continue;
+    if (isToolResultEvent(ev)) continue; // surfaced via pairs
     if (filters && !eventIsVisible(ev, filters)) continue;
 
-    if (ev.kind === "assistant") {
+    if (isAssistantEvent(ev)) {
       if (!pending) pending = [];
       pending.push(ev);
 
-      const content = payloadOf(ev).message?.content;
-      const toolUseIds = Array.isArray(content)
-        ? (content as Array<{ type: string; id?: string }>)
-            .filter((b) => b.type === "tool_use")
-            .map((b) => b.id ?? "")
-        : [];
+      const toolUseIds = toolUsesIn(ev).map((tool) => tool.id ?? "");
       const visiblePairs = toolUseIds
         .map((id) => pairById.get(id))
         .filter(
@@ -281,8 +289,8 @@ function buildChunks(
     }
 
     flushPending();
-    if (ev.kind === "summary") chunks.push({ kind: "summary", event: ev });
-    else if (ev.kind === "system") chunks.push({ kind: "system", event: ev });
+    if (isSummaryEvent(ev)) chunks.push({ kind: "summary", event: ev });
+    else if (isSystemEvent(ev)) chunks.push({ kind: "system", event: ev });
     else chunks.push({ kind: "generic", event: ev });
   }
   flushPending();
@@ -435,7 +443,7 @@ function ToolPairRow({
             <span className="td__tool-status td__tool-status--ok">ok</span>
           )}
         </button>
-        {pair.name === "Task" && onOpenSubagent && (
+        {pair.name === "task" && onOpenSubagent && (
           <button
             type="button"
             className="td__tool-subagent"
@@ -482,24 +490,24 @@ function toolSummary(pair: ToolPair): string {
   const pick = (k: string) =>
     typeof input[k] === "string" ? (input[k] as string) : undefined;
   switch (pair.name) {
-    case "Edit":
-    case "Write":
-    case "MultiEdit":
-    case "Read":
-      return pick("file_path") ?? "";
-    case "Bash":
+    case "edit":
+    case "write":
+    case "multi_edit":
+    case "read":
+      return pick("path") ?? "";
+    case "bash":
       return (pick("command") ?? "").slice(0, 120);
-    case "Grep":
+    case "grep":
       return pick("pattern") ?? "";
-    case "Glob":
+    case "glob":
       return pick("pattern") ?? "";
-    case "Task":
-      return pick("description") ?? pick("subagent_type") ?? "";
-    case "TodoWrite":
+    case "task":
+      return pick("description") ?? pick("agent") ?? "";
+    case "todo_write":
       return "todos updated";
-    case "WebFetch":
+    case "web_fetch":
       return pick("url") ?? "";
-    case "WebSearch":
+    case "web_search":
       return pick("query") ?? "";
     default:
       return "";
@@ -507,7 +515,5 @@ function toolSummary(pair: ToolPair): string {
 }
 
 function summaryTextOf(ev: TimelineEvent): string {
-  const p = payloadOf(ev);
-  const s = (p as { summary?: unknown }).summary;
-  return typeof s === "string" ? s : "";
+  return textBlocksIn(ev).join(" ");
 }

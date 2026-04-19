@@ -50,7 +50,7 @@ pub struct PtyStats {
 pub struct DbStats {
     pub database_size_bytes: i64,
     pub events_rowcount: i64,
-    pub claude_sessions_rowcount: i64,
+    pub agent_sessions_rowcount: i64,
     pub pty_sessions_rowcount: i64,
     pub ingester_state_rowcount: i64,
 }
@@ -142,7 +142,7 @@ async fn db_stats(pool: &crate::db::Pool) -> sqlx::Result<DbStats> {
     let events: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events")
         .fetch_one(pool)
         .await?;
-    let claude_sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM claude_sessions")
+    let agent_sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM claude_sessions")
         .fetch_one(pool)
         .await?;
     let pty_sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pty_sessions")
@@ -157,7 +157,7 @@ async fn db_stats(pool: &crate::db::Pool) -> sqlx::Result<DbStats> {
     Ok(DbStats {
         database_size_bytes: db_size,
         events_rowcount: events,
-        claude_sessions_rowcount: claude_sessions,
+        agent_sessions_rowcount: agent_sessions,
         pty_sessions_rowcount: pty_sessions,
         ingester_state_rowcount: ingester_state,
     })

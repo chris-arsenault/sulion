@@ -1,7 +1,7 @@
 //! Search surface. Three scopes:
 //!
-//! - `timeline`  → Postgres tsvector over `events.payload` for one
-//!   Claude session's history.
+//! - `timeline`  → Postgres ILIKE over canonical `events.search_text`
+//!   for one transcript session's history.
 //! - `repo`      → spawn `rg` streaming file-content matches under the
 //!   repo root, plus `timeline` unioned across every session in that
 //!   repo.
@@ -47,7 +47,8 @@ pub enum SearchHit {
     #[serde(rename = "event")]
     Event {
         session_id: String,
-        claude_session_uuid: String,
+        session_uuid: String,
+        session_agent: String,
         byte_offset: i64,
         kind: String,
         timestamp: String,
@@ -235,10 +236,10 @@ fn parse_rg_line(line: &str, repo_name: &str) -> Option<SearchHit> {
     })
 }
 
-/// Timeline full-text: scans `events.payload::text` with ILIKE for a
-/// quick-and-simple match. A GIN/tsvector index would scale better,
-/// but we're at <10k events per session today — the simpler path buys
-/// enough runway.
+/// Timeline full-text: scans canonical `events.search_text` with ILIKE
+/// for a quick-and-simple match. A GIN/tsvector index would scale
+/// better, but we're at <10k events per session today — the simpler
+/// path buys enough runway.
 async fn search_timeline(
     state: &AppState,
     session_id: Option<&str>,
@@ -248,13 +249,12 @@ async fn search_timeline(
     let session_uuid = match session_id {
         Some(id) => {
             let uuid = uuid::Uuid::parse_str(id)?;
-            // pty_sessions.id -> current claude_session_uuid
-            let row: Option<(Option<uuid::Uuid>,)> = sqlx::query_as(
-                "SELECT current_claude_session_uuid FROM pty_sessions WHERE id = $1",
-            )
-            .bind(uuid)
-            .fetch_optional(&state.pool)
-            .await?;
+            // pty_sessions.id -> current transcript session uuid
+            let row: Option<(Option<uuid::Uuid>,)> =
+                sqlx::query_as("SELECT current_session_uuid FROM pty_sessions WHERE id = $1")
+                    .bind(uuid)
+                    .fetch_optional(&state.pool)
+                    .await?;
             match row {
                 Some((Some(u),)) => Some((uuid, u)),
                 _ => return Ok(Vec::new()),
@@ -268,37 +268,33 @@ async fn search_timeline(
     )>;
     let _ = rows; // suppress unused
 
-    let out = if let Some((pty_id, claude_uuid)) = session_uuid {
+    let out = if let Some((pty_id, session_uuid)) = session_uuid {
         let pty_id_str = pty_id.to_string();
-        let claude_uuid_str = claude_uuid.to_string();
-        sqlx::query_as::<
-            _,
-            (
-                i64,
-                chrono::DateTime<chrono::Utc>,
-                String,
-                serde_json::Value,
-            ),
-        >(
-            "SELECT byte_offset, timestamp, kind, payload \
-             FROM events \
-             WHERE session_uuid = $1 AND payload::text ILIKE $2 \
+        let session_uuid_str = session_uuid.to_string();
+        sqlx::query_as::<_, (i64, chrono::DateTime<chrono::Utc>, String, String, String)>(
+            "SELECT e.byte_offset, e.timestamp, e.kind, e.search_text, s.agent \
+             FROM events e \
+             JOIN claude_sessions s ON s.session_uuid = e.session_uuid \
+             WHERE e.session_uuid = $1 AND e.search_text ILIKE $2 \
              ORDER BY byte_offset DESC \
              LIMIT 100",
         )
-        .bind(claude_uuid)
+        .bind(session_uuid)
         .bind(&pattern)
         .fetch_all(&state.pool)
         .await?
         .into_iter()
-        .map(|(offset, ts, kind, payload)| SearchHit::Event {
-            session_id: pty_id_str.clone(),
-            claude_session_uuid: claude_uuid_str.clone(),
-            byte_offset: offset,
-            kind,
-            timestamp: ts.to_rfc3339(),
-            preview: snippet(&payload, query),
-        })
+        .map(
+            |(offset, ts, kind, search_text, session_agent)| SearchHit::Event {
+                session_id: pty_id_str.clone(),
+                session_uuid: session_uuid_str.clone(),
+                session_agent,
+                byte_offset: offset,
+                kind,
+                timestamp: ts.to_rfc3339(),
+                preview: snippet(&search_text, query),
+            },
+        )
         .collect()
     } else {
         Vec::new()
@@ -307,11 +303,10 @@ async fn search_timeline(
     Ok(out)
 }
 
-fn snippet(payload: &serde_json::Value, query: &str) -> String {
-    // Flatten payload to a string and extract a ±80-char window around
-    // the first match. Keeps preview small without yanking the whole
-    // event back to the client.
-    let s = payload.to_string();
+fn snippet(search_text: &str, query: &str) -> String {
+    // Extract a ±80-char window around the first match. Keeps preview
+    // small without yanking the whole event back to the client.
+    let s = search_text;
     let lower = s.to_lowercase();
     let q = query.to_lowercase();
     if let Some(idx) = lower.find(&q) {

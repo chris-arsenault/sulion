@@ -32,7 +32,7 @@ pub enum PtyState {
     Deleted,
     /// Process was running when the backend last stopped and never got
     /// a supervisor signal — we can't resume it, but the row (and its
-    /// linked Claude session) is still useful for "resume claude in a
+    /// linked agent session) is still useful for "resume Claude in a
     /// fresh PTY" workflows.
     Orphaned,
 }
@@ -80,8 +80,9 @@ pub struct PtyMetadata {
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
     pub exit_code: Option<i32>,
-    pub current_claude_session_uuid: Option<Uuid>,
-    /// MAX(events.timestamp) for the session's current claude session,
+    pub current_session_uuid: Option<Uuid>,
+    pub current_session_agent: Option<String>,
+    /// MAX(events.timestamp) for the session's current transcript session,
     /// populated by `list()` only.
     pub last_event_at: Option<chrono::DateTime<chrono::Utc>>,
     /// User-facing label; overrides the uuid prefix in the sidebar.
@@ -222,7 +223,8 @@ impl PtyManager {
             created_at: chrono::Utc::now(),
             ended_at: None,
             exit_code: None,
-            current_claude_session_uuid: None,
+            current_session_uuid: None,
+            current_session_agent: None,
             last_event_at: None,
             label: None,
             pinned: false,
@@ -269,10 +271,10 @@ impl PtyManager {
     pub async fn list(&self) -> anyhow::Result<Vec<PtyMetadata>> {
         let rows = sqlx::query_as::<_, PtyRowWithActivity>(
             "SELECT ps.id, ps.repo, ps.working_dir, ps.state, ps.created_at, \
-             ps.ended_at, ps.exit_code, ps.current_claude_session_uuid, \
+             ps.ended_at, ps.exit_code, ps.current_session_uuid, ps.current_session_agent, \
              ps.label, ps.pinned, ps.color, \
              (SELECT MAX(e.timestamp) FROM events e \
-              WHERE e.session_uuid = ps.current_claude_session_uuid) AS last_event_at \
+              WHERE e.session_uuid = ps.current_session_uuid) AS last_event_at \
              FROM pty_sessions ps \
              WHERE ps.state <> 'deleted' \
              ORDER BY ps.pinned DESC, ps.created_at DESC",
@@ -388,7 +390,8 @@ struct PtyRow {
     created_at: chrono::DateTime<chrono::Utc>,
     ended_at: Option<chrono::DateTime<chrono::Utc>>,
     exit_code: Option<i32>,
-    current_claude_session_uuid: Option<Uuid>,
+    current_session_uuid: Option<Uuid>,
+    current_session_agent: Option<String>,
 }
 
 impl PtyRow {
@@ -401,7 +404,8 @@ impl PtyRow {
             created_at: self.created_at,
             ended_at: self.ended_at,
             exit_code: self.exit_code,
-            current_claude_session_uuid: self.current_claude_session_uuid,
+            current_session_uuid: self.current_session_uuid,
+            current_session_agent: self.current_session_agent,
             last_event_at: None,
             label: None,
             pinned: false,
@@ -421,7 +425,8 @@ struct PtyRowWithActivity {
     created_at: chrono::DateTime<chrono::Utc>,
     ended_at: Option<chrono::DateTime<chrono::Utc>>,
     exit_code: Option<i32>,
-    current_claude_session_uuid: Option<Uuid>,
+    current_session_uuid: Option<Uuid>,
+    current_session_agent: Option<String>,
     label: Option<String>,
     pinned: bool,
     color: Option<String>,
@@ -438,7 +443,8 @@ impl PtyRowWithActivity {
             created_at: self.created_at,
             ended_at: self.ended_at,
             exit_code: self.exit_code,
-            current_claude_session_uuid: self.current_claude_session_uuid,
+            current_session_uuid: self.current_session_uuid,
+            current_session_agent: self.current_session_agent,
             last_event_at: self.last_event_at,
             label: self.label,
             pinned: self.pinned,
@@ -549,7 +555,7 @@ async fn wait_for_exit(pid: u32, timeout: std::time::Duration) -> bool {
 pub async fn read_meta(pool: &Pool, id: Uuid) -> anyhow::Result<Option<PtyMetadata>> {
     let row = sqlx::query_as::<_, PtyRow>(
         "SELECT id, repo, working_dir, state, created_at, ended_at, exit_code, \
-         current_claude_session_uuid \
+         current_session_uuid, current_session_agent \
          FROM pty_sessions WHERE id = $1",
     )
     .bind(id)
