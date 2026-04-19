@@ -1,5 +1,9 @@
-// Facet chip row rendered above the timeline virtuoso list. Drives the
-// useTimelineFilters state; all selections persist to localStorage.
+// Facet chips for the timeline. Simple semantic:
+//   - A chip is BRIGHT (default) when that category is visible
+//   - Clicking it DIMS it + draws a strikethrough → category hidden
+//   - Click again → bright → visible
+// The left-bar "errors only" and the file-path textbox are include-only
+// filters (they're labeled as such and behave intuitively).
 
 import { KNOWN_TOOLS, type TimelineFilters } from "./filters";
 import "./FilterChips.css";
@@ -27,9 +31,9 @@ export function FilterChips({
   setFilePath,
   reset,
 }: Props) {
-  const hasActive =
-    filters.speakers.size > 0 ||
-    filters.tools.size > 0 ||
+  const hasAnythingHidden =
+    filters.hiddenSpeakers.size > 0 ||
+    filters.hiddenTools.size > 0 ||
     filters.errorsOnly ||
     filters.filePath.length > 0 ||
     !filters.showThinking ||
@@ -39,69 +43,58 @@ export function FilterChips({
   return (
     <div className="fc" data-testid="filter-chips">
       <div className="fc__group">
-        <span className="fc__label">Speaker</span>
-        <Chip
-          active={filters.speakers.has("user")}
+        <span className="fc__label">Show</span>
+        <HideChip
+          hidden={filters.hiddenSpeakers.has("user")}
           onClick={() => toggleSpeaker("user")}
-        >
-          user
-        </Chip>
-        <Chip
-          active={filters.speakers.has("assistant")}
+          label="user"
+        />
+        <HideChip
+          hidden={filters.hiddenSpeakers.has("assistant")}
           onClick={() => toggleSpeaker("assistant")}
-        >
-          claude
-        </Chip>
-        <Chip
-          active={filters.speakers.has("tool_result")}
+          label="claude"
+        />
+        <HideChip
+          hidden={filters.hiddenSpeakers.has("tool_result")}
           onClick={() => toggleSpeaker("tool_result")}
-        >
-          tool result
-        </Chip>
+          label="tool result"
+        />
       </div>
 
       <div className="fc__group">
-        <span className="fc__label">Tool</span>
+        <span className="fc__label">Tools</span>
         {KNOWN_TOOLS.map((t) => (
-          <Chip
+          <HideChip
             key={t}
-            active={filters.tools.has(t)}
+            hidden={filters.hiddenTools.has(t)}
             onClick={() => toggleTool(t)}
-          >
-            {t}
-          </Chip>
+            label={t}
+            variant={t.toLowerCase()}
+          />
         ))}
       </div>
 
       <div className="fc__group">
-        <Chip
+        <IncludeChip
           active={filters.errorsOnly}
-          variant="warn"
           onClick={() => setErrorsOnly(!filters.errorsOnly)}
-        >
-          errors only
-        </Chip>
-        <Chip
-          active={filters.showThinking}
-          variant="neutral"
+          label="errors only"
+        />
+        <HideChip
+          hidden={!filters.showThinking}
           onClick={() => setShowThinking(!filters.showThinking)}
-        >
-          {filters.showThinking ? "💭 thinking" : "💭 thinking (off)"}
-        </Chip>
-        <Chip
-          active={filters.showBookkeeping}
-          variant="neutral"
+          label="💭 thinking"
+        />
+        <HideChip
+          hidden={!filters.showBookkeeping}
           onClick={() => setShowBookkeeping(!filters.showBookkeeping)}
-        >
-          {filters.showBookkeeping ? "bookkeeping shown" : "bookkeeping hidden"}
-        </Chip>
-        <Chip
-          active={filters.showSidechain}
-          variant="neutral"
+          label="bookkeeping"
+        />
+        <HideChip
+          hidden={!filters.showSidechain}
           onClick={() => setShowSidechain(!filters.showSidechain)}
-        >
-          {filters.showSidechain ? "sidechain shown" : "sidechain hidden"}
-        </Chip>
+          label="sidechain"
+        />
       </div>
 
       <div className="fc__group fc__group--grow">
@@ -109,45 +102,87 @@ export function FilterChips({
         <input
           type="text"
           className="fc__input"
-          placeholder="path substring…"
+          placeholder="show only turns touching this path…"
           value={filters.filePath}
           onChange={(e) => setFilePath(e.target.value)}
-          aria-label="Filter by file path"
+          aria-label="Filter to turns referencing file path"
         />
       </div>
 
-      {hasActive && (
+      {hasAnythingHidden && (
         <button
           type="button"
           className="fc__clear"
           onClick={reset}
-          title="Clear all filters"
+          title="Reset all filters"
         >
-          Clear
+          Show all
         </button>
       )}
     </div>
   );
 }
 
-function Chip({
-  children,
-  active,
+/** Hide chip: bright when the category is SHOWING (default), dim +
+ * strikethrough when hidden. Clicking toggles. */
+function HideChip({
+  hidden,
   onClick,
-  variant = "default",
+  label,
+  variant,
 }: {
-  children: React.ReactNode;
-  active: boolean;
+  hidden: boolean;
   onClick: () => void;
-  variant?: "default" | "warn" | "neutral";
+  label: string;
+  variant?: string;
 }) {
+  const cls = [
+    "fc__chip",
+    variant ? `fc__chip--${variant}` : "",
+    hidden ? "fc__chip--hidden" : "fc__chip--visible",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
     <button
       type="button"
-      className={`fc__chip fc__chip--${variant} ${active ? "fc__chip--active" : ""}`}
+      className={cls}
       onClick={onClick}
+      aria-pressed={hidden}
+      title={hidden ? `${label} — hidden (click to show)` : `${label} — showing (click to hide)`}
     >
-      {children}
+      {label}
+    </button>
+  );
+}
+
+/** Include-only chip: dim when inactive (no constraint), bright when
+ * active (filtering). Used for errorsOnly — still the intuitive
+ * "click to filter" semantic. */
+function IncludeChip({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  const cls = [
+    "fc__chip",
+    "fc__chip--include",
+    active ? "fc__chip--include-active" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <button
+      type="button"
+      className={cls}
+      onClick={onClick}
+      aria-pressed={active}
+    >
+      {label}
     </button>
   );
 }

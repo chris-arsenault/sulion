@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 
 import type { TimelineEvent } from "../../api/types";
-import { groupIntoTurns, prefilter, type Turn } from "./grouping";
+import { groupIntoTurns, prefilter, type ToolPair, type Turn } from "./grouping";
 import {
   DEFAULT_FILTERS,
-  hasActiveFacets,
-  turnMatchesFilters,
+  eventIsVisible,
+  hasActiveIncludeFilters,
+  toolPairIsVisible,
+  turnPassesIncludeFilters,
   useTimelineFilters,
   type TimelineFilters,
 } from "./filters";
@@ -65,8 +67,8 @@ function buildTurn(events: TimelineEvent[]): Turn {
 
 function base(overrides: Partial<TimelineFilters> = {}): TimelineFilters {
   return {
-    speakers: new Set(),
-    tools: new Set(),
+    hiddenSpeakers: new Set(),
+    hiddenTools: new Set(),
     errorsOnly: false,
     showThinking: true,
     showBookkeeping: false,
@@ -76,172 +78,147 @@ function base(overrides: Partial<TimelineFilters> = {}): TimelineFilters {
   };
 }
 
-describe("turnMatchesFilters — facets AND across, OR within", () => {
-  // Canonical turn with user prompt + assistant Edit + tool_result + assistant text.
-  function canonicalTurn(): Turn {
-    offset = 0;
-    return buildTurn([
-      mkUserPrompt("edit foo.ts"),
-      mkAssistantTool("t1", "Edit", { file_path: "/src/foo.ts" }),
-      mkToolResult("t1", "edit applied"),
-      mkAssistantText("done"),
-    ]);
-  }
+function pair(name: string): ToolPair {
+  return {
+    id: `id-${name}`,
+    name,
+    input: {},
+    use: { type: "tool_use", id: `id-${name}`, name } as never,
+    useEvent: mkAssistantText(""),
+    result: null,
+    resultEvent: null,
+    isError: false,
+    isPending: false,
+  };
+}
 
-  it("passes every turn when no facet is active", () => {
-    expect(turnMatchesFilters(canonicalTurn(), base())).toBe(true);
+describe("hide semantics — simple and obvious", () => {
+  describe("eventIsVisible", () => {
+    it("returns true for any event when nothing is hidden (default)", () => {
+      expect(eventIsVisible(mkUserPrompt("hi"), base())).toBe(true);
+      expect(eventIsVisible(mkAssistantText("hey"), base())).toBe(true);
+      expect(eventIsVisible(mkToolResult("t", "ok"), base())).toBe(true);
+    });
+
+    it("hides user events when 'user' is in hiddenSpeakers", () => {
+      const f = base({ hiddenSpeakers: new Set(["user"]) });
+      expect(eventIsVisible(mkUserPrompt("hi"), f)).toBe(false);
+      expect(eventIsVisible(mkAssistantText("hey"), f)).toBe(true);
+      expect(eventIsVisible(mkToolResult("t", "ok"), f)).toBe(true);
+    });
+
+    it("hides assistant events when 'assistant' is hidden", () => {
+      const f = base({ hiddenSpeakers: new Set(["assistant"]) });
+      expect(eventIsVisible(mkAssistantText("hey"), f)).toBe(false);
+      expect(eventIsVisible(mkUserPrompt("hi"), f)).toBe(true);
+    });
+
+    it("hides tool_result wrapper events when 'tool_result' is hidden", () => {
+      const f = base({ hiddenSpeakers: new Set(["tool_result"]) });
+      expect(eventIsVisible(mkToolResult("t", "ok"), f)).toBe(false);
+      expect(eventIsVisible(mkUserPrompt("hi"), f)).toBe(true);
+    });
   });
 
-  it("speaker=user alone: turn with any user event passes", () => {
-    expect(
-      turnMatchesFilters(canonicalTurn(), base({ speakers: new Set(["user"]) })),
-    ).toBe(true);
+  describe("toolPairIsVisible", () => {
+    it("returns true when the tool name is not hidden", () => {
+      expect(toolPairIsVisible(pair("Edit"), base())).toBe(true);
+    });
+
+    it("hides the pair when its tool name is in hiddenTools", () => {
+      const f = base({ hiddenTools: new Set(["Edit"]) });
+      expect(toolPairIsVisible(pair("Edit"), f)).toBe(false);
+      expect(toolPairIsVisible(pair("Bash"), f)).toBe(true);
+    });
+
+    it("user-reported expectation: click Edit → Edit pair hidden, other pairs still visible", () => {
+      const f = base({ hiddenTools: new Set(["Edit"]) });
+      expect(toolPairIsVisible(pair("Edit"), f)).toBe(false);
+      expect(toolPairIsVisible(pair("Bash"), f)).toBe(true);
+      expect(toolPairIsVisible(pair("Read"), f)).toBe(true);
+    });
+
+    it("hiding multiple tools hides all of them, leaves others alone", () => {
+      const f = base({ hiddenTools: new Set(["Edit", "Bash"]) });
+      expect(toolPairIsVisible(pair("Edit"), f)).toBe(false);
+      expect(toolPairIsVisible(pair("Bash"), f)).toBe(false);
+      expect(toolPairIsVisible(pair("Read"), f)).toBe(true);
+    });
   });
 
-  it("speaker=assistant alone: turn with any assistant event passes", () => {
-    expect(
-      turnMatchesFilters(
-        canonicalTurn(),
-        base({ speakers: new Set(["assistant"]) }),
-      ),
-    ).toBe(true);
+  describe("turnPassesIncludeFilters — only errorsOnly and filePath drop turns", () => {
+    function canonicalTurn(): Turn {
+      offset = 0;
+      return buildTurn([
+        mkUserPrompt("edit foo.ts"),
+        mkAssistantTool("t1", "Edit", { file_path: "/src/foo.ts" }),
+        mkToolResult("t1", "edit applied"),
+        mkAssistantText("done"),
+      ]);
+    }
+
+    it("default state: every turn passes", () => {
+      expect(turnPassesIncludeFilters(canonicalTurn(), base())).toBe(true);
+    });
+
+    it("hiding a speaker does NOT drop the turn from the list — only hides content inside", () => {
+      const f = base({ hiddenSpeakers: new Set(["user"]) });
+      expect(turnPassesIncludeFilters(canonicalTurn(), f)).toBe(true);
+    });
+
+    it("hiding a tool does NOT drop the turn from the list — only hides the pair row", () => {
+      const f = base({ hiddenTools: new Set(["Edit"]) });
+      expect(turnPassesIncludeFilters(canonicalTurn(), f)).toBe(true);
+    });
+
+    it("errorsOnly drops turns without errors", () => {
+      offset = 0;
+      const errTurn = buildTurn([
+        mkUserPrompt("p"),
+        mkAssistantTool("e", "Bash", { command: "fail" }),
+        mkToolResult("e", "err", true),
+      ]);
+      const okTurn = canonicalTurn();
+      expect(turnPassesIncludeFilters(errTurn, base({ errorsOnly: true }))).toBe(true);
+      expect(turnPassesIncludeFilters(okTurn, base({ errorsOnly: true }))).toBe(false);
+    });
+
+    it("filePath drops turns with no matching file", () => {
+      offset = 0;
+      const fooTurn = buildTurn([
+        mkUserPrompt("p"),
+        mkAssistantTool("r", "Read", { file_path: "/src/foo.ts" }),
+        mkToolResult("r", "content"),
+      ]);
+      expect(turnPassesIncludeFilters(fooTurn, base({ filePath: "foo" }))).toBe(true);
+      expect(turnPassesIncludeFilters(fooTurn, base({ filePath: "bar" }))).toBe(false);
+    });
   });
 
-  it("speaker=tool_result alone: turn with a tool_result wrapper passes", () => {
-    expect(
-      turnMatchesFilters(
-        canonicalTurn(),
-        base({ speakers: new Set(["tool_result"]) }),
-      ),
-    ).toBe(true);
-  });
+  describe("hasActiveIncludeFilters", () => {
+    it("is false by default", () => {
+      expect(hasActiveIncludeFilters(base())).toBe(false);
+    });
 
-  it("speaker=user + tool=Edit (regression for the cross-facet bug): passes because turn has BOTH independently", () => {
-    // Under the old per-event logic, no single event was both a user
-    // event and a tool_use Edit, so the turn was wrongly excluded.
-    expect(
-      turnMatchesFilters(
-        canonicalTurn(),
-        base({ speakers: new Set(["user"]), tools: new Set(["Edit"]) }),
-      ),
-    ).toBe(true);
-  });
+    it("is true when errorsOnly is on", () => {
+      expect(hasActiveIncludeFilters(base({ errorsOnly: true }))).toBe(true);
+    });
 
-  it("speaker=assistant + tool=Bash: FAILS when no Bash in turn", () => {
-    expect(
-      turnMatchesFilters(
-        canonicalTurn(),
-        base({ speakers: new Set(["assistant"]), tools: new Set(["Bash"]) }),
-      ),
-    ).toBe(false);
-  });
+    it("is true when filePath is non-empty", () => {
+      expect(hasActiveIncludeFilters(base({ filePath: "x" }))).toBe(true);
+    });
 
-  it("tools facet is OR within: selecting Edit OR Bash passes a turn with only Edit", () => {
-    expect(
-      turnMatchesFilters(
-        canonicalTurn(),
-        base({ tools: new Set(["Edit", "Bash"]) }),
-      ),
-    ).toBe(true);
-  });
-
-  it("'select a few, then turn one off' drops the turn only when no selection still matches", () => {
-    const t = canonicalTurn();
-    expect(
-      turnMatchesFilters(t, base({ tools: new Set(["Edit", "Bash"]) })),
-    ).toBe(true);
-    // Drop Edit — only Bash remains, turn doesn't have Bash → fails.
-    expect(turnMatchesFilters(t, base({ tools: new Set(["Bash"]) }))).toBe(false);
-    // Drop the WRONG one — Bash was never in turn; unselecting leaves
-    // Edit active and the turn still passes.
-    expect(turnMatchesFilters(t, base({ tools: new Set(["Edit"]) }))).toBe(true);
-  });
-
-  it("errorsOnly passes turns whose any tool_result has is_error=true", () => {
-    offset = 0;
-    const errorTurn = buildTurn([
-      mkUserPrompt("do bad thing"),
-      mkAssistantTool("e1", "Bash", { command: "fail" }),
-      mkToolResult("e1", "command not found", true),
-    ]);
-    const noErrorTurn = buildTurn([
-      mkUserPrompt("do good thing"),
-      mkAssistantTool("ok1", "Read", { file_path: "/a" }),
-      mkToolResult("ok1", "content"),
-    ]);
-    expect(turnMatchesFilters(errorTurn, base({ errorsOnly: true }))).toBe(true);
-    expect(turnMatchesFilters(noErrorTurn, base({ errorsOnly: true }))).toBe(false);
-  });
-
-  it("filePath matches file_path in any tool_use input (case-insensitive substring)", () => {
-    offset = 0;
-    const t = buildTurn([
-      mkUserPrompt("touch it"),
-      mkAssistantTool("e", "Edit", { file_path: "/src/FOO.ts" }),
-      mkToolResult("e", "ok"),
-    ]);
-    expect(turnMatchesFilters(t, base({ filePath: "foo" }))).toBe(true);
-    expect(turnMatchesFilters(t, base({ filePath: "bar" }))).toBe(false);
-  });
-
-  it("filePath + speaker compose correctly", () => {
-    offset = 0;
-    const t = buildTurn([
-      mkUserPrompt("read foo"),
-      mkAssistantTool("r", "Read", { file_path: "/src/foo.ts" }),
-      mkToolResult("r", "contents"),
-    ]);
-    expect(
-      turnMatchesFilters(
-        t,
-        base({ speakers: new Set(["user"]), filePath: "foo" }),
-      ),
-    ).toBe(true);
-  });
-
-  it("empty set on speakers means 'no constraint', not 'match nothing'", () => {
-    const t = canonicalTurn();
-    // Tool facet satisfied; speakers facet inactive → passes.
-    expect(turnMatchesFilters(t, base({ tools: new Set(["Edit"]) }))).toBe(true);
-  });
-
-  it("complex: [user, assistant] speakers + [Edit, Bash] tools matches turn with user+Edit", () => {
-    expect(
-      turnMatchesFilters(
-        canonicalTurn(),
-        base({
-          speakers: new Set(["user", "assistant"]),
-          tools: new Set(["Edit", "Bash"]),
-        }),
-      ),
-    ).toBe(true);
-  });
-
-  it("turn with NO assistant events: speaker=assistant drops it", () => {
-    offset = 0;
-    const t = buildTurn([mkUserPrompt("just a prompt, no reply yet")]);
-    expect(
-      turnMatchesFilters(t, base({ speakers: new Set(["assistant"]) })),
-    ).toBe(false);
-  });
-});
-
-describe("hasActiveFacets", () => {
-  it("returns false for the default filters", () => {
-    expect(hasActiveFacets(base())).toBe(false);
-  });
-
-  it("returns true as soon as any facet is non-empty", () => {
-    expect(hasActiveFacets(base({ speakers: new Set(["user"]) }))).toBe(true);
-    expect(hasActiveFacets(base({ tools: new Set(["Edit"]) }))).toBe(true);
-    expect(hasActiveFacets(base({ errorsOnly: true }))).toBe(true);
-    expect(hasActiveFacets(base({ filePath: "x" }))).toBe(true);
-  });
-
-  it("ignores display toggles (thinking / bookkeeping / sidechain)", () => {
-    expect(hasActiveFacets(base({ showThinking: false }))).toBe(false);
-    expect(hasActiveFacets(base({ showBookkeeping: true }))).toBe(false);
-    expect(hasActiveFacets(base({ showSidechain: true }))).toBe(false);
+    it("is false when only hide-filters are active (those don't drop turns)", () => {
+      expect(
+        hasActiveIncludeFilters(base({ hiddenSpeakers: new Set(["user"]) })),
+      ).toBe(false);
+      expect(
+        hasActiveIncludeFilters(base({ hiddenTools: new Set(["Edit"]) })),
+      ).toBe(false);
+      expect(
+        hasActiveIncludeFilters(base({ showThinking: false })),
+      ).toBe(false);
+    });
   });
 });
 
@@ -250,38 +227,45 @@ describe("useTimelineFilters", () => {
     window.localStorage.clear();
   });
 
-  it("returns defaults on first render and persists via localStorage", () => {
+  it("returns defaults on first render", () => {
     const { result } = renderHook(() => useTimelineFilters());
     expect(result.current.filters).toEqual(DEFAULT_FILTERS);
-
-    act(() => result.current.toggleSpeaker("user"));
-    expect(result.current.filters.speakers.has("user")).toBe(true);
-
-    const { result: r2 } = renderHook(() => useTimelineFilters());
-    expect(r2.current.filters.speakers.has("user")).toBe(true);
   });
 
-  it("toggleTool adds/removes the tool name", () => {
+  it("toggleSpeaker flips the hidden state and persists", () => {
+    const { result } = renderHook(() => useTimelineFilters());
+    expect(result.current.filters.hiddenSpeakers.has("user")).toBe(false);
+    act(() => result.current.toggleSpeaker("user"));
+    expect(result.current.filters.hiddenSpeakers.has("user")).toBe(true);
+    act(() => result.current.toggleSpeaker("user"));
+    expect(result.current.filters.hiddenSpeakers.has("user")).toBe(false);
+
+    act(() => result.current.toggleSpeaker("assistant"));
+    const { result: r2 } = renderHook(() => useTimelineFilters());
+    expect(r2.current.filters.hiddenSpeakers.has("assistant")).toBe(true);
+  });
+
+  it("toggleTool adds and removes the tool from hiddenTools", () => {
     const { result } = renderHook(() => useTimelineFilters());
     act(() => result.current.toggleTool("Edit"));
-    expect(result.current.filters.tools.has("Edit")).toBe(true);
+    expect(result.current.filters.hiddenTools.has("Edit")).toBe(true);
     act(() => result.current.toggleTool("Edit"));
-    expect(result.current.filters.tools.has("Edit")).toBe(false);
+    expect(result.current.filters.hiddenTools.has("Edit")).toBe(false);
   });
 
   it("reset returns to defaults", () => {
     const { result } = renderHook(() => useTimelineFilters());
     act(() => {
-      result.current.setShowBookkeeping(true);
+      result.current.toggleSpeaker("user");
+      result.current.toggleTool("Edit");
+      result.current.setShowThinking(false);
       result.current.setFilePath("foo");
-      result.current.toggleSpeaker("assistant");
     });
-    expect(result.current.filters.showBookkeeping).toBe(true);
     act(() => result.current.reset());
     expect(result.current.filters).toEqual(DEFAULT_FILTERS);
   });
 
-  it("defaults are strict booleans — none of the toggles are undefined", () => {
+  it("defaults are strict booleans (no undefined for toggles)", () => {
     const { result } = renderHook(() => useTimelineFilters());
     const f = result.current.filters;
     expect(typeof f.errorsOnly).toBe("boolean");
@@ -289,17 +273,17 @@ describe("useTimelineFilters", () => {
     expect(typeof f.showBookkeeping).toBe("boolean");
     expect(typeof f.showSidechain).toBe("boolean");
     expect(typeof f.filePath).toBe("string");
-    expect(f.speakers).toBeInstanceOf(Set);
-    expect(f.tools).toBeInstanceOf(Set);
+    expect(f.hiddenSpeakers).toBeInstanceOf(Set);
+    expect(f.hiddenTools).toBeInstanceOf(Set);
   });
 
-  it("localStorage rehydration coerces wrong types back to strict booleans", () => {
+  it("localStorage rehydration coerces garbage values to strict booleans", () => {
     window.localStorage.setItem(
-      "shuttlecraft.timeline.filters.v1",
+      "shuttlecraft.timeline.filters.v2",
       JSON.stringify({
-        speakers: ["user"],
-        tools: ["Edit"],
-        errorsOnly: "nope",
+        hiddenSpeakers: ["user"],
+        hiddenTools: ["Edit"],
+        errorsOnly: "maybe",
         showThinking: null,
         showBookkeeping: undefined,
         showSidechain: 1,
@@ -313,8 +297,7 @@ describe("useTimelineFilters", () => {
     expect(typeof f.showBookkeeping).toBe("boolean");
     expect(typeof f.showSidechain).toBe("boolean");
     expect(typeof f.filePath).toBe("string");
-    // Valid set-member entries survive.
-    expect(f.speakers.has("user")).toBe(true);
-    expect(f.tools.has("Edit")).toBe(true);
+    expect(f.hiddenSpeakers.has("user")).toBe(true);
+    expect(f.hiddenTools.has("Edit")).toBe(true);
   });
 });

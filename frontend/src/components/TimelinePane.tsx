@@ -14,8 +14,8 @@ import type { TimelineEvent } from "../api/types";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { FilterChips } from "./timeline/FilterChips";
 import {
-  hasActiveFacets,
-  turnMatchesFilters,
+  hasActiveIncludeFilters,
+  turnPassesIncludeFilters,
   useTimelineFilters,
 } from "./timeline/filters";
 import {
@@ -114,8 +114,8 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
       showSidechain: filters.showSidechain,
     });
     const grouped = groupIntoTurns(prefiltered);
-    if (!hasActiveFacets(filters)) return grouped;
-    return grouped.filter((t) => turnMatchesFilters(t, filters));
+    if (!hasActiveIncludeFilters(filters)) return grouped;
+    return grouped.filter((t) => turnPassesIncludeFilters(t, filters));
   }, [events, filters]);
 
   const selectedTurn = useMemo<Turn | null>(
@@ -206,6 +206,7 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
           <SessionInspectorPane
             turn={selectedTurn}
             showThinking={filters.showThinking}
+            filters={filters}
             onOpenSubagent={handleSubagent}
             asOverlay
             onClose={() => setSelectedTurnId(null)}
@@ -236,6 +237,7 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
           <SessionInspectorPane
             turn={selectedTurn}
             showThinking={filters.showThinking}
+            filters={filters}
             onOpenSubagent={handleSubagent}
             asOverlay={false}
           />

@@ -11,6 +11,11 @@
 import { type MouseEvent, useRef, useState } from "react";
 
 import type { TimelineEvent } from "../../api/types";
+import {
+  eventIsVisible,
+  toolPairIsVisible,
+  type TimelineFilters,
+} from "./filters";
 import { type ToolPair, type Turn } from "./grouping";
 import { ThinkingFlyout } from "./ThinkingFlyout";
 import { ToolHoverCard } from "./ToolHoverCard";
@@ -28,6 +33,10 @@ interface Props {
   turn: Turn;
   showThinking: boolean;
   onOpenSubagent?: (pair: ToolPair) => void;
+  /** Optional: when provided, events from hidden speakers and tool
+   * pairs with hidden tool names are skipped. When absent, everything
+   * renders (used by SubagentModal where there's no filter UI). */
+  filters?: TimelineFilters;
 }
 
 interface ThinkingAnchor {
@@ -41,7 +50,7 @@ interface HoverAnchor {
   pinned: boolean;
 }
 
-export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
+export function TurnDetail({ turn, showThinking, onOpenSubagent, filters }: Props) {
   const pairById = new Map(turn.toolPairs.map((p) => [p.id, p] as const));
   const [thinking, setThinking] = useState<ThinkingAnchor | null>(null);
   const [hover, setHover] = useState<HoverAnchor | null>(null);
@@ -86,6 +95,7 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
         {turn.events.map((ev) => {
           if (ev.kind === "user" && ev === turn.userPrompt) return null;
           if (ev.kind === "user") return null; // tool_result wrapper, surfaced via pairs
+          if (filters && !eventIsVisible(ev, filters)) return null;
           if (ev.kind === "assistant") {
             return (
               <AssistantRow
@@ -94,6 +104,7 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
                 pairById={pairById}
                 showThinking={showThinking}
                 onOpenSubagent={onOpenSubagent}
+                filters={filters}
                 onThinkingChip={(el, text) => {
                   setHover(null);
                   setThinking({ el, text });
@@ -170,6 +181,7 @@ function AssistantRow({
   pairById,
   showThinking,
   onOpenSubagent,
+  filters,
   onThinkingChip,
   onToolEnter,
   onToolLeave,
@@ -178,6 +190,7 @@ function AssistantRow({
   pairById: Map<string, ToolPair>;
   showThinking: boolean;
   onOpenSubagent?: (pair: ToolPair) => void;
+  filters?: TimelineFilters;
   onThinkingChip: (el: HTMLElement, text: string) => void;
   onToolEnter: (el: HTMLElement, pair: ToolPair) => void;
   onToolLeave: () => void;
@@ -216,6 +229,7 @@ function AssistantRow({
       {toolUseIds.map((id) => {
         const pair = pairById.get(id);
         if (!pair) return null;
+        if (filters && !toolPairIsVisible(pair, filters)) return null;
         return (
           <ToolPairRow
             key={pair.id || id}

@@ -30,38 +30,96 @@
 }
 
 .fc__chip {
-  background: #1f232b;
-  color: #9ca3af;
   border: 1px solid transparent;
   padding: 3px 8px;
   border-radius: 3px;
   font: inherit;
   font-size: 11px;
   cursor: pointer;
-  transition: background 0.1s;
+  transition: all 0.1s;
 }
 
-.fc__chip:hover {
-  background: #2a2e37;
-  color: #d1d5db;
-}
-
-.fc__chip--active {
+/* Default "visible" state: bright per-category colour */
+.fc__chip--visible {
   background: #1e40af;
   color: #dbeafe;
   border-color: #3b82f6;
 }
 
-.fc__chip--warn.fc__chip--active {
+.fc__chip--visible.fc__chip--edit,
+.fc__chip--visible.fc__chip--write,
+.fc__chip--visible.fc__chip--multiedit {
+  background: #065f46;
+  color: #d1fae5;
+  border-color: #10b981;
+}
+
+.fc__chip--visible.fc__chip--bash {
+  background: #1e40af;
+  color: #dbeafe;
+  border-color: #3b82f6;
+}
+
+.fc__chip--visible.fc__chip--task {
+  background: #581c87;
+  color: #f3e8ff;
+  border-color: #a855f7;
+}
+
+.fc__chip--visible.fc__chip--todowrite {
+  background: #422006;
+  color: #fde68a;
+  border-color: #d97706;
+}
+
+.fc__chip--visible.fc__chip--read,
+.fc__chip--visible.fc__chip--grep,
+.fc__chip--visible.fc__chip--glob {
+  background: #0e7490;
+  color: #a5f3fc;
+  border-color: #06b6d4;
+}
+
+.fc__chip--visible.fc__chip--webfetch,
+.fc__chip--visible.fc__chip--websearch {
+  background: #4338ca;
+  color: #e0e7ff;
+  border-color: #6366f1;
+}
+
+.fc__chip:hover {
+  filter: brightness(1.15);
+}
+
+/* Hidden state: dim, desaturated, strikethrough */
+.fc__chip--hidden {
+  background: #0b0d12;
+  color: #4b5563;
+  border-color: #1f232b;
+  text-decoration: line-through;
+}
+
+.fc__chip--hidden:hover {
+  background: #1a1d23;
+  color: #6b7280;
+}
+
+/* Include-only chips (errors only): default dim, active bright */
+.fc__chip--include {
+  background: #0b0d12;
+  color: #9ca3af;
+  border-color: #1f232b;
+}
+
+.fc__chip--include:hover {
+  background: #1a1d23;
+  color: #d1d5db;
+}
+
+.fc__chip--include-active {
   background: #7f1d1d;
   color: #fecaca;
   border-color: #b91c1c;
-}
-
-.fc__chip--neutral.fc__chip--active {
-  background: #374151;
-  color: #e5e7eb;
-  border-color: #6b7280;
 }
 
 .fc__input {
@@ -82,9 +140,9 @@
 }
 
 .fc__clear {
-  background: #2a0f12;
-  color: #fca5a5;
-  border: 1px solid #7f1d1d;
+  background: #1e3a8a;
+  color: #dbeafe;
+  border: 1px solid #3b82f6;
   padding: 3px 10px;
   border-radius: 3px;
   font: inherit;
@@ -93,6 +151,6 @@
 }
 
 .fc__clear:hover {
-  background: #7f1d1d;
-  color: #fee2e2;
+  background: #2563eb;
+  color: #fff;
 }

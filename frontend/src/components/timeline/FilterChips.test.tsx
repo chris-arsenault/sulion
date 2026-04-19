@@ -10,66 +10,74 @@ function Host() {
   return <FilterChips {...hook} />;
 }
 
-describe("FilterChips", () => {
+describe("FilterChips — exclusion UI", () => {
   afterEach(() => window.localStorage.clear());
 
-  it("renders speaker, tool, toggle, and file-path chips", () => {
+  it("renders speaker, tool, include, and file-path chips", () => {
     render(<Host />);
-    expect(screen.getByRole("button", { name: /user/i })).toBeDefined();
+    expect(screen.getByRole("button", { name: /^user$/i })).toBeDefined();
     expect(screen.getByRole("button", { name: /^claude$/i })).toBeDefined();
     expect(screen.getByRole("button", { name: /tool result/i })).toBeDefined();
     expect(screen.getByRole("button", { name: /^edit$/i })).toBeDefined();
     expect(screen.getByRole("button", { name: /errors only/i })).toBeDefined();
-    expect(screen.getByPlaceholderText(/path substring/i)).toBeDefined();
+    expect(screen.getByPlaceholderText(/path/i)).toBeDefined();
   });
 
-  it("toggles the speaker chip active state on click and persists to localStorage", async () => {
+  it("clicking a category chip marks it as hidden (aria-pressed + hidden class)", async () => {
+    const user = userEvent.setup();
+    render(<Host />);
+    const editChip = screen.getByRole("button", { name: /^edit$/i });
+    expect(editChip.getAttribute("aria-pressed")).toBe("false");
+    expect(editChip.className).toContain("visible");
+    await user.click(editChip);
+    expect(editChip.getAttribute("aria-pressed")).toBe("true");
+    expect(editChip.className).toContain("hidden");
+  });
+
+  it("hide toggles persist to localStorage", async () => {
     const user = userEvent.setup();
     render(<Host />);
     const userChip = screen.getByRole("button", { name: /^user$/i });
-    expect(userChip.className).not.toContain("active");
     await user.click(userChip);
-    expect(userChip.className).toContain("active");
 
     const stored = window.localStorage.getItem(
-      "shuttlecraft.timeline.filters.v1",
+      "shuttlecraft.timeline.filters.v2",
     );
     expect(stored).not.toBeNull();
     const parsed = JSON.parse(stored!);
-    expect(parsed.speakers).toContain("user");
+    expect(parsed.hiddenSpeakers).toContain("user");
   });
 
-  it("Clear button appears once a filter is active and resets state", async () => {
+  it("Show all button appears when anything is hidden, resets state when clicked", async () => {
     const user = userEvent.setup();
     render(<Host />);
-    expect(screen.queryByRole("button", { name: /clear/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /show all/i })).toBeNull();
     await user.click(screen.getByRole("button", { name: /^edit$/i }));
-    const clear = screen.getByRole("button", { name: /clear/i });
+    const clear = screen.getByRole("button", { name: /show all/i });
     await user.click(clear);
-    // All chips return to inactive
-    expect(
-      screen.getByRole("button", { name: /^edit$/i }).className,
-    ).not.toContain("active");
+    const editChip = screen.getByRole("button", { name: /^edit$/i });
+    expect(editChip.getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("typing in the file-path input updates the filter state", async () => {
+  it("typing in the file-path input updates state", async () => {
     const user = userEvent.setup();
     render(<Host />);
-    const input = screen.getByPlaceholderText(/path substring/i);
+    const input = screen.getByPlaceholderText(/path/i);
     await user.type(input, "foo");
     expect((input as HTMLInputElement).value).toBe("foo");
   });
 
-  it("toggling 'bookkeeping' updates the label", async () => {
+  it("errors-only is an include chip (dim default, bright when active)", async () => {
     const user = userEvent.setup();
     render(<Host />);
-    const chip = screen.getByRole("button", { name: /bookkeeping hidden/i });
+    const chip = screen.getByRole("button", { name: /errors only/i });
+    expect(chip.getAttribute("aria-pressed")).toBe("false");
     await user.click(chip);
-    expect(screen.getByRole("button", { name: /bookkeeping shown/i })).toBeDefined();
+    expect(chip.getAttribute("aria-pressed")).toBe("true");
+    expect(chip.className).toContain("include-active");
   });
 
-  // Sanity check that the hook's defaults match what the chips expose
-  it("default state has showThinking on, bookkeeping hidden, sidechain hidden", () => {
+  it("default state: thinking visible, bookkeeping hidden, sidechain hidden", () => {
     expect(DEFAULT_FILTERS.showThinking).toBe(true);
     expect(DEFAULT_FILTERS.showBookkeeping).toBe(false);
     expect(DEFAULT_FILTERS.showSidechain).toBe(false);
