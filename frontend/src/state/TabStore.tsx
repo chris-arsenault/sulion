@@ -24,7 +24,14 @@ import {
 const STORAGE_KEY = "shuttlecraft.tabs.v2";
 
 export type PaneId = "top" | "bottom";
-export type TabKind = "terminal" | "timeline" | "file" | "diff" | "search";
+export type TabKind =
+  | "terminal"
+  | "timeline"
+  | "file"
+  | "diff"
+  | "search"
+  | "ref"
+  | "prompt";
 
 /** Minimal registry entry. Kind + refs is the identity; everything
  * else is the tab's own business. */
@@ -33,10 +40,12 @@ export interface TabData {
   kind: TabKind;
   /** For session-bound tabs (terminal, timeline). */
   sessionId?: string;
-  /** For repo-bound tabs (file, diff). */
+  /** For repo-bound tabs (file, diff, ref, prompt). */
   repo?: string;
   /** File path for file/diff tabs; optional for diff (whole-repo). */
   path?: string;
+  /** Library slug for ref / prompt tabs. */
+  slug?: string;
 }
 
 export interface TabStore {
@@ -91,6 +100,7 @@ export function TabProvider({ children }: { children: ReactNode }) {
           sessionId: t.sessionId,
           repo: t.repo,
           path: t.path,
+          slug: t.slug,
         } as TabData;
       }
       const hPanes: Record<PaneId, string[]> = {
@@ -241,7 +251,9 @@ export function useTabs(): TabStore {
 }
 
 /** Canonical key that de-duplicates a tab spec. */
-export function tabKey(spec: Pick<TabData, "kind" | "sessionId" | "repo" | "path">): string {
+export function tabKey(
+  spec: Pick<TabData, "kind" | "sessionId" | "repo" | "path" | "slug">,
+): string {
   switch (spec.kind) {
     case "terminal":
     case "timeline":
@@ -252,6 +264,10 @@ export function tabKey(spec: Pick<TabData, "kind" | "sessionId" | "repo" | "path
       return `diff:${spec.repo ?? ""}:${spec.path ?? ""}`;
     case "search":
       return "search"; // single search tab
+    case "ref":
+      return `ref:${spec.repo ?? ""}:${spec.slug ?? ""}`;
+    case "prompt":
+      return `prompt:${spec.repo ?? ""}:${spec.slug ?? ""}`;
   }
 }
 

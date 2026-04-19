@@ -11,8 +11,9 @@ export interface SessionView {
   created_at: string;
   ended_at: string | null;
   exit_code: number | null;
-  current_claude_session_uuid: string | null;
-  /** MAX(event.timestamp) for this session's current Claude UUID.
+  current_session_uuid: string | null;
+  current_session_agent: string | null;
+  /** MAX(event.timestamp) for this session's current transcript session.
    * Null when no events have been ingested yet. Drives the sidebar
    * unread-dot indicator. */
   last_event_at: string | null;
@@ -60,10 +61,10 @@ export interface CreateSessionRequest {
   working_dir?: string;
   cols?: number;
   rows?: number;
-  /** When set, the new shell boots straight into `claude --resume <uuid>`
-   * and drops to an interactive bash after Claude exits. Used by the
-   * Resume action on orphaned/ended sessions. */
-  claude_resume_uuid?: string;
+  /** Resume session id when the backend supports agent-specific resume. */
+  resume_session_uuid?: string;
+  /** Agent id for `resume_session_uuid`. */
+  resume_agent?: string;
 }
 
 export interface RepoView {
@@ -83,8 +84,8 @@ export interface CreateRepoRequest {
 /** One canonical content block. Agent-agnostic: same shape whether
  * the source is Claude, Codex, or any future parser. `tool_name`
  * preserves the raw emitted name; `tool_name_canonical` is what the
- * renderers switch on. Unknown block kinds carry the original raw
- * JSON so the UI can show a placeholder without losing data. */
+ * renderers switch on. The API intentionally omits any raw per-block
+ * JSON to force consumers onto the canonical form. */
 export interface TimelineBlock {
   ord: number;
   kind: "text" | "thinking" | "tool_use" | "tool_result" | "unknown";
@@ -94,32 +95,38 @@ export interface TimelineBlock {
   tool_name_canonical?: string;
   tool_input?: unknown;
   is_error?: boolean;
-  raw?: unknown;
 }
 
 export interface TimelineEvent {
   byte_offset: number;
   timestamp: string;
   kind: string;
-  /** Raw JSONL payload. Kept for forensic use (and to cover events
-   * that haven't been backfilled yet). New code should read `blocks`. */
-  payload: unknown;
-  /** Canonical content blocks, emitted by the ingester's parser. This
-   * is the authoritative read path for renderers. Optional in the type
-   * because test fixtures don't populate it; at runtime the backend
-   * always emits an array (possibly empty). */
-  blocks?: TimelineBlock[];
   /** Ingesting agent id — "claude-code", "codex", etc. */
-  agent?: string;
+  agent: string;
   /** Normalised speaker: user / assistant / system / summary / other. */
-  speaker?: string | null;
+  speaker: string | null;
   /** Coarse content-kind discriminator for quick filtering without
    * walking `blocks`. */
-  content_kind?: string | null;
+  content_kind: string | null;
+  /** Stable event id emitted by the source transcript, when present. */
+  event_uuid: string | null;
+  /** Parent event id for sidechain/subagent lineage, when present. */
+  parent_event_uuid: string | null;
+  /** Related tool_use id carried by some result/report rows. */
+  related_tool_use_id: string | null;
+  /** True when this event belongs to a Task-subagent conversation. */
+  is_sidechain: boolean;
+  /** True for internal/bookkeeping system events. */
+  is_meta: boolean;
+  /** Optional subtype for system/bookkeeping rows. */
+  subtype: string | null;
+  /** Canonical content blocks, emitted by the ingester's parser. */
+  blocks: TimelineBlock[];
 }
 
 export interface HistoryResponse {
-  claude_session_uuid: string | null;
+  session_uuid: string | null;
+  session_agent: string | null;
   events: TimelineEvent[];
   next_after: number | null;
 }
@@ -128,7 +135,7 @@ export interface HistoryQuery {
   after?: number;
   limit?: number;
   kind?: string;
-  claude_session?: string;
+  session?: string;
 }
 
 export interface GitCommit {
@@ -186,7 +193,8 @@ export type SearchHit =
   | {
       type: "event";
       session_id: string;
-      claude_session_uuid: string;
+      session_uuid: string;
+      session_agent: string;
       byte_offset: number;
       kind: string;
       timestamp: string;
@@ -213,8 +221,28 @@ export interface StatsResponse {
   db: {
     database_size_bytes: number;
     events_rowcount: number;
-    claude_sessions_rowcount: number;
+    agent_sessions_rowcount: number;
     pty_sessions_rowcount: number;
     ingester_state_rowcount: number;
   };
+}
+
+/** Per-repo library entry (refs or prompts). Frontmatter is a thin
+ * markdown header; the body is plain text. */
+export interface LibraryEntry {
+  slug: string;
+  name: string;
+  tags: string[];
+  created_at: string | null;
+  body: string;
+  /** Any additional frontmatter keys the backend didn't recognise. */
+  extras: Record<string, unknown>;
+}
+
+export type LibraryKind = "refs" | "prompts";
+
+export interface SaveLibraryInput {
+  name: string;
+  tags?: string[];
+  body: string;
 }

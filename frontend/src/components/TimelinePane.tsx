@@ -12,6 +12,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { getHistory } from "../api/client";
 import type { TimelineEvent } from "../api/types";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useSessions } from "../state/SessionStore";
 import { FilterChips } from "./timeline/FilterChips";
 import {
   hasActiveIncludeFilters,
@@ -43,7 +44,8 @@ interface SubagentSelection {
 
 export function TimelinePane({ sessionId }: { sessionId: string }) {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
-  const [claudeSession, setClaudeSession] = useState<string | null>(null);
+  const [currentSessionUuid, setCurrentSessionUuid] = useState<string | null>(null);
+  const [currentSessionAgent, setCurrentSessionAgent] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const offsetRef = useRef<number>(-1);
   const virtuoso = useRef<VirtuosoHandle | null>(null);
@@ -53,6 +55,8 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
   const filterHook = useTimelineFilters();
   const { filters } = filterHook;
   const narrow = useMediaQuery("(max-width: 999px)");
+  const { sessions } = useSessions();
+  const repo = sessions.find((s) => s.id === sessionId)?.repo;
 
   const [inspectorFraction, setInspectorFraction] = useState<number>(() => {
     if (typeof window === "undefined") return DEFAULT_INSPECTOR_FRACTION;
@@ -70,7 +74,8 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     offsetRef.current = -1;
     setEvents([]);
-    setClaudeSession(null);
+    setCurrentSessionUuid(null);
+    setCurrentSessionAgent(null);
     setLastError(null);
     setSubagent(null);
     setSelectedTurnId(null);
@@ -85,7 +90,8 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
           after: offsetRef.current >= 0 ? offsetRef.current : undefined,
         });
         if (cancelled) return;
-        setClaudeSession(resp.claude_session_uuid);
+        setCurrentSessionUuid(resp.session_uuid);
+        setCurrentSessionAgent(resp.session_agent);
         if (resp.events.length > 0) {
           setEvents((prev) => [...prev, ...resp.events]);
           offsetRef.current = resp.events[resp.events.length - 1].byte_offset;
@@ -130,10 +136,7 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
     if (!pair.id) return;
     setSubagent({
       toolUseId: pair.id,
-      seedUuid:
-        typeof (pair.useEvent.payload as { uuid?: string } | null)?.uuid === "string"
-          ? (pair.useEvent.payload as { uuid: string }).uuid
-          : undefined,
+      seedUuid: pair.useEvent.event_uuid ?? undefined,
       title: subagentTitleFromPair(pair),
     });
   };
@@ -166,12 +169,12 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
     <div className="timeline-pane" data-testid="timeline-pane">
       <div className="timeline-pane__header">
         <span className="timeline-pane__title">Timeline</span>
-        {claudeSession && (
+        {currentSessionUuid && (
           <span
             className="timeline-pane__session"
-            title={`claude session ${claudeSession}`}
+            title={`${currentSessionAgent ?? "session"} ${currentSessionUuid}`}
           >
-            claude {claudeSession.slice(0, 8)}
+            {(currentSessionAgent ?? "session")} {currentSessionUuid.slice(0, 8)}
           </span>
         )}
         <span className="timeline-pane__count">
@@ -187,9 +190,9 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
       {empty ? (
         <div className="timeline-pane__empty">
           {events.length === 0
-            ? claudeSession
+            ? currentSessionUuid
               ? "Waiting for events…"
-              : "No Claude session correlated yet. Start `claude` in the terminal."
+              : "No transcript session correlated yet."
             : "No turns match current filters."}
         </div>
       ) : narrow ? (
@@ -201,6 +204,7 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
               showThinking={filters.showThinking}
               onSelect={setSelectedTurnId}
               virtuosoRef={virtuoso}
+              repo={repo}
             />
           </div>
           <SessionInspectorPane
@@ -227,6 +231,7 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
               showThinking={filters.showThinking}
               onSelect={setSelectedTurnId}
               virtuosoRef={virtuoso}
+              repo={repo}
             />
           </div>
           <div
@@ -264,12 +269,14 @@ function TurnList({
   showThinking,
   onSelect,
   virtuosoRef,
+  repo,
 }: {
   turns: Turn[];
   selectedTurnId: number | null;
   showThinking: boolean;
   onSelect: (id: number) => void;
   virtuosoRef: MutableRefObject<VirtuosoHandle | null>;
+  repo?: string;
 }) {
   return (
     <Virtuoso
@@ -282,6 +289,7 @@ function TurnList({
           selected={selectedTurnId === t.id}
           showThinking={showThinking}
           onSelect={() => onSelect(t.id)}
+          repo={repo}
         />
       )}
       followOutput="smooth"
@@ -293,8 +301,7 @@ function TurnList({
 function subagentTitleFromPair(pair: ToolPair): string {
   const input = (pair.input ?? {}) as Record<string, unknown>;
   const desc = typeof input.description === "string" ? input.description : null;
-  const agent =
-    typeof input.subagent_type === "string" ? input.subagent_type : null;
+  const agent = typeof input.agent === "string" ? input.agent : null;
   if (desc) return `Agent log · ${desc}`;
   if (agent) return `Agent log · ${agent}`;
   return "Agent log";

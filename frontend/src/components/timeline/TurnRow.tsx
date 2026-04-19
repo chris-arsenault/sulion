@@ -4,8 +4,15 @@
 // badges + duration. Selection drives the inspector pane; this row
 // itself never expands inline.
 
+import { saveLibraryEntry } from "../../api/client";
 import type { Turn, ToolPair } from "./grouping";
-import { userPromptText, textBlocksIn } from "./types";
+import { isAssistantEvent, textBlocksIn, userPromptText } from "./types";
+import { formatTurn } from "./markdown-export";
+import type { MenuItem } from "../common/ContextMenu";
+import {
+  contextMenuHandler,
+  useContextMenu,
+} from "../common/ContextMenu";
 import "./TurnRow.css";
 
 interface Props {
@@ -13,11 +20,50 @@ interface Props {
   selected: boolean;
   showThinking: boolean;
   onSelect: () => void;
+  /** Optional — when present, the right-click "Pin as reference" menu
+   * item is enabled and saves to `<repo>/.shuttlecraft/refs/`. */
+  repo?: string;
 }
 
-export function TurnRow({ turn, selected, showThinking, onSelect }: Props) {
+export function TurnRow({ turn, selected, showThinking, onSelect, repo }: Props) {
   const preview = turnPreview(turn);
   const badges = toolBadges(turn.toolPairs);
+  const { open: openCtx } = useContextMenu();
+
+  const onContextMenu = contextMenuHandler(openCtx, () => {
+    const items: MenuItem[] = [];
+    if (repo) {
+      items.push({
+        kind: "item",
+        id: "pin-ref",
+        label: "Pin turn as reference",
+        onSelect: async () => {
+          const name = defaultRefName(turn);
+          try {
+            await saveLibraryEntry(
+              repo,
+              "refs",
+              { name, tags: ["turn"], body: formatTurn(turn) },
+            );
+            window.dispatchEvent(
+              new CustomEvent("shuttlecraft:library-changed", {
+                detail: { repo, kind: "refs" },
+              }),
+            );
+          } catch (err) {
+            // Surface the failure via the window event bus so something
+            // upstream can log it — no state lives here.
+            window.dispatchEvent(
+              new CustomEvent("shuttlecraft:pin-error", {
+                detail: { err: err instanceof Error ? err.message : "save failed" },
+              }),
+            );
+          }
+        },
+      });
+    }
+    return items;
+  });
 
   return (
     <button
@@ -26,6 +72,7 @@ export function TurnRow({ turn, selected, showThinking, onSelect }: Props) {
         turn.hasErrors ? "tr--errors" : ""
       }`}
       onClick={onSelect}
+      onContextMenu={repo ? onContextMenu : undefined}
       data-testid="turn-row"
       aria-pressed={selected}
     >
@@ -76,7 +123,7 @@ function turnPreview(turn: Turn): string {
     const txt = userPromptText(turn.userPrompt);
     if (txt) return firstParagraph(txt, 280);
   }
-  const firstAssistant = turn.events.find((e) => e.kind === "assistant");
+  const firstAssistant = turn.events.find((e) => isAssistantEvent(e));
   if (firstAssistant) {
     const txt = textBlocksIn(firstAssistant).join(" ");
     if (txt) return `(assistant) ${firstParagraph(txt, 260)}`;
@@ -130,6 +177,19 @@ function formatDuration(ms: number): string {
   const m = Math.floor(s / 60);
   const rs = Math.round(s - m * 60);
   return `${m}m${rs > 0 ? `${rs}s` : ""}`;
+}
+
+/** Derive a default reference name from a turn's prompt. Long prompts
+ * get truncated; empty / no-prompt turns fall back to a timestamp. */
+function defaultRefName(turn: Turn): string {
+  if (turn.userPrompt) {
+    const txt = userPromptText(turn.userPrompt);
+    if (txt) return txt.replace(/\s+/g, " ").trim().slice(0, 60);
+  }
+  const d = new Date(turn.startTimestamp);
+  return Number.isFinite(d.getTime())
+    ? `Turn at ${d.toLocaleString()}`
+    : "Turn";
 }
 
 function formatTime(iso: string): string {

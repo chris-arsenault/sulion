@@ -80,6 +80,8 @@
 .wa__tab-kind--file     { color: #a5f3fc; }
 .wa__tab-kind--diff     { color: #fcd34d; }
 .wa__tab-kind--search   { color: #e879f9; }
+.wa__tab-kind--ref      { color: #fbbf24; }
+.wa__tab-kind--prompt   { color: #86efac; }
 
 .wa__tab-label {
   overflow: hidden;

@@ -30,8 +30,10 @@ import {
   useContextMenu,
 } from "./common/ContextMenu";
 import { ConfirmDialog } from "./common/ConfirmDialog";
+import { LibrarySection } from "./LibrarySection";
 import { StatsStrip } from "./StatsStrip";
 import "./Sidebar.css";
+import "./LibrarySection.css";
 
 export function Sidebar() {
   const {
@@ -263,6 +265,8 @@ function RepoGroup({
     sessions: true,
     files: false,
     gitSection: true,
+    refs: false,
+    prompts: false,
   });
 
   useEffect(() => {
@@ -370,6 +374,20 @@ function RepoGroup({
           >
             <GitPanel git={git} />
           </Subsection>
+
+          <LibrarySection
+            repo={group.name}
+            kind="refs"
+            open={subOpen.refs}
+            onToggle={() => setSubOpen((p) => ({ ...p, refs: !p.refs }))}
+          />
+
+          <LibrarySection
+            repo={group.name}
+            kind="prompts"
+            open={subOpen.prompts}
+            onToggle={() => setSubOpen((p) => ({ ...p, prompts: !p.prompts }))}
+          />
         </div>
       )}
     </li>

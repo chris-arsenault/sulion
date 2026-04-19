@@ -1,33 +1,33 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render as rawRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 
 import type { Turn, ToolPair } from "./grouping";
-import type { TimelineEvent } from "../../api/types";
 import { TurnRow } from "./TurnRow";
+import { makeEvent, textBlock } from "./test-helpers";
+import { ContextMenuProvider } from "../common/ContextMenu";
 
-function userEv(text: string): TimelineEvent {
-  return {
-    byte_offset: 100,
-    timestamp: "2025-01-01T00:00:00Z",
-    kind: "user",
-    payload: {
-      type: "user",
-      message: { role: "user", content: [{ type: "text", text }] },
-    },
-  };
+// TurnRow reaches for the ContextMenu primitive unconditionally (for the
+// right-click "Pin as reference" affordance). Wrap every render in the
+// provider so the hook can resolve.
+function render(ui: ReactElement) {
+  return rawRender(<ContextMenuProvider>{ui}</ContextMenuProvider>);
 }
 
-function assistantEv(text = "reply"): TimelineEvent {
-  return {
+function userEv(text: string) {
+  return makeEvent("user", {
+    byte_offset: 100,
+    blocks: [textBlock(0, text)],
+  });
+}
+
+function assistantEv(text = "reply") {
+  return makeEvent("assistant", {
     byte_offset: 200,
     timestamp: "2025-01-01T00:00:02Z",
-    kind: "assistant",
-    payload: {
-      type: "assistant",
-      message: { role: "assistant", content: [{ type: "text", text }] },
-    },
-  };
+    blocks: [textBlock(0, text)],
+  });
 }
 
 function turn(overrides: Partial<Turn> = {}): Turn {
@@ -91,9 +91,9 @@ describe("TurnRow", () => {
   it("shows tool badges with counts per tool type", () => {
     const editPair: ToolPair = {
       id: "a",
-      name: "Edit",
+      name: "edit",
       input: {},
-      use: { type: "tool_use", id: "a", name: "Edit" } as never,
+      use: { type: "tool_use", id: "a", name: "edit" } as never,
       useEvent: assistantEv(),
       result: null,
       resultEvent: null,
@@ -103,9 +103,9 @@ describe("TurnRow", () => {
     const editPair2: ToolPair = { ...editPair, id: "b" };
     const bashPair: ToolPair = {
       id: "c",
-      name: "Bash",
+      name: "bash",
       input: {},
-      use: { type: "tool_use", id: "c", name: "Bash" } as never,
+      use: { type: "tool_use", id: "c", name: "bash" } as never,
       useEvent: assistantEv(),
       result: null,
       resultEvent: null,
@@ -120,8 +120,8 @@ describe("TurnRow", () => {
         onSelect={() => {}}
       />,
     );
-    expect(screen.getByText("Edit×2")).toBeDefined();
-    expect(screen.getByText("Bash")).toBeDefined();
+    expect(screen.getByText("edit×2")).toBeDefined();
+    expect(screen.getByText("bash")).toBeDefined();
   });
 
   it("hides the thinking badge when showThinking=false", () => {
@@ -150,21 +150,15 @@ describe("TurnRow", () => {
 
   it("multi-paragraph prompt: shows first paragraph only, with trailing ellipsis when more exists", () => {
     const multi = {
-      byte_offset: 100,
-      timestamp: "2025-01-01T00:00:00Z",
-      kind: "user",
-      payload: {
-        type: "user",
-        message: {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Fix the bug in foo.ts.\n\nContext: the user clicks delete and nothing happens. The handler fires but the DELETE never reaches the server.\n\nCheck network tab for what actually went over the wire.",
-            },
-          ],
-        },
-      },
+      ...makeEvent("user", {
+        byte_offset: 100,
+        blocks: [
+          textBlock(
+            0,
+            "Fix the bug in foo.ts.\n\nContext: the user clicks delete and nothing happens. The handler fires but the DELETE never reaches the server.\n\nCheck network tab for what actually went over the wire.",
+          ),
+        ],
+      }),
     };
     render(
       <TurnRow
@@ -187,22 +181,15 @@ describe("TurnRow", () => {
 
   it("single-paragraph prompt with internal line breaks: collapses to one paragraph, no trailing ellipsis", () => {
     const singleWithLinebreaks = {
-      byte_offset: 100,
-      timestamp: "2025-01-01T00:00:00Z",
-      kind: "user",
-      payload: {
-        type: "user",
-        message: {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              // One paragraph wrapped with single newlines (not blank line)
-              text: "add a new session rename feature\nthat lets me name sessions\nwith emoji",
-            },
-          ],
-        },
-      },
+      ...makeEvent("user", {
+        byte_offset: 100,
+        blocks: [
+          textBlock(
+            0,
+            "add a new session rename feature\nthat lets me name sessions\nwith emoji",
+          ),
+        ],
+      }),
     };
     render(
       <TurnRow

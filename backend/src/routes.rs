@@ -12,6 +12,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::library::{self, LibraryKind};
 use crate::pty::{self, PtyMetadata, SpawnParams};
 use crate::{git, workspace, AppState};
 
@@ -31,6 +32,16 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/repos/:name/files", get(get_repo_files))
         .route("/api/repos/:name/file", get(get_repo_file))
         .route("/api/repos/:name/upload", post(post_repo_upload))
+        .route(
+            "/api/repos/:name/library/:kind",
+            get(list_library).put(put_library_root),
+        )
+        .route(
+            "/api/repos/:name/library/:kind/:slug",
+            get(get_library_entry)
+                .put(put_library_entry)
+                .delete(delete_library_entry),
+        )
 }
 
 // ─── error type ───────────────────────────────────────────────────────
@@ -90,8 +101,9 @@ struct SessionView {
     created_at: chrono::DateTime<chrono::Utc>,
     ended_at: Option<chrono::DateTime<chrono::Utc>>,
     exit_code: Option<i32>,
-    current_claude_session_uuid: Option<Uuid>,
-    /// MAX(event.timestamp) for this session's current Claude UUID.
+    current_session_uuid: Option<Uuid>,
+    current_session_agent: Option<String>,
+    /// MAX(event.timestamp) for this session's current transcript session.
     /// Null means no events ingested yet. Used by the frontend's
     /// unread-dot indicator.
     last_event_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -126,7 +138,8 @@ impl From<PtyMetadata> for SessionView {
             created_at: m.created_at,
             ended_at: m.ended_at,
             exit_code: m.exit_code,
-            current_claude_session_uuid: m.current_claude_session_uuid,
+            current_session_uuid: m.current_session_uuid,
+            current_session_agent: m.current_session_agent,
             last_event_at: m.last_event_at,
             label: m.label,
             pinned: m.pinned,
@@ -157,9 +170,13 @@ struct CreateSessionReq {
     cols: Option<u16>,
     #[serde(default)]
     rows: Option<u16>,
-    /// If set, the shell boots straight into `claude --resume <uuid>`
-    /// and falls back to an interactive bash after Claude exits. Used
-    /// by the "Resume" action on orphaned sessions.
+    /// If set, the shell boots straight into the agent-specific resume
+    /// command and falls back to an interactive shell after.
+    #[serde(default)]
+    resume_session_uuid: Option<Uuid>,
+    #[serde(default)]
+    resume_agent: Option<String>,
+    /// Backward-compatible alias for older frontend builds.
     #[serde(default)]
     claude_resume_uuid: Option<Uuid>,
 }
@@ -185,20 +202,44 @@ async fn create_session(
         )));
     }
 
-    // When resuming a prior Claude session, boot bash directly into the
-    // resume command and fall back to an interactive shell after. The
-    // uuid is `Uuid`-typed so no shell injection is possible.
-    // `--dangerously-skip-permissions` matches the user's default
-    // workflow (same flag as the `cl` alias).
-    let (shell, args) = match req.claude_resume_uuid {
-        Some(uuid) => (
+    // When resuming a prior agent session, boot bash directly into the
+    // agent-specific resume command and fall back to an interactive
+    // shell after. The uuid is `Uuid`-typed so no shell injection is
+    // possible.
+    let resume_session_uuid = req.resume_session_uuid.or(req.claude_resume_uuid);
+    let resume_agent = req
+        .resume_agent
+        .as_deref()
+        .or_else(|| resume_session_uuid.map(|_| "claude-code"));
+    let (shell, args) = match (resume_session_uuid, resume_agent) {
+        (Some(uuid), Some("claude-code")) => (
             PathBuf::from("/bin/bash"),
             vec![
                 "-c".to_string(),
                 format!("claude --dangerously-skip-permissions --resume {uuid} ; exec bash"),
             ],
         ),
-        None => (pty::default_shell(), Vec::new()),
+        (Some(uuid), Some("codex")) => {
+            let codex = crate::codex::wrapper_path();
+            (
+                PathBuf::from("/bin/bash"),
+                vec![
+                    "-c".to_string(),
+                    format!("{} resume {uuid} ; exec bash", codex.display()),
+                ],
+            )
+        }
+        (Some(_), Some(agent)) => {
+            return Err(ApiError::BadRequest(format!(
+                "resume is not implemented for agent {agent}",
+            )));
+        }
+        (Some(_), None) => {
+            return Err(ApiError::BadRequest(
+                "resume_agent is required when resume_session_uuid is set".into(),
+            ));
+        }
+        (None, _) => (pty::default_shell(), Vec::new()),
     };
 
     let params = SpawnParams {
@@ -272,6 +313,8 @@ struct HistoryQuery {
     #[serde(default)]
     kind: Option<String>,
     #[serde(default)]
+    session: Option<Uuid>,
+    #[serde(default)]
     claude_session: Option<Uuid>,
 }
 
@@ -280,13 +323,15 @@ struct EventView {
     byte_offset: i64,
     timestamp: chrono::DateTime<chrono::Utc>,
     kind: String,
-    /// Raw JSONL payload. Kept for forensic / debug use and for agents
-    /// the parser doesn't understand yet. New code should read `blocks`
-    /// instead.
-    payload: serde_json::Value,
     agent: String,
     speaker: Option<String>,
     content_kind: Option<String>,
+    event_uuid: Option<String>,
+    parent_event_uuid: Option<String>,
+    related_tool_use_id: Option<String>,
+    is_sidechain: bool,
+    is_meta: bool,
+    subtype: Option<String>,
     /// Canonical content blocks, agent-agnostic. Empty for unparsable
     /// events or those still waiting on the startup backfill.
     blocks: Vec<crate::canonical::Block>,
@@ -294,7 +339,8 @@ struct EventView {
 
 #[derive(Serialize)]
 struct HistoryResponse {
-    claude_session_uuid: Option<Uuid>,
+    session_uuid: Option<Uuid>,
+    session_agent: Option<String>,
     events: Vec<EventView>,
     next_after: Option<i64>,
 }
@@ -305,16 +351,15 @@ async fn session_history(
     Query(q): Query<HistoryQuery>,
 ) -> ApiResult<Json<HistoryResponse>> {
     // Figure out which claude session to read from.
-    let claude_uuid = match q.claude_session {
+    let session_uuid = match q.session.or(q.claude_session) {
         Some(u) => Some(u),
         None => {
-            // Fall back to pty's current pointer.
-            let row: Option<(Option<Uuid>,)> = sqlx::query_as(
-                "SELECT current_claude_session_uuid FROM pty_sessions WHERE id = $1",
-            )
-            .bind(id)
-            .fetch_optional(&state.pool)
-            .await?;
+            // Fall back to the PTY's current transcript pointer.
+            let row: Option<(Option<Uuid>,)> =
+                sqlx::query_as("SELECT current_session_uuid FROM pty_sessions WHERE id = $1")
+                    .bind(id)
+                    .fetch_optional(&state.pool)
+                    .await?;
             match row {
                 Some((Some(u),)) => Some(u),
                 Some((None,)) => None,
@@ -323,13 +368,19 @@ async fn session_history(
         }
     };
 
-    let Some(claude_uuid) = claude_uuid else {
+    let Some(session_uuid) = session_uuid else {
         return Ok(Json(HistoryResponse {
-            claude_session_uuid: None,
+            session_uuid: None,
+            session_agent: None,
             events: Vec::new(),
             next_after: None,
         }));
     };
+    let session_agent: Option<(String,)> =
+        sqlx::query_as("SELECT agent FROM claude_sessions WHERE session_uuid = $1")
+            .bind(session_uuid)
+            .fetch_optional(&state.pool)
+            .await?;
 
     let after = q.after.unwrap_or(-1);
     let limit = q.limit.unwrap_or(500).clamp(1, 5000);
@@ -340,20 +391,26 @@ async fn session_history(
         i64,
         chrono::DateTime<chrono::Utc>,
         String,
-        serde_json::Value,
         String,
         Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        bool,
+        bool,
         Option<String>,
     );
     let rows: Vec<HistoryRow> = if let Some(kind) = &q.kind {
         sqlx::query_as(
-            "SELECT byte_offset, timestamp, kind, payload, agent, speaker, content_kind \
+            "SELECT byte_offset, timestamp, kind, agent, speaker, content_kind, \
+                    event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype \
                  FROM events \
                  WHERE session_uuid = $1 AND byte_offset > $2 AND kind = $3 \
                  ORDER BY byte_offset ASC \
                  LIMIT $4",
         )
-        .bind(claude_uuid)
+        .bind(session_uuid)
         .bind(after)
         .bind(kind)
         .bind(limit)
@@ -361,13 +418,14 @@ async fn session_history(
         .await?
     } else {
         sqlx::query_as(
-            "SELECT byte_offset, timestamp, kind, payload, agent, speaker, content_kind \
+            "SELECT byte_offset, timestamp, kind, agent, speaker, content_kind, \
+                    event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype \
                  FROM events \
                  WHERE session_uuid = $1 AND byte_offset > $2 \
                  ORDER BY byte_offset ASC \
                  LIMIT $3",
         )
-        .bind(claude_uuid)
+        .bind(session_uuid)
         .bind(after)
         .bind(limit)
         .fetch_all(&state.pool)
@@ -378,12 +436,25 @@ async fn session_history(
 
     // Load canonical blocks for this event window in one query.
     let blocks_by_offset =
-        load_event_blocks(&state.pool, claude_uuid, rows.iter().map(|r| r.0)).await?;
+        load_event_blocks(&state.pool, session_uuid, rows.iter().map(|r| r.0)).await?;
 
     let events = rows
         .into_iter()
         .map(
-            |(byte_offset, timestamp, kind, payload, agent, speaker, content_kind)| {
+            |(
+                byte_offset,
+                timestamp,
+                kind,
+                agent,
+                speaker,
+                content_kind,
+                event_uuid,
+                parent_event_uuid,
+                related_tool_use_id,
+                is_sidechain,
+                is_meta,
+                subtype,
+            )| {
                 let blocks = blocks_by_offset
                     .get(&byte_offset)
                     .cloned()
@@ -392,10 +463,15 @@ async fn session_history(
                     byte_offset,
                     timestamp,
                     kind,
-                    payload,
                     agent,
                     speaker,
                     content_kind,
+                    event_uuid,
+                    parent_event_uuid,
+                    related_tool_use_id,
+                    is_sidechain,
+                    is_meta,
+                    subtype,
                     blocks,
                 }
             },
@@ -403,16 +479,18 @@ async fn session_history(
         .collect();
 
     Ok(Json(HistoryResponse {
-        claude_session_uuid: Some(claude_uuid),
+        session_uuid: Some(session_uuid),
+        session_agent: session_agent.map(|(agent,)| agent),
         events,
         next_after,
     }))
 }
 
-/// Fetch `event_blocks` for a set of byte offsets within one claude
-/// session, grouped by byte_offset and sorted by `ord`. Returns a map
-/// so the caller can match them back to each event row without another
-/// round-trip.
+/// Fetch canonical `event_blocks` for a set of byte offsets within one
+/// transcript session, grouped by byte_offset and sorted by `ord`.
+/// Returns a map so the caller can match them back to each event row
+/// without another round-trip. Raw per-block JSON is intentionally not
+/// returned here; the UI only gets canonical fields.
 async fn load_event_blocks(
     pool: &crate::db::Pool,
     session_uuid: Uuid,
@@ -434,12 +512,11 @@ async fn load_event_blocks(
         tool_name_canonical: Option<String>,
         tool_input: Option<serde_json::Value>,
         is_error: Option<bool>,
-        raw: Option<serde_json::Value>,
     }
 
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT byte_offset, ord, kind, text, tool_id, tool_name, \
-                tool_name_canonical, tool_input, is_error, raw \
+                tool_name_canonical, tool_input, is_error \
            FROM event_blocks \
           WHERE session_uuid = $1 AND byte_offset = ANY($2) \
           ORDER BY byte_offset ASC, ord ASC",
@@ -470,7 +547,7 @@ async fn load_event_blocks(
                 tool_name_canonical: r.tool_name_canonical,
                 tool_input: r.tool_input,
                 is_error: r.is_error,
-                raw: r.raw,
+                raw: None,
             });
     }
     Ok(out)
@@ -821,6 +898,83 @@ async fn post_repo_upload(
 #[derive(Deserialize)]
 struct UploadQuery {
     path: Option<String>,
+}
+
+// ─── library (refs + prompts) ────────────────────────────────────────
+
+fn parse_kind(s: &str) -> ApiResult<LibraryKind> {
+    LibraryKind::parse(s).ok_or_else(|| ApiError::BadRequest(format!("unknown library kind: {s}")))
+}
+
+async fn list_library(
+    State(state): State<Arc<AppState>>,
+    Path((name, kind)): Path<(String, String)>,
+) -> ApiResult<Json<Vec<library::LibraryEntry>>> {
+    let root = repo_path(&state, &name)?;
+    let kind = parse_kind(&kind)?;
+    let entries = library::list(&root, kind)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
+    Ok(Json(entries))
+}
+
+async fn get_library_entry(
+    State(state): State<Arc<AppState>>,
+    Path((name, kind, slug)): Path<(String, String, String)>,
+) -> ApiResult<Json<library::LibraryEntry>> {
+    let root = repo_path(&state, &name)?;
+    let kind = parse_kind(&kind)?;
+    let entry = library::read(&root, kind, &slug)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(entry))
+}
+
+/// POST/PUT to the root URL: derive a slug from the name. Returns the
+/// saved entry (including the derived slug) so the client can round-trip.
+async fn put_library_root(
+    State(state): State<Arc<AppState>>,
+    Path((name, kind)): Path<(String, String)>,
+    Json(input): Json<library::SaveInput>,
+) -> ApiResult<Json<library::LibraryEntry>> {
+    let root = repo_path(&state, &name)?;
+    let kind = parse_kind(&kind)?;
+    let slug = library::sanitise_slug(&input.name)
+        .ok_or_else(|| ApiError::BadRequest("name must derive a valid slug".into()))?;
+    let entry = library::save(&root, kind, &slug, input)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
+    Ok(Json(entry))
+}
+
+async fn put_library_entry(
+    State(state): State<Arc<AppState>>,
+    Path((name, kind, slug)): Path<(String, String, String)>,
+    Json(input): Json<library::SaveInput>,
+) -> ApiResult<Json<library::LibraryEntry>> {
+    let root = repo_path(&state, &name)?;
+    let kind = parse_kind(&kind)?;
+    let entry = library::save(&root, kind, &slug, input)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
+    Ok(Json(entry))
+}
+
+async fn delete_library_entry(
+    State(state): State<Arc<AppState>>,
+    Path((name, kind, slug)): Path<(String, String, String)>,
+) -> ApiResult<StatusCode> {
+    let root = repo_path(&state, &name)?;
+    let kind = parse_kind(&kind)?;
+    let removed = library::delete(&root, kind, &slug)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
+    Ok(if removed {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    })
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────

@@ -218,6 +218,22 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
     };
     textarea?.addEventListener("paste", onPaste);
 
+    // Prompt-library "inject into terminal" action: a PromptTab
+    // dispatches this window event with {sessionId, text}. We pipe the
+    // body through sanitizePaste to strip weird whitespace/NULs, then
+    // hand off to term.paste so bracketed-paste semantics apply when
+    // the shell has them enabled.
+    const onInject = (ev: Event) => {
+      const ce = ev as CustomEvent<{ sessionId: string; text: string }>;
+      if (ce.detail?.sessionId !== sessionId) return;
+      if (typeof ce.detail.text !== "string") return;
+      term.paste(sanitizePaste(ce.detail.text));
+    };
+    window.addEventListener(
+      "shuttlecraft:inject-terminal",
+      onInject as EventListener,
+    );
+
     // Right-click: Windows-Terminal-style copy/paste.
     const onContextMenu: EventListener = (ev) => {
       ev.preventDefault();
@@ -260,6 +276,10 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
       ro?.disconnect();
       if (!ro) window.removeEventListener("resize", resize);
       textarea?.removeEventListener("paste", onPaste);
+      window.removeEventListener(
+        "shuttlecraft:inject-terminal",
+        onInject as EventListener,
+      );
       host.removeEventListener("contextmenu", onContextMenu);
       onData.dispose();
       conn.close();

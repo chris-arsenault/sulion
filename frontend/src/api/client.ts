@@ -9,9 +9,12 @@ import type {
   GitStatus,
   HistoryQuery,
   HistoryResponse,
+  LibraryEntry,
+  LibraryKind,
   ListReposResponse,
   ListSessionsResponse,
   RepoView,
+  SaveLibraryInput,
   SearchHit,
   SearchScope,
   SessionView,
@@ -93,7 +96,7 @@ export function getHistory(
   if (query.after != null) params.set("after", String(query.after));
   if (query.limit != null) params.set("limit", String(query.limit));
   if (query.kind) params.set("kind", query.kind);
-  if (query.claude_session) params.set("claude_session", query.claude_session);
+  if (query.session) params.set("session", query.session);
   const qs = params.toString();
   return request<HistoryResponse>(
     `/api/sessions/${sessionId}/history${qs ? `?${qs}` : ""}`,
@@ -214,4 +217,51 @@ export async function searchStream(
       }
     }
   }
+}
+
+// ─── library (refs + prompts) ────────────────────────────────────────
+
+export function listLibrary(
+  repo: string,
+  kind: LibraryKind,
+): Promise<LibraryEntry[]> {
+  return request<LibraryEntry[]>(
+    `/api/repos/${encodeURIComponent(repo)}/library/${kind}`,
+  );
+}
+
+export function getLibraryEntry(
+  repo: string,
+  kind: LibraryKind,
+  slug: string,
+): Promise<LibraryEntry> {
+  return request<LibraryEntry>(
+    `/api/repos/${encodeURIComponent(repo)}/library/${kind}/${encodeURIComponent(slug)}`,
+  );
+}
+
+export function saveLibraryEntry(
+  repo: string,
+  kind: LibraryKind,
+  input: SaveLibraryInput,
+  slug?: string,
+): Promise<LibraryEntry> {
+  const url = slug
+    ? `/api/repos/${encodeURIComponent(repo)}/library/${kind}/${encodeURIComponent(slug)}`
+    : `/api/repos/${encodeURIComponent(repo)}/library/${kind}`;
+  return request<LibraryEntry>(url, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteLibraryEntry(
+  repo: string,
+  kind: LibraryKind,
+  slug: string,
+): Promise<void> {
+  return request<void>(
+    `/api/repos/${encodeURIComponent(repo)}/library/${kind}/${encodeURIComponent(slug)}`,
+    { method: "DELETE" },
+  );
 }

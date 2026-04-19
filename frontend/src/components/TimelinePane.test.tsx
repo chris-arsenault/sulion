@@ -20,7 +20,22 @@ vi.mock("react-virtuoso", () => ({
   ),
 }));
 
-import { TimelinePane } from "./TimelinePane";
+import { TimelinePane as TimelinePaneRaw } from "./TimelinePane";
+import { ContextMenuProvider } from "./common/ContextMenu";
+import { SessionProvider } from "../state/SessionStore";
+import { makeEvent, textBlock } from "./timeline/test-helpers";
+
+// TimelinePane now reads the session list for the current session's
+// repo (used to scope the "Pin as reference" menu) and renders
+// TurnRow which needs the ContextMenuProvider. Wrap every render so
+// both hooks resolve.
+const TimelinePane = (props: { sessionId: string }) => (
+  <SessionProvider>
+    <ContextMenuProvider>
+      <TimelinePaneRaw {...props} />
+    </ContextMenuProvider>
+  </SessionProvider>
+);
 
 function stubHistoryFetch(
   handler: (url: string, init?: RequestInit) => Response,
@@ -29,29 +44,39 @@ function stubHistoryFetch(
     "fetch",
     vi.fn(async (input: RequestInfo, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.url;
+      // The wrapper providers fire mount-time polls; route those to
+      // empty-JSON shells so they don't confuse the per-test handler.
+      if (url === "/api/sessions") {
+        return new Response(JSON.stringify({ sessions: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/repos") {
+        return new Response(JSON.stringify({ repos: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       return handler(url, init);
     }),
   );
 }
 
 const mkUser = (offset: number, text: string) => ({
-  byte_offset: offset,
-  timestamp: new Date(offset * 1000).toISOString(),
-  kind: "user",
-  payload: {
-    type: "user",
-    message: { role: "user", content: [{ type: "text", text }] },
-  },
+  ...makeEvent("user", {
+    byte_offset: offset,
+    timestamp: new Date(offset * 1000).toISOString(),
+    blocks: [textBlock(0, text)],
+  }),
 });
 
 const mkAssistant = (offset: number, text: string) => ({
-  byte_offset: offset,
-  timestamp: new Date(offset * 1000).toISOString(),
-  kind: "assistant",
-  payload: {
-    type: "assistant",
-    message: { role: "assistant", content: [{ type: "text", text }] },
-  },
+  ...makeEvent("assistant", {
+    byte_offset: offset,
+    timestamp: new Date(offset * 1000).toISOString(),
+    blocks: [textBlock(0, text)],
+  }),
 });
 
 describe("TimelinePane", () => {
@@ -62,7 +87,8 @@ describe("TimelinePane", () => {
 
   it("groups events into turns and expands the header on click", async () => {
     const body = JSON.stringify({
-      claude_session_uuid: "00000000-0000-0000-0000-000000000001",
+      session_uuid: "00000000-0000-0000-0000-000000000001",
+      session_agent: "claude-code",
       events: [mkUser(0, "hello"), mkAssistant(120, "hi there")],
       next_after: 120,
     });
@@ -90,9 +116,10 @@ describe("TimelinePane", () => {
     });
   });
 
-  it("shows empty-state copy when the API returns no claude session", async () => {
+  it("shows empty-state copy when the API returns no correlated session", async () => {
     const body = JSON.stringify({
-      claude_session_uuid: null,
+      session_uuid: null,
+      session_agent: null,
       events: [],
       next_after: null,
     });
@@ -106,7 +133,7 @@ describe("TimelinePane", () => {
 
     render(<TimelinePane sessionId="abc" />);
     await waitFor(() => {
-      expect(screen.getByText(/no claude session correlated yet/i)).toBeDefined();
+      expect(screen.getByText(/no transcript session correlated yet/i)).toBeDefined();
     });
   });
 
@@ -118,12 +145,14 @@ describe("TimelinePane", () => {
       const body =
         call++ === 0
           ? {
-              claude_session_uuid: "00000000-0000-0000-0000-000000000001",
+              session_uuid: "00000000-0000-0000-0000-000000000001",
+              session_agent: "claude-code",
               events: [mkUser(0, "one")],
               next_after: 0,
             }
           : {
-              claude_session_uuid: "00000000-0000-0000-0000-000000000001",
+              session_uuid: "00000000-0000-0000-0000-000000000001",
+              session_agent: "claude-code",
               events: [mkUser(1, "two")],
               next_after: 1,
             };
@@ -145,14 +174,15 @@ describe("TimelinePane", () => {
 
   it("bookkeeping events are hidden by default", async () => {
     const body = JSON.stringify({
-      claude_session_uuid: "00000000-0000-0000-0000-000000000001",
+      session_uuid: "00000000-0000-0000-0000-000000000001",
+      session_agent: "claude-code",
       events: [
         mkUser(0, "real prompt"),
         {
-          byte_offset: 10,
-          timestamp: "2025-01-01T00:00:10Z",
-          kind: "file-history-snapshot",
-          payload: { type: "file-history-snapshot" },
+          ...makeEvent("file-history-snapshot", {
+            byte_offset: 10,
+            timestamp: "2025-01-01T00:00:10Z",
+          }),
         },
         mkAssistant(20, "real reply"),
       ],
