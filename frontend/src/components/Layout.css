@@ -53,3 +53,138 @@
 .split__divider:hover {
   background: #3b82f6;
 }
+
+/* ─────────────────────────────────────────────────────────────────
+   Mobile layout (#22)
+   Fires on viewports <768px. Stacks the app: top bar with hamburger
+   + pane tabs, off-canvas drawer for the sidebar, main area swaps
+   between terminal and timeline via display (both stay mounted so
+   xterm keeps its buffer).
+   ────────────────────────────────────────────────────────────────── */
+
+.layout--mobile {
+  grid-template-columns: 1fr;
+  grid-template-rows: 48px 1fr;
+}
+
+.layout--mobile .layout__main {
+  grid-row: 2;
+}
+
+.mobile-topbar {
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  background: #14161b;
+  border-bottom: 1px solid #1f232b;
+}
+
+.mobile-topbar__hamburger {
+  background: transparent;
+  border: 1px solid #1f232b;
+  color: #e5e7eb;
+  width: 40px;
+  height: 36px;
+  border-radius: 4px;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.mobile-topbar__title {
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: #93c5fd;
+  font-size: 13px;
+}
+
+.mobile-topbar__tabs {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  background: #0f1115;
+  padding: 2px;
+  border-radius: 6px;
+  border: 1px solid #1f232b;
+}
+
+.mobile-topbar__tab {
+  background: transparent;
+  color: #9ca3af;
+  border: none;
+  padding: 6px 12px;
+  min-height: 32px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mobile-topbar__tab--active {
+  background: #1e3a8a;
+  color: #e0f2fe;
+}
+
+.layout__scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 50;
+}
+
+.layout__drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(86vw, 320px);
+  background: #14161b;
+  border-right: 1px solid #1f232b;
+  z-index: 60;
+  overflow-y: auto;
+  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.5);
+  animation: drawer-slide-in 0.18s ease-out;
+}
+
+@keyframes drawer-slide-in {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+.mobile-panes {
+  position: relative;
+  height: 100%;
+  width: 100%;
+}
+
+/* Both panes mount in parallel so xterm keeps its buffer when the user
+   swaps tabs. Only the active one is visible. */
+.mobile-pane {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  /* Keep sizes stable — hiding via display:none makes TerminalPane
+     re-measure on show which thrashes the resize observer. */
+}
+
+.mobile-pane--active {
+  visibility: visible;
+}
+
+/* Larger tap targets on the sidebar when rendered inside the drawer. */
+.layout__drawer .sidebar__session,
+.layout__drawer .sidebar__group-toggle {
+  min-height: 44px;
+}
+.layout__drawer .sidebar__icon-button {
+  min-width: 32px;
+  min-height: 32px;
+}
+.layout__drawer .sidebar__menu-button,
+.layout__drawer .sidebar__delete {
+  padding: 8px 10px;
+  font-size: 16px;
+  /* Drawer has no hover state — keep actions always visible. */
+  opacity: 1;
+}
