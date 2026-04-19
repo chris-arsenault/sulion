@@ -138,6 +138,22 @@
   margin: 0 0 8px;
 }
 
+.wa__orphan {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 24px;
+  color: #9ca3af;
+  font-size: 13px;
+}
+.wa__orphan code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  background: #1f232b;
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: #e5e7eb;
+}
+
 /* Mobile: single-pane, all tabs in one strip. */
 .wa--mobile {
   display: flex;

@@ -24,10 +24,25 @@ export function SearchTab({ initialQuery = "", initialScope = "workspace" }: Pro
   const [done, setDone] = useState(false);
   const workerRef = useRef<Worker | null>(null);
 
-  const { sessions, selectedSessionId } = useSessions();
-  const { openTab } = useTabs();
-  const activeSession = sessions.find((s) => s.id === selectedSessionId) ?? null;
-  const activeRepo = activeSession?.repo ?? null;
+  const { sessions } = useSessions();
+  const { openTab, tabs, activeByPane } = useTabs();
+  // Derive "current context" from which tab is active in the top pane,
+  // not from the sidebar highlight. Tabs are independent — the sidebar
+  // is for navigation, not state.
+  const focusedTabId = activeByPane.top ?? activeByPane.bottom ?? null;
+  const focusedTab = focusedTabId ? tabs[focusedTabId] ?? null : null;
+  const contextSessionId =
+    focusedTab?.kind === "terminal" || focusedTab?.kind === "timeline"
+      ? focusedTab.sessionId ?? null
+      : null;
+  const contextRepo = (() => {
+    if (focusedTab?.repo) return focusedTab.repo;
+    if (contextSessionId) {
+      const s = sessions.find((x) => x.id === contextSessionId);
+      return s?.repo ?? null;
+    }
+    return null;
+  })();
 
   useEffect(() => {
     const w = new Worker(
@@ -69,9 +84,9 @@ export function SearchTab({ initialQuery = "", initialScope = "workspace" }: Pro
     const qs = new URLSearchParams();
     qs.set("q", q);
     qs.set("scope", s);
-    if (s === "repo" && activeRepo) qs.set("repo", activeRepo);
-    if (s === "timeline" && selectedSessionId)
-      qs.set("session", selectedSessionId);
+    if (s === "repo" && contextRepo) qs.set("repo", contextRepo);
+    if (s === "timeline" && contextSessionId)
+      qs.set("session", contextSessionId);
     setHits([]);
     setRunning(true);
     setDone(false);
@@ -81,15 +96,15 @@ export function SearchTab({ initialQuery = "", initialScope = "workspace" }: Pro
     });
   };
 
-  const canUseTimelineScope = selectedSessionId != null;
-  const canUseRepoScope = activeRepo != null;
+  const canUseTimelineScope = contextSessionId != null;
+  const canUseRepoScope = contextRepo != null;
 
   const disabledNote = useMemo(() => {
     if (scope === "timeline" && !canUseTimelineScope) {
-      return "Select a session to search its timeline.";
+      return "Focus a terminal or timeline tab to search its timeline.";
     }
     if (scope === "repo" && !canUseRepoScope) {
-      return "Select a session/repo to search its files.";
+      return "Focus a tab bound to a repo (terminal, timeline, file, or diff) to search that repo.";
     }
     return null;
   }, [scope, canUseTimelineScope, canUseRepoScope]);

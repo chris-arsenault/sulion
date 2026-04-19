@@ -6,7 +6,7 @@
 // Mobile mode (viewport <768px) collapses to a single-pane strip
 // showing every open tab mixed together, no divider.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import type { PaneId, TabData } from "../state/TabStore";
 import { useTabs } from "../state/TabStore";
@@ -21,21 +21,13 @@ import { SearchTab } from "./SearchTab";
 import "./WorkArea.css";
 
 export function WorkArea() {
-  const { panes, activeByPane, tabs, hasAnyTab, pruneSessions } = useTabs();
-  const { sessions, sessionsLoaded } = useSessions();
+  const { panes, activeByPane, tabs, hasAnyTab } = useTabs();
   const isMobile = useMediaQuery("(max-width: 767px)");
   const [topFraction, setTopFraction] = useState(0.55);
-
-  // Prune tabs for sessions that no longer exist. Gated on
-  // `sessionsLoaded` because on a fresh page load TabStore hydrates
-  // before the /api/sessions response arrives — pruning against an
-  // empty list would wipe every persisted session-bound tab (the
-  // "refresh and everything disappears" bug).
-  useEffect(() => {
-    if (!sessionsLoaded) return;
-    const live = new Set(sessions.map((s) => s.id));
-    pruneSessions(live);
-  }, [sessions, sessionsLoaded, pruneSessions]);
+  // No more automatic prune: tabs survive their session's deletion and
+  // show an orphan placeholder with a manual close. That keeps tab
+  // state fully user-driven and avoids the "refresh wipes everything"
+  // failure mode.
 
   if (!hasAnyTab) {
     return (
@@ -392,10 +384,19 @@ function TabContent({ tab }: { tab: TabData }) {
 }
 
 function TerminalOrEndedPane({ sessionId }: { sessionId: string }) {
-  const { sessions } = useSessions();
+  const { sessions, sessionsLoaded } = useSessions();
   const s = sessions.find((x) => x.id === sessionId) ?? null;
-  if (s && s.state !== "live") {
-    return <SessionEndedPane session={s} />;
+  // Sessions not loaded yet → render the terminal optimistically; the
+  // WS will connect once things stabilise.
+  if (!sessionsLoaded) return <TerminalPane sessionId={sessionId} />;
+  if (!s) {
+    return (
+      <div className="wa__orphan">
+        <p>This tab's session (<code>{sessionId.slice(0, 8)}</code>) is no longer available.</p>
+        <p>Close the tab via the × button, or open a fresh session from the sidebar.</p>
+      </div>
+    );
   }
+  if (s.state !== "live") return <SessionEndedPane session={s} />;
   return <TerminalPane sessionId={sessionId} />;
 }

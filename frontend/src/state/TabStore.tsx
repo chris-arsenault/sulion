@@ -69,23 +69,42 @@ export function TabProvider({ children }: { children: ReactNode }) {
   });
   const hydrated = useRef(false);
 
-  // Hydrate from localStorage once.
+  // Hydrate from localStorage once. Self-heals a couple of invariant
+  // violations that older builds may have persisted:
+  //   - active id that doesn't exist in the pane → pick the last tab
+  //   - pane has tabs but activeByPane is null → pick the last tab
+  //   - active id references a tab that doesn't exist in `tabs` → clear
+  // Result: a hydrated pane with tabs is guaranteed to have a valid
+  // activeId. This is the "refresh and content is blank" fix.
   useEffect(() => {
     if (hydrated.current) return;
     hydrated.current = true;
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
-      const parsed = JSON.parse(raw) as {
+      const parsed = JSON.parse(raw) as Partial<{
         tabs: Record<string, TabData>;
         panes: Record<PaneId, string[]>;
         activeByPane: Record<PaneId, string | null>;
+      }>;
+      const hTabs = parsed.tabs ?? {};
+      const hPanes: Record<PaneId, string[]> = {
+        top: (parsed.panes?.top ?? []).filter((id) => id in hTabs),
+        bottom: (parsed.panes?.bottom ?? []).filter((id) => id in hTabs),
       };
-      if (parsed && parsed.tabs && parsed.panes) {
-        setTabs(parsed.tabs);
-        setPanes(parsed.panes);
-        setActiveByPane(parsed.activeByPane);
-      }
+      const pickActive = (pane: PaneId): string | null => {
+        const ids = hPanes[pane];
+        if (ids.length === 0) return null;
+        const persisted = parsed.activeByPane?.[pane];
+        if (persisted && ids.includes(persisted)) return persisted;
+        return ids[ids.length - 1]!;
+      };
+      setTabs(hTabs);
+      setPanes(hPanes);
+      setActiveByPane({
+        top: pickActive("top"),
+        bottom: pickActive("bottom"),
+      });
     } catch {
       // Corrupt storage — reset by not hydrating.
     }
@@ -130,14 +149,38 @@ export function TabProvider({ children }: { children: ReactNode }) {
   );
 
   const closeTab = useCallback((id: string) => {
-    setPanes((prev) => ({
-      top: prev.top.filter((t) => t !== id),
-      bottom: prev.bottom.filter((t) => t !== id),
-    }));
+    // Single-pass update: if we close the active tab in a pane, promote
+    // the neighbour (prev sibling, else next) instead of leaving
+    // activeId=null with live tabs still in the pane — that would
+    // render an empty content area even though the strip shows tabs.
+    let newTop: string[] | null = null;
+    let newBottom: string[] | null = null;
+    setPanes((prev) => {
+      newTop = prev.top.filter((t) => t !== id);
+      newBottom = prev.bottom.filter((t) => t !== id);
+      return { top: newTop, bottom: newBottom };
+    });
     setActiveByPane((prev) => {
       const next = { ...prev };
       for (const p of ["top", "bottom"] as PaneId[]) {
-        if (next[p] === id) next[p] = null;
+        const paneList = (p === "top" ? newTop : newBottom) ?? [];
+        if (next[p] === id) {
+          // Promote the closed tab's neighbour: prefer the one that was
+          // immediately before it (easier to re-find on screen), fall
+          // back to the last remaining tab.
+          const oldIdx = (panes[p] ?? []).indexOf(id);
+          if (paneList.length === 0) {
+            next[p] = null;
+          } else if (oldIdx > 0 && paneList[oldIdx - 1]) {
+            next[p] = paneList[oldIdx - 1]!;
+          } else {
+            next[p] = paneList[paneList.length - 1]!;
+          }
+        } else if (next[p] != null && !paneList.includes(next[p]!)) {
+          // Belt-and-braces: if active id somehow drifted out of the
+          // pane's list, reset.
+          next[p] = paneList[paneList.length - 1] ?? null;
+        }
       }
       return next;
     });
@@ -146,7 +189,7 @@ export function TabProvider({ children }: { children: ReactNode }) {
       delete next[id];
       return next;
     });
-  }, []);
+  }, [panes]);
 
   const activateTab = useCallback((pane: PaneId, id: string) => {
     setActiveByPane((prev) => ({ ...prev, [pane]: id }));
