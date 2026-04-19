@@ -389,9 +389,21 @@ async fn insert_event(
         );
     }
 
+    // Parse the line into the canonical block representation up-front
+    // so the transaction below can write events + event_blocks atomically
+    // (same commit). If the parser ever starts failing for a shape it
+    // doesn't recognise, we log and fall back to storing the raw row
+    // with no blocks — the frontend will render via `unknown` blocks or
+    // the legacy payload path.
+    use crate::canonical::EventParser;
+    let parsed = crate::canonical::ClaudeParser.parse(&value);
+
+    let mut tx = pool.begin().await.map_err(InsertError::Db)?;
+
     let result = sqlx::query(
-        "INSERT INTO events (session_uuid, byte_offset, timestamp, kind, payload) \
-         VALUES ($1, $2, $3, $4, $5) \
+        "INSERT INTO events \
+             (session_uuid, byte_offset, timestamp, kind, payload, agent, speaker, content_kind) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
          ON CONFLICT (session_uuid, byte_offset) DO NOTHING",
     )
     .bind(session_uuid)
@@ -399,9 +411,21 @@ async fn insert_event(
     .bind(timestamp)
     .bind(&kind)
     .bind(&value)
-    .execute(pool)
+    .bind(parsed.agent)
+    .bind(parsed.speaker.as_str())
+    .bind(parsed.content_kind.as_str())
+    .execute(&mut *tx)
     .await
     .map_err(InsertError::Db)?;
+
+    let inserted = result.rows_affected() > 0;
+    if inserted && !parsed.blocks.is_empty() {
+        insert_blocks(&mut tx, session_uuid, byte_offset, &parsed.blocks)
+            .await
+            .map_err(InsertError::Db)?;
+    }
+
+    tx.commit().await.map_err(InsertError::Db)?;
 
     // If this event hints that the current session is a compaction
     // continuation of another, record the parent linkage. Best-effort —
@@ -412,7 +436,88 @@ async fn insert_event(
         }
     }
 
-    Ok(result.rows_affected() > 0)
+    Ok(inserted)
+}
+
+async fn insert_blocks(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    session_uuid: Uuid,
+    byte_offset: i64,
+    blocks: &[crate::canonical::Block],
+) -> sqlx::Result<()> {
+    for b in blocks {
+        sqlx::query(
+            "INSERT INTO event_blocks \
+                 (session_uuid, byte_offset, ord, kind, text, \
+                  tool_id, tool_name, tool_name_canonical, tool_input, is_error, raw) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             ON CONFLICT (session_uuid, byte_offset, ord) DO NOTHING",
+        )
+        .bind(session_uuid)
+        .bind(byte_offset)
+        .bind(b.ord)
+        .bind(b.kind.as_str())
+        .bind(b.text.as_deref())
+        .bind(b.tool_id.as_deref())
+        .bind(b.tool_name.as_deref())
+        .bind(b.tool_name_canonical.as_deref())
+        .bind(b.tool_input.as_ref())
+        .bind(b.is_error)
+        .bind(b.raw.as_ref())
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
+/// One-shot backfill on startup: walk every event that hasn't been
+/// decomposed into blocks yet and synthesise them from `payload`. Keeps
+/// the frontend's "read from blocks only" invariant true even for rows
+/// that pre-date this migration. Cheap because the corpus is small.
+pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<usize> {
+    let rows: Vec<(Uuid, i64, serde_json::Value)> = sqlx::query_as(
+        "SELECT e.session_uuid, e.byte_offset, e.payload \
+         FROM events e \
+         WHERE NOT EXISTS ( \
+             SELECT 1 FROM event_blocks b \
+              WHERE b.session_uuid = e.session_uuid \
+                AND b.byte_offset = e.byte_offset \
+         ) \
+         AND e.agent = 'claude-code'",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let count = rows.len();
+    if count == 0 {
+        return Ok(0);
+    }
+
+    use crate::canonical::EventParser;
+    let parser = crate::canonical::ClaudeParser;
+    for (session_uuid, byte_offset, payload) in rows {
+        let parsed = parser.parse(&payload);
+        if parsed.blocks.is_empty() {
+            continue;
+        }
+        let mut tx = pool.begin().await?;
+        // Update the cached discriminator columns while we're here;
+        // older rows may have the default 'claude-code' but NULL for
+        // speaker / content_kind.
+        sqlx::query(
+            "UPDATE events SET speaker = $3, content_kind = $4 \
+             WHERE session_uuid = $1 AND byte_offset = $2",
+        )
+        .bind(session_uuid)
+        .bind(byte_offset)
+        .bind(parsed.speaker.as_str())
+        .bind(parsed.content_kind.as_str())
+        .execute(&mut *tx)
+        .await?;
+        insert_blocks(&mut tx, session_uuid, byte_offset, &parsed.blocks).await?;
+        tx.commit().await?;
+    }
+    Ok(count)
 }
 
 /// Scan a JSONL event payload for hints that the current session is a

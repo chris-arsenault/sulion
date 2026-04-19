@@ -12,27 +12,31 @@ export interface ToolUseSummary {
 
 export function ToolCallRenderer({ tool }: { tool: ToolUseSummary }) {
   const input = (tool.input ?? {}) as Record<string, unknown>;
+  // Dispatch on the canonical tool name. Agent-specific raw names are
+  // mapped to canonical form by the ingester before they reach us, so
+  // the same renderer handles "Read" (Claude Code) and "read_file"
+  // (Codex) without caring which one it is.
   switch (tool.name) {
-    case "Edit":
+    case "edit":
       return <EditRenderer input={input} variant="edit" />;
-    case "Write":
+    case "write":
       return <WriteRenderer input={input} />;
-    case "MultiEdit":
+    case "multi_edit":
       return <MultiEditRenderer input={input} />;
-    case "Bash":
+    case "bash":
       return <BashRenderer input={input} />;
-    case "Read":
+    case "read":
       return <ReadRenderer input={input} />;
-    case "Grep":
+    case "grep":
       return <GrepRenderer input={input} />;
-    case "Glob":
+    case "glob":
       return <GlobRenderer input={input} />;
-    case "Task":
+    case "task":
       return <TaskRenderer input={input} />;
-    case "TodoWrite":
+    case "todo_write":
       return <TodoRenderer input={input} />;
-    case "WebFetch":
-    case "WebSearch":
+    case "web_fetch":
+    case "web_search":
       return <WebRenderer input={input} name={tool.name} />;
     default:
       return <GenericRenderer input={input} />;

@@ -26,6 +26,16 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!(count = orphaned, "reconciled orphaned PTY sessions");
     }
 
+    // One-shot backfill: synthesize canonical event_blocks for any
+    // events ingested before the canonical-block migration. No-op once
+    // complete. Cheap — corpus is small and the SELECT anti-joins are
+    // indexed.
+    match shuttlecraft::ingester::backfill_canonical_blocks(&pool).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(count = n, "backfilled canonical event blocks"),
+        Err(err) => tracing::warn!(%err, "canonical block backfill failed"),
+    }
+
     // Background ingester — the sole reader of the JSONL transcripts.
     // We hold an Arc so the `/api/stats` handler can read the cumulative
     // counters without a second process observing them.

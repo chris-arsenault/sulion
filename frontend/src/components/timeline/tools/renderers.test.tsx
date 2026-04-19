@@ -8,7 +8,7 @@ describe("ToolCallRenderer", () => {
     render(
       <ToolCallRenderer
         tool={{
-          name: "Edit",
+          name: "edit",
           input: {
             file_path: "/tmp/foo.ts",
             old_string: "hello",
@@ -26,7 +26,7 @@ describe("ToolCallRenderer", () => {
     render(
       <ToolCallRenderer
         tool={{
-          name: "Bash",
+          name: "bash",
           input: { command: "ls -la", description: "list files" },
         }}
       />,
@@ -39,7 +39,7 @@ describe("ToolCallRenderer", () => {
     render(
       <ToolCallRenderer
         tool={{
-          name: "Read",
+          name: "read",
           input: { file_path: "/a/b.txt", offset: 10, limit: 50 },
         }}
       />,
@@ -54,7 +54,7 @@ describe("ToolCallRenderer", () => {
     render(
       <ToolCallRenderer
         tool={{
-          name: "Grep",
+          name: "grep",
           input: { pattern: "TODO", path: "src/" },
         }}
       />,
@@ -67,7 +67,7 @@ describe("ToolCallRenderer", () => {
     render(
       <ToolCallRenderer
         tool={{
-          name: "Task",
+          name: "task",
           input: {
             subagent_type: "Explore",
             description: "find stuff",
@@ -98,7 +98,7 @@ describe("ToolCallRenderer", () => {
     render(
       <ToolCallRenderer
         tool={{
-          name: "MultiEdit",
+          name: "multi_edit",
           input: {
             file_path: "/tmp/x.ts",
             edits: [

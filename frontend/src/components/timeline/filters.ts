@@ -267,16 +267,19 @@ export function toolPairIsVisible(
   return !f.hiddenTools.has(pair.name);
 }
 
+/** Canonical tool names — matches the ingester's canonical map in
+ * backend/src/canonical.rs. Chips + filter state compare against these
+ * lowercase/underscored forms, not the raw agent-emitted names. */
 export const KNOWN_TOOLS = [
-  "Edit",
-  "Write",
-  "MultiEdit",
-  "Bash",
-  "Read",
-  "Grep",
-  "Glob",
-  "Task",
-  "TodoWrite",
-  "WebFetch",
-  "WebSearch",
+  "edit",
+  "write",
+  "multi_edit",
+  "bash",
+  "read",
+  "grep",
+  "glob",
+  "task",
+  "todo_write",
+  "web_fetch",
+  "web_search",
 ] as const;

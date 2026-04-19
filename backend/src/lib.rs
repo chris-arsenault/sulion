@@ -4,6 +4,7 @@ use std::time::Instant;
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::Serialize;
 
+pub mod canonical;
 pub mod config;
 pub mod correlate;
 pub mod db;

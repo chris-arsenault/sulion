@@ -78,8 +78,57 @@ describe("timeline/types helpers", () => {
     });
     const tools = toolUsesIn(e);
     expect(tools).toHaveLength(2);
-    expect(tools[0]!.name).toBe("Read");
-    expect(tools[1]!.name).toBe("Bash");
+    // toolUsesIn returns canonical names (the ingester normalises);
+    // rawName preserves the agent-specific original for display.
+    expect(tools[0]!.name).toBe("read");
+    expect(tools[0]!.rawName).toBe("Read");
+    expect(tools[1]!.name).toBe("bash");
+    expect(tools[1]!.rawName).toBe("Bash");
+  });
+
+  it("prefers canonical blocks when the event carries them", () => {
+    const e: TimelineEvent = {
+      byte_offset: 0,
+      timestamp: "2025-01-01T00:00:00Z",
+      kind: "assistant",
+      payload: {}, // intentionally empty — blocks should win
+      blocks: [
+        { ord: 0, kind: "text", text: "canonical path wins" },
+        {
+          ord: 1,
+          kind: "tool_use",
+          tool_id: "t1",
+          tool_name: "Read",
+          tool_name_canonical: "read",
+          tool_input: { file_path: "/a" },
+        },
+      ],
+    };
+    // text extraction comes from blocks, not payload
+    const tools = toolUsesIn(e);
+    expect(tools).toHaveLength(1);
+    expect(tools[0]!.name).toBe("read");
+    expect(tools[0]!.rawName).toBe("Read");
+    expect(textPreview(e)).toBe("canonical path wins [tool_use: read]");
+  });
+
+  it("falls back to legacy payload for events without blocks", () => {
+    // Pre-backfill events arrive with blocks empty; helpers must still
+    // work by walking the raw payload shape.
+    const e: TimelineEvent = {
+      byte_offset: 0,
+      timestamp: "2025-01-01T00:00:00Z",
+      kind: "assistant",
+      payload: {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "legacy path" }],
+        },
+      },
+      blocks: [],
+    };
+    expect(textPreview(e)).toBe("legacy path");
   });
 
   it("long preview is truncated with ellipsis", () => {

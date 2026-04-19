@@ -280,7 +280,16 @@ struct EventView {
     byte_offset: i64,
     timestamp: chrono::DateTime<chrono::Utc>,
     kind: String,
+    /// Raw JSONL payload. Kept for forensic / debug use and for agents
+    /// the parser doesn't understand yet. New code should read `blocks`
+    /// instead.
     payload: serde_json::Value,
+    agent: String,
+    speaker: Option<String>,
+    content_kind: Option<String>,
+    /// Canonical content blocks, agent-agnostic. Empty for unparsable
+    /// events or those still waiting on the startup backfill.
+    blocks: Vec<crate::canonical::Block>,
 }
 
 #[derive(Serialize)]
@@ -327,14 +336,18 @@ async fn session_history(
 
     // Build query with optional kind filter. Using a CASE keeps things
     // simple without query builders — the bound params are positional.
-    let rows: Vec<(
+    type HistoryRow = (
         i64,
         chrono::DateTime<chrono::Utc>,
         String,
         serde_json::Value,
-    )> = if let Some(kind) = &q.kind {
+        String,
+        Option<String>,
+        Option<String>,
+    );
+    let rows: Vec<HistoryRow> = if let Some(kind) = &q.kind {
         sqlx::query_as(
-            "SELECT byte_offset, timestamp, kind, payload \
+            "SELECT byte_offset, timestamp, kind, payload, agent, speaker, content_kind \
                  FROM events \
                  WHERE session_uuid = $1 AND byte_offset > $2 AND kind = $3 \
                  ORDER BY byte_offset ASC \
@@ -348,7 +361,7 @@ async fn session_history(
         .await?
     } else {
         sqlx::query_as(
-            "SELECT byte_offset, timestamp, kind, payload \
+            "SELECT byte_offset, timestamp, kind, payload, agent, speaker, content_kind \
                  FROM events \
                  WHERE session_uuid = $1 AND byte_offset > $2 \
                  ORDER BY byte_offset ASC \
@@ -361,15 +374,32 @@ async fn session_history(
         .await?
     };
 
-    let next_after = rows.last().map(|(o, _, _, _)| *o);
+    let next_after = rows.last().map(|r| r.0);
+
+    // Load canonical blocks for this event window in one query.
+    let blocks_by_offset =
+        load_event_blocks(&state.pool, claude_uuid, rows.iter().map(|r| r.0)).await?;
+
     let events = rows
         .into_iter()
-        .map(|(byte_offset, timestamp, kind, payload)| EventView {
-            byte_offset,
-            timestamp,
-            kind,
-            payload,
-        })
+        .map(
+            |(byte_offset, timestamp, kind, payload, agent, speaker, content_kind)| {
+                let blocks = blocks_by_offset
+                    .get(&byte_offset)
+                    .cloned()
+                    .unwrap_or_default();
+                EventView {
+                    byte_offset,
+                    timestamp,
+                    kind,
+                    payload,
+                    agent,
+                    speaker,
+                    content_kind,
+                    blocks,
+                }
+            },
+        )
         .collect();
 
     Ok(Json(HistoryResponse {
@@ -377,6 +407,73 @@ async fn session_history(
         events,
         next_after,
     }))
+}
+
+/// Fetch `event_blocks` for a set of byte offsets within one claude
+/// session, grouped by byte_offset and sorted by `ord`. Returns a map
+/// so the caller can match them back to each event row without another
+/// round-trip.
+async fn load_event_blocks(
+    pool: &crate::db::Pool,
+    session_uuid: Uuid,
+    offsets: impl Iterator<Item = i64>,
+) -> ApiResult<std::collections::HashMap<i64, Vec<crate::canonical::Block>>> {
+    let list: Vec<i64> = offsets.collect();
+    if list.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        byte_offset: i64,
+        ord: i32,
+        kind: String,
+        text: Option<String>,
+        tool_id: Option<String>,
+        tool_name: Option<String>,
+        tool_name_canonical: Option<String>,
+        tool_input: Option<serde_json::Value>,
+        is_error: Option<bool>,
+        raw: Option<serde_json::Value>,
+    }
+
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT byte_offset, ord, kind, text, tool_id, tool_name, \
+                tool_name_canonical, tool_input, is_error, raw \
+           FROM event_blocks \
+          WHERE session_uuid = $1 AND byte_offset = ANY($2) \
+          ORDER BY byte_offset ASC, ord ASC",
+    )
+    .bind(session_uuid)
+    .bind(&list)
+    .fetch_all(pool)
+    .await?;
+
+    let mut out: std::collections::HashMap<i64, Vec<crate::canonical::Block>> =
+        std::collections::HashMap::new();
+    for r in rows {
+        let kind = match r.kind.as_str() {
+            "text" => crate::canonical::BlockKind::Text,
+            "thinking" => crate::canonical::BlockKind::Thinking,
+            "tool_use" => crate::canonical::BlockKind::ToolUse,
+            "tool_result" => crate::canonical::BlockKind::ToolResult,
+            _ => crate::canonical::BlockKind::Unknown,
+        };
+        out.entry(r.byte_offset)
+            .or_default()
+            .push(crate::canonical::Block {
+                ord: r.ord,
+                kind,
+                text: r.text,
+                tool_id: r.tool_id,
+                tool_name: r.tool_name,
+                tool_name_canonical: r.tool_name_canonical,
+                tool_input: r.tool_input,
+                is_error: r.is_error,
+                raw: r.raw,
+            });
+    }
+    Ok(out)
 }
 
 // ─── repos ───────────────────────────────────────────────────────────

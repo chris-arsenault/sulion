@@ -80,13 +80,42 @@ export interface CreateRepoRequest {
   git_url?: string;
 }
 
+/** One canonical content block. Agent-agnostic: same shape whether
+ * the source is Claude, Codex, or any future parser. `tool_name`
+ * preserves the raw emitted name; `tool_name_canonical` is what the
+ * renderers switch on. Unknown block kinds carry the original raw
+ * JSON so the UI can show a placeholder without losing data. */
+export interface TimelineBlock {
+  ord: number;
+  kind: "text" | "thinking" | "tool_use" | "tool_result" | "unknown";
+  text?: string;
+  tool_id?: string;
+  tool_name?: string;
+  tool_name_canonical?: string;
+  tool_input?: unknown;
+  is_error?: boolean;
+  raw?: unknown;
+}
+
 export interface TimelineEvent {
   byte_offset: number;
   timestamp: string;
   kind: string;
-  // Opaque JSONB — shape depends on `kind`. Tool-call renderers in #11
-  // will narrow this further.
+  /** Raw JSONL payload. Kept for forensic use (and to cover events
+   * that haven't been backfilled yet). New code should read `blocks`. */
   payload: unknown;
+  /** Canonical content blocks, emitted by the ingester's parser. This
+   * is the authoritative read path for renderers. Optional in the type
+   * because test fixtures don't populate it; at runtime the backend
+   * always emits an array (possibly empty). */
+  blocks?: TimelineBlock[];
+  /** Ingesting agent id — "claude-code", "codex", etc. */
+  agent?: string;
+  /** Normalised speaker: user / assistant / system / summary / other. */
+  speaker?: string | null;
+  /** Coarse content-kind discriminator for quick filtering without
+   * walking `blocks`. */
+  content_kind?: string | null;
 }
 
 export interface HistoryResponse {
