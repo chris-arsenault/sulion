@@ -6,6 +6,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { deleteLibraryEntry, getLibraryEntry } from "../api/client";
 import type { LibraryEntry } from "../api/types";
+import { appCommands } from "../state/AppCommands";
 import { useTabs } from "../state/TabStore";
 import { Markdown } from "./timeline/Markdown";
 import "./LibraryTab.css";
@@ -40,6 +41,7 @@ export function RefTab({ repo, slug }: { repo: string; slug: string }) {
     if (!confirm(`Delete reference "${entry?.name ?? slug}"?`)) return;
     try {
       await deleteLibraryEntry(repo, "refs", slug);
+      appCommands.libraryChanged({ repo, kind: "refs" });
       // Close our own tab (find the id by matching).
       const mine = Object.values(tabs).find(
         (t) => t.kind === "ref" && t.repo === repo && t.slug === slug,

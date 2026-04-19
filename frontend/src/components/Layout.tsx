@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Sidebar } from "./Sidebar";
 import { WorkArea } from "./WorkArea";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useAppCommand } from "../state/AppCommands";
 import { useTabs } from "../state/TabStore";
 import "./Layout.css";
 
@@ -47,33 +48,17 @@ export function Layout() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // File-tree row clicks / context-menu actions dispatch these events.
-  // Left-click → file tab; context-menu "Open diff" → diff tab.
-  useEffect(() => {
-    const onFile = (e: Event) => {
-      const ce = e as CustomEvent<{ repo: string; path: string; dirty: boolean }>;
-      openTabRef.current({ kind: "file", repo: ce.detail.repo, path: ce.detail.path });
-    };
-    const onDiff = (e: Event) => {
-      const ce = e as CustomEvent<{ repo: string; path: string }>;
-      openTabRef.current({ kind: "diff", repo: ce.detail.repo, path: ce.detail.path });
-    };
-    const onCloseDrawer = () => setDrawerOpen(false);
-    window.addEventListener("shuttlecraft:open-file", onFile as EventListener);
-    window.addEventListener("shuttlecraft:open-diff", onDiff as EventListener);
-    window.addEventListener(
-      "shuttlecraft:close-drawer",
-      onCloseDrawer as EventListener,
-    );
-    return () => {
-      window.removeEventListener("shuttlecraft:open-file", onFile as EventListener);
-      window.removeEventListener("shuttlecraft:open-diff", onDiff as EventListener);
-      window.removeEventListener(
-        "shuttlecraft:close-drawer",
-        onCloseDrawer as EventListener,
-      );
-    };
-  }, []);
+  useAppCommand("open-file", ({ repo, path }) => {
+    openTabRef.current({ kind: "file", repo, path });
+  });
+
+  useAppCommand("open-diff", ({ repo, path }) => {
+    openTabRef.current({ kind: "diff", repo, path });
+  });
+
+  useAppCommand("close-drawer", () => {
+    setDrawerOpen(false);
+  });
 
   if (isMobile) {
     return (

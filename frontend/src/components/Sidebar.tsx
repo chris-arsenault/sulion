@@ -22,6 +22,7 @@ import type {
 } from "../api/types";
 import { SESSION_COLORS } from "../api/types";
 import { ApiError, stageRepoPath, uploadRepoFile } from "../api/client";
+import { appCommands } from "../state/AppCommands";
 import { useSessions } from "../state/SessionStore";
 import { dirtyAncestors, stalenessFor, useRepos } from "../state/RepoStore";
 import { useTabs } from "../state/TabStore";
@@ -73,7 +74,7 @@ export function Sidebar() {
     selectSession(id);
     openTab({ kind: "terminal", sessionId: id }, "top");
     openTab({ kind: "timeline", sessionId: id }, "bottom");
-    window.dispatchEvent(new CustomEvent("shuttlecraft:close-drawer"));
+    appCommands.closeDrawer();
   };
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(grouped.map((g) => [g.name, true])),
@@ -186,6 +187,7 @@ export function Sidebar() {
             onNewSessionSubmit={(form) => onCreateSession(group.name, form)}
             onNewSessionCancel={() => setNewSessionFor(null)}
             isUnread={isUnread}
+            onError={setFormError}
           />
         ))}
       </ul>
@@ -250,6 +252,7 @@ function RepoGroup({
   onNewSessionSubmit,
   onNewSessionCancel,
   isUnread,
+  onError,
 }: {
   group: RepoGroupData;
   expanded: boolean;
@@ -270,6 +273,7 @@ function RepoGroup({
   onNewSessionSubmit: (form: { working_dir: string }) => void;
   onNewSessionCancel: () => void;
   isUnread: (sessionId: string, lastEventAt: string | null) => boolean;
+  onError: (message: string | null) => void;
 }) {
   const { setExpanded, repoState } = useRepos(
     useShallow((store) => ({
@@ -379,7 +383,7 @@ function RepoGroup({
             open={subOpen.files}
             onToggle={() => setSubOpen((p) => ({ ...p, files: !p.files }))}
           >
-            {subOpen.files && <FileTree repoName={group.name} />}
+            {subOpen.files && <FileTree repoName={group.name} onError={onError} />}
           </Subsection>
 
           <Subsection
@@ -483,7 +487,13 @@ function RepoBadge({
 
 // ─── File tree ──────────────────────────────────────────────────────
 
-function FileTree({ repoName }: { repoName: string }) {
+function FileTree({
+  repoName,
+  onError,
+}: {
+  repoName: string;
+  onError: (message: string | null) => void;
+}) {
   const { state, loadDir, setShowAll } = useRepos(
     useShallow((store) => ({
       state: store.repos[repoName],
@@ -517,6 +527,7 @@ function FileTree({ repoName }: { repoName: string }) {
         entries={root.entries}
         dirtyExpand={dirtyExpand}
         depth={0}
+        onError={onError}
       />
       <label className="sidebar__tree-toggle">
         <input
@@ -536,12 +547,14 @@ function TreeNodes({
   entries,
   dirtyExpand,
   depth,
+  onError,
 }: {
   repoName: string;
   path: string;
   entries: DirEntryView[];
   dirtyExpand: Set<string>;
   depth: number;
+  onError: (message: string | null) => void;
 }) {
   return (
     <ul className="sidebar__tree-list">
@@ -555,6 +568,7 @@ function TreeNodes({
             fullPath={childPath}
             dirtyExpand={dirtyExpand}
             depth={depth}
+            onError={onError}
           />
         );
       })}
@@ -568,12 +582,14 @@ function TreeRow({
   fullPath,
   dirtyExpand,
   depth,
+  onError,
 }: {
   repoName: string;
   entry: DirEntryView;
   fullPath: string;
   dirtyExpand: Set<string>;
   depth: number;
+  onError: (message: string | null) => void;
 }) {
   const { state, loadDir, toggleDir, refresh } = useRepos(
     useShallow((store) => ({
@@ -607,21 +623,11 @@ function TreeRow({
     if (entry.kind === "dir") {
       toggleDir(repoName, fullPath, isExpanded);
     } else {
-      // Future: open file tab / diff tab. For now, no-op beyond select.
-      window.dispatchEvent(
-        new CustomEvent("shuttlecraft:open-file", {
-          detail: { repo: repoName, path: fullPath, dirty: !!entry.dirty },
-        }),
-      );
+      appCommands.openFile({ repo: repoName, path: fullPath });
     }
   };
 
-  const openFileTab = () =>
-    window.dispatchEvent(
-      new CustomEvent("shuttlecraft:open-file", {
-        detail: { repo: repoName, path: fullPath, dirty: !!entry.dirty },
-      }),
-    );
+  const openFileTab = () => appCommands.openFile({ repo: repoName, path: fullPath });
 
   const copyPath = (variant: "absolute" | "relative") => {
     const text = variant === "absolute"
@@ -646,12 +652,7 @@ function TreeRow({
           kind: "item",
           id: "open-diff",
           label: "Open diff",
-          onSelect: () =>
-            window.dispatchEvent(
-              new CustomEvent("shuttlecraft:open-diff", {
-                detail: { repo: repoName, path: fullPath },
-              }),
-            ),
+          onSelect: () => appCommands.openDiff({ repo: repoName, path: fullPath }),
         });
       }
       items.push({ kind: "separator" });
@@ -719,12 +720,8 @@ function TreeRow({
     for (const f of files) {
       try {
         await uploadRepoFile(repoName, fullPath, f);
-      } catch {
-        window.dispatchEvent(
-          new CustomEvent("shuttlecraft:upload-error", {
-            detail: { repo: repoName, path: fullPath, name: f.name },
-          }),
-        );
+      } catch (err) {
+        onError(`Upload failed for ${f.name}: ${messageOf(err)}`);
       }
     }
     refresh(repoName);
@@ -748,14 +745,8 @@ function TreeRow({
             for (const f of files) {
               try {
                 await uploadRepoFile(repoName, fullPath, f);
-              } catch {
-                // Surface upload errors via a custom event so higher-
-                // level UI can toast.
-                window.dispatchEvent(
-                  new CustomEvent("shuttlecraft:upload-error", {
-                    detail: { repo: repoName, path: fullPath, name: f.name },
-                  }),
-                );
+              } catch (err) {
+                onError(`Upload failed for ${f.name}: ${messageOf(err)}`);
               }
             }
             refresh(repoName);
@@ -819,6 +810,7 @@ function TreeRow({
             entries={childEntries.entries}
             dirtyExpand={dirtyExpand}
             depth={depth + 1}
+            onError={onError}
           />
         )}
     </li>

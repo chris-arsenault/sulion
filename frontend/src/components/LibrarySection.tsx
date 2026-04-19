@@ -1,7 +1,7 @@
 // Sidebar subsection: lists refs or prompts for one repo. Loads
 // lazily on first mount and refreshes when a save/delete elsewhere
-// fires `shuttlecraft:library-changed`. Keeps the list small: each
-// entry is a click-to-open link and a context menu for delete.
+// emits a typed `library-changed` app command. Keeps the list small:
+// each entry is a click-to-open link and a context menu for delete.
 //
 // Prompts sections get a "+" button that opens an inline form (name
 // + body) — refs are created from the timeline (right-click a turn →
@@ -21,6 +21,7 @@ import {
   saveLibraryEntry,
 } from "../api/client";
 import type { LibraryEntry, LibraryKind } from "../api/types";
+import { appCommands, useAppCommand } from "../state/AppCommands";
 import { useTabs } from "../state/TabStore";
 import type { MenuItem } from "./common/ContextMenu";
 import {
@@ -60,23 +61,11 @@ export function LibrarySection({
     if (entries === null) void refresh();
   }, [open, entries, refresh]);
 
-  useEffect(() => {
-    const onChanged = (e: Event) => {
-      const ce = e as CustomEvent<{ repo: string; kind: LibraryKind }>;
-      if (ce.detail.repo !== repo) return;
-      if (ce.detail.kind !== kind) return;
-      void refresh();
-    };
-    window.addEventListener(
-      "shuttlecraft:library-changed",
-      onChanged as EventListener,
-    );
-    return () =>
-      window.removeEventListener(
-        "shuttlecraft:library-changed",
-        onChanged as EventListener,
-      );
-  }, [repo, kind, refresh]);
+  useAppCommand("library-changed", (command) => {
+    if (command.repo !== repo) return;
+    if (command.kind !== kind) return;
+    void refresh();
+  });
 
   const onEntryClick = (entry: LibraryEntry) => {
     openTab({
@@ -107,11 +96,7 @@ export function LibrarySection({
             }
             try {
               await deleteLibraryEntry(repo, kind, entry.slug);
-              window.dispatchEvent(
-                new CustomEvent("shuttlecraft:library-changed", {
-                  detail: { repo, kind },
-                }),
-              );
+              appCommands.libraryChanged({ repo, kind });
             } catch (err) {
               setError(err instanceof Error ? err.message : "delete failed");
             }
@@ -243,11 +228,7 @@ function NewPromptForm({
         tags: [],
         body,
       });
-      window.dispatchEvent(
-        new CustomEvent("shuttlecraft:library-changed", {
-          detail: { repo, kind: "prompts" },
-        }),
-      );
+      appCommands.libraryChanged({ repo, kind: "prompts" });
       onCreated();
     } catch (err) {
       onError(err instanceof Error ? err.message : "save failed");

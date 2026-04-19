@@ -1,12 +1,13 @@
 // Prompt preview tab. Same shape as RefTab but adds an "inject into
-// terminal" action that dispatches a window event the TerminalPane
-// listens for and pipes the body into the PTY via term.paste().
+// terminal" action that routes through the app command layer so the
+// TerminalPane can paste the prompt into the active PTY.
 
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { deleteLibraryEntry, getLibraryEntry } from "../api/client";
 import type { LibraryEntry } from "../api/types";
+import { appCommands } from "../state/AppCommands";
 import { useTabs } from "../state/TabStore";
 import "./LibraryTab.css";
 
@@ -41,6 +42,7 @@ export function PromptTab({ repo, slug }: { repo: string; slug: string }) {
     if (!confirm(`Delete prompt "${entry?.name ?? slug}"?`)) return;
     try {
       await deleteLibraryEntry(repo, "prompts", slug);
+      appCommands.libraryChanged({ repo, kind: "prompts" });
       const mine = Object.values(tabs).find(
         (t) => t.kind === "prompt" && t.repo === repo && t.slug === slug,
       );
@@ -71,11 +73,7 @@ export function PromptTab({ repo, slug }: { repo: string; slug: string }) {
       setError("No active terminal tab to inject into.");
       return;
     }
-    window.dispatchEvent(
-      new CustomEvent("shuttlecraft:inject-terminal", {
-        detail: { sessionId: candidate.sessionId, text: entry.body },
-      }),
-    );
+    appCommands.injectTerminal({ sessionId: candidate.sessionId, text: entry.body });
   };
 
   if (error) {

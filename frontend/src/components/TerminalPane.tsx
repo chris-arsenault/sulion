@@ -24,6 +24,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { connectPty, type ConnectionState } from "../api/ws";
 import { uploadRepoFile } from "../api/client";
+import { useAppCommand } from "../state/AppCommands";
 import { useSessions } from "../state/SessionStore";
 
 /** Explicit session-lifecycle discriminated union. The previous shape
@@ -44,6 +45,7 @@ const PASTE_AS_FILE_LINES = 200;
 
 export function TerminalPane({ sessionId }: { sessionId: string }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
   const [connState, setConnState] = useState<ConnectionState>("connecting");
   const [exitStatus, setExitStatus] = useState<ExitStatus>({ kind: "alive" });
   const sessions = useSessions((store) => store.sessions);
@@ -92,6 +94,7 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
         brightWhite: "#f9fafb",
       },
     });
+    termRef.current = term;
 
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -218,22 +221,6 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
     };
     textarea?.addEventListener("paste", onPaste);
 
-    // Prompt-library "inject into terminal" action: a PromptTab
-    // dispatches this window event with {sessionId, text}. We pipe the
-    // body through sanitizePaste to strip weird whitespace/NULs, then
-    // hand off to term.paste so bracketed-paste semantics apply when
-    // the shell has them enabled.
-    const onInject = (ev: Event) => {
-      const ce = ev as CustomEvent<{ sessionId: string; text: string }>;
-      if (ce.detail?.sessionId !== sessionId) return;
-      if (typeof ce.detail.text !== "string") return;
-      term.paste(sanitizePaste(ce.detail.text));
-    };
-    window.addEventListener(
-      "shuttlecraft:inject-terminal",
-      onInject as EventListener,
-    );
-
     // Right-click: Windows-Terminal-style copy/paste.
     const onContextMenu: EventListener = (ev) => {
       ev.preventDefault();
@@ -276,17 +263,19 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
       ro?.disconnect();
       if (!ro) window.removeEventListener("resize", resize);
       textarea?.removeEventListener("paste", onPaste);
-      window.removeEventListener(
-        "shuttlecraft:inject-terminal",
-        onInject as EventListener,
-      );
       host.removeEventListener("contextmenu", onContextMenu);
       onData.dispose();
       conn.close();
       webgl?.dispose();
       term.dispose();
+      termRef.current = null;
     };
   }, [sessionId]);
+
+  useAppCommand("inject-terminal", ({ sessionId: targetSessionId, text }) => {
+    if (targetSessionId !== sessionId) return;
+    termRef.current?.paste(sanitizePaste(text));
+  });
 
   return (
     <div className="terminal-pane" data-testid="terminal-pane">

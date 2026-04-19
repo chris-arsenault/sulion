@@ -63,6 +63,7 @@ vi.mock("../api/ws", () => ({
   connectPty: (...args: Parameters<typeof connectPtyMock>) => connectPtyMock(...args),
 }));
 
+import { appCommands } from "../state/AppCommands";
 import { TerminalPane } from "./TerminalPane";
 
 describe("TerminalPane", () => {
@@ -166,6 +167,15 @@ describe("TerminalPane", () => {
     (pasteEvent as unknown as { clipboardData: typeof clipboardData }).clipboardData =
       clipboardData;
     mockTerm.textarea.dispatchEvent(pasteEvent);
+
+    expect(mockTerm.paste).toHaveBeenCalledWith("helloworld\nend");
+  });
+
+  it("pastes injected terminal text from the app command layer", async () => {
+    render(<TerminalPane sessionId="abc" />);
+    await waitFor(() => expect(connectPtyMock).toHaveBeenCalled());
+
+    appCommands.injectTerminal({ sessionId: "abc", text: "hello\u200Bworld\r\nend" });
 
     expect(mockTerm.paste).toHaveBeenCalledWith("helloworld\nend");
   });

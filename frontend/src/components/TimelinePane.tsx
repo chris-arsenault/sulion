@@ -31,7 +31,8 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
   const [timeline, setTimeline] = useState<TimelineResponse | null>(null);
   const [currentSessionUuid, setCurrentSessionUuid] = useState<string | null>(null);
   const [currentSessionAgent, setCurrentSessionAgent] = useState<string | null>(null);
-  const [lastError, setLastError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [uiError, setUiError] = useState<string | null>(null);
   const virtuoso = useRef<VirtuosoHandle | null>(null);
   const [subagent, setSubagent] = useState<TimelineSubagent | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<number | null>(null);
@@ -83,7 +84,8 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
     setTimeline(null);
     setCurrentSessionUuid(null);
     setCurrentSessionAgent(null);
-    setLastError(null);
+    setLoadError(null);
+    setUiError(null);
     setSubagent(null);
     setSelectedTurnId(null);
   }, [sessionId]);
@@ -100,10 +102,10 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
         setCurrentSessionUuid(resp.session_uuid);
         setCurrentSessionAgent(resp.session_agent);
         setTimeline(resp);
-        setLastError(null);
+        setLoadError(null);
       } catch (err) {
         if (!cancelled) {
-          setLastError(err instanceof Error ? err.message : "timeline fetch failed");
+          setLoadError(err instanceof Error ? err.message : "timeline fetch failed");
         }
       } finally {
         inFlight = false;
@@ -171,8 +173,8 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
         <span className="timeline-pane__count">
           {turns.length} turn{turns.length === 1 ? "" : "s"} · {timeline?.total_event_count ?? 0} events
         </span>
-        {lastError && (
-          <span className="timeline-pane__error" title={lastError}>
+        {(loadError ?? uiError) && (
+          <span className="timeline-pane__error" title={loadError ?? uiError ?? undefined}>
             error
           </span>
         )}
@@ -196,6 +198,7 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
               onSelect={setSelectedTurnId}
               virtuosoRef={virtuoso}
               repo={repo}
+              onError={setUiError}
             />
           </div>
           <SessionInspectorPane
@@ -222,6 +225,7 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
               onSelect={setSelectedTurnId}
               virtuosoRef={virtuoso}
               repo={repo}
+              onError={setUiError}
             />
           </div>
           <div
@@ -256,6 +260,7 @@ function TurnList({
   onSelect,
   virtuosoRef,
   repo,
+  onError,
 }: {
   turns: Turn[];
   selectedTurnId: number | null;
@@ -263,6 +268,7 @@ function TurnList({
   onSelect: (id: number) => void;
   virtuosoRef: MutableRefObject<VirtuosoHandle | null>;
   repo?: string;
+  onError: (message: string | null) => void;
 }) {
   return (
     <Virtuoso
@@ -276,6 +282,7 @@ function TurnList({
           showThinking={showThinking}
           onSelect={() => onSelect(t.id)}
           repo={repo}
+          onError={(message) => onError(message)}
         />
       )}
       followOutput="smooth"

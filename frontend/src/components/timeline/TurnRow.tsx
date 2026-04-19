@@ -1,4 +1,5 @@
 import { saveLibraryEntry } from "../../api/client";
+import { appCommands } from "../../state/AppCommands";
 import { formatTurn } from "./markdown-export";
 import type { ToolPair, Turn } from "./grouping";
 import type { MenuItem } from "../common/ContextMenu";
@@ -14,9 +15,17 @@ interface Props {
   showThinking: boolean;
   onSelect: () => void;
   repo?: string;
+  onError?: (message: string) => void;
 }
 
-export function TurnRow({ turn, selected, showThinking, onSelect, repo }: Props) {
+export function TurnRow({
+  turn,
+  selected,
+  showThinking,
+  onSelect,
+  repo,
+  onError,
+}: Props) {
   const badges = toolBadges(turn.tool_pairs);
   const openCtx = useContextMenu((store) => store.open);
 
@@ -35,16 +44,10 @@ export function TurnRow({ turn, selected, showThinking, onSelect, repo }: Props)
               "refs",
               { name, tags: ["turn"], body: formatTurn(turn) },
             );
-            window.dispatchEvent(
-              new CustomEvent("shuttlecraft:library-changed", {
-                detail: { repo, kind: "refs" },
-              }),
-            );
+            appCommands.libraryChanged({ repo, kind: "refs" });
           } catch (err) {
-            window.dispatchEvent(
-              new CustomEvent("shuttlecraft:pin-error", {
-                detail: { err: err instanceof Error ? err.message : "save failed" },
-              }),
+            onError?.(
+              `Pin reference failed: ${err instanceof Error ? err.message : "save failed"}`,
             );
           }
         },
@@ -116,7 +119,8 @@ function toolBadges(pairs: ToolPair[]): Badge[] {
   if (pairs.length === 0) return [];
   const counts = new Map<string, number>();
   for (const pair of pairs) {
-    counts.set(pair.name, (counts.get(pair.name) ?? 0) + 1);
+    const name = pair.operation_type ?? pair.name;
+    counts.set(name, (counts.get(name) ?? 0) + 1);
   }
   return Array.from(counts.entries())
     .sort((a, b) => b[1] - a[1])
