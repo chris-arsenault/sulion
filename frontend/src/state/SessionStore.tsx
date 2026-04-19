@@ -33,6 +33,7 @@ import type {
   RepoView,
   SessionView,
 } from "../api/types";
+import { useLastViewed } from "./useLastViewed";
 
 const POLL_SESSIONS_MS = 3000;
 const POLL_REPOS_MS = 10_000;
@@ -47,6 +48,9 @@ export interface SessionStore {
   createRepo: (req: CreateRepoRequest) => Promise<RepoView>;
   refresh: () => Promise<void>;
   lastError: string | null;
+  /** Unread indicator derived from server-reported last_event_at vs.
+   * client-side last-viewed timestamps in localStorage (ticket #23). */
+  isUnread: (sessionId: string, lastEventAt: string | null) => boolean;
 }
 
 const Ctx = createContext<SessionStore | null>(null);
@@ -58,6 +62,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     readSessionIdFromUrl(),
   );
   const [lastError, setLastError] = useState<string | null>(null);
+  const lastViewed = useLastViewed();
 
   const loadSessions = useCallback(async () => {
     try {
@@ -97,10 +102,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  const selectSession = useCallback((id: string | null) => {
-    setSelectedSessionId(id);
-    writeSessionIdToUrl(id);
-  }, []);
+  const selectSession = useCallback(
+    (id: string | null) => {
+      setSelectedSessionId(id);
+      writeSessionIdToUrl(id);
+      if (id) lastViewed.markViewed(id);
+    },
+    [lastViewed],
+  );
 
   const createSession = useCallback(
     async (req: CreateSessionRequest) => {
@@ -142,6 +151,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       createRepo,
       refresh,
       lastError,
+      isUnread: lastViewed.isUnread,
     }),
     [
       sessions,
@@ -153,6 +163,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       createRepo,
       refresh,
       lastError,
+      lastViewed.isUnread,
     ],
   );
 

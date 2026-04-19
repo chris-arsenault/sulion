@@ -81,6 +81,12 @@ pub struct PtyMetadata {
     pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
     pub exit_code: Option<i32>,
     pub current_claude_session_uuid: Option<Uuid>,
+    /// MAX(events.timestamp) for the session's current claude session,
+    /// populated by `list()` only. Used by the frontend's unread-dot
+    /// indicator to know when a session has new activity since the
+    /// user last viewed it. Not tracked on individual `get`/`read_meta`
+    /// fetches since callers who want this info use `list()`.
+    pub last_event_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Live, running PTY session. Holds the master PTY and the channels used
@@ -208,6 +214,7 @@ impl PtyManager {
             ended_at: None,
             exit_code: None,
             current_claude_session_uuid: None,
+            last_event_at: None,
         };
 
         sqlx::query(
@@ -243,19 +250,26 @@ impl PtyManager {
         self.sessions.read().await.get(&id).cloned()
     }
 
-    /// Snapshot of live sessions held in memory plus any persisted rows
-    /// (including dead sessions). Dedupes by id.
+    /// Snapshot of sessions plus each one's last-event timestamp for
+    /// the unread-indicator UX. The `last_event_at` is a correlated
+    /// subquery against events, so it stays reasonable for the session
+    /// counts we care about (dozens, not tens of thousands).
     pub async fn list(&self) -> anyhow::Result<Vec<PtyMetadata>> {
-        let rows = sqlx::query_as::<_, PtyRow>(
-            "SELECT id, repo, working_dir, state, created_at, ended_at, exit_code, \
-             current_claude_session_uuid \
-             FROM pty_sessions \
-             WHERE state <> 'deleted' \
-             ORDER BY created_at DESC",
+        let rows = sqlx::query_as::<_, PtyRowWithActivity>(
+            "SELECT ps.id, ps.repo, ps.working_dir, ps.state, ps.created_at, \
+             ps.ended_at, ps.exit_code, ps.current_claude_session_uuid, \
+             (SELECT MAX(e.timestamp) FROM events e \
+              WHERE e.session_uuid = ps.current_claude_session_uuid) AS last_event_at \
+             FROM pty_sessions ps \
+             WHERE ps.state <> 'deleted' \
+             ORDER BY ps.created_at DESC",
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().map(PtyRow::into_meta).collect())
+        Ok(rows
+            .into_iter()
+            .map(PtyRowWithActivity::into_meta)
+            .collect())
     }
 
     /// SIGTERM → grace period → SIGKILL. Marks the DB row deleted.
@@ -323,6 +337,38 @@ impl PtyRow {
             ended_at: self.ended_at,
             exit_code: self.exit_code,
             current_claude_session_uuid: self.current_claude_session_uuid,
+            last_event_at: None,
+        }
+    }
+}
+
+/// Extended row used by `list()` — adds the MAX(events.timestamp)
+/// subquery result so the UI can flag sessions with new activity.
+#[derive(sqlx::FromRow)]
+struct PtyRowWithActivity {
+    id: Uuid,
+    repo: String,
+    working_dir: String,
+    state: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    ended_at: Option<chrono::DateTime<chrono::Utc>>,
+    exit_code: Option<i32>,
+    current_claude_session_uuid: Option<Uuid>,
+    last_event_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl PtyRowWithActivity {
+    fn into_meta(self) -> PtyMetadata {
+        PtyMetadata {
+            id: self.id,
+            repo: self.repo,
+            working_dir: PathBuf::from(self.working_dir),
+            state: PtyState::parse(&self.state).unwrap_or(PtyState::Dead),
+            created_at: self.created_at,
+            ended_at: self.ended_at,
+            exit_code: self.exit_code,
+            current_claude_session_uuid: self.current_claude_session_uuid,
+            last_event_at: self.last_event_at,
         }
     }
 }

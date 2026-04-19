@@ -12,6 +12,10 @@ export interface SessionView {
   ended_at: string | null;
   exit_code: number | null;
   current_claude_session_uuid: string | null;
+  /** MAX(event.timestamp) for this session's current Claude UUID.
+   * Null when no events have been ingested yet. Drives the sidebar
+   * unread-dot indicator. */
+  last_event_at: string | null;
 }
 
 export interface ListSessionsResponse {

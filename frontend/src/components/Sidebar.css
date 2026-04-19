@@ -214,6 +214,26 @@
   color: #93c5fd;
 }
 
+.sidebar__unread {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f59e0b;
+  flex-shrink: 0;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+  animation: sidebar-unread-pulse 2s ease-in-out infinite;
+}
+
+@keyframes sidebar-unread-pulse {
+  0%,
+  100% {
+    opacity: 0.9;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
 .sidebar__delete {
   background: transparent;
   border: none;

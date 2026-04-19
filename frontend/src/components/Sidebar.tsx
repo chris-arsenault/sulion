@@ -18,6 +18,7 @@ export function Sidebar() {
     createSession,
     deleteSession,
     createRepo,
+    isUnread,
   } = useSessions();
 
   const grouped = useMemo(() => groupByRepo(sessions, repos), [sessions, repos]);
@@ -159,6 +160,7 @@ export function Sidebar() {
                     key={s.id}
                     session={s}
                     selected={s.id === selectedSessionId}
+                    unread={isUnread(s.id, s.last_event_at)}
                     onSelect={() => selectSession(s.id)}
                     onDelete={() => requestDelete(s.id)}
                   />
@@ -206,11 +208,13 @@ function groupByRepo(sessions: SessionView[], repos: RepoView[]): RepoGroup[] {
 function SessionRow({
   session: s,
   selected,
+  unread,
   onSelect,
   onDelete,
 }: {
   session: SessionView;
   selected: boolean;
+  unread: boolean;
   onSelect: () => void;
   onDelete: () => void;
 }) {
@@ -240,6 +244,13 @@ function SessionRow({
             {ageSince(s.created_at)} · {claudeLabel}
           </span>
         </span>
+        {unread && !selected && (
+          <span
+            className="sidebar__unread"
+            aria-label="new activity since last view"
+            title="New events since you last viewed this session"
+          />
+        )}
       </button>
       <button
         type="button"

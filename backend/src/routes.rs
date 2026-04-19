@@ -82,6 +82,10 @@ struct SessionView {
     ended_at: Option<chrono::DateTime<chrono::Utc>>,
     exit_code: Option<i32>,
     current_claude_session_uuid: Option<Uuid>,
+    /// MAX(event.timestamp) for this session's current Claude UUID.
+    /// Null means no events ingested yet. Used by the frontend's
+    /// unread-dot indicator.
+    last_event_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<PtyMetadata> for SessionView {
@@ -101,6 +105,7 @@ impl From<PtyMetadata> for SessionView {
             ended_at: m.ended_at,
             exit_code: m.exit_code,
             current_claude_session_uuid: m.current_claude_session_uuid,
+            last_event_at: m.last_event_at,
         }
     }
 }

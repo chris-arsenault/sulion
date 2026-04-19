@@ -14,6 +14,7 @@ const orphanedSession = {
   ended_at: new Date().toISOString(),
   exit_code: null,
   current_claude_session_uuid: "deadbeef-dead-beef-dead-beefdeadbeef",
+  last_event_at: null,
 };
 
 const deadSession = {
