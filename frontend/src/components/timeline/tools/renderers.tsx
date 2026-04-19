@@ -258,11 +258,13 @@ function GenericRenderer({ input }: { input: Record<string, unknown> }) {
 
 // ─── helpers ──────────────────────────────────────────────────────────
 
-function str(v: unknown): string | undefined {
+import type { Maybe } from "../../../lib/types";
+
+function str(v: unknown): Maybe<string> {
   return typeof v === "string" ? v : undefined;
 }
 
-function num(v: unknown): number | undefined {
+function num(v: unknown): Maybe<number> {
   return typeof v === "number" ? v : undefined;
 }
 

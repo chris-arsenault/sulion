@@ -606,6 +606,7 @@ function TreeRow({
           (dragOver ? " sidebar__tree-row--drag-over" : "") +
           (entry.dirty ? " sidebar__tree-row--dirty" : "")
         }
+        // eslint-disable-next-line local/no-inline-styles -- depth is per-row; can't be expressed as a finite class set
         style={{ paddingLeft: 4 + depth * 12 }}
         onClick={onClickRow}
         {...dropHandlers}

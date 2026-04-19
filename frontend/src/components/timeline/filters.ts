@@ -210,8 +210,7 @@ function eventMatchesFilePath(ev: TimelineEvent, needle: string): boolean {
   if (!needle) return true;
   const lower = needle.toLowerCase();
   for (const use of toolUsesIn(ev)) {
-    const input = use.input as Record<string, unknown> | undefined;
-    if (!input) continue;
+    const input = (use.input ?? {}) as Record<string, unknown>;
     for (const key of ["file_path", "path", "pattern", "command"]) {
       const v = input[key];
       if (typeof v === "string" && v.toLowerCase().includes(lower)) return true;

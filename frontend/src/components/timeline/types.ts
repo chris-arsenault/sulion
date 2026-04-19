@@ -1,4 +1,5 @@
 import type { TimelineBlock, TimelineEvent } from "../../api/types";
+import type { Maybe } from "../../lib/types";
 
 // ─── Helpers over the canonical block model ────────────────────────
 //
@@ -133,7 +134,7 @@ function legacyBlocksFromPayload(event: TimelineEvent): TimelineBlock[] {
         content?: string | LegacyContentBlock[];
         is_error?: boolean;
       };
-      let text: string | undefined;
+      let text: Maybe<string>;
       if (typeof tr.content === "string") text = tr.content;
       else if (Array.isArray(tr.content)) {
         text = tr.content
@@ -193,7 +194,7 @@ export function flattenEventContent(event: TimelineEvent): string {
  * already-extracted content array (summary panels, markdown export for
  * raw tool_result content). */
 export function flattenContent(
-  content: string | LegacyContentBlock[] | undefined,
+  content?: string | LegacyContentBlock[],
 ): string {
   if (!content) return "";
   if (typeof content === "string") return content;

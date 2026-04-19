@@ -237,7 +237,7 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent, filters }: Prop
 function buildChunks(
   turn: Turn,
   pairById: Map<string, ToolPair>,
-  filters: TimelineFilters | undefined,
+  filters?: TimelineFilters,
 ): Chunk[] {
   const chunks: Chunk[] = [];
   let pending: TimelineEvent[] | null = null;

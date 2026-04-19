@@ -93,6 +93,7 @@ export function ThinkingFlyout({ anchor, thinkingText, onClose }: Props) {
     <div
       ref={cardRef}
       className="tf__card"
+      // eslint-disable-next-line local/no-inline-styles -- popover position is anchor-relative, computed at render time
       style={pos ? { top: pos.top, left: pos.left } : undefined}
       role="dialog"
       aria-label="thinking"

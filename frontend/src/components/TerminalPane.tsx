@@ -24,6 +24,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { connectPty, type ConnectionState } from "../api/ws";
 import { uploadRepoFile } from "../api/client";
+import type { Maybe } from "../lib/types";
 import { useSessions } from "../state/SessionStore";
 import { copyToClipboard, readClipboard, sanitizePaste } from "./terminal/clipboard";
 import "@xterm/xterm/css/xterm.css";
@@ -35,7 +36,9 @@ const PASTE_AS_FILE_LINES = 200;
 export function TerminalPane({ sessionId }: { sessionId: string }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [connState, setConnState] = useState<ConnectionState>("connecting");
-  const [deadExit, setDeadExit] = useState<number | null | undefined>(undefined);
+  // Three-state: undefined = haven't heard yet, null = alive / no exit
+  // reported, number = explicit exit code.
+  const [deadExit, setDeadExit] = useState<Maybe<number | null>>(undefined);
   const { sessions } = useSessions();
   const repoName = sessions.find((s) => s.id === sessionId)?.repo ?? null;
   const repoRef = useRef<string | null>(repoName);

@@ -74,6 +74,7 @@ export function ToolHoverCard({ anchor, pair, pinned, onPin, onClose }: Props) {
       className={`thc ${pinned ? "thc--pinned" : ""} ${
         pair.isError ? "thc--error" : ""
       }`}
+      // eslint-disable-next-line local/no-inline-styles -- hover card position is anchor-relative, computed at render time
       style={pos ? { top: pos.top, left: pos.left } : undefined}
       role="tooltip"
       data-testid="tool-hover-card"

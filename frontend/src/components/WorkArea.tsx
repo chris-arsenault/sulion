@@ -57,6 +57,7 @@ export function WorkArea() {
   return (
     <div
       className="wa wa--split"
+      // eslint-disable-next-line local/no-inline-styles -- resizable split fractions are per-user-drag; can't be CSS classes
       style={{ gridTemplateRows: `${topFraction}fr 6px ${1 - topFraction}fr` }}
     >
       <Pane

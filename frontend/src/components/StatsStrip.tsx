@@ -93,6 +93,7 @@ export function StatsStrip() {
         >
           <div
             className="stats-strip__mem-fill"
+            // eslint-disable-next-line local/no-inline-styles -- memPct is a computed percentage, not a finite state
             style={{ width: `${memPct}%` }}
             data-danger={memPct > 85 ? "true" : "false"}
           />

@@ -215,6 +215,7 @@ export function TimelinePane({ sessionId }: { sessionId: string }) {
       ) : (
         <div
           className="timeline-pane__split"
+          // eslint-disable-next-line local/no-inline-styles -- resizable split fractions are per-user-drag; can't be CSS classes
           style={{
             gridTemplateColumns: `${listFraction}fr 6px ${inspectorFraction}fr`,
           }}
