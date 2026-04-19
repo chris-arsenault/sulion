@@ -16,6 +16,39 @@ export interface SessionView {
    * Null when no events have been ingested yet. Drives the sidebar
    * unread-dot indicator. */
   last_event_at: string | null;
+  /** User-facing label; overrides the uuid prefix in the sidebar. */
+  label: string | null;
+  /** Pinned sessions float to the top of their repo group. */
+  pinned: boolean;
+  /** Palette-constrained colour tag name. */
+  color: SessionColor | null;
+}
+
+export type SessionColor =
+  | "amber"
+  | "emerald"
+  | "sky"
+  | "rose"
+  | "violet"
+  | "slate"
+  | "teal"
+  | "fuchsia";
+
+export const SESSION_COLORS: readonly SessionColor[] = [
+  "amber",
+  "emerald",
+  "sky",
+  "rose",
+  "violet",
+  "slate",
+  "teal",
+  "fuchsia",
+] as const;
+
+export interface UpdateSessionRequest {
+  label?: string | null;
+  pinned?: boolean;
+  color?: SessionColor | null;
 }
 
 export interface ListSessionsResponse {

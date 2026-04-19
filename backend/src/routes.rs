@@ -19,7 +19,10 @@ pub fn router() -> Router<Arc<AppState>> {
     use axum::routing::{delete, get};
     Router::new()
         .route("/api/sessions", get(list_sessions).post(create_session))
-        .route("/api/sessions/:id", delete(delete_session))
+        .route(
+            "/api/sessions/:id",
+            delete(delete_session).patch(patch_session),
+        )
         .route("/api/sessions/:id/history", get(session_history))
         .route("/api/repos", get(list_repos).post(create_repo))
 }
@@ -86,7 +89,20 @@ struct SessionView {
     /// Null means no events ingested yet. Used by the frontend's
     /// unread-dot indicator.
     last_event_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// User-facing label; overrides the uuid prefix in the sidebar.
+    label: Option<String>,
+    /// Pinned sessions float to the top of their repo group.
+    pinned: bool,
+    /// Palette-constrained colour tag name.
+    color: Option<String>,
 }
+
+/// Allowed palette names for session colour tags. The backend rejects
+/// anything outside this set so invalid strings don't sneak into the
+/// UI and produce unstyled chips.
+const COLOR_PALETTE: &[&str] = &[
+    "amber", "emerald", "sky", "rose", "violet", "slate", "teal", "fuchsia",
+];
 
 impl From<PtyMetadata> for SessionView {
     fn from(m: PtyMetadata) -> Self {
@@ -106,6 +122,9 @@ impl From<PtyMetadata> for SessionView {
             exit_code: m.exit_code,
             current_claude_session_uuid: m.current_claude_session_uuid,
             last_event_at: m.last_event_at,
+            label: m.label,
+            pinned: m.pinned,
+            color: m.color,
         }
     }
 }
@@ -193,6 +212,46 @@ async fn delete_session(
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
     state.pty.delete(id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct PatchSessionReq {
+    /// Set the label. Empty string clears. Null/absent = no change.
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    pinned: Option<bool>,
+    /// One of COLOR_PALETTE names, or empty string to clear. Null =
+    /// no change.
+    #[serde(default)]
+    color: Option<String>,
+}
+
+async fn patch_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<PatchSessionReq>,
+) -> ApiResult<StatusCode> {
+    if let Some(name) = &req.color {
+        if !name.is_empty() && !COLOR_PALETTE.contains(&name.as_str()) {
+            return Err(ApiError::BadRequest(format!(
+                "color must be one of: {}",
+                COLOR_PALETTE.join(", "),
+            )));
+        }
+    }
+    if let Some(label) = &req.label {
+        if label.len() > 100 {
+            return Err(ApiError::BadRequest(
+                "label must be 100 characters or fewer".into(),
+            ));
+        }
+    }
+    state
+        .pty
+        .update_metadata(id, req.label.map(Some), req.pinned, req.color.map(Some))
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

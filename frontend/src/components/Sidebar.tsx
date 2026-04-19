@@ -1,9 +1,20 @@
 // Sidebar: repo tree + grouped session list, with inline forms for
 // creating repos and sessions and a delete affordance on each session.
 
-import { type FormEvent, useMemo, useState } from "react";
+import {
+  type FormEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
-import type { RepoView, SessionView } from "../api/types";
+import type {
+  RepoView,
+  SessionColor,
+  SessionView,
+} from "../api/types";
+import { SESSION_COLORS } from "../api/types";
 import { ApiError } from "../api/client";
 import { useSessions } from "../state/SessionStore";
 import { ConfirmDialog } from "./common/ConfirmDialog";
@@ -17,6 +28,7 @@ export function Sidebar() {
     selectSession,
     createSession,
     deleteSession,
+    updateSession,
     createRepo,
     isUnread,
   } = useSessions();
@@ -72,6 +84,18 @@ export function Sidebar() {
     setPendingDeleteId(null);
     try {
       await deleteSession(id);
+    } catch (err) {
+      setFormError(messageOf(err));
+    }
+  };
+
+  const onUpdateSession = async (
+    id: string,
+    patch: Parameters<typeof updateSession>[1],
+  ) => {
+    setFormError(null);
+    try {
+      await updateSession(id, patch);
     } catch (err) {
       setFormError(messageOf(err));
     }
@@ -163,6 +187,7 @@ export function Sidebar() {
                     unread={isUnread(s.id, s.last_event_at)}
                     onSelect={() => selectSession(s.id)}
                     onDelete={() => requestDelete(s.id)}
+                    onUpdate={(patch) => onUpdateSession(s.id, patch)}
                   />
                 ))}
               </ul>
@@ -202,7 +227,26 @@ function groupByRepo(sessions: SessionView[], repos: RepoView[]): RepoGroup[] {
     }
     byName.get(s.repo)!.sessions.push(s);
   }
+  // Pinned sessions float to the top of each repo group; otherwise
+  // newest-first matches the server ordering and stays stable under
+  // optimistic local pin toggles.
+  for (const g of byName.values()) {
+    g.sessions.sort(sessionCompare);
+  }
   return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function sessionCompare(a: SessionView, b: SessionView): number {
+  const ap = a.pinned ? 1 : 0;
+  const bp = b.pinned ? 1 : 0;
+  if (ap !== bp) return bp - ap;
+  return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+}
+
+interface UpdatePatch {
+  label?: string | null;
+  pinned?: boolean;
+  color?: SessionColor | null;
 }
 
 function SessionRow({
@@ -211,13 +255,18 @@ function SessionRow({
   unread,
   onSelect,
   onDelete,
+  onUpdate,
 }: {
   session: SessionView;
   selected: boolean;
   unread: boolean;
   onSelect: () => void;
   onDelete: () => void;
+  onUpdate: (patch: UpdatePatch) => void | Promise<void>;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+
   const claudeLabel = (() => {
     if (s.state === "dead") return "ended";
     if (s.state === "orphaned") return "orphaned";
@@ -226,45 +275,240 @@ function SessionRow({
     return `claude ${s.current_claude_session_uuid.slice(0, 6)}`;
   })();
 
+  const displayName =
+    s.label && s.label.length > 0 ? s.label : s.id.slice(0, 8);
+
+  const rowClass = [
+    "sidebar__row",
+    s.color ? `sidebar__row--color-${s.color}` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <li className="sidebar__row">
-      <button
-        type="button"
-        className={
-          selected
-            ? "sidebar__session sidebar__session--active"
-            : "sidebar__session"
-        }
-        onClick={onSelect}
-      >
-        <span className={`sidebar__dot sidebar__dot--${s.state}`} />
-        <span className="sidebar__session-main">
-          <span className="sidebar__session-id">{s.id.slice(0, 8)}</span>
-          <span className="sidebar__session-meta">
-            {ageSince(s.created_at)} · {claudeLabel}
+    <li className={rowClass}>
+      {s.color && <span className="sidebar__color-accent" aria-hidden />}
+      {renaming ? (
+        <RenameInput
+          initial={s.label ?? ""}
+          onSubmit={(value) => {
+            const v = value.trim();
+            void onUpdate({ label: v.length === 0 ? null : v });
+            setRenaming(false);
+          }}
+          onCancel={() => setRenaming(false)}
+        />
+      ) : (
+        <button
+          type="button"
+          className={
+            selected
+              ? "sidebar__session sidebar__session--active"
+              : "sidebar__session"
+          }
+          onClick={onSelect}
+          onDoubleClick={() => setRenaming(true)}
+        >
+          <span className={`sidebar__dot sidebar__dot--${s.state}`} />
+          <span className="sidebar__session-main">
+            <span className="sidebar__session-id">
+              {s.pinned && (
+                <span
+                  className="sidebar__pin-indicator"
+                  aria-label="pinned"
+                  title="pinned"
+                >
+                  ★
+                </span>
+              )}
+              {displayName}
+            </span>
+            <span className="sidebar__session-meta">
+              {ageSince(s.created_at)} · {claudeLabel}
+            </span>
           </span>
-        </span>
-        {unread && !selected && (
-          <span
-            className="sidebar__unread"
-            aria-label="new activity since last view"
-            title="New events since you last viewed this session"
-          />
-        )}
+          {unread && !selected && (
+            <span
+              className="sidebar__unread"
+              aria-label="new activity since last view"
+              title="New events since you last viewed this session"
+            />
+          )}
+        </button>
+      )}
+      {!renaming && (
+        <div className="sidebar__row-actions">
+          <button
+            type="button"
+            className="sidebar__menu-button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setMenuOpen((v) => !v);
+            }}
+            title="Session options"
+            aria-label="Session options"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+          >
+            ⋯
+          </button>
+          {menuOpen && (
+            <SessionMenu
+              session={s}
+              onClose={() => setMenuOpen(false)}
+              onRename={() => {
+                setRenaming(true);
+                setMenuOpen(false);
+              }}
+              onUpdate={onUpdate}
+            />
+          )}
+          <button
+            type="button"
+            className="sidebar__delete"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            title="Delete session"
+            aria-label="Delete session"
+          >
+            ×
+          </button>
+        </div>
+      )}
+    </li>
+  );
+}
+
+function RenameInput({
+  initial,
+  onSubmit,
+  onCancel,
+}: {
+  initial: string;
+  onSubmit: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  return (
+    <form
+      className="sidebar__rename"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit(value);
+      }}
+    >
+      <input
+        type="text"
+        className="sidebar__rename-input"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        autoFocus
+        maxLength={100}
+        placeholder="Session name (empty to clear)"
+        aria-label="Session name"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+        onBlur={() => onSubmit(value)}
+      />
+    </form>
+  );
+}
+
+function SessionMenu({
+  session: s,
+  onClose,
+  onRename,
+  onUpdate,
+}: {
+  session: SessionView;
+  onClose: () => void;
+  onRename: () => void;
+  onUpdate: (patch: UpdatePatch) => void | Promise<void>;
+}) {
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const handleDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("mousedown", handleDown);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleDown);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div className="sidebar__menu" role="menu" ref={menuRef}>
+      <button
+        type="button"
+        role="menuitem"
+        className="sidebar__menu-item"
+        onClick={onRename}
+      >
+        Rename
       </button>
       <button
         type="button"
-        className="sidebar__delete"
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete();
+        role="menuitem"
+        className="sidebar__menu-item"
+        onClick={() => {
+          void onUpdate({ pinned: !s.pinned });
+          onClose();
         }}
-        title="Delete session"
-        aria-label="Delete session"
       >
-        ×
+        {s.pinned ? "Unpin" : "Pin to top"}
       </button>
-    </li>
+      <div className="sidebar__menu-divider" />
+      <div className="sidebar__menu-section">Colour</div>
+      <div className="sidebar__colors" role="group" aria-label="Session colour">
+        <button
+          type="button"
+          className={
+            s.color == null
+              ? "sidebar__swatch sidebar__swatch--none sidebar__swatch--selected"
+              : "sidebar__swatch sidebar__swatch--none"
+          }
+          aria-label="No colour"
+          title="No colour"
+          onClick={() => {
+            void onUpdate({ color: null });
+            onClose();
+          }}
+        >
+          ∅
+        </button>
+        {SESSION_COLORS.map((c) => (
+          <button
+            key={c}
+            type="button"
+            className={
+              s.color === c
+                ? `sidebar__swatch sidebar__swatch--${c} sidebar__swatch--selected`
+                : `sidebar__swatch sidebar__swatch--${c}`
+            }
+            aria-label={`Colour ${c}`}
+            title={c}
+            onClick={() => {
+              void onUpdate({ color: c });
+              onClose();
+            }}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 

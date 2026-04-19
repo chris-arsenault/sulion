@@ -9,6 +9,7 @@ import type {
   ListSessionsResponse,
   RepoView,
   SessionView,
+  UpdateSessionRequest,
 } from "./types";
 
 export class ApiError extends Error {
@@ -58,6 +59,23 @@ export function createSession(body: CreateSessionRequest): Promise<SessionView> 
 
 export function deleteSession(id: string): Promise<void> {
   return request<void>(`/api/sessions/${id}`, { method: "DELETE" });
+}
+
+/** Update user-facing session metadata. Any field you omit is left
+ * unchanged server-side. Pass null for label/color to clear (backend
+ * interprets empty string as null). */
+export function updateSession(
+  id: string,
+  body: UpdateSessionRequest,
+): Promise<void> {
+  // Normalise: null → empty string (backend converts to NULL).
+  const payload: Record<string, unknown> = { ...body };
+  if (payload.label === null) payload.label = "";
+  if (payload.color === null) payload.color = "";
+  return request<void>(`/api/sessions/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getHistory(

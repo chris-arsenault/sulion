@@ -13,6 +13,7 @@ interface MockState {
   createSessionCalls: Array<unknown>;
   createRepoCalls: Array<unknown>;
   deletedIds: string[];
+  patches: Array<{ id: string; body: unknown }>;
 }
 
 function installFetchMock(): MockState {
@@ -22,6 +23,7 @@ function installFetchMock(): MockState {
     createSessionCalls: [],
     createRepoCalls: [],
     deletedIds: [],
+    patches: [],
   };
 
   vi.stubGlobal(
@@ -61,6 +63,15 @@ function installFetchMock(): MockState {
         const id = url.split("/").pop()!;
         state.sessions = state.sessions.filter((s) => s.id !== id);
         state.deletedIds.push(id);
+        return new Response(null, { status: 204 });
+      }
+      if (url.startsWith("/api/sessions/") && method === "PATCH") {
+        const id = url.split("/").pop()!;
+        const body = JSON.parse(init!.body as string);
+        state.patches.push({ id, body });
+        state.sessions = state.sessions.map((s) =>
+          s.id === id ? { ...s, ...body } : s,
+        );
         return new Response(null, { status: 204 });
       }
       if (url === "/api/repos" && method === "GET") {
@@ -194,6 +205,155 @@ describe("Sidebar", () => {
     // Give any stray requests a moment to fire — none should.
     await new Promise((r) => setTimeout(r, 50));
     expect(state.deletedIds.length).toBe(0);
+  });
+
+  it("opens the session menu and fires PATCH { pinned: true } on Pin to top", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: "alpha", path: "/tmp/alpha" });
+    state.sessions.push({
+      id: "44444444-4444-4444-4444-444444444444",
+      repo: "alpha",
+      working_dir: "/tmp/alpha",
+      state: "live",
+      created_at: new Date().toISOString(),
+      ended_at: null,
+      exit_code: null,
+      current_claude_session_uuid: null,
+      last_event_at: null,
+      label: null,
+      pinned: false,
+      color: null,
+    });
+    setup();
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText(/44444444/)).toBeDefined());
+
+    await user.click(screen.getAllByLabelText("Session options")[0]);
+    await user.click(screen.getByRole("menuitem", { name: /pin to top/i }));
+
+    await waitFor(() => expect(state.patches.length).toBe(1));
+    expect(state.patches[0]).toEqual({
+      id: "44444444-4444-4444-4444-444444444444",
+      body: { pinned: true },
+    });
+  });
+
+  it("renames a session through the menu", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: "alpha", path: "/tmp/alpha" });
+    state.sessions.push({
+      id: "55555555-5555-5555-5555-555555555555",
+      repo: "alpha",
+      working_dir: "/tmp/alpha",
+      state: "live",
+      created_at: new Date().toISOString(),
+      ended_at: null,
+      exit_code: null,
+      current_claude_session_uuid: null,
+      last_event_at: null,
+      label: null,
+      pinned: false,
+      color: null,
+    });
+    setup();
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText(/55555555/)).toBeDefined());
+
+    await user.click(screen.getAllByLabelText("Session options")[0]);
+    await user.click(screen.getByRole("menuitem", { name: /rename/i }));
+
+    const input = screen.getByLabelText("Session name");
+    await user.clear(input);
+    await user.type(input, "deploy-work{enter}");
+
+    await waitFor(() => expect(state.patches.length).toBe(1));
+    expect(state.patches[0]).toEqual({
+      id: "55555555-5555-5555-5555-555555555555",
+      body: { label: "deploy-work" },
+    });
+    // Label replaces the uuid prefix after the optimistic update.
+    await waitFor(() => expect(screen.getByText("deploy-work")).toBeDefined());
+  });
+
+  it("picks a colour through the menu swatch", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: "alpha", path: "/tmp/alpha" });
+    state.sessions.push({
+      id: "66666666-6666-6666-6666-666666666666",
+      repo: "alpha",
+      working_dir: "/tmp/alpha",
+      state: "live",
+      created_at: new Date().toISOString(),
+      ended_at: null,
+      exit_code: null,
+      current_claude_session_uuid: null,
+      last_event_at: null,
+      label: null,
+      pinned: false,
+      color: null,
+    });
+    setup();
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText(/66666666/)).toBeDefined());
+
+    await user.click(screen.getAllByLabelText("Session options")[0]);
+    await user.click(screen.getByLabelText("Colour emerald"));
+
+    await waitFor(() => expect(state.patches.length).toBe(1));
+    expect(state.patches[0]).toEqual({
+      id: "66666666-6666-6666-6666-666666666666",
+      body: { color: "emerald" },
+    });
+  });
+
+  it("pinned sessions float to the top of their repo group", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: "alpha", path: "/tmp/alpha" });
+    // Newer session, unpinned.
+    state.sessions.push({
+      id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      repo: "alpha",
+      working_dir: "/tmp/alpha",
+      state: "live",
+      created_at: new Date(Date.now()).toISOString(),
+      ended_at: null,
+      exit_code: null,
+      current_claude_session_uuid: null,
+      last_event_at: null,
+      label: null,
+      pinned: false,
+      color: null,
+    });
+    // Older session, pinned — should appear first.
+    state.sessions.push({
+      id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      repo: "alpha",
+      working_dir: "/tmp/alpha",
+      state: "live",
+      created_at: new Date(Date.now() - 3_600_000).toISOString(),
+      ended_at: null,
+      exit_code: null,
+      current_claude_session_uuid: null,
+      last_event_at: null,
+      label: "pinned-one",
+      pinned: true,
+      color: null,
+    });
+    setup();
+
+    await waitFor(() => {
+      expect(screen.getByText("pinned-one")).toBeDefined();
+      expect(screen.getByText(/aaaaaaaa/)).toBeDefined();
+    });
+    const ids = Array.from(document.querySelectorAll(".sidebar__session-id")).map(
+      (el) => el.textContent ?? "",
+    );
+    const pinnedIdx = ids.findIndex((t) => t.includes("pinned-one"));
+    const newerIdx = ids.findIndex((t) => t.includes("aaaaaaaa"));
+    expect(pinnedIdx).toBeLessThan(newerIdx);
   });
 
   it("new-repo form POSTs to /api/repos", async () => {

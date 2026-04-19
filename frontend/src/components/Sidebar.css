@@ -133,6 +133,44 @@
   align-items: center;
   padding: 0;
   margin: 0;
+  position: relative;
+}
+
+/* Coloured accent bar on the left edge of the session row. One class
+   per palette entry — keeps the mapping from SessionColor → CSS var
+   explicit and avoids a sprawling inline-style fallback. */
+.sidebar__color-accent {
+  position: absolute;
+  left: 0;
+  top: 3px;
+  bottom: 3px;
+  width: 3px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+.sidebar__row--color-amber .sidebar__color-accent {
+  background: #f59e0b;
+}
+.sidebar__row--color-emerald .sidebar__color-accent {
+  background: #10b981;
+}
+.sidebar__row--color-sky .sidebar__color-accent {
+  background: #38bdf8;
+}
+.sidebar__row--color-rose .sidebar__color-accent {
+  background: #f43f5e;
+}
+.sidebar__row--color-violet .sidebar__color-accent {
+  background: #a78bfa;
+}
+.sidebar__row--color-slate .sidebar__color-accent {
+  background: #94a3b8;
+}
+.sidebar__row--color-teal .sidebar__color-accent {
+  background: #2dd4bf;
+}
+.sidebar__row--color-fuchsia .sidebar__color-accent {
+  background: #e879f9;
 }
 
 .sidebar__session {
@@ -234,7 +272,14 @@
   }
 }
 
-.sidebar__delete {
+.sidebar__row-actions {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+.sidebar__delete,
+.sidebar__menu-button {
   background: transparent;
   border: none;
   color: #6b7280;
@@ -243,15 +288,134 @@
   font-size: 14px;
   opacity: 0;
   transition: opacity 0.15s;
+  line-height: 1;
 }
 
-.sidebar__row:hover .sidebar__delete {
+.sidebar__row:hover .sidebar__delete,
+.sidebar__row:hover .sidebar__menu-button,
+.sidebar__menu-button[aria-expanded="true"] {
   opacity: 1;
 }
 
 .sidebar__delete:hover {
   color: #fecaca;
 }
+
+.sidebar__menu-button:hover {
+  color: #fff;
+}
+
+.sidebar__pin-indicator {
+  color: #fbbf24;
+  margin-right: 4px;
+  font-size: 11px;
+}
+
+.sidebar__rename {
+  flex: 1;
+  padding: 4px 6px;
+  display: flex;
+}
+
+.sidebar__rename-input {
+  flex: 1;
+  min-width: 0;
+  background: #0f1115;
+  border: 1px solid #3b82f6;
+  color: #e5e7eb;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.sidebar__rename-input:focus {
+  outline: none;
+}
+
+.sidebar__menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 20;
+  min-width: 180px;
+  padding: 4px;
+  background: #1a1d23;
+  border: 1px solid #2a2f37;
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar__menu-item {
+  background: transparent;
+  color: #d1d5db;
+  border: none;
+  padding: 6px 10px;
+  text-align: left;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.sidebar__menu-item:hover {
+  background: #2a2f37;
+}
+
+.sidebar__menu-divider {
+  height: 1px;
+  background: #2a2f37;
+  margin: 4px 2px;
+}
+
+.sidebar__menu-section {
+  padding: 4px 10px 2px;
+  color: #6b7280;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sidebar__colors {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+  padding: 4px 6px 6px;
+}
+
+.sidebar__swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  color: #6b7280;
+  font-size: 10px;
+}
+
+.sidebar__swatch--selected {
+  border-color: #e5e7eb;
+}
+
+.sidebar__swatch--none {
+  background: #0f1115;
+  border: 1px dashed #4b5563;
+}
+.sidebar__swatch--none.sidebar__swatch--selected {
+  border: 2px solid #e5e7eb;
+}
+.sidebar__swatch--amber { background: #f59e0b; }
+.sidebar__swatch--emerald { background: #10b981; }
+.sidebar__swatch--sky { background: #38bdf8; }
+.sidebar__swatch--rose { background: #f43f5e; }
+.sidebar__swatch--violet { background: #a78bfa; }
+.sidebar__swatch--slate { background: #94a3b8; }
+.sidebar__swatch--teal { background: #2dd4bf; }
+.sidebar__swatch--fuchsia { background: #e879f9; }
 
 .sidebar__form {
   display: flex;

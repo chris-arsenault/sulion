@@ -15,6 +15,9 @@ const orphanedSession = {
   exit_code: null,
   current_claude_session_uuid: "deadbeef-dead-beef-dead-beefdeadbeef",
   last_event_at: null,
+  label: null,
+  pinned: false,
+  color: null,
 };
 
 const deadSession = {

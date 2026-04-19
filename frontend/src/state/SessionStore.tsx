@@ -24,6 +24,7 @@ import {
   createRepo as apiCreateRepo,
   createSession as apiCreateSession,
   deleteSession as apiDeleteSession,
+  updateSession as apiUpdateSession,
   listRepos,
   listSessions,
 } from "../api/client";
@@ -32,6 +33,7 @@ import type {
   CreateSessionRequest,
   RepoView,
   SessionView,
+  UpdateSessionRequest,
 } from "../api/types";
 import { useLastViewed } from "./useLastViewed";
 
@@ -45,6 +47,7 @@ export interface SessionStore {
   selectSession: (id: string | null) => void;
   createSession: (req: CreateSessionRequest) => Promise<SessionView>;
   deleteSession: (id: string) => Promise<void>;
+  updateSession: (id: string, patch: UpdateSessionRequest) => Promise<void>;
   createRepo: (req: CreateRepoRequest) => Promise<RepoView>;
   refresh: () => Promise<void>;
   lastError: string | null;
@@ -130,6 +133,33 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [selectedSessionId, selectSession],
   );
 
+  const updateSession = useCallback(
+    async (id: string, patch: UpdateSessionRequest) => {
+      // Optimistic: apply locally first, roll back on error.
+      let prev: SessionView[] = [];
+      setSessions((current) => {
+        prev = current;
+        return current.map((s) =>
+          s.id === id
+            ? {
+                ...s,
+                ...(patch.label !== undefined ? { label: patch.label } : {}),
+                ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}),
+                ...(patch.color !== undefined ? { color: patch.color } : {}),
+              }
+            : s,
+        );
+      });
+      try {
+        await apiUpdateSession(id, patch);
+      } catch (err) {
+        setSessions(prev);
+        throw err;
+      }
+    },
+    [],
+  );
+
   const createRepo = useCallback(async (req: CreateRepoRequest) => {
     const created = await apiCreateRepo(req);
     setRepos((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
@@ -148,6 +178,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       selectSession,
       createSession,
       deleteSession,
+      updateSession,
       createRepo,
       refresh,
       lastError,
@@ -160,6 +191,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       selectSession,
       createSession,
       deleteSession,
+      updateSession,
       createRepo,
       refresh,
       lastError,

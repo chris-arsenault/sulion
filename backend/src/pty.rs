@@ -82,11 +82,14 @@ pub struct PtyMetadata {
     pub exit_code: Option<i32>,
     pub current_claude_session_uuid: Option<Uuid>,
     /// MAX(events.timestamp) for the session's current claude session,
-    /// populated by `list()` only. Used by the frontend's unread-dot
-    /// indicator to know when a session has new activity since the
-    /// user last viewed it. Not tracked on individual `get`/`read_meta`
-    /// fetches since callers who want this info use `list()`.
+    /// populated by `list()` only.
     pub last_event_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// User-facing label; overrides the uuid prefix in the sidebar.
+    pub label: Option<String>,
+    /// Pinned sessions float to the top of their repo group.
+    pub pinned: bool,
+    /// Palette-constrained colour tag. See PALETTE in routes.rs.
+    pub color: Option<String>,
 }
 
 /// Live, running PTY session. Holds the master PTY and the channels used
@@ -215,6 +218,9 @@ impl PtyManager {
             exit_code: None,
             current_claude_session_uuid: None,
             last_event_at: None,
+            label: None,
+            pinned: false,
+            color: None,
         };
 
         sqlx::query(
@@ -250,19 +256,20 @@ impl PtyManager {
         self.sessions.read().await.get(&id).cloned()
     }
 
-    /// Snapshot of sessions plus each one's last-event timestamp for
-    /// the unread-indicator UX. The `last_event_at` is a correlated
-    /// subquery against events, so it stays reasonable for the session
-    /// counts we care about (dozens, not tens of thousands).
+    /// Snapshot of sessions plus each one's last-event timestamp and
+    /// user-facing metadata (label/pinned/color). Pinned sessions sort
+    /// first, then by created_at desc — so the sidebar ordering is
+    /// consistent for every client.
     pub async fn list(&self) -> anyhow::Result<Vec<PtyMetadata>> {
         let rows = sqlx::query_as::<_, PtyRowWithActivity>(
             "SELECT ps.id, ps.repo, ps.working_dir, ps.state, ps.created_at, \
              ps.ended_at, ps.exit_code, ps.current_claude_session_uuid, \
+             ps.label, ps.pinned, ps.color, \
              (SELECT MAX(e.timestamp) FROM events e \
               WHERE e.session_uuid = ps.current_claude_session_uuid) AS last_event_at \
              FROM pty_sessions ps \
              WHERE ps.state <> 'deleted' \
-             ORDER BY ps.created_at DESC",
+             ORDER BY ps.pinned DESC, ps.created_at DESC",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -270,6 +277,58 @@ impl PtyManager {
             .into_iter()
             .map(PtyRowWithActivity::into_meta)
             .collect())
+    }
+
+    /// Update user-facing metadata. Each field is optional; null means
+    /// "no change to this field." To clear a label or color, pass
+    /// `Some(String::new())` — that value round-trips to NULL in the DB.
+    pub async fn update_metadata(
+        &self,
+        id: Uuid,
+        label: Option<Option<String>>,
+        pinned: Option<bool>,
+        color: Option<Option<String>>,
+    ) -> anyhow::Result<()> {
+        // Build SET clause dynamically — sqlx doesn't compose cleanly
+        // with optional column updates, so we hand-roll the query.
+        let mut set_parts: Vec<String> = Vec::new();
+        let mut has_change = false;
+        if label.is_some() {
+            set_parts.push("label = $2".to_string());
+            has_change = true;
+        }
+        if pinned.is_some() {
+            set_parts.push(format!("pinned = ${}", if label.is_some() { 3 } else { 2 }));
+            has_change = true;
+        }
+        if color.is_some() {
+            let n = 2 + label.is_some() as usize + pinned.is_some() as usize;
+            set_parts.push(format!("color = ${n}"));
+            has_change = true;
+        }
+        if !has_change {
+            return Ok(());
+        }
+
+        let sql = format!(
+            "UPDATE pty_sessions SET {} WHERE id = $1",
+            set_parts.join(", "),
+        );
+        let mut query = sqlx::query(&sql).bind(id);
+        if let Some(l) = label {
+            // empty string → NULL (clear)
+            let v = l.filter(|s| !s.is_empty());
+            query = query.bind(v);
+        }
+        if let Some(p) = pinned {
+            query = query.bind(p);
+        }
+        if let Some(c) = color {
+            let v = c.filter(|s| !s.is_empty());
+            query = query.bind(v);
+        }
+        query.execute(&self.pool).await?;
+        Ok(())
     }
 
     /// SIGTERM → grace period → SIGKILL. Marks the DB row deleted.
@@ -338,12 +397,15 @@ impl PtyRow {
             exit_code: self.exit_code,
             current_claude_session_uuid: self.current_claude_session_uuid,
             last_event_at: None,
+            label: None,
+            pinned: false,
+            color: None,
         }
     }
 }
 
-/// Extended row used by `list()` — adds the MAX(events.timestamp)
-/// subquery result so the UI can flag sessions with new activity.
+/// Extended row used by `list()` — includes activity timestamp plus
+/// user metadata (label/pinned/color).
 #[derive(sqlx::FromRow)]
 struct PtyRowWithActivity {
     id: Uuid,
@@ -354,6 +416,9 @@ struct PtyRowWithActivity {
     ended_at: Option<chrono::DateTime<chrono::Utc>>,
     exit_code: Option<i32>,
     current_claude_session_uuid: Option<Uuid>,
+    label: Option<String>,
+    pinned: bool,
+    color: Option<String>,
     last_event_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -369,6 +434,9 @@ impl PtyRowWithActivity {
             exit_code: self.exit_code,
             current_claude_session_uuid: self.current_claude_session_uuid,
             last_event_at: self.last_event_at,
+            label: self.label,
+            pinned: self.pinned,
+            color: self.color,
         }
     }
 }
