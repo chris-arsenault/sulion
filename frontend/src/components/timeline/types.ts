@@ -192,11 +192,12 @@ export function flattenEventContent(event: TimelineEvent): string {
 
 /** Legacy shape-based flattener kept for callers that receive an
  * already-extracted content array (summary panels, markdown export for
- * raw tool_result content). */
+ * raw tool_result content). Requires non-null content — callers with
+ * optional sources pass `content ?? ""` so the absent case is handled
+ * at the call site rather than hidden inside the helper. */
 export function flattenContent(
-  content?: string | LegacyContentBlock[],
+  content: string | LegacyContentBlock[],
 ): string {
-  if (!content) return "";
   if (typeof content === "string") return content;
   const parts: string[] = [];
   for (const block of content) {
@@ -207,7 +208,11 @@ export function flattenContent(
     } else if (block.type === "tool_result") {
       const tr = block as { content?: string | LegacyContentBlock[] };
       const nested =
-        typeof tr.content === "string" ? tr.content : flattenContent(tr.content);
+        typeof tr.content === "string"
+          ? tr.content
+          : tr.content
+            ? flattenContent(tr.content)
+            : "";
       parts.push(`[tool_result]${nested ? ` ${nested}` : ""}`);
     }
   }

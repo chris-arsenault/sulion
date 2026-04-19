@@ -5,7 +5,6 @@
 import type { TimelineEvent } from "../../api/types";
 import type { ToolPair, Turn } from "./grouping";
 import {
-  flattenContent,
   payloadOf,
   textBlocksIn,
   userPromptText,
@@ -181,10 +180,9 @@ function formatMultiEditInput(pair: ToolPair): string {
 
 function formatToolResult(pair: ToolPair): string {
   if (!pair.result) return "";
-  const body =
-    typeof pair.result.content === "string"
-      ? pair.result.content
-      : flattenContent(pair.result.content);
+  // Canonical-block tool_result content is a pre-flattened string;
+  // missing content just means "no output to show".
+  const body = pair.result.content ?? "";
   if (!body) return "";
   const truncated =
     body.length > 1500 ? `${body.slice(0, 1500)}\n… (${body.length} chars total)` : body;

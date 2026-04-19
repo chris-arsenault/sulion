@@ -166,7 +166,7 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent, filters }: Prop
               >
                 <span className="td__sub-label">summary</span>
                 <span>
-                  {flattenContent(payloadOf(chunk.event).message?.content) ||
+                  {flattenContent(payloadOf(chunk.event).message?.content ?? "") ||
                     summaryTextOf(chunk.event)}
                 </span>
               </div>
@@ -181,7 +181,7 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent, filters }: Prop
                 <span className="td__sub-label">system</span>
                 <span>
                   {payloadOf(chunk.event).subtype ?? "system"}{" "}
-                  {flattenContent(payloadOf(chunk.event).message?.content)}
+                  {flattenContent(payloadOf(chunk.event).message?.content ?? "")}
                 </span>
               </div>
             );
@@ -462,10 +462,9 @@ function ToolPairRow({
 
 function ToolResultRender({ pair }: { pair: ToolPair }) {
   const r = pair.result!;
-  const body =
-    typeof r.content === "string"
-      ? r.content
-      : flattenContent(r.content);
+  // ToolResultBlock.content is pre-flattened to a string by the
+  // canonical parser; undefined means "tool produced no output".
+  const body = r.content ?? "";
   const truncated =
     body.length > 2000 ? `${body.slice(0, 2000)}\n… (${body.length} chars)` : body;
   return (

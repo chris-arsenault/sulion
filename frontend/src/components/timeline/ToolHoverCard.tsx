@@ -8,7 +8,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type { ToolPair } from "./grouping";
-import { flattenContent } from "./types";
 import { ToolCallRenderer } from "./tools/renderers";
 import "./ToolHoverCard.css";
 
@@ -60,10 +59,7 @@ export function ToolHoverCard({ anchor, pair, pinned, onPin, onClose }: Props) {
 
   const resultText = (() => {
     if (!pair.result) return pair.isPending ? "(pending)" : "";
-    const body =
-      typeof pair.result.content === "string"
-        ? pair.result.content
-        : flattenContent(pair.result.content);
+    const body = pair.result.content ?? "";
     if (!body) return "(empty result)";
     return body.length > 1200 ? `${body.slice(0, 1200)}\n… (${body.length} chars)` : body;
   })();

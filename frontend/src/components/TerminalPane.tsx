@@ -24,8 +24,17 @@ import { useEffect, useRef, useState } from "react";
 
 import { connectPty, type ConnectionState } from "../api/ws";
 import { uploadRepoFile } from "../api/client";
-import type { Maybe } from "../lib/types";
 import { useSessions } from "../state/SessionStore";
+
+/** Explicit session-lifecycle discriminated union. The previous shape
+ * used `number | null | undefined` where undefined = "haven't heard",
+ * null = "dead, no code", number = "dead, code" — readable only with
+ * a code-comment next to the state. With an explicit kind tag the
+ * rendering condition becomes `exit.kind === "dead"` instead of
+ * "!== undefined", which didn't spell out what it meant. */
+type ExitStatus =
+  | { kind: "alive" }
+  | { kind: "dead"; code: number | null };
 import { copyToClipboard, readClipboard, sanitizePaste } from "./terminal/clipboard";
 import "@xterm/xterm/css/xterm.css";
 import "./TerminalPane.css";
@@ -36,9 +45,7 @@ const PASTE_AS_FILE_LINES = 200;
 export function TerminalPane({ sessionId }: { sessionId: string }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [connState, setConnState] = useState<ConnectionState>("connecting");
-  // Three-state: undefined = haven't heard yet, null = alive / no exit
-  // reported, number = explicit exit code.
-  const [deadExit, setDeadExit] = useState<Maybe<number | null>>(undefined);
+  const [exitStatus, setExitStatus] = useState<ExitStatus>({ kind: "alive" });
   const { sessions } = useSessions();
   const repoName = sessions.find((s) => s.id === sessionId)?.repo ?? null;
   const repoRef = useRef<string | null>(repoName);
@@ -117,7 +124,7 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
     const conn = connectPty(sessionId, {
       onBytes: (chunk) => term.write(chunk),
       onServerMsg: (msg) => {
-        if (msg.t === "dead") setDeadExit(msg.exit ?? null);
+        if (msg.t === "dead") setExitStatus({ kind: "dead", code: msg.exit ?? null });
       },
       onConnectionChange: setConnState,
     });
@@ -271,10 +278,10 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
           {connState === "closed" && "closed"}
         </div>
       )}
-      {deadExit !== undefined && (
+      {exitStatus.kind === "dead" && (
         <div className="terminal-pane__banner">
-          shell exited {deadExit == null ? "" : `with code ${deadExit}`} — session
-          no longer receiving input
+          shell exited{exitStatus.code == null ? "" : ` with code ${exitStatus.code}`} —
+          session no longer receiving input
         </div>
       )}
     </div>
