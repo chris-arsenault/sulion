@@ -6,6 +6,7 @@ import { Sidebar } from "./Sidebar";
 import { ContextMenuProvider } from "./common/ContextMenu";
 import { RepoProvider } from "../state/RepoStore";
 import { SessionProvider } from "../state/SessionStore";
+import { TabProvider } from "../state/TabStore";
 
 type Endpoint = "/api/sessions" | "/api/repos" | string;
 
@@ -56,7 +57,8 @@ function installFetchMock(): MockState {
           created_at: new Date().toISOString(),
           ended_at: null,
           exit_code: null,
-          current_claude_session_uuid: null,
+          current_session_uuid: null,
+          current_session_agent: null,
         };
         state.sessions.push(s);
         return jsonResp(s, 201);
@@ -110,7 +112,7 @@ function installFetchMock(): MockState {
           db: {
             database_size_bytes: 0,
             events_rowcount: 0,
-            claude_sessions_rowcount: 0,
+            agent_sessions_rowcount: 0,
             pty_sessions_rowcount: 0,
             ingester_state_rowcount: 0,
           },
@@ -131,9 +133,11 @@ describe("Sidebar", () => {
     return render(
       <SessionProvider>
         <RepoProvider>
-          <ContextMenuProvider>
-            <Sidebar />
-          </ContextMenuProvider>
+          <TabProvider>
+            <ContextMenuProvider>
+              <Sidebar />
+            </ContextMenuProvider>
+          </TabProvider>
         </RepoProvider>
       </SessionProvider>,
     );
@@ -151,7 +155,8 @@ describe("Sidebar", () => {
       created_at: new Date().toISOString(),
       ended_at: null,
       exit_code: null,
-      current_claude_session_uuid: null,
+      current_session_uuid: null,
+      current_session_agent: null,
     });
     setup();
     await waitFor(() => {
@@ -194,7 +199,8 @@ describe("Sidebar", () => {
       created_at: new Date().toISOString(),
       ended_at: null,
       exit_code: null,
-      current_claude_session_uuid: null,
+      current_session_uuid: null,
+      current_session_agent: null,
     });
     setup();
     const user = userEvent.setup();
@@ -226,7 +232,8 @@ describe("Sidebar", () => {
       created_at: new Date().toISOString(),
       ended_at: null,
       exit_code: null,
-      current_claude_session_uuid: null,
+      current_session_uuid: null,
+      current_session_agent: null,
     });
     setup();
     const user = userEvent.setup();
@@ -254,7 +261,8 @@ describe("Sidebar", () => {
       created_at: new Date().toISOString(),
       ended_at: null,
       exit_code: null,
-      current_claude_session_uuid: null,
+      current_session_uuid: null,
+      current_session_agent: null,
       last_event_at: null,
       label: null,
       pinned: false,
@@ -286,7 +294,8 @@ describe("Sidebar", () => {
       created_at: new Date().toISOString(),
       ended_at: null,
       exit_code: null,
-      current_claude_session_uuid: null,
+      current_session_uuid: null,
+      current_session_agent: null,
       last_event_at: null,
       label: null,
       pinned: false,
@@ -324,7 +333,8 @@ describe("Sidebar", () => {
       created_at: new Date().toISOString(),
       ended_at: null,
       exit_code: null,
-      current_claude_session_uuid: null,
+      current_session_uuid: null,
+      current_session_agent: null,
       last_event_at: null,
       label: null,
       pinned: false,
@@ -357,7 +367,8 @@ describe("Sidebar", () => {
       created_at: new Date(Date.now()).toISOString(),
       ended_at: null,
       exit_code: null,
-      current_claude_session_uuid: null,
+      current_session_uuid: null,
+      current_session_agent: null,
       last_event_at: null,
       label: null,
       pinned: false,
@@ -372,7 +383,8 @@ describe("Sidebar", () => {
       created_at: new Date(Date.now() - 3_600_000).toISOString(),
       ended_at: null,
       exit_code: null,
-      current_claude_session_uuid: null,
+      current_session_uuid: null,
+      current_session_agent: null,
       last_event_at: null,
       label: "pinned-one",
       pinned: true,

@@ -1,48 +1,32 @@
-// Universal search. Three scopes: timeline (active session), repo
-// (active repo), workspace (everything). Streams NDJSON hits from
-// /api/search — fetch + parse run in a web worker, which batches hits
-// at ~30Hz and posts them to the main thread. Keeps the UI responsive
-// and the terminal WebSocket frames flowing during a big search.
+// Universal search. Three scopes: timeline / repo / workspace. Owns
+// its own query + scope state locally — the tab registry only knows
+// "this is a search tab". No subscription to other tabs or the
+// sidebar. User explicitly selects the scope.
+//
+// Streams NDJSON hits from /api/search via a web worker that parses
+// the stream off the main thread and batches results at ~30Hz so
+// large searches don't thrash React or starve the terminal WS.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { SearchHit, SearchScope } from "../api/types";
-import { useSessions } from "../state/SessionStore";
 import { useTabs } from "../state/TabStore";
 import "./SearchTab.css";
 
-interface Props {
-  initialQuery?: string;
-  initialScope?: SearchScope;
-}
-
-export function SearchTab({ initialQuery = "", initialScope = "workspace" }: Props) {
-  const [query, setQuery] = useState(initialQuery);
-  const [scope, setScope] = useState<SearchScope>(initialScope);
+export function SearchTab() {
+  const [query, setQuery] = useState("");
+  const [scope, setScope] = useState<SearchScope>("workspace");
+  // Repo/session pickers for the scoped modes. Also SearchTab-local —
+  // no reaching up into the registry to infer "what is the user
+  // looking at right now".
+  const [repo, setRepo] = useState<string>("");
+  const [session, setSession] = useState<string>("");
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
   const workerRef = useRef<Worker | null>(null);
 
-  const { sessions } = useSessions();
-  const { openTab, tabs, activeByPane } = useTabs();
-  // Derive "current context" from which tab is active in the top pane,
-  // not from the sidebar highlight. Tabs are independent — the sidebar
-  // is for navigation, not state.
-  const focusedTabId = activeByPane.top ?? activeByPane.bottom ?? null;
-  const focusedTab = focusedTabId ? tabs[focusedTabId] ?? null : null;
-  const contextSessionId =
-    focusedTab?.kind === "terminal" || focusedTab?.kind === "timeline"
-      ? focusedTab.sessionId ?? null
-      : null;
-  const contextRepo = (() => {
-    if (focusedTab?.repo) return focusedTab.repo;
-    if (contextSessionId) {
-      const s = sessions.find((x) => x.id === contextSessionId);
-      return s?.repo ?? null;
-    }
-    return null;
-  })();
+  const { openTab } = useTabs();
 
   useEffect(() => {
     const w = new Worker(
@@ -57,10 +41,7 @@ export function SearchTab({ initialQuery = "", initialScope = "workspace" }: Pro
       const m = ev.data;
       if (m.kind === "hits") {
         setHits((prev) => [...prev, ...m.hits]);
-      } else if (m.kind === "done") {
-        setRunning(false);
-        setDone(true);
-      } else if (m.kind === "error") {
+      } else if (m.kind === "done" || m.kind === "error") {
         setRunning(false);
         setDone(true);
       }
@@ -84,9 +65,8 @@ export function SearchTab({ initialQuery = "", initialScope = "workspace" }: Pro
     const qs = new URLSearchParams();
     qs.set("q", q);
     qs.set("scope", s);
-    if (s === "repo" && contextRepo) qs.set("repo", contextRepo);
-    if (s === "timeline" && contextSessionId)
-      qs.set("session", contextSessionId);
+    if (s === "repo" && repo) qs.set("repo", repo);
+    if (s === "timeline" && session) qs.set("session", session);
     setHits([]);
     setRunning(true);
     setDone(false);
@@ -96,19 +76,6 @@ export function SearchTab({ initialQuery = "", initialScope = "workspace" }: Pro
     });
   };
 
-  const canUseTimelineScope = contextSessionId != null;
-  const canUseRepoScope = contextRepo != null;
-
-  const disabledNote = useMemo(() => {
-    if (scope === "timeline" && !canUseTimelineScope) {
-      return "Focus a terminal or timeline tab to search its timeline.";
-    }
-    if (scope === "repo" && !canUseRepoScope) {
-      return "Focus a tab bound to a repo (terminal, timeline, file, or diff) to search that repo.";
-    }
-    return null;
-  }, [scope, canUseTimelineScope, canUseRepoScope]);
-
   const onHitClick = (hit: SearchHit) => {
     if (hit.type === "file") {
       openTab({ kind: "file", repo: hit.repo, path: hit.path });
@@ -116,6 +83,9 @@ export function SearchTab({ initialQuery = "", initialScope = "workspace" }: Pro
       openTab({ kind: "timeline", sessionId: hit.session_id });
     }
   };
+
+  const needsRepo = scope === "repo" && !repo;
+  const needsSession = scope === "timeline" && !session;
 
   return (
     <div className="st">
@@ -141,22 +111,45 @@ export function SearchTab({ initialQuery = "", initialScope = "workspace" }: Pro
               type="button"
               role="tab"
               aria-selected={scope === s}
-              className={
-                scope === s ? "st__scope st__scope--active" : "st__scope"
-              }
+              className={scope === s ? "st__scope st__scope--active" : "st__scope"}
               onClick={() => setScope(s)}
             >
               {s}
             </button>
           ))}
         </div>
-        <button type="submit" className="st__run">
+        {scope === "repo" && (
+          <input
+            type="text"
+            className="st__input st__input--narrow"
+            placeholder="repo"
+            value={repo}
+            onChange={(e) => setRepo(e.target.value)}
+            aria-label="Repo to search"
+          />
+        )}
+        {scope === "timeline" && (
+          <input
+            type="text"
+            className="st__input st__input--narrow"
+            placeholder="session id"
+            value={session}
+            onChange={(e) => setSession(e.target.value)}
+            aria-label="Session id to search"
+          />
+        )}
+        <button type="submit" className="st__run" disabled={needsRepo || needsSession}>
           {running ? "…" : "go"}
         </button>
       </form>
-      {disabledNote && <div className="st__note">{disabledNote}</div>}
+      {needsRepo && (
+        <div className="st__note">Enter a repo name to search its files.</div>
+      )}
+      {needsSession && (
+        <div className="st__note">Enter a session id to search its timeline.</div>
+      )}
       <div className="st__results">
-        {hits.length === 0 && done && !disabledNote && (
+        {hits.length === 0 && done && !needsRepo && !needsSession && (
           <div className="st__muted">no matches</div>
         )}
         {hits.map((h, i) => (

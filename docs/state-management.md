@@ -1,74 +1,115 @@
 # Frontend state management
 
-This project runs a small mix of React context and Zustand, on purpose:
+Single paradigm: **React context** for app-wide stores, **component-local
+`useState`** for everything else. No Zustand, no Redux.
 
-| Store | Implementation | Why |
-|---|---|---|
-| `useTabStore` | Zustand (`persist` middleware) | Hot write path, persisted to localStorage, selectors let child components subscribe to narrow slices |
-| `SessionStore` | React context | Has network polling + derived hooks; not pressured yet |
-| `RepoStore` | React context | Per-repo polling + lazy tree, not pressured yet |
-| `ContextMenuProvider` | React context | Tiny ephemeral state, no write pressure |
+## Stores
 
-## Decision log — 2026-04-19
+| Store | Purpose |
+|---|---|
+| `SessionStore` | PTY sessions list + selection highlight. Polls `/api/sessions`. |
+| `RepoStore` | Per-repo git + file tree state. Polls `/api/repos/:name/git`. |
+| `TabStore` | Tab **registry** only (see below). |
+| `ContextMenuProvider` | Ephemeral menu state for the open popover. |
 
-Investigated Zustand vs. continuing with context providers per ticket
-#36. Migrated `TabStore` as the template; the other three stores stay
-on context for now.
+Everything else — terminal scroll, timeline filters, tab-internal
+state, form values — lives in the component that owns it via
+`useState`/`useReducer`.
 
-**Why Zustand for TabStore:**
+## The tab registry: thin by design
 
-- Writes are frequent (every tab click, drag, close). Every context
-  consumer re-renders on every write under the old design — our
-  `TabProvider` wrapped the entire work area, so one `openTab` call
-  caused re-renders in all of Sidebar, WorkArea, TabStrip, TabHandle,
-  every TabContent — whether they cared about the slice that changed
-  or not.
-- The persist middleware replaces a hand-rolled
-  `useEffect(localStorage.setItem)` plus a corresponding `useEffect`
-  hydration dance (~30 lines). `merge` gives us a single place to
-  self-heal bad persisted state, which we were already doing inline.
-- Selector API: existing consumers call `useTabs()` and still get the
-  full state (same re-render behaviour as the old context). New
-  consumers that care about render cost call
-  `useTabStore((s) => s.panes.top)` and only re-render when that
-  specific slice changes. Zero call-site migration cost, real upside
-  when we need it.
+This is the load-bearing architectural decision.
 
-**Why not migrate SessionStore / RepoStore too (yet):**
+**Each tab is its own subtree with its own state, analogous to a
+separate process in a desktop application.** The registry only routes;
+the tabs run.
 
-- They lean on `useEffect` polling loops and derived hooks
-  (`useLastViewed`, `useMediaQuery`). Zustand is fine with those but
-  the refactor isn't pressing: neither store writes frequently enough
-  to be in the hot path.
-- One migration is enough to prove the pattern. Go through the TabStore
-  migration in review; if the ergonomics land well, promote
-  SessionStore next. If not, revert cheaply.
+The registry (`TabStore`) holds the minimum needed to know that a tab
+exists and where it is:
 
-**Testing implications:**
+```ts
+interface TabData {
+  id: string;
+  kind: "terminal" | "timeline" | "file" | "diff" | "search";
+  sessionId?: string;  // for session-bound tabs
+  repo?: string;       // for repo-bound tabs
+  path?: string;       // for file/diff tabs
+}
+```
 
-- Zustand stores are module-level singletons. Tests that mutate the
-  store should reset it:
-  ```ts
-  afterEach(() => {
-    useTabStore.setState({
-      tabs: {},
-      panes: { top: [], bottom: [] },
-      activeByPane: { top: null, bottom: null },
-      hasAnyTab: false,
-    });
-  });
-  ```
-- Current test suite doesn't exercise tab mutations so the reset isn't
-  wired yet — add it when the first test that opens a tab lands.
+Plus pane membership (`panes: { top: string[], bottom: string[] }`)
+and active-per-pane (`activeByPane`).
 
-## When to reach for Zustand on a new store
+The registry does **not** hold:
 
-- Write pressure: multiple writes per user interaction, or writes from
-  inside render loops.
-- A persisted slice that needs self-healing on hydration.
-- A store read by many components where you'd otherwise split the
-  context into "stable actions" vs "frequently-changing data" to keep
-  re-renders tight.
+- Terminal scroll / selection / WebSocket state
+- Timeline filters, virtuoso scroll, current-turn selection
+- File-tab fetched content, raw-toggle state
+- Search query, scope, hit list
+- Diff expanded-file set, stage-pending state
 
-Default to React context otherwise. The provider plumbing is cheap and
-the mental model is one fewer library.
+Those all live inside their respective tab components and die when the
+tab unmounts. A closed-and-reopened file tab re-fetches. A
+closed-and-reopened search tab starts fresh. This is correct: mount
+lifecycle = process lifecycle.
+
+### What this rules out
+
+- **Tab A reading Tab B's internal state.** If the Search tab wanted
+  to "default scope to whatever session you're currently viewing", it
+  would be reaching across tab boundaries. Instead, the user picks
+  scope explicitly.
+- **Persisting tab-internal state in the registry.** The registry
+  knows *what* a tab is (a search tab), not *what the tab is doing*
+  (current query). If a particular tab wants to persist its own
+  internal state across mounts, it writes to its own localStorage
+  key — that's its business, not the registry's.
+
+## Why context, not Zustand
+
+The registry is thin. When `openTab` or `closeTab` fires, the full
+registry state change is small and context consumers are a bounded
+set (WorkArea + TabStrip + TabHandle + Sidebar writers). Zustand's
+selector-based fine-grained subscriptions would matter more if the
+registry were fat — but keeping it thin was the correct fix, not
+switching tools.
+
+Uniform context keeps:
+
+- One paradigm for contributors to learn
+- Tests wrap with providers consistently
+- No extra dependency
+
+## When to write local state vs. a store
+
+Default to local. Promote to a store only when:
+
+1. **Two sibling components genuinely need the same state** (not
+   "could be wired through a prop"). A form's value field belongs to
+   the form component; a search tab's query belongs to the search
+   tab; a session's label belongs to the server and is exposed via
+   `SessionStore`.
+2. **An outside actor must be able to dispatch an action** (e.g.
+   sidebar clicks trigger `openTab`). Stores are good at this.
+
+If the only reason to hoist state is "maybe I'll need it elsewhere
+later", keep it local.
+
+## Testing
+
+Each store exposes a `<Provider>` wrapper. Tests compose them:
+
+```tsx
+<SessionProvider>
+  <RepoProvider>
+    <TabProvider>
+      <ContextMenuProvider>
+        <ComponentUnderTest />
+      </ContextMenuProvider>
+    </TabProvider>
+  </RepoProvider>
+</SessionProvider>
+```
+
+Each provider starts fresh per test (context state is lexically
+scoped to the provider instance). No singleton resets needed.

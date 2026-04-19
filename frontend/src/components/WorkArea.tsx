@@ -431,12 +431,10 @@ function TabContent({ tab }: { tab: TabData }) {
       case "diff":
         return <DiffTab repo={tab.repo!} path={tab.path} />;
       case "search":
-        return (
-          <SearchTab
-            initialQuery={tab.searchQuery}
-            initialScope={tab.searchScope}
-          />
-        );
+        // SearchTab owns its own query + scope state entirely. No seed
+        // from the registry — a search tab is its own process with its
+        // own internal state that survives tab-strip churn.
+        return <SearchTab />;
     }
   }, [tab]);
 }

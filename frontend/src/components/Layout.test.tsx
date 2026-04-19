@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { ContextMenuProvider } from "./common/ContextMenu";
 import { Layout } from "./Layout";
 import { RepoProvider } from "../state/RepoStore";
 import { SessionProvider } from "../state/SessionStore";
+import { TabProvider } from "../state/TabStore";
 
 // matchMedia is not implemented in jsdom — stub it so useMediaQuery can
 // observe breakpoints deterministically.
@@ -41,7 +43,7 @@ beforeEach(() => {
           db: {
             database_size_bytes: 0,
             events_rowcount: 0,
-            claude_sessions_rowcount: 0,
+            agent_sessions_rowcount: 0,
             pty_sessions_rowcount: 0,
             ingester_state_rowcount: 0,
           },
@@ -64,9 +66,15 @@ describe("Layout", () => {
   it("desktop (>=768px): renders the sidebar inline (no drawer)", async () => {
     stubMatchMedia(() => false); // no mobile media match
     render(
-      <SessionProvider><RepoProvider>
-        <Layout />
-      </RepoProvider></SessionProvider>,
+      <SessionProvider>
+        <RepoProvider>
+          <TabProvider>
+            <ContextMenuProvider>
+              <Layout />
+            </ContextMenuProvider>
+          </TabProvider>
+        </RepoProvider>
+      </SessionProvider>,
     );
     // Hamburger is mobile-only; it should not be in the DOM.
     expect(screen.queryByLabelText(/open sessions drawer/i)).toBeNull();
@@ -77,9 +85,15 @@ describe("Layout", () => {
   it("mobile (<768px): shows hamburger, hides sidebar until toggled", async () => {
     stubMatchMedia((q) => q.includes("max-width: 767px"));
     render(
-      <SessionProvider><RepoProvider>
-        <Layout />
-      </RepoProvider></SessionProvider>,
+      <SessionProvider>
+        <RepoProvider>
+          <TabProvider>
+            <ContextMenuProvider>
+              <Layout />
+            </ContextMenuProvider>
+          </TabProvider>
+        </RepoProvider>
+      </SessionProvider>,
     );
     const hamburger = screen.getByLabelText(/open sessions drawer/i);
     expect(hamburger).toBeDefined();
@@ -101,9 +115,15 @@ describe("Layout", () => {
   it("mobile empty state shows the phone-friendly hint", () => {
     stubMatchMedia((q) => q.includes("max-width: 767px"));
     render(
-      <SessionProvider><RepoProvider>
-        <Layout />
-      </RepoProvider></SessionProvider>,
+      <SessionProvider>
+        <RepoProvider>
+          <TabProvider>
+            <ContextMenuProvider>
+              <Layout />
+            </ContextMenuProvider>
+          </TabProvider>
+        </RepoProvider>
+      </SessionProvider>,
     );
     expect(screen.getByText(/tap ☰ to open the session list/i)).toBeDefined();
   });
