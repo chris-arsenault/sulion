@@ -1,3 +1,4 @@
+import { ContextMenuProvider } from "./components/common/ContextMenu";
 import { Layout } from "./components/Layout";
 import { RepoProvider } from "./state/RepoStore";
 import { SessionProvider } from "./state/SessionStore";
@@ -8,7 +9,9 @@ export function App() {
     <SessionProvider>
       <RepoProvider>
         <TabProvider>
-          <Layout />
+          <ContextMenuProvider>
+            <Layout />
+          </ContextMenuProvider>
         </TabProvider>
       </RepoProvider>
     </SessionProvider>

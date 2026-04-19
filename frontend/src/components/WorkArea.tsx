@@ -12,6 +12,11 @@ import type { PaneId, TabData } from "../state/TabStore";
 import { useTabs } from "../state/TabStore";
 import { useSessions } from "../state/SessionStore";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import type { MenuItem } from "./common/ContextMenu";
+import {
+  contextMenuHandler,
+  useContextMenu,
+} from "./common/ContextMenu";
 import { TerminalPane } from "./TerminalPane";
 import { TimelinePane } from "./TimelinePane";
 import { SessionEndedPane } from "./SessionEndedPane";
@@ -249,6 +254,9 @@ function TabStrip({
           <TabHandle
             key={id}
             tab={tab}
+            paneId={paneId}
+            paneTabIds={tabIds}
+            index={i}
             active={id === activeId}
             onActivate={() => onActivate(id)}
             onClose={() => onClose(id)}
@@ -262,12 +270,18 @@ function TabStrip({
 
 function TabHandle({
   tab,
+  paneId,
+  paneTabIds,
+  index,
   active,
   onActivate,
   onClose,
   onDragOverIndex,
 }: {
   tab: TabData;
+  paneId: PaneId;
+  paneTabIds: string[];
+  index: number;
   active: boolean;
   onActivate: () => void;
   onClose: () => void;
@@ -276,7 +290,40 @@ function TabHandle({
   // Derive the label live from session / repo state so renames reflect
   // without touching every open tab's persisted title.
   const { sessions } = useSessions();
+  const { closeTab, moveTab } = useTabs();
+  const { open: openCtx } = useContextMenu();
   const label = useMemo(() => liveLabel(tab, sessions), [tab, sessions]);
+
+  const onContextMenu = contextMenuHandler(openCtx, () => {
+    const otherPane: PaneId = paneId === "top" ? "bottom" : "top";
+    const others = paneTabIds.filter((id) => id !== tab.id);
+    const toRight = paneTabIds.slice(index + 1);
+    const items: MenuItem[] = [
+      { kind: "item", id: "close", label: "Close", onSelect: onClose },
+      {
+        kind: "item",
+        id: "close-others",
+        label: "Close others",
+        disabled: others.length === 0,
+        onSelect: () => others.forEach((id) => closeTab(id)),
+      },
+      {
+        kind: "item",
+        id: "close-right",
+        label: "Close all to the right",
+        disabled: toRight.length === 0,
+        onSelect: () => toRight.forEach((id) => closeTab(id)),
+      },
+      { kind: "separator" },
+      {
+        kind: "item",
+        id: "move-pane",
+        label: `Move to ${otherPane} pane`,
+        onSelect: () => moveTab(tab.id, otherPane),
+      },
+    ];
+    return items;
+  });
 
   return (
     <div
@@ -293,6 +340,7 @@ function TabHandle({
         }
       }}
       onClick={onActivate}
+      onContextMenu={onContextMenu}
       title={tabTitle(tab, label)}
     >
       <span className={`wa__tab-kind wa__tab-kind--${tab.kind}`} aria-hidden>

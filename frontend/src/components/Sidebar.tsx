@@ -20,10 +20,15 @@ import type {
   SessionView,
 } from "../api/types";
 import { SESSION_COLORS } from "../api/types";
-import { ApiError, uploadRepoFile } from "../api/client";
+import { ApiError, stageRepoPath, uploadRepoFile } from "../api/client";
 import { useSessions } from "../state/SessionStore";
 import { dirtyAncestors, stalenessFor, useRepos } from "../state/RepoStore";
 import { useTabs } from "../state/TabStore";
+import type { MenuItem } from "./common/ContextMenu";
+import {
+  contextMenuHandler,
+  useContextMenu,
+} from "./common/ContextMenu";
 import { ConfirmDialog } from "./common/ConfirmDialog";
 import { StatsStrip } from "./StatsStrip";
 import "./Sidebar.css";
@@ -533,6 +538,8 @@ function TreeRow({
   const store = useRepos();
   const state = store.repos[repoName];
   const [dragOver, setDragOver] = useState(false);
+  const { open: openCtx } = useContextMenu();
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const userExpanded = state?.expanded?.has(fullPath) ?? false;
   const userCollapsed = state?.collapsed?.has(fullPath) ?? false;
@@ -560,6 +567,110 @@ function TreeRow({
         }),
       );
     }
+  };
+
+  const openFileTab = () =>
+    window.dispatchEvent(
+      new CustomEvent("shuttlecraft:open-file", {
+        detail: { repo: repoName, path: fullPath, dirty: !!entry.dirty },
+      }),
+    );
+
+  const copyPath = (variant: "absolute" | "relative") => {
+    const text = variant === "absolute"
+      ? `/home/dev/repos/${repoName}/${fullPath}`
+      : fullPath;
+    void navigator.clipboard?.writeText(text).catch(() => {
+      /* ignore — HTTP deploys lack permission */
+    });
+  };
+
+  const onContextMenu = contextMenuHandler(openCtx, () => {
+    const items: MenuItem[] = [];
+    if (entry.kind === "file") {
+      items.push({
+        kind: "item",
+        id: "open-file",
+        label: "Open file",
+        onSelect: openFileTab,
+      });
+      if (entry.dirty) {
+        items.push({
+          kind: "item",
+          id: "open-diff",
+          label: "Open diff",
+          onSelect: () =>
+            window.dispatchEvent(
+              new CustomEvent("shuttlecraft:open-diff", {
+                detail: { repo: repoName, path: fullPath },
+              }),
+            ),
+        });
+      }
+      items.push({ kind: "separator" });
+    } else {
+      // dir
+      items.push({
+        kind: "item",
+        id: "toggle",
+        label: isExpanded ? "Collapse" : "Expand",
+        onSelect: () => store.toggleDir(repoName, fullPath, isExpanded),
+      });
+      items.push({
+        kind: "item",
+        id: "upload",
+        label: "Upload files here…",
+        onSelect: () => uploadInputRef.current?.click(),
+      });
+      items.push({ kind: "separator" });
+    }
+    items.push({
+      kind: "item",
+      id: "copy-rel",
+      label: "Copy relative path",
+      onSelect: () => copyPath("relative"),
+    });
+    items.push({
+      kind: "item",
+      id: "copy-abs",
+      label: "Copy absolute path",
+      onSelect: () => copyPath("absolute"),
+    });
+    if (entry.dirty && entry.kind === "file") {
+      items.push({ kind: "separator" });
+      const staged = entry.dirty[0] !== " " && entry.dirty[0] !== "?";
+      items.push({
+        kind: "item",
+        id: "stage",
+        label: staged ? "Unstage" : "Stage",
+        onSelect: async () => {
+          try {
+            await stageRepoPath(repoName, fullPath, !staged);
+            store.refresh(repoName);
+          } catch {
+            /* swallowed; ref the error through the store next refresh */
+          }
+        },
+      });
+    }
+    return items;
+  });
+
+  const onUploadChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    for (const f of files) {
+      try {
+        await uploadRepoFile(repoName, fullPath, f);
+      } catch {
+        window.dispatchEvent(
+          new CustomEvent("shuttlecraft:upload-error", {
+            detail: { repo: repoName, path: fullPath, name: f.name },
+          }),
+        );
+      }
+    }
+    store.refresh(repoName);
+    e.target.value = "";
   };
 
   const dropHandlers =
@@ -609,6 +720,7 @@ function TreeRow({
         // eslint-disable-next-line local/no-inline-styles -- depth is per-row; can't be expressed as a finite class set
         style={{ paddingLeft: 4 + depth * 12 }}
         onClick={onClickRow}
+        onContextMenu={onContextMenu}
         {...dropHandlers}
         title={entry.dirty ? `${entry.dirty.trim()} ${fullPath}` : fullPath}
       >
@@ -629,6 +741,16 @@ function TreeRow({
           <span className="sidebar__tree-dirty">{entry.dirty.trim() || entry.dirty}</span>
         )}
       </button>
+      {entry.kind === "dir" && (
+        <input
+          ref={uploadInputRef}
+          type="file"
+          multiple
+          className="sidebar__hidden-upload"
+          onChange={onUploadChange}
+          aria-hidden
+        />
+      )}
       {isExpanded &&
         entry.kind === "dir" &&
         childEntries !== undefined &&
@@ -718,6 +840,61 @@ function SessionRow({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const { openTab } = useTabs();
+  const { open: openCtx } = useContextMenu();
+
+  const onRowContextMenu = contextMenuHandler(openCtx, () => {
+    const items: MenuItem[] = [
+      {
+        kind: "item",
+        id: "open-terminal",
+        label: "Open terminal",
+        onSelect: () => openTab({ kind: "terminal", sessionId: s.id }, "top"),
+      },
+      {
+        kind: "item",
+        id: "open-timeline",
+        label: "Open timeline",
+        onSelect: () => openTab({ kind: "timeline", sessionId: s.id }, "bottom"),
+      },
+      { kind: "separator" },
+      { kind: "item", id: "rename", label: "Rename", onSelect: () => setRenaming(true) },
+      {
+        kind: "item",
+        id: "pin",
+        label: s.pinned ? "Unpin" : "Pin to top",
+        onSelect: () => void onUpdate({ pinned: !s.pinned }),
+      },
+      {
+        kind: "submenu",
+        id: "colour",
+        label: "Colour",
+        items: [
+          {
+            kind: "item",
+            id: "colour-none",
+            label: "None",
+            onSelect: () => void onUpdate({ color: null }),
+          },
+          ...SESSION_COLORS.map<MenuItem>((c) => ({
+            kind: "item",
+            id: `colour-${c}`,
+            label: c,
+            onSelect: () => void onUpdate({ color: c }),
+          })),
+        ],
+      },
+      { kind: "separator" },
+      {
+        kind: "item",
+        id: "delete",
+        label: "Delete session",
+        destructive: true,
+        onSelect: onDelete,
+      },
+    ];
+    return items;
+  });
 
   const claudeLabel = (() => {
     if (s.state === "dead") return "ended";
@@ -751,7 +928,7 @@ function SessionRow({
     .join(" ");
 
   return (
-    <div className={rowClass}>
+    <div className={rowClass} onContextMenu={onRowContextMenu}>
       {s.color && <span className="sidebar__color-accent" aria-hidden />}
       {renaming ? (
         <RenameInput

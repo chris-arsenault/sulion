@@ -47,26 +47,27 @@ export function Layout() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // File-tree row clicks dispatch this event; translate to a file tab
-  // open. The "dirty" flag is available on the event but we always
-  // show file contents — a diff view is only reachable through an
-  // explicit action (right-click → View diff, once that lands).
+  // File-tree row clicks / context-menu actions dispatch these events.
+  // Left-click → file tab; context-menu "Open diff" → diff tab.
   useEffect(() => {
     const onFile = (e: Event) => {
       const ce = e as CustomEvent<{ repo: string; path: string; dirty: boolean }>;
       openTabRef.current({ kind: "file", repo: ce.detail.repo, path: ce.detail.path });
     };
+    const onDiff = (e: Event) => {
+      const ce = e as CustomEvent<{ repo: string; path: string }>;
+      openTabRef.current({ kind: "diff", repo: ce.detail.repo, path: ce.detail.path });
+    };
     const onCloseDrawer = () => setDrawerOpen(false);
     window.addEventListener("shuttlecraft:open-file", onFile as EventListener);
+    window.addEventListener("shuttlecraft:open-diff", onDiff as EventListener);
     window.addEventListener(
       "shuttlecraft:close-drawer",
       onCloseDrawer as EventListener,
     );
     return () => {
-      window.removeEventListener(
-        "shuttlecraft:open-file",
-        onFile as EventListener,
-      );
+      window.removeEventListener("shuttlecraft:open-file", onFile as EventListener);
+      window.removeEventListener("shuttlecraft:open-diff", onDiff as EventListener);
       window.removeEventListener(
         "shuttlecraft:close-drawer",
         onCloseDrawer as EventListener,

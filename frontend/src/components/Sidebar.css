@@ -189,6 +189,10 @@
 }
 .sidebar__tree-toggle input { margin: 0; }
 
+.sidebar__hidden-upload {
+  display: none;
+}
+
 /* ─── git panel ──────────────────────────────────────────────────── */
 
 .sidebar__git {

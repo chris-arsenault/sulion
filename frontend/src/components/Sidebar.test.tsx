@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { Sidebar } from "./Sidebar";
+import { ContextMenuProvider } from "./common/ContextMenu";
 import { RepoProvider } from "../state/RepoStore";
 import { SessionProvider } from "../state/SessionStore";
 import { TabProvider } from "../state/TabStore";
@@ -132,7 +133,9 @@ describe("Sidebar", () => {
       <SessionProvider>
         <RepoProvider>
           <TabProvider>
-            <Sidebar />
+            <ContextMenuProvider>
+              <Sidebar />
+            </ContextMenuProvider>
           </TabProvider>
         </RepoProvider>
       </SessionProvider>,

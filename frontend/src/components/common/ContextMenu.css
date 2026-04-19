@@ -1,0 +1,112 @@
+.ctxm-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  /* Transparent — clicks pass-through intent via scrim-level handlers. */
+}
+
+.ctxm {
+  position: fixed;
+  z-index: 201;
+  min-width: 200px;
+  padding: 4px;
+  background: #14161b;
+  color: #e5e7eb;
+  border: 1px solid #2a2f37;
+  border-radius: 6px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 12px;
+  line-height: 1.3;
+  outline: none;
+}
+
+.ctxm__sep {
+  height: 1px;
+  background: #2a2f37;
+  margin: 4px 2px;
+}
+
+.ctxm__header {
+  padding: 4px 10px 2px;
+  color: #6b7280;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.ctxm__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: transparent;
+  color: inherit;
+  border: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+  min-height: 28px;
+}
+
+.ctxm__row:hover,
+.ctxm__row--focused,
+.ctxm__row--open {
+  background: #1f232b;
+  color: #ffffff;
+  outline: none;
+}
+
+.ctxm__row:disabled,
+.ctxm__row[disabled] {
+  color: #4b5563;
+  cursor: not-allowed;
+}
+
+.ctxm__row--destructive {
+  color: #fca5a5;
+}
+.ctxm__row--destructive:hover,
+.ctxm__row--destructive.ctxm__row--focused {
+  background: #2a0f12;
+  color: #fecaca;
+}
+
+.ctxm__icon {
+  flex: 0 0 16px;
+  text-align: center;
+  color: #9ca3af;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+}
+
+.ctxm__row--focused .ctxm__icon,
+.ctxm__row:hover .ctxm__icon {
+  color: #e5e7eb;
+}
+
+.ctxm__label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ctxm__kbd {
+  color: #6b7280;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 10px;
+}
+
+.ctxm__chevron {
+  color: #6b7280;
+  font-size: 10px;
+}
+
+.ctxm__row--open .ctxm__chevron,
+.ctxm__row--submenu.ctxm__row--focused .ctxm__chevron {
+  color: #e5e7eb;
+}
