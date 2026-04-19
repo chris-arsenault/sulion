@@ -6,7 +6,6 @@ import { Sidebar } from "./Sidebar";
 import { ContextMenuProvider } from "./common/ContextMenu";
 import { RepoProvider } from "../state/RepoStore";
 import { SessionProvider } from "../state/SessionStore";
-import { TabProvider } from "../state/TabStore";
 
 type Endpoint = "/api/sessions" | "/api/repos" | string;
 
@@ -132,11 +131,9 @@ describe("Sidebar", () => {
     return render(
       <SessionProvider>
         <RepoProvider>
-          <TabProvider>
-            <ContextMenuProvider>
-              <Sidebar />
-            </ContextMenuProvider>
-          </TabProvider>
+          <ContextMenuProvider>
+            <Sidebar />
+          </ContextMenuProvider>
         </RepoProvider>
       </SessionProvider>,
     );
