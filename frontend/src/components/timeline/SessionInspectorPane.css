@@ -1,0 +1,79 @@
+.sip {
+  display: flex;
+  flex-direction: column;
+  background: #0f1115;
+  border-left: 1px solid #1f232b;
+  overflow: hidden;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.sip__empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: #6b7280;
+  font-size: 12px;
+  font-style: italic;
+  padding: 20px;
+  text-align: center;
+}
+
+/* Overlay mode for narrow viewports */
+.sip__overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  z-index: 9995;
+  backdrop-filter: blur(2px);
+}
+
+.sip__overlay-content {
+  position: fixed;
+  inset: 8px;
+  background: #14161b;
+  border: 1px solid #1f232b;
+  border-radius: 8px;
+  color: #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+}
+
+.sip__overlay-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid #1f232b;
+  background: #0f1115;
+}
+
+.sip__overlay-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: #93c5fd;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sip__overlay-close {
+  background: transparent;
+  color: #9ca3af;
+  border: none;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.sip__overlay-close:hover {
+  color: #fecaca;
+}

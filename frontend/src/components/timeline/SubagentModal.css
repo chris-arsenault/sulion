@@ -80,3 +80,11 @@
   font-size: 12px;
   line-height: 1.5;
 }
+
+.sm__turn {
+  margin-bottom: 8px;
+  height: min(50vh, 480px);
+  border: 1px solid #1f232b;
+  border-radius: 4px;
+  overflow: hidden;
+}

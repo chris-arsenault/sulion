@@ -7,7 +7,7 @@ import { createPortal } from "react-dom";
 
 import type { TimelineEvent } from "../../api/types";
 import { groupIntoTurns } from "./grouping";
-import { TurnBlock } from "./TurnBlock";
+import { TurnDetail } from "./TurnDetail";
 import { isSidechainEvent, payloadOf } from "./types";
 import "./SubagentModal.css";
 
@@ -88,7 +88,9 @@ export function SubagentModal({
             </div>
           )}
           {turns.map((t) => (
-            <TurnBlock key={t.id} turn={t} showThinking={showThinking} />
+            <div key={t.id} className="sm__turn">
+              <TurnDetail turn={t} showThinking={showThinking} />
+            </div>
           ))}
         </div>
       </div>

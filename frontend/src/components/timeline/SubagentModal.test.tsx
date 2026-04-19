@@ -165,7 +165,8 @@ describe("SubagentModal", () => {
         onClose={() => {}}
       />,
     );
-    // Header meta shows event count
-    expect(screen.getByText(/event/)).toBeDefined();
+    // Header meta shows event count — TurnDetail inside also emits
+    // "N events" in its own header, so we assert existence not uniqueness.
+    expect(screen.getAllByText(/event/).length).toBeGreaterThan(0);
   });
 });
