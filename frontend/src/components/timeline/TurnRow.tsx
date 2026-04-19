@@ -74,19 +74,34 @@ export function TurnRow({ turn, selected, showThinking, onSelect }: Props) {
 function turnPreview(turn: Turn): string {
   if (turn.userPrompt) {
     const txt = userPromptText(turn.userPrompt);
-    if (txt) return collapse(txt, 280);
+    if (txt) return firstParagraph(txt, 280);
   }
   const firstAssistant = turn.events.find((e) => e.kind === "assistant");
   if (firstAssistant) {
     const txt = textBlocksIn(firstAssistant).join(" ");
-    if (txt) return `(assistant) ${collapse(txt, 260)}`;
+    if (txt) return `(assistant) ${firstParagraph(txt, 260)}`;
   }
   return "(no user prompt)";
 }
 
-function collapse(s: string, max: number): string {
-  const one = s.replace(/\s+/g, " ").trim();
-  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+/** Prompts are often multi-paragraph. In the list row we only have two
+ * lines of height to work with, so:
+ *   - split on the first blank line (paragraph break)
+ *   - collapse internal whitespace inside that paragraph so CSS wrap
+ *     handles the visual layout
+ *   - if there are more paragraphs below, add a trailing " …" to hint
+ *     at more content — the full prompt lives in the inspector pane
+ *   - truncate if the paragraph alone exceeds `max` */
+function firstParagraph(s: string, max: number): string {
+  const trimmed = s.trim();
+  if (!trimmed) return "";
+  const paragraphs = trimmed.split(/\n\s*\n/);
+  const first = (paragraphs[0] ?? trimmed).replace(/\s+/g, " ").trim();
+  const hasMore = paragraphs.length > 1 && paragraphs.slice(1).some((p) => p.trim().length > 0);
+  if (first.length <= max) {
+    return hasMore ? `${first} …` : first;
+  }
+  return `${first.slice(0, max - 1)}…`;
 }
 
 interface Badge {

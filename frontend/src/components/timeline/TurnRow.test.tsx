@@ -148,6 +148,82 @@ describe("TurnRow", () => {
     expect(screen.getByText("⚠")).toBeDefined();
   });
 
+  it("multi-paragraph prompt: shows first paragraph only, with trailing ellipsis when more exists", () => {
+    const multi = {
+      byte_offset: 100,
+      timestamp: "2025-01-01T00:00:00Z",
+      kind: "user",
+      payload: {
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Fix the bug in foo.ts.\n\nContext: the user clicks delete and nothing happens. The handler fires but the DELETE never reaches the server.\n\nCheck network tab for what actually went over the wire.",
+            },
+          ],
+        },
+      },
+    };
+    render(
+      <TurnRow
+        turn={turn({ userPrompt: multi as never, events: [multi as never] })}
+        selected={false}
+        showThinking={true}
+        onSelect={() => {}}
+      />,
+    );
+    // First paragraph only
+    expect(screen.getByText((t) => t.includes("Fix the bug in foo.ts."))).toBeDefined();
+    // Second+ paragraph content NOT in the row
+    expect(screen.queryByText(/Context: the user clicks/)).toBeNull();
+    expect(screen.queryByText(/Check network tab/)).toBeNull();
+    // Trailing ellipsis hint
+    expect(
+      screen.getByText((t) => t.endsWith(" …") || t.endsWith("…")),
+    ).toBeDefined();
+  });
+
+  it("single-paragraph prompt with internal line breaks: collapses to one paragraph, no trailing ellipsis", () => {
+    const singleWithLinebreaks = {
+      byte_offset: 100,
+      timestamp: "2025-01-01T00:00:00Z",
+      kind: "user",
+      payload: {
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              // One paragraph wrapped with single newlines (not blank line)
+              text: "add a new session rename feature\nthat lets me name sessions\nwith emoji",
+            },
+          ],
+        },
+      },
+    };
+    render(
+      <TurnRow
+        turn={turn({
+          userPrompt: singleWithLinebreaks as never,
+          events: [singleWithLinebreaks as never],
+        })}
+        selected={false}
+        showThinking={true}
+        onSelect={() => {}}
+      />,
+    );
+    // Whole thing visible, whitespace collapsed, NO trailing " …" since
+    // there's only one paragraph.
+    expect(
+      screen.getByText(
+        "add a new session rename feature that lets me name sessions with emoji",
+      ),
+    ).toBeDefined();
+  });
+
   it("falls back to an orphan preview when there's no user prompt", () => {
     const asst = assistantEv("boot sequence");
     const t: Turn = {
