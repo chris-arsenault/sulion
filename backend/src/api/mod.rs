@@ -5,8 +5,10 @@ use serde::Serialize;
 
 use crate::{db, AppState};
 
+mod future_prompt_routes;
 mod routes;
 mod stats;
+mod timeline_routes;
 mod ws;
 
 pub use routes::ApiError;

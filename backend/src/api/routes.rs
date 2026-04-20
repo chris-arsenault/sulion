@@ -12,7 +12,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::future_prompts;
+use super::{future_prompt_routes, timeline_routes};
 use crate::ingest::{self, canonical, timeline};
 use crate::library::{self, LibraryKind};
 use crate::pty::{self, PtyMetadata, SpawnParams};
@@ -28,17 +28,25 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/api/sessions/:id/e2e/drop-ws", post(drop_session_ws))
         .route("/api/sessions/:id/history", get(session_history))
-        .route("/api/sessions/:id/timeline", get(session_timeline))
+        .route(
+            "/api/sessions/:id/timeline",
+            get(timeline_routes::session_timeline),
+        )
         .route(
             "/api/sessions/:id/future-prompts",
-            get(list_future_prompts).put(create_future_prompt),
+            get(future_prompt_routes::list_future_prompts)
+                .put(future_prompt_routes::create_future_prompt),
         )
         .route(
             "/api/sessions/:id/future-prompts/:item_id",
-            delete(delete_future_prompt).patch(update_future_prompt),
+            delete(future_prompt_routes::delete_future_prompt)
+                .patch(future_prompt_routes::update_future_prompt),
         )
         .route("/api/repos", get(list_repos).post(create_repo))
-        .route("/api/repos/:name/timeline", get(repo_timeline))
+        .route(
+            "/api/repos/:name/timeline",
+            get(timeline_routes::repo_timeline),
+        )
         .route("/api/repos/:name/git", get(get_repo_git))
         .route("/api/repos/:name/git/diff", get(get_repo_diff))
         .route("/api/repos/:name/git/stage", post(post_repo_stage))
@@ -102,7 +110,7 @@ impl IntoResponse for ApiError {
     }
 }
 
-type ApiResult<T> = Result<T, ApiError>;
+pub(super) type ApiResult<T> = Result<T, ApiError>;
 
 // ─── sessions ────────────────────────────────────────────────────────
 
@@ -370,26 +378,6 @@ struct HistoryQuery {
     claude_session: Option<Uuid>,
 }
 
-#[derive(Deserialize)]
-struct TimelineQuery {
-    #[serde(default)]
-    session: Option<Uuid>,
-    #[serde(default)]
-    claude_session: Option<Uuid>,
-    #[serde(default)]
-    hide_speakers: Option<String>,
-    #[serde(default)]
-    hide_categories: Option<String>,
-    #[serde(default)]
-    errors_only: Option<bool>,
-    #[serde(default)]
-    show_bookkeeping: Option<bool>,
-    #[serde(default)]
-    show_sidechain: Option<bool>,
-    #[serde(default)]
-    file_path: Option<String>,
-}
-
 #[derive(Serialize)]
 struct EventView {
     byte_offset: i64,
@@ -475,207 +463,6 @@ async fn session_history(
         events,
         next_after,
     }))
-}
-
-async fn session_timeline(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<Uuid>,
-    Query(q): Query<TimelineQuery>,
-) -> ApiResult<Json<timeline::TimelineResponse>> {
-    let resolved =
-        timeline::resolve_session_target(&state.pool, id, q.session.or(q.claude_session)).await?;
-
-    let resolved = match resolved {
-        timeline::SessionLookup::Resolved(resolved) => resolved,
-        timeline::SessionLookup::NoSession => {
-            return Ok(Json(timeline::TimelineResponse {
-                session_uuid: None,
-                session_agent: None,
-                total_event_count: 0,
-                turns: Vec::new(),
-            }));
-        }
-        timeline::SessionLookup::MissingPty => return Err(ApiError::NotFound),
-    };
-
-    let filters = timeline::ProjectionFilters {
-        hidden_speakers: parse_hidden_speakers(q.hide_speakers.as_deref()),
-        hidden_operation_categories: parse_hidden_categories(q.hide_categories.as_deref()),
-        errors_only: q.errors_only.unwrap_or(false),
-        show_bookkeeping: q.show_bookkeeping.unwrap_or(false),
-        show_sidechain: q.show_sidechain.unwrap_or(false),
-        file_path: q.file_path.unwrap_or_default(),
-    };
-
-    let mut response =
-        ingest::load_timeline_response(&state.pool, resolved.session_uuid, &filters).await?;
-    let meta = ingest::load_timeline_session_meta(&state.pool, resolved.session_uuid).await?;
-    ingest::annotate_timeline_turns(&mut response.turns, &meta);
-    response.session_uuid = Some(resolved.session_uuid);
-    response.session_agent = resolved.session_agent;
-    Ok(Json(response))
-}
-
-async fn repo_timeline(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-    Query(q): Query<TimelineQuery>,
-) -> ApiResult<Json<timeline::TimelineResponse>> {
-    let _ = repo_path(&state, &name)?;
-    let filters = timeline::ProjectionFilters {
-        hidden_speakers: parse_hidden_speakers(q.hide_speakers.as_deref()),
-        hidden_operation_categories: parse_hidden_categories(q.hide_categories.as_deref()),
-        errors_only: q.errors_only.unwrap_or(false),
-        show_bookkeeping: q.show_bookkeeping.unwrap_or(false),
-        show_sidechain: q.show_sidechain.unwrap_or(false),
-        file_path: q.file_path.unwrap_or_default(),
-    };
-
-    let response = ingest::load_repo_timeline_response(&state.pool, &name, &filters).await?;
-    Ok(Json(response))
-}
-
-fn parse_hidden_speakers(raw: Option<&str>) -> std::collections::HashSet<timeline::SpeakerFacet> {
-    let mut out = std::collections::HashSet::new();
-    for value in raw.unwrap_or_default().split(',').map(str::trim) {
-        match value {
-            "user" => {
-                out.insert(timeline::SpeakerFacet::User);
-            }
-            "assistant" => {
-                out.insert(timeline::SpeakerFacet::Assistant);
-            }
-            "tool_result" => {
-                out.insert(timeline::SpeakerFacet::ToolResult);
-            }
-            _ => {}
-        }
-    }
-    out
-}
-
-fn parse_hidden_categories(
-    raw: Option<&str>,
-) -> std::collections::HashSet<canonical::OperationCategory> {
-    raw.unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter_map(canonical::OperationCategory::parse)
-        .collect()
-}
-
-#[derive(Serialize)]
-struct FuturePromptListResponse {
-    session_uuid: Option<Uuid>,
-    session_agent: Option<String>,
-    prompts: Vec<future_prompts::FuturePromptEntry>,
-}
-
-fn future_prompts_root(state: &AppState) -> PathBuf {
-    state
-        .library_root
-        .parent()
-        .unwrap_or(state.library_root.as_path())
-        .join("future-prompts")
-}
-
-async fn resolve_future_prompt_session(
-    state: &AppState,
-    pty_id: Uuid,
-) -> ApiResult<Option<timeline::ResolvedSession>> {
-    let resolved = timeline::resolve_session_target(&state.pool, pty_id, None).await?;
-    match resolved {
-        timeline::SessionLookup::Resolved(resolved) => Ok(Some(resolved)),
-        timeline::SessionLookup::NoSession => Ok(None),
-        timeline::SessionLookup::MissingPty => Err(ApiError::NotFound),
-    }
-}
-
-async fn list_future_prompts(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<Uuid>,
-) -> ApiResult<Json<FuturePromptListResponse>> {
-    let Some(resolved) = resolve_future_prompt_session(&state, id).await? else {
-        return Ok(Json(FuturePromptListResponse {
-            session_uuid: None,
-            session_agent: None,
-            prompts: Vec::new(),
-        }));
-    };
-
-    let prompts = future_prompts::list(&future_prompts_root(&state), resolved.session_uuid)
-        .await
-        .map_err(ApiError::Internal)?;
-    Ok(Json(FuturePromptListResponse {
-        session_uuid: Some(resolved.session_uuid),
-        session_agent: resolved.session_agent,
-        prompts,
-    }))
-}
-
-async fn create_future_prompt(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<Uuid>,
-    Json(input): Json<future_prompts::CreateInput>,
-) -> ApiResult<(StatusCode, Json<future_prompts::FuturePromptEntry>)> {
-    let Some(resolved) = resolve_future_prompt_session(&state, id).await? else {
-        return Err(ApiError::BadRequest(
-            "no correlated transcript session for this terminal".into(),
-        ));
-    };
-
-    let entry = future_prompts::create(&future_prompts_root(&state), resolved.session_uuid, input)
-        .await
-        .map_err(ApiError::Internal)?;
-    Ok((StatusCode::CREATED, Json(entry)))
-}
-
-async fn update_future_prompt(
-    State(state): State<Arc<AppState>>,
-    Path((id, item_id)): Path<(Uuid, String)>,
-    Json(input): Json<future_prompts::UpdateInput>,
-) -> ApiResult<Json<future_prompts::FuturePromptEntry>> {
-    let Some(resolved) = resolve_future_prompt_session(&state, id).await? else {
-        return Err(ApiError::BadRequest(
-            "no correlated transcript session for this terminal".into(),
-        ));
-    };
-
-    let entry = future_prompts::update(
-        &future_prompts_root(&state),
-        resolved.session_uuid,
-        &item_id,
-        input,
-    )
-    .await
-    .map_err(ApiError::Internal)?;
-    let Some(entry) = entry else {
-        return Err(ApiError::NotFound);
-    };
-    Ok(Json(entry))
-}
-
-async fn delete_future_prompt(
-    State(state): State<Arc<AppState>>,
-    Path((id, item_id)): Path<(Uuid, String)>,
-) -> ApiResult<StatusCode> {
-    let Some(resolved) = resolve_future_prompt_session(&state, id).await? else {
-        return Err(ApiError::BadRequest(
-            "no correlated transcript session for this terminal".into(),
-        ));
-    };
-
-    let removed = future_prompts::delete(
-        &future_prompts_root(&state),
-        resolved.session_uuid,
-        &item_id,
-    )
-    .await
-    .map_err(ApiError::Internal)?;
-    if !removed {
-        return Err(ApiError::NotFound);
-    }
-    Ok(StatusCode::NO_CONTENT)
 }
 
 // ─── repos ───────────────────────────────────────────────────────────
@@ -786,7 +573,7 @@ async fn create_repo(
 
 // ─── repo git / files / diff / upload ─────────────────────────────────
 
-fn repo_path(state: &AppState, name: &str) -> ApiResult<PathBuf> {
+pub(super) fn repo_path(state: &AppState, name: &str) -> ApiResult<PathBuf> {
     if name.is_empty() || name.contains('/') || name.starts_with('.') {
         return Err(ApiError::BadRequest("invalid repo name".into()));
     }
