@@ -1,0 +1,47 @@
+.ui-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  color: var(--text-mid);
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-stat__label {
+  color: var(--text-lo);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: calc(var(--t-meta) - 1px);
+}
+
+.ui-stat__value {
+  color: var(--text);
+  font-weight: var(--w-500);
+}
+
+.ui-stat__unit {
+  color: var(--text-lo);
+}
+
+.ui-stat--tone-ok .ui-stat__value {
+  color: var(--ok-fg);
+}
+.ui-stat--tone-warn .ui-stat__value {
+  color: var(--warn-fg);
+}
+.ui-stat--tone-crit .ui-stat__value {
+  color: var(--crit-fg);
+}
+.ui-stat--tone-info .ui-stat__value {
+  color: var(--info-fg);
+}
+.ui-stat--tone-atn .ui-stat__value {
+  color: var(--atn-fg);
+}
+.ui-stat--tone-mute .ui-stat__value {
+  color: var(--mute-fg);
+}
+.ui-stat--tone-accent .ui-stat__value {
+  color: var(--accent-hi);
+}

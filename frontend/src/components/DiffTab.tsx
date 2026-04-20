@@ -8,6 +8,8 @@ import { useShallow } from "zustand/react/shallow";
 
 import { getRepoDiff, stageRepoPath } from "../api/client";
 import { useRepos } from "../state/RepoStore";
+import { Icon } from "../icons";
+import { Tooltip } from "./ui";
 import type { FileDiff, DiffLine } from "../workers/diffParser.worker";
 import "./DiffTab.css";
 
@@ -117,21 +119,22 @@ function FileDiffView({
           onClick={() => setCollapsed((v) => !v)}
         >
           <span className={collapsed ? "dt__chev" : "dt__chev dt__chev--open"}>
-            ▸
+            <Icon name="chevron-right" size={12} />
           </span>
-          <span className="dt__file-code">{statusCode.trim() || "•"}</span>
+          <span className="dt__file-code tabular">
+            {statusCode.trim() || "•"}
+          </span>
           <span className="dt__file-path">{diff.path}</span>
         </button>
-        <button
-          type="button"
-          className={
-            staged ? "dt__stage dt__stage--staged" : "dt__stage"
-          }
-          onClick={onToggleStage}
-          title={staged ? "Unstage this file" : "Stage this file"}
-        >
-          {staged ? "unstage" : "stage"}
-        </button>
+        <Tooltip label={staged ? "Unstage this file" : "Stage this file"}>
+          <button
+            type="button"
+            className={staged ? "dt__stage dt__stage--staged" : "dt__stage"}
+            onClick={onToggleStage}
+          >
+            {staged ? "unstage" : "stage"}
+          </button>
+        </Tooltip>
       </div>
       {!collapsed && (
         <pre className="dt__hunks">

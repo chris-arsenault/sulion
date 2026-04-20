@@ -8,6 +8,8 @@ import { useEffect, useState } from "react";
 
 import { getStats } from "../api/client";
 import type { StatsResponse } from "../api/types";
+import { Icon } from "../icons";
+import { Tooltip } from "./ui";
 import "./StatsStrip.css";
 
 const POLL_MS = 10_000;
@@ -67,25 +69,43 @@ export function StatsStrip() {
 
   return (
     <div className="stats-strip">
-      <button
-        type="button"
-        className="stats-strip__summary"
-        onClick={() => setExpanded((v) => !v)}
-        aria-expanded={expanded}
-        aria-label="Toggle stats details"
-        title={`uptime ${formatUptime(s.uptime_seconds)}`}
-      >
-        <span className="stats-strip__chev">{expanded ? "▾" : "▸"}</span>
-        <span className="stats-strip__pill" title="Memory (RSS / cgroup limit)">
-          🧠 {memDisplay}
-        </span>
-        <span className="stats-strip__pill" title="Process CPU percent">
-          ⚙ {cpuDisplay}
-        </span>
-        <span className="stats-strip__pill" title="Tracked PTY sessions">
-          ▶ {s.pty.tracked_sessions}
-        </span>
-      </button>
+      <Tooltip label={`uptime ${formatUptime(s.uptime_seconds)}`}>
+        <button
+          type="button"
+          className="stats-strip__summary"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          aria-label="Toggle stats details"
+        >
+          <span
+            className={
+              expanded
+                ? "stats-strip__chev stats-strip__chev--open"
+                : "stats-strip__chev"
+            }
+          >
+            <Icon name="chevron-right" size={12} />
+          </span>
+          <Tooltip label="Memory (RSS / cgroup limit)">
+            <span className="stats-strip__pill tabular">
+              <Icon name="cpu" size={12} />
+              {memDisplay}
+            </span>
+          </Tooltip>
+          <Tooltip label="Process CPU percent">
+            <span className="stats-strip__pill tabular">
+              <Icon name="activity" size={12} />
+              {cpuDisplay}
+            </span>
+          </Tooltip>
+          <Tooltip label="Tracked PTY sessions">
+            <span className="stats-strip__pill tabular">
+              <Icon name="terminal" size={12} />
+              {s.pty.tracked_sessions}
+            </span>
+          </Tooltip>
+        </button>
+      </Tooltip>
       {memPct != null && (
         <div
           className="stats-strip__mem-bar"

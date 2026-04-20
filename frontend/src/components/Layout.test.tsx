@@ -209,7 +209,7 @@ describe("Layout", () => {
         <ContextMenuHost />
       </>,
     );
-    expect(screen.getByText(/tap ☰ to open the session list/i)).toBeDefined();
+    expect(screen.getByText(/open the drawer to pick a session/i)).toBeDefined();
   });
 
   it("opens file and diff tabs from sidebar tree actions", async () => {

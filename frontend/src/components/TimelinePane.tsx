@@ -18,6 +18,7 @@ import { type ToolPair, type Turn } from "./timeline/grouping";
 import { SessionInspectorPane } from "./timeline/SessionInspectorPane";
 import { SubagentModal } from "./timeline/SubagentModal";
 import { TurnRow } from "./timeline/TurnRow";
+import { Tooltip } from "./ui";
 import "./TimelinePane.css";
 
 const POLL_MS = 1500;
@@ -178,20 +179,19 @@ export function TimelinePane({
       <div className="timeline-pane__header">
         <span className="timeline-pane__title">Timeline</span>
         {currentSessionUuid && (
-          <span
-            className="timeline-pane__session"
-            title={`${currentSessionAgent ?? "session"} ${currentSessionUuid}`}
-          >
-            {(currentSessionAgent ?? "session")} {currentSessionUuid.slice(0, 8)}
-          </span>
+          <Tooltip label={`${currentSessionAgent ?? "session"} ${currentSessionUuid}`}>
+            <span className="timeline-pane__session">
+              {(currentSessionAgent ?? "session")} {currentSessionUuid.slice(0, 8)}
+            </span>
+          </Tooltip>
         )}
-        <span className="timeline-pane__count">
+        <span className="timeline-pane__count tabular">
           {turns.length} turn{turns.length === 1 ? "" : "s"} · {timeline?.total_event_count ?? 0} events
         </span>
         {loadError && (
-          <span className="timeline-pane__error" title={loadError}>
-            error
-          </span>
+          <Tooltip label={loadError}>
+            <span className="timeline-pane__error">error</span>
+          </Tooltip>
         )}
       </div>
       <FilterChips {...filterHook} />

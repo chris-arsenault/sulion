@@ -8,6 +8,7 @@
 
 import { useState } from "react";
 
+import { Tooltip } from "../ui";
 import "./JsonTree.css";
 
 export function JsonTree({
@@ -107,14 +108,15 @@ function StringValue({ text }: { text: string }) {
       <span className="jsont__str">
         {JSON.stringify(text.slice(0, STRING_TRUNCATE))}
       </span>
-      <button
-        type="button"
-        className="jsont__expand"
-        onClick={() => setFull(true)}
-        title={`Show all ${text.length} characters`}
-      >
-        …+{text.length - STRING_TRUNCATE}
-      </button>
+      <Tooltip label={`Show all ${text.length} characters`}>
+        <button
+          type="button"
+          className="jsont__expand"
+          onClick={() => setFull(true)}
+        >
+          …+{text.length - STRING_TRUNCATE}
+        </button>
+      </Tooltip>
     </>
   );
 }

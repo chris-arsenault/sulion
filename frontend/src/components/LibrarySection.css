@@ -12,7 +12,7 @@
 .lib-sec {
   display: flex;
   flex-direction: column;
-  border-left: 1px solid #1f232b;
+  border-left: 1px solid var(--canvas-3);
   margin: 2px 0 2px 0;
   padding-left: 4px;
 }
@@ -30,9 +30,9 @@
   gap: 4px;
   background: transparent;
   border: none;
-  color: #9ca3af;
+  color: var(--text-mid);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--t-meta);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   cursor: pointer;
@@ -41,19 +41,19 @@
 }
 
 .lib-sec__toggle:hover {
-  background: #1f232b;
-  color: #e5e7eb;
+  background: var(--canvas-3);
+  color: var(--text);
 }
 
 .lib-sec__chev {
   display: inline-block;
   width: 10px;
-  color: #6b7280;
+  color: var(--text-lo);
   transition: transform 0.1s;
 }
 .lib-sec__chev--open {
   transform: rotate(90deg);
-  color: #93c5fd;
+  color: var(--accent-hi);
 }
 
 .lib-sec__label {
@@ -62,25 +62,25 @@
 }
 
 .lib-sec__count {
-  color: #6b7280;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
 }
 
 .lib-sec__new {
   background: transparent;
-  color: #d1d5db;
-  border: 1px solid #1f232b;
+  color: var(--text);
+  border: 1px solid var(--canvas-3);
   width: 22px;
   height: 22px;
   padding: 0;
   cursor: pointer;
   line-height: 1;
   border-radius: 4px;
-  font-size: 14px;
+  font-size: var(--t-body);
 }
 .lib-sec__new:hover {
-  background: #1f232b;
-  color: #fff;
+  background: var(--canvas-3);
+  color: var(--text-hi);
 }
 
 .lib-sec__body {
@@ -88,22 +88,22 @@
   flex-direction: column;
   gap: 2px;
   padding: 2px 0 4px;
-  font-size: 11px;
+  font-size: var(--t-meta);
 }
 
 .lib-sec__muted {
-  color: #6b7280;
+  color: var(--text-lo);
   font-style: italic;
   padding: 4px 6px;
 }
 
 .lib-sec__error {
-  color: #fca5a5;
-  background: #2a0f12;
+  color: var(--crit-fg);
+  background: var(--crit-bg);
   padding: 4px 6px;
   border-radius: 3px;
   margin: 2px 0;
-  font-size: 11px;
+  font-size: var(--t-meta);
 }
 
 .lib-sec__list {
@@ -133,12 +133,12 @@
 }
 
 .lib-sec__entry:hover {
-  background: #1f232b;
+  background: var(--canvas-3);
 }
 
 .lib-sec__entry-name {
-  color: #e5e7eb;
-  font-size: 12px;
+  color: var(--text);
+  font-size: var(--t-ui);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -146,8 +146,8 @@
 }
 
 .lib-sec__entry-preview {
-  color: #6b7280;
-  font-size: 10px;
+  color: var(--text-lo);
+  font-size: var(--t-meta);
   line-height: 1.35;
 }
 
@@ -158,10 +158,10 @@
 }
 
 .lib-sec__entry-tag {
-  background: #14161b;
-  color: #a5f3fc;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 9px;
+  background: var(--canvas-2);
+  color: var(--cat-inspect);
+  font-family: var(--font-mono);
+  font-size: calc(var(--t-meta) - 2px);
   padding: 0 4px;
   border-radius: 2px;
 }
@@ -171,26 +171,26 @@
   flex-direction: column;
   gap: 4px;
   padding: 6px 4px;
-  background: #1a1d23;
+  background: var(--canvas-2);
   border-radius: 4px;
   margin: 4px 0;
 }
 
 .lib-sec__form input,
 .lib-sec__form textarea {
-  background: #0f1115;
-  border: 1px solid #1f232b;
-  color: #e5e7eb;
+  background: var(--canvas-0);
+  border: 1px solid var(--canvas-3);
+  color: var(--text);
   padding: 5px 7px;
   border-radius: 3px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--t-ui);
   resize: vertical;
 }
 .lib-sec__form input:focus,
 .lib-sec__form textarea:focus {
   outline: none;
-  border-color: #3b82f6;
+  border-color: var(--accent);
 }
 
 .lib-sec__form-actions {
@@ -201,18 +201,18 @@
 }
 
 .lib-sec__form-actions button {
-  background: #1f232b;
-  color: #d1d5db;
+  background: var(--canvas-3);
+  color: var(--text);
   border: none;
   padding: 4px 10px;
   border-radius: 3px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--t-meta);
 }
 
 .lib-sec__form-actions button[type="submit"] {
-  background: #2563eb;
-  color: #fff;
+  background: var(--info-mark);
+  color: var(--text-hi);
 }
 .lib-sec__form-actions button:hover:not(:disabled) {
   filter: brightness(1.15);

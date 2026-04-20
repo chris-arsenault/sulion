@@ -1,9 +1,9 @@
 .stats-strip {
-  border-top: 1px solid #1f232b;
+  border-top: 1px solid var(--canvas-3);
   padding: 6px 8px;
-  font-size: 11px;
-  color: #9ca3af;
-  background: #0f1115;
+  font-size: var(--t-meta);
+  color: var(--text-mid);
+  background: var(--canvas-0);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -11,12 +11,12 @@
 
 .stats-strip--loading,
 .stats-strip--err {
-  color: #6b7280;
+  color: var(--text-lo);
   font-style: italic;
 }
 
 .stats-strip--err {
-  color: #fca5a5;
+  color: var(--crit-fg);
 }
 
 .stats-strip__summary {
@@ -27,7 +27,7 @@
   border: none;
   color: inherit;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--t-meta);
   cursor: pointer;
   padding: 2px 0;
   text-align: left;
@@ -35,41 +35,41 @@
 }
 
 .stats-strip__summary:hover {
-  color: #e5e7eb;
+  color: var(--text);
 }
 
 .stats-strip__chev {
   width: 10px;
-  color: #6b7280;
+  color: var(--text-lo);
   flex-shrink: 0;
 }
 
 .stats-strip__pill {
-  background: #14161b;
-  color: #d1d5db;
+  background: var(--canvas-2);
+  color: var(--text);
   padding: 1px 6px;
   border-radius: 3px;
-  border: 1px solid #1f232b;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 10px;
+  border: 1px solid var(--canvas-3);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
   white-space: nowrap;
 }
 
 .stats-strip__mem-bar {
   height: 3px;
-  background: #1f232b;
+  background: var(--canvas-3);
   border-radius: 2px;
   overflow: hidden;
 }
 
 .stats-strip__mem-fill {
   height: 100%;
-  background: #10b981;
+  background: var(--ok-mark);
   transition: width 0.3s ease, background 0.3s ease;
 }
 
 .stats-strip__mem-fill[data-danger="true"] {
-  background: #ef4444;
+  background: var(--crit-mark);
 }
 
 .stats-strip__details {
@@ -78,7 +78,7 @@
   gap: 2px 12px;
   margin: 4px 0 0;
   padding: 4px 2px 2px;
-  border-top: 1px dashed #1f232b;
+  border-top: 1px dashed var(--canvas-3);
 }
 
 .stats-strip__details > div {
@@ -86,13 +86,13 @@
 }
 
 .stats-strip__details dt {
-  color: #6b7280;
+  color: var(--text-lo);
   margin: 0;
 }
 
 .stats-strip__details dd {
-  color: #e5e7eb;
+  color: var(--text);
   margin: 0;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-family: var(--font-mono);
   text-align: right;
 }

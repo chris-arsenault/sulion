@@ -1,0 +1,65 @@
+.ui-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--lane-sm);
+  padding: 0 10px 0 12px;
+  background: transparent;
+  color: var(--text-mid);
+  font-family: var(--font-sans);
+  font-size: var(--t-ui);
+  line-height: var(--lh-dense);
+  border: 0;
+  border-right: 1px solid var(--hairline);
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 240px;
+  transition: background var(--dur-0) var(--ease), color var(--dur-0) var(--ease);
+}
+
+.ui-tab:hover {
+  background: var(--canvas-3);
+  color: var(--text);
+}
+
+.ui-tab--active {
+  color: var(--text-hi);
+  background: var(--canvas-1);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.ui-tab__binding {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  margin-right: 2px;
+}
+
+.ui-tab__leading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+  opacity: 0.85;
+}
+
+.ui-tab__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-tab__trailing {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-lo);
+}
+
+.ui-tab__trailing:hover {
+  color: var(--text);
+}

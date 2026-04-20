@@ -14,6 +14,8 @@ import type { PaneId, TabData } from "../state/TabStore";
 import { useTabs } from "../state/TabStore";
 import { useSessions } from "../state/SessionStore";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { Icon, type IconName } from "../icons";
+import { Tooltip } from "./ui";
 import type { MenuItem } from "./common/ContextMenu";
 import {
   contextMenuHandler,
@@ -93,12 +95,19 @@ export function WorkArea() {
 function EmptyWorkArea({ mobile = false }: { mobile?: boolean }) {
   return (
     <div className="wa wa--empty">
-      <div>
+      <div className="wa__empty-inner">
+        <div className="wa__empty-sigil" aria-hidden>
+          <Icon name="terminal" size={20} />
+        </div>
         <h1>sulion</h1>
-        <p>
+        <p className="wa__empty-sub">
           {mobile
-            ? "Tap ☰ to open the session list."
-            : "Select a session from the sidebar or create a new one to begin."}
+            ? "Open the drawer to pick a session."
+            : "Choose a session from the sidebar, or create one to begin."}
+        </p>
+        <p className="wa__empty-hint">
+          <span className="wa__empty-kbd">⌘K</span>
+          <span>command palette · jump to repo / session</span>
         </p>
       </div>
     </div>
@@ -216,7 +225,9 @@ function PaneSplash({ paneId }: { paneId: PaneId }) {
   return (
     <div className="wa__splash">
       <div className="wa__splash-inner">
-        <div className="wa__splash-icon">⊕</div>
+        <div className="wa__splash-icon">
+          <Icon name="plus" size={20} />
+        </div>
         <div className="wa__splash-text">{hint}</div>
       </div>
     </div>
@@ -344,41 +355,60 @@ function TabHandle({
     return items;
   });
 
+  const boundSession = tab.sessionId
+    ? sessions.find((s) => s.id === tab.sessionId) ?? null
+    : null;
+  const bindingTone = boundSession
+    ? boundSession.state === "live"
+      ? "ok"
+      : boundSession.state === "orphaned"
+        ? "atn"
+        : "crit"
+    : null;
+
   return (
-    <div
-      className={active ? "wa__tab-handle wa__tab-handle--active" : "wa__tab-handle"}
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.setData("application/x-sulion-tab", tab.id);
-        e.dataTransfer.effectAllowed = "move";
-      }}
-      onDragOver={(e) => {
-        if (e.dataTransfer.types.includes("application/x-sulion-tab")) {
-          e.preventDefault();
-          onDragOverIndex();
-        }
-      }}
-      onClick={onActivate}
-      onContextMenu={onContextMenu}
-      title={tabTitle(tab, label)}
-    >
-      <span className={`wa__tab-kind wa__tab-kind--${tab.kind}`} aria-hidden>
-        {tabIcon(tab)}
-      </span>
-      <span className="wa__tab-label">{label}</span>
-      <button
-        type="button"
-        className="wa__tab-close"
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
+    <Tooltip label={tabTitle(tab, label)}>
+      <div
+        className={active ? "wa__tab-handle wa__tab-handle--active" : "wa__tab-handle"}
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData("application/x-sulion-tab", tab.id);
+          e.dataTransfer.effectAllowed = "move";
         }}
-        aria-label="Close tab"
-        title="Close this view (PTY keeps running; delete from the sidebar to stop the session)"
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes("application/x-sulion-tab")) {
+            e.preventDefault();
+            onDragOverIndex();
+          }
+        }}
+        onClick={onActivate}
+        onContextMenu={onContextMenu}
       >
-        ×
-      </button>
-    </div>
+        {bindingTone ? (
+          <span
+            className={`wa__tab-bind wa__tab-bind--${bindingTone}`}
+            aria-hidden
+          />
+        ) : null}
+        <span className={`wa__tab-kind wa__tab-kind--${tab.kind}`} aria-hidden>
+          <Icon name={tabIcon(tab)} size={12} />
+        </span>
+        <span className="wa__tab-label">{label}</span>
+        <Tooltip label="Close this view (PTY keeps running; delete from the sidebar to stop the session)">
+          <button
+            type="button"
+            className="wa__tab-close"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            aria-label="Close tab"
+          >
+            <Icon name="x" size={12} />
+          </button>
+        </Tooltip>
+      </div>
+    </Tooltip>
   );
 }
 
@@ -415,18 +445,18 @@ function basename(p: string): string {
   return i === -1 ? p : p.slice(i + 1);
 }
 
-function tabIcon(tab: TabData): string {
+function tabIcon(tab: TabData): IconName {
   switch (tab.kind) {
     case "terminal":
-      return "▸_";
+      return "terminal";
     case "timeline":
-      return "≡";
+      return "list";
     case "file":
-      return "◫";
+      return "file-text";
     case "diff":
-      return "±";
+      return "diff";
     case "ref":
-      return "★";
+      return "pin";
   }
 }
 

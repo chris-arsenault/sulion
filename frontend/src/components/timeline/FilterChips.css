@@ -3,10 +3,10 @@
   flex-wrap: wrap;
   gap: 8px 12px;
   padding: 8px 12px;
-  background: #14161b;
-  border-bottom: 1px solid #1f232b;
+  background: var(--canvas-2);
+  border-bottom: 1px solid var(--canvas-3);
   align-items: center;
-  font-size: 11px;
+  font-size: var(--t-meta);
 }
 
 .fc__group {
@@ -22,10 +22,10 @@
 }
 
 .fc__label {
-  color: #6b7280;
+  color: var(--text-lo);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  font-size: 10px;
+  font-size: var(--t-meta);
   margin-right: 4px;
 }
 
@@ -34,58 +34,58 @@
   padding: 3px 8px;
   border-radius: 3px;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--t-meta);
   cursor: pointer;
   transition: all 0.1s;
 }
 
 /* Default "visible" state: bright per-category colour */
 .fc__chip--visible {
-  background: #1e40af;
-  color: #dbeafe;
-  border-color: #3b82f6;
+  background: var(--info-bg);
+  color: var(--info-fg);
+  border-color: var(--accent);
 }
 
 .fc__chip--visible.fc__chip--createcontent {
-  background: #065f46;
-  color: #d1fae5;
-  border-color: #10b981;
+  background: var(--ok-bg);
+  color: var(--ok-fg);
+  border-color: var(--ok-mark);
 }
 
 .fc__chip--visible.fc__chip--utility {
-  background: #1e40af;
-  color: #dbeafe;
-  border-color: #3b82f6;
+  background: var(--info-bg);
+  color: var(--info-fg);
+  border-color: var(--accent);
 }
 
 .fc__chip--visible.fc__chip--delegate {
-  background: #581c87;
-  color: #f3e8ff;
-  border-color: #a855f7;
+  background: var(--atn-bg);
+  color: var(--atn-fg);
+  border-color: var(--atn-mark);
 }
 
 .fc__chip--visible.fc__chip--workflow {
-  background: #422006;
-  color: #fde68a;
-  border-color: #d97706;
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  border-color: var(--warn-mark);
 }
 
 .fc__chip--visible.fc__chip--inspect {
-  background: #0e7490;
-  color: #a5f3fc;
-  border-color: #06b6d4;
+  background: var(--canvas-3);
+  color: var(--cat-inspect);
+  border-color: var(--cat-inspect);
 }
 
 .fc__chip--visible.fc__chip--research {
-  background: #4338ca;
-  color: #e0e7ff;
-  border-color: #6366f1;
+  background: var(--info-bg);
+  color: var(--info-fg);
+  border-color: var(--cat-research);
 }
 
 .fc__chip--visible.fc__chip--other {
-  background: #374151;
-  color: #e5e7eb;
-  border-color: #6b7280;
+  background: var(--mute-bg);
+  color: var(--text);
+  border-color: var(--text-lo);
 }
 
 .fc__chip:hover {
@@ -94,64 +94,64 @@
 
 /* Hidden state: dim, desaturated, strikethrough */
 .fc__chip--hidden {
-  background: #0b0d12;
-  color: #4b5563;
-  border-color: #1f232b;
+  background: var(--canvas-1);
+  color: var(--text-dis);
+  border-color: var(--canvas-3);
   text-decoration: line-through;
 }
 
 .fc__chip--hidden:hover {
-  background: #1a1d23;
-  color: #6b7280;
+  background: var(--canvas-2);
+  color: var(--text-lo);
 }
 
 /* Include-only chips (errors only): default dim, active bright */
 .fc__chip--include {
-  background: #0b0d12;
-  color: #9ca3af;
-  border-color: #1f232b;
+  background: var(--canvas-1);
+  color: var(--text-mid);
+  border-color: var(--canvas-3);
 }
 
 .fc__chip--include:hover {
-  background: #1a1d23;
-  color: #d1d5db;
+  background: var(--canvas-2);
+  color: var(--text);
 }
 
 .fc__chip--include-active {
-  background: #7f1d1d;
-  color: #fecaca;
-  border-color: #b91c1c;
+  background: var(--crit-bg);
+  color: var(--crit-fg);
+  border-color: var(--crit-mark);
 }
 
 .fc__input {
-  background: #0b0d12;
-  border: 1px solid #1f232b;
-  color: #d1d5db;
+  background: var(--canvas-1);
+  border: 1px solid var(--canvas-3);
+  color: var(--text);
   padding: 3px 8px;
   border-radius: 3px;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--t-meta);
   min-width: 180px;
   flex: 1;
 }
 
 .fc__input:focus {
   outline: none;
-  border-color: #3b82f6;
+  border-color: var(--accent);
 }
 
 .fc__clear {
-  background: #1e3a8a;
-  color: #dbeafe;
-  border: 1px solid #3b82f6;
+  background: var(--accent-lo);
+  color: var(--info-fg);
+  border: 1px solid var(--accent);
   padding: 3px 10px;
   border-radius: 3px;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--t-meta);
   cursor: pointer;
 }
 
 .fc__clear:hover {
-  background: #2563eb;
-  color: #fff;
+  background: var(--info-mark);
+  color: var(--text-hi);
 }

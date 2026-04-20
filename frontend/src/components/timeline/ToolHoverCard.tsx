@@ -8,6 +8,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type { ToolPair } from "./grouping";
+import { Icon } from "../../icons";
 import { ToolCallRenderer } from "./tools/renderers";
 import "./ToolHoverCard.css";
 
@@ -94,7 +95,7 @@ export function ToolHoverCard({ anchor, pair, pinned, onPin, onClose }: Props) {
             }}
             aria-label="Close card"
           >
-            ×
+            <Icon name="x" size={12} />
           </button>
         )}
         {!pinned && <span className="thc__hint">click to pin</span>}

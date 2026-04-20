@@ -7,6 +7,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { Icon } from "../../icons";
 import "./ThinkingFlyout.css";
 
 interface Props {
@@ -72,14 +73,17 @@ export function ThinkingFlyout({ anchor, thinkingText, onClose }: Props) {
           onMouseDown={(e) => e.stopPropagation()}
         >
           <div className="tf__header">
-            <span className="tf__title">💭 thinking</span>
+            <span className="tf__title">
+              <Icon name="sparkles" size={12} />
+              <span>thinking</span>
+            </span>
             <button
               type="button"
               className="tf__close"
               onClick={onClose}
               aria-label="Close thinking"
             >
-              ×
+              <Icon name="x" size={12} />
             </button>
           </div>
           <pre className="tf__body">{thinkingText}</pre>

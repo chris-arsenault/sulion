@@ -1,0 +1,16 @@
+.ui-tooltip {
+  z-index: var(--z-tooltip);
+  max-width: 360px;
+  padding: 6px 8px;
+  background: var(--canvas-3);
+  color: var(--text-hi);
+  font-family: var(--font-sans);
+  font-size: var(--t-meta);
+  line-height: var(--lh-dense);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-1);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  white-space: pre-wrap;
+  word-break: break-word;
+  pointer-events: none;
+}

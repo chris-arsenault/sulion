@@ -6,6 +6,7 @@ export type AppCommand =
   | { type: "open-file"; repo: string; path: string }
   | { type: "open-diff"; repo: string; path?: string }
   | { type: "reveal-file"; repo: string; path: string }
+  | { type: "reveal-repo"; repo: string }
   | { type: "close-drawer" }
   | { type: "inject-terminal"; sessionId: string; text: string }
   | { type: "library-changed"; kind: LibraryKind };
@@ -33,6 +34,10 @@ export const appCommands = {
 
   revealFile(detail: Omit<AppCommandOf<"reveal-file">, "type">) {
     dispatchAppCommand({ type: "reveal-file", ...detail });
+  },
+
+  revealRepo(detail: Omit<AppCommandOf<"reveal-repo">, "type">) {
+    dispatchAppCommand({ type: "reveal-repo", ...detail });
   },
 
   closeDrawer() {

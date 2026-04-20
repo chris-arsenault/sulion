@@ -1,10 +1,10 @@
 .timeline-pane {
   display: flex;
   flex-direction: column;
-  background: #12151b;
-  color: #d1d5db;
+  background: var(--canvas-1);
+  color: var(--text);
   height: 100%;
-  border-top: 1px solid #1f232b;
+  border-top: 1px solid var(--canvas-3);
   min-height: 0;
 }
 
@@ -13,42 +13,42 @@
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
-  border-bottom: 1px solid #1f232b;
-  background: #14161b;
-  font-size: 12px;
+  border-bottom: 1px solid var(--canvas-3);
+  background: var(--canvas-2);
+  font-size: var(--t-ui);
 }
 
 .timeline-pane__title {
   font-weight: 600;
-  color: #93c5fd;
+  color: var(--accent-hi);
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  font-size: 11px;
+  font-size: var(--t-meta);
 }
 
 .timeline-pane__session {
-  font-family: ui-monospace, monospace;
-  color: #a5f3fc;
+  font-family: var(--font-mono);
+  color: var(--cat-inspect);
 }
 
 .timeline-pane__count {
-  color: #6b7280;
+  color: var(--text-lo);
   margin-left: auto;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
 }
 
 .timeline-pane__error {
-  color: #fecaca;
-  background: #7f1d1d;
+  color: var(--crit-fg);
+  background: var(--crit-bg);
   padding: 1px 6px;
   border-radius: 3px;
-  font-size: 10px;
+  font-size: var(--t-meta);
 }
 
 .timeline-pane__empty {
   padding: 24px;
   text-align: center;
-  color: #4b5563;
+  color: var(--text-dis);
   font-style: italic;
   flex: 1;
   display: grid;
@@ -84,11 +84,11 @@
 }
 
 .timeline-pane__divider {
-  background: #1f232b;
+  background: var(--canvas-3);
   cursor: col-resize;
   transition: background 0.15s;
 }
 
 .timeline-pane__divider:hover {
-  background: #3b82f6;
+  background: var(--accent);
 }

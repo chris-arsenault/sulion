@@ -1,0 +1,126 @@
+.rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 36px;
+  height: 100%;
+  padding: 6px 0;
+  gap: 4px;
+  background: var(--canvas-2);
+  border-right: 1px solid var(--hairline);
+}
+
+.rail__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  color: var(--text-mid);
+  border: 0;
+  border-radius: var(--r-1);
+  cursor: pointer;
+  transition: background var(--dur-0) var(--ease), color var(--dur-0) var(--ease);
+}
+
+.rail__icon:hover {
+  background: var(--canvas-3);
+  color: var(--text-hi);
+}
+
+.rail__icon[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+.rail__repos {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 4px 0;
+  border-top: 1px solid var(--hairline);
+  width: 100%;
+}
+
+.rail__spacer {
+  flex: 1 1 auto;
+}
+
+.rail__sigil {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: var(--canvas-1);
+  color: var(--text-mid);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-1);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  font-weight: var(--w-600);
+  transition:
+    background var(--dur-0) var(--ease),
+    border-color var(--dur-0) var(--ease),
+    color var(--dur-0) var(--ease);
+}
+
+.rail__sigil:hover {
+  background: var(--canvas-3);
+  color: var(--text-hi);
+}
+
+.rail__sigil--ok {
+  border-color: var(--ok-mark);
+  color: var(--ok-fg);
+}
+
+.rail__sigil--warn {
+  border-color: var(--warn-mark);
+  color: var(--warn-fg);
+}
+
+.rail__sigil--crit {
+  border-color: var(--crit-mark);
+  color: var(--crit-fg);
+}
+
+.rail__sigil--pulse {
+  animation: sulion-pulse 2s infinite ease-in-out;
+}
+
+.rail__sigil-letter {
+  line-height: 1;
+}
+
+.rail__sigil-unread {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 1.5px var(--canvas-2);
+}
+
+.rail__tip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rail__tip-name {
+  color: var(--text-hi);
+  font-weight: var(--w-500);
+}
+
+.rail__tip-meta {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: calc(var(--t-meta) - 1px);
+}

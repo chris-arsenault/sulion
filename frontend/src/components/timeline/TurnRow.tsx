@@ -1,4 +1,6 @@
 import type { ToolPair, Turn } from "./grouping";
+import { Icon } from "../../icons";
+import { Tooltip } from "../ui";
 import "./TurnRow.css";
 
 interface Props {
@@ -23,14 +25,16 @@ export function TurnRow({ turn, selected, showThinking, onSelect }: Props) {
     >
       <div className="tr__prompt">{turn.preview}</div>
       <div className="tr__meta">
-        <span className="tr__time">{formatTime(turn.start_timestamp)}</span>
+        <span className="tr__time tabular">{formatTime(turn.start_timestamp)}</span>
         {turn.duration_ms > 0 && (
           <span className="tr__dot" aria-hidden>
             ·
           </span>
         )}
         {turn.duration_ms > 0 && (
-          <span className="tr__duration">{formatDuration(turn.duration_ms)}</span>
+          <span className="tr__duration tabular">
+            {formatDuration(turn.duration_ms)}
+          </span>
         )}
         {badges.length > 0 && (
           <span className="tr__dot" aria-hidden>
@@ -39,23 +43,26 @@ export function TurnRow({ turn, selected, showThinking, onSelect }: Props) {
         )}
         <span className="tr__badges">
           {badges.map((badge) => (
-            <span
-              key={badge.label}
-              className={`tr__badge tr__badge--${badge.variant}`}
-              title={badge.title}
-            >
-              {badge.label}
-            </span>
+            <Tooltip key={badge.label} label={badge.title}>
+              <span className={`tr__badge tr__badge--${badge.variant}`}>
+                {badge.label}
+              </span>
+            </Tooltip>
           ))}
           {turn.thinking_count > 0 && showThinking && (
-            <span className="tr__badge tr__badge--thinking" title="thinking">
-              💭{turn.thinking_count}
-            </span>
+            <Tooltip label="Thinking blocks in this turn">
+              <span className="tr__badge tr__badge--thinking">
+                <Icon name="sparkles" size={12} />
+                <span className="tabular">{turn.thinking_count}</span>
+              </span>
+            </Tooltip>
           )}
           {turn.has_errors && (
-            <span className="tr__badge tr__badge--error" title="errors in turn">
-              ⚠
-            </span>
+            <Tooltip label="Errors in this turn">
+              <span className="tr__badge tr__badge--error">
+                <Icon name="alert-triangle" size={12} />
+              </span>
+            </Tooltip>
           )}
         </span>
       </div>

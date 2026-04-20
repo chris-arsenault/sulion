@@ -1,0 +1,119 @@
+.ui-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.ui-overlay--modal {
+  pointer-events: auto;
+  z-index: var(--z-modal);
+}
+
+.ui-overlay__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
+}
+
+.ui-overlay__surface {
+  position: relative;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--canvas-2);
+  color: var(--text);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-2);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.ui-overlay--flyout .ui-overlay__surface {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+.ui-overlay__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--canvas-3);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.ui-overlay__leading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-mid);
+}
+
+.ui-overlay__titlewrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ui-overlay__title {
+  color: var(--text-hi);
+  font-size: var(--t-body);
+  font-weight: var(--w-600);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-overlay__subtitle {
+  color: var(--text-lo);
+  font-size: var(--t-meta);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-overlay__close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  color: var(--text-mid);
+  border: 0;
+  border-radius: var(--r-1);
+  cursor: pointer;
+  transition: background var(--dur-0) var(--ease), color var(--dur-0) var(--ease);
+}
+
+.ui-overlay__close:hover {
+  background: var(--canvas-1);
+  color: var(--text-hi);
+}
+
+.ui-overlay__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  font-size: var(--t-ui);
+  line-height: var(--lh-prose);
+}
+
+.ui-overlay__footer {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  background: var(--canvas-2);
+  border-top: 1px solid var(--hairline);
+}

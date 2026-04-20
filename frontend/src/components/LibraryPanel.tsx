@@ -16,6 +16,8 @@ import {
 import type { LibraryEntry, LibraryKind } from "../api/types";
 import { appCommands, useAppCommand } from "../state/AppCommands";
 import { useTabs } from "../state/TabStore";
+import { Icon } from "../icons";
+import { Tooltip } from "./ui";
 import type { MenuItem } from "./common/ContextMenu";
 import {
   contextMenuHandler,
@@ -199,16 +201,17 @@ export function LibraryPanel() {
           <ul className="lib-sec__list">
             {references.map((entry) => (
               <li key={entry.slug}>
-                <button
-                  type="button"
-                  className="lib-sec__entry"
-                  title={entry.body.slice(0, 200)}
-                  onClick={() => openTab({ kind: "ref", slug: entry.slug })}
-                  onContextMenu={onReferenceContextMenu(entry)}
-                >
-                  <span className="lib-sec__entry-name">{entry.name}</span>
-                  <span className="lib-sec__entry-preview">{preview(entry.body)}</span>
-                </button>
+                <Tooltip label={entry.body.slice(0, 200)}>
+                  <button
+                    type="button"
+                    className="lib-sec__entry"
+                    onClick={() => openTab({ kind: "ref", slug: entry.slug })}
+                    onContextMenu={onReferenceContextMenu(entry)}
+                  >
+                    <span className="lib-sec__entry-name">{entry.name}</span>
+                    <span className="lib-sec__entry-preview">{preview(entry.body)}</span>
+                  </button>
+                </Tooltip>
               </li>
             ))}
           </ul>
@@ -221,15 +224,16 @@ export function LibraryPanel() {
         open={promptsOpen}
         onToggle={() => setPromptsOpen((value) => !value)}
         rightSlot={
-          <button
-            type="button"
-            className="lib-sec__new"
-            onClick={() => setEditingPrompt({ slug: undefined, name: "", body: "" })}
-            title="New prompt"
-            aria-label="New prompt"
-          >
-            +
-          </button>
+          <Tooltip label="New prompt">
+            <button
+              type="button"
+              className="lib-sec__new"
+              onClick={() => setEditingPrompt({ slug: undefined, name: "", body: "" })}
+              aria-label="New prompt"
+            >
+              <Icon name="plus" size={12} />
+            </button>
+          </Tooltip>
         }
       >
         {editingPrompt && (
@@ -249,16 +253,17 @@ export function LibraryPanel() {
           <ul className="lib-sec__list">
             {prompts.map((entry) => (
               <li key={entry.slug}>
-                <button
-                  type="button"
-                  className="lib-sec__entry"
-                  title={entry.body.slice(0, 200)}
-                  onClick={() => injectPrompt(entry)}
-                  onContextMenu={onPromptContextMenu(entry)}
-                >
-                  <span className="lib-sec__entry-name">{entry.name}</span>
-                  <span className="lib-sec__entry-preview">{preview(entry.body)}</span>
-                </button>
+                <Tooltip label={entry.body.slice(0, 200)}>
+                  <button
+                    type="button"
+                    className="lib-sec__entry"
+                    onClick={() => injectPrompt(entry)}
+                    onContextMenu={onPromptContextMenu(entry)}
+                  >
+                    <span className="lib-sec__entry-name">{entry.name}</span>
+                    <span className="lib-sec__entry-preview">{preview(entry.body)}</span>
+                  </button>
+                </Tooltip>
               </li>
             ))}
           </ul>

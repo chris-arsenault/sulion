@@ -1,104 +1,46 @@
 .layout {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: 36px var(--sulion-sidebar-width, 280px) 4px 1fr;
+  grid-template-rows: 1fr;
   height: 100vh;
   width: 100vw;
-  background: #0f1115;
-  color: #e5e7eb;
-  font-family:
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    Roboto,
-    sans-serif;
+  background: var(--canvas-0);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--t-ui);
 }
 
-/* Unpinned sidebar: a narrow rail that doesn't claim width; hovering
-   floats the full panel over the work area. Keeps the work area's
-   horizontal real estate stable during pin/unpin. */
-.layout--rail {
-  grid-template-columns: 28px 1fr;
+.layout--collapsed {
+  grid-template-columns: 36px 1fr;
 }
-
-.layout--rail .layout__sidebar {
-  position: relative;
-  z-index: 5;
-}
-
-.layout--rail .layout__sidebar--expanded {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 280px;
-  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.45);
-}
-
-.layout__rail {
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 10px;
-  color: #6b7280;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  cursor: pointer;
-  height: 100%;
-  background: #14161b;
-  border-right: 1px solid #1f232b;
-}
-
-.layout__rail-logo {
-  color: #93c5fd;
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  letter-spacing: 0.2em;
-}
-
-.layout__sidebar-body {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-
-.layout__pin {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  z-index: 2;
-  background: transparent;
-  border: 1px solid #1f232b;
-  color: #d1d5db;
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
-  line-height: 1;
-}
-
-.layout__pin:hover { background: #1f232b; }
 
 .layout__sidebar {
-  background: #14161b;
-  border-right: 1px solid #1f232b;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--canvas-2);
+  border-right: 1px solid var(--hairline);
   overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.layout__resizer {
+  cursor: col-resize;
+  background: transparent;
+  border-left: 1px solid var(--hairline);
+  transition: background var(--dur-0) var(--ease);
+}
+
+.layout__resizer:hover,
+.layout__resizer:focus-visible {
+  background: var(--accent-lo);
+  outline: none;
 }
 
 .layout__main {
   overflow: hidden;
   min-width: 0;
-}
-
-.layout__empty {
-  display: grid;
-  place-items: center;
-  height: 100%;
-  text-align: center;
-  opacity: 0.7;
 }
 
 .split {
@@ -113,22 +55,16 @@
 }
 
 .split__divider {
-  background: #1f232b;
+  background: var(--hairline);
   cursor: row-resize;
-  transition: background 0.15s;
+  transition: background var(--dur-0) var(--ease);
 }
 
 .split__divider:hover {
-  background: #3b82f6;
+  background: var(--accent);
 }
 
-/* ─────────────────────────────────────────────────────────────────
-   Mobile layout (#22)
-   Fires on viewports <768px. Stacks the app: top bar with hamburger
-   + pane tabs, off-canvas drawer for the sidebar, main area swaps
-   between terminal and timeline via display (both stay mounted so
-   xterm keeps its buffer).
-   ────────────────────────────────────────────────────────────────── */
+/* ─── Mobile ─────────────────────────────────────────────────────── */
 
 .layout--mobile {
   grid-template-columns: 1fr;
@@ -144,61 +80,70 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 8px;
-  background: #14161b;
-  border-bottom: 1px solid #1f232b;
+  padding: 0 10px;
+  background: var(--canvas-2);
+  border-bottom: 1px solid var(--hairline);
 }
 
 .mobile-topbar__hamburger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
-  border: 1px solid #1f232b;
-  color: #e5e7eb;
-  width: 40px;
+  border: 1px solid var(--hairline);
+  color: var(--text);
+  width: 36px;
   height: 36px;
-  border-radius: 4px;
-  font-size: 18px;
+  border-radius: var(--r-1);
   cursor: pointer;
 }
 
+.mobile-topbar__hamburger:hover {
+  background: var(--canvas-3);
+  color: var(--text-hi);
+}
+
 .mobile-topbar__title {
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  color: #93c5fd;
-  font-size: 13px;
+  font-family: var(--font-sans);
+  font-weight: var(--w-600);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-hi);
+  font-size: var(--t-ui);
 }
 
 .mobile-topbar__tabs {
   margin-left: auto;
   display: flex;
   gap: 2px;
-  background: #0f1115;
   padding: 2px;
-  border-radius: 6px;
-  border: 1px solid #1f232b;
+  background: var(--canvas-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-1);
 }
 
 .mobile-topbar__tab {
   background: transparent;
-  color: #9ca3af;
-  border: none;
-  padding: 6px 12px;
+  color: var(--text-mid);
+  border: 0;
+  padding: 0 12px;
   min-height: 32px;
-  border-radius: 4px;
+  border-radius: var(--r-1);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--t-ui);
   cursor: pointer;
 }
 
 .mobile-topbar__tab--active {
-  background: #1e3a8a;
-  color: #e0f2fe;
+  background: var(--accent-lo);
+  color: var(--text-hi);
 }
 
 .layout__scrim {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  z-index: 50;
+  background: var(--scrim);
+  z-index: var(--z-drawer-scrim);
 }
 
 .layout__drawer {
@@ -207,17 +152,21 @@
   left: 0;
   bottom: 0;
   width: min(86vw, 320px);
-  background: #14161b;
-  border-right: 1px solid #1f232b;
-  z-index: 60;
+  background: var(--canvas-2);
+  border-right: 1px solid var(--hairline);
+  z-index: var(--z-drawer);
   overflow-y: auto;
   box-shadow: 4px 0 16px rgba(0, 0, 0, 0.5);
-  animation: drawer-slide-in 0.18s ease-out;
+  animation: drawer-slide-in var(--dur-1) var(--ease-out);
 }
 
 @keyframes drawer-slide-in {
-  from { transform: translateX(-100%); }
-  to { transform: translateX(0); }
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
 }
 
 .mobile-panes {
@@ -226,24 +175,20 @@
   width: 100%;
 }
 
-/* Both panes mount in parallel so xterm keeps its buffer when the user
-   swaps tabs. Only the active one is visible. */
 .mobile-pane {
   position: absolute;
   inset: 0;
   visibility: hidden;
-  /* Keep sizes stable — hiding via display:none makes TerminalPane
-     re-measure on show which thrashes the resize observer. */
 }
 
 .mobile-pane--active {
   visibility: visible;
 }
 
-/* Larger tap targets on the sidebar when rendered inside the drawer. */
+/* Larger tap targets on the drawer. */
 .layout__drawer .sidebar__session,
 .layout__drawer .sidebar__group-toggle {
-  min-height: 44px;
+  min-height: var(--lane-lg);
 }
 .layout__drawer .sidebar__icon-button {
   min-width: 32px;

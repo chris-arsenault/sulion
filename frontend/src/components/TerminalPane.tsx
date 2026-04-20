@@ -48,6 +48,7 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
   const termRef = useRef<Terminal | null>(null);
   const [connState, setConnState] = useState<ConnectionState>("connecting");
   const [exitStatus, setExitStatus] = useState<ExitStatus>({ kind: "alive" });
+  const [focused, setFocused] = useState(false);
   const sessions = useSessions((store) => store.sessions);
   const repoName = sessions.find((s) => s.id === sessionId)?.repo ?? null;
   const repoRef = useRef<string | null>(repoName);
@@ -69,29 +70,34 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
       scrollback: 5000,
       cursorBlink: true,
       fontFamily:
-        "ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace",
+        "'IBM Plex Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace",
       fontSize: 13,
+      // Palette mirrors the IDT token canvas so the terminal reads as
+      // one surface with the app shell. xterm can't consume CSS vars —
+      // it rasterises into a canvas — so we duplicate the hex values
+      // here. Keep in sync with frontend/src/styles/tokens.css.
       theme: {
-        background: "#0b0d12",
-        foreground: "#e5e7eb",
-        cursor: "#93c5fd",
-        selectionBackground: "#1e40af",
-        black: "#1f232b",
-        red: "#f87171",
-        green: "#86efac",
-        yellow: "#fde68a",
-        blue: "#93c5fd",
-        magenta: "#f0abfc",
-        cyan: "#67e8f9",
-        white: "#e5e7eb",
-        brightBlack: "#4b5563",
-        brightRed: "#fca5a5",
-        brightGreen: "#bbf7d0",
-        brightYellow: "#fef3c7",
-        brightBlue: "#bfdbfe",
-        brightMagenta: "#f5d0fe",
-        brightCyan: "#a5f3fc",
-        brightWhite: "#f9fafb",
+        background: "#0c0e13",
+        foreground: "#d7dae0",
+        cursor: "#5aa6ff",
+        cursorAccent: "#0c0e13",
+        selectionBackground: "#1f4a7a",
+        black: "#1c2029",
+        red: "#e0484f",
+        green: "#2fbf71",
+        yellow: "#d99a2b",
+        blue: "#5aa6ff",
+        magenta: "#a665de",
+        cyan: "#3cc5c9",
+        white: "#d7dae0",
+        brightBlack: "#4a4f59",
+        brightRed: "#f5a3a8",
+        brightGreen: "#8fe8b4",
+        brightYellow: "#f4c878",
+        brightBlue: "#8cc3ff",
+        brightMagenta: "#d8a8f2",
+        brightCyan: "#8fe3e5",
+        brightWhite: "#f3f4f6",
       },
     });
     termRef.current = term;
@@ -242,6 +248,11 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
     };
     host.addEventListener("contextmenu", onContextMenu);
 
+    const onFocusIn = () => setFocused(true);
+    const onFocusOut = () => setFocused(false);
+    host.addEventListener("focusin", onFocusIn);
+    host.addEventListener("focusout", onFocusOut);
+
     const resize = () => {
       try {
         fit.fit();
@@ -264,6 +275,8 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
       if (!ro) window.removeEventListener("resize", resize);
       textarea?.removeEventListener("paste", onPaste);
       host.removeEventListener("contextmenu", onContextMenu);
+      host.removeEventListener("focusin", onFocusIn);
+      host.removeEventListener("focusout", onFocusOut);
       onData.dispose();
       conn.close();
       webgl?.dispose();
@@ -278,7 +291,12 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
   });
 
   return (
-    <div className="terminal-pane" data-testid="terminal-pane">
+    <div
+      className={
+        "terminal-pane" + (focused ? " terminal-pane--focused" : "")
+      }
+      data-testid="terminal-pane"
+    >
       <div ref={hostRef} className="terminal-pane__host" />
       {connState !== "open" && (
         <div className="terminal-pane__status">

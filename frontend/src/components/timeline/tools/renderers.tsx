@@ -91,7 +91,6 @@ function FileTouchRow({ touch }: { touch: TimelineFileTouch }) {
     <div
       className="tr-file"
       onContextMenu={onContextMenu}
-      title="Right-click for file actions"
     >
       <span className="tr-file__meta">
         <span className="tr-file__kind">{touch.touch_kind}</span>

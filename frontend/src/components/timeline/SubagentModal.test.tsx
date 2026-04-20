@@ -36,15 +36,18 @@ describe("SubagentModal", () => {
   it("clicking backdrop fires onClose; content click does not", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
-    render(
+    const { container } = render(
       <SubagentModal
         subagent={makeSubagent({ title: "Agent log" })}
         showThinking={true}
         onClose={onClose}
       />,
     );
-    const dialog = screen.getByTestId("subagent-modal");
-    await user.click(dialog);
+    const scrim = container.ownerDocument.querySelector(
+      ".ui-overlay__scrim",
+    ) as HTMLElement | null;
+    expect(scrim).not.toBeNull();
+    await user.click(scrim!);
     expect(onClose).toHaveBeenCalled();
 
     onClose.mockClear();

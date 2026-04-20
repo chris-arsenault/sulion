@@ -1,46 +1,42 @@
 .tr {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   width: 100%;
   padding: 8px 12px;
   background: transparent;
-  border: none;
-  border-bottom: 1px solid #1a1d23;
+  border: 0;
+  border-bottom: 1px solid var(--hairline);
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--t-ui);
+  transition: background var(--dur-0) var(--ease);
 }
 
 .tr:hover {
-  background: #14171e;
+  background: var(--canvas-2);
 }
 
 .tr--selected {
-  background: #1e3a8a;
-  border-left: 3px solid #3b82f6;
-  padding-left: 9px;
+  background: var(--accent-lo);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .tr--selected:hover {
-  background: #1e40af;
+  background: var(--accent-lo);
 }
 
 .tr--errors:not(.tr--selected) {
-  box-shadow: inset 3px 0 0 #dc2626;
+  box-shadow: inset 2px 0 0 var(--crit-mark);
 }
 
 .tr__prompt {
-  color: #e5e7eb;
-  font-family:
-    ui-monospace,
-    SFMono-Regular,
-    Consolas,
-    monospace;
-  font-size: 12px;
-  line-height: 1.35;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--t-ui);
+  line-height: var(--lh-dense);
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
@@ -52,7 +48,7 @@
 }
 
 .tr--selected .tr__prompt {
-  color: #e0f2fe;
+  color: var(--text-hi);
 }
 
 .tr__meta {
@@ -60,18 +56,18 @@
   align-items: center;
   gap: 4px;
   flex-wrap: wrap;
-  color: #6b7280;
-  font-family: ui-monospace, monospace;
-  font-size: 10px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
   line-height: 1.2;
 }
 
 .tr--selected .tr__meta {
-  color: #93c5fd;
+  color: var(--accent-hi);
 }
 
 .tr__dot {
-  color: #374151;
+  color: var(--text-dis);
   padding: 0 1px;
 }
 
@@ -82,63 +78,78 @@
 
 .tr__badges {
   display: flex;
-  gap: 3px;
+  gap: 4px;
   flex-wrap: wrap;
-  margin-left: 0;
 }
 
 .tr__badge {
-  font-size: 9px;
-  font-weight: 600;
-  padding: 1px 5px;
-  border-radius: 2px;
-  background: #1f232b;
-  color: #d1d5db;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: calc(var(--t-meta) - 1px);
+  font-weight: var(--w-500);
+  padding: 1px 6px;
+  border-radius: var(--r-1);
+  background: var(--mute-bg);
+  color: var(--mute-fg);
+  border: 1px solid transparent;
   white-space: nowrap;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
+  text-transform: lowercase;
 }
 
 .tr__badge--thinking {
-  background: #3a1e66;
-  color: #e9d5ff;
+  background: var(--atn-bg);
+  color: var(--atn-fg);
+  border-color: color-mix(in oklab, var(--atn-mark) 25%, transparent);
 }
 
 .tr__badge--error {
-  background: #7f1d1d;
-  color: #fecaca;
+  background: var(--crit-bg);
+  color: var(--crit-fg);
+  border-color: color-mix(in oklab, var(--crit-mark) 35%, transparent);
 }
 
+/* Category-bg + text. These map tool names to the category axis;
+ * they're the one place category and specific-name meet. */
 .tr__badge--edit,
 .tr__badge--write,
 .tr__badge--multiedit {
-  background: #065f46;
-  color: #d1fae5;
+  background: var(--ok-bg);
+  color: var(--ok-fg);
+  border-color: color-mix(in oklab, var(--ok-mark) 25%, transparent);
 }
 
 .tr__badge--bash {
-  background: #1e40af;
-  color: #dbeafe;
+  background: var(--info-bg);
+  color: var(--info-fg);
+  border-color: color-mix(in oklab, var(--info-mark) 25%, transparent);
 }
 
 .tr__badge--task {
-  background: #581c87;
-  color: #f3e8ff;
+  background: var(--atn-bg);
+  color: var(--atn-fg);
+  border-color: color-mix(in oklab, var(--atn-mark) 25%, transparent);
 }
 
 .tr__badge--todowrite {
-  background: #422006;
-  color: #fde68a;
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  border-color: color-mix(in oklab, var(--warn-mark) 25%, transparent);
 }
 
 .tr__badge--read,
 .tr__badge--grep,
 .tr__badge--glob {
-  background: #0e7490;
-  color: #a5f3fc;
+  background: var(--canvas-3);
+  color: var(--cat-inspect);
+  border-color: color-mix(in oklab, var(--cat-inspect) 30%, transparent);
 }
 
 .tr__badge--webfetch,
 .tr__badge--websearch {
-  background: #4338ca;
-  color: #e0e7ff;
+  background: var(--canvas-3);
+  color: var(--cat-research);
+  border-color: color-mix(in oklab, var(--cat-research) 30%, transparent);
 }

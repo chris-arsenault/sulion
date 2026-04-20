@@ -11,6 +11,8 @@ import {
   type TimelineFilters,
 } from "./filters";
 import type { OperationCategory } from "../../api/types";
+import { Icon } from "../../icons";
+import { Tooltip } from "../ui";
 import "./FilterChips.css";
 
 interface Props {
@@ -88,7 +90,12 @@ export function FilterChips({
         <HideChip
           hidden={!filters.showThinking}
           onClick={() => setShowThinking(!filters.showThinking)}
-          label="💭 thinking"
+          label={
+            <>
+              <Icon name="sparkles" size={12} /> thinking
+            </>
+          }
+          ariaLabel="thinking"
         />
         <HideChip
           hidden={!filters.showBookkeeping}
@@ -115,14 +122,11 @@ export function FilterChips({
       </div>
 
       {hasAnythingHidden && (
-        <button
-          type="button"
-          className="fc__clear"
-          onClick={reset}
-          title="Reset all filters"
-        >
-          Show all
-        </button>
+        <Tooltip label="Reset all filters">
+          <button type="button" className="fc__clear" onClick={reset}>
+            Show all
+          </button>
+        </Tooltip>
       )}
     </div>
   );
@@ -139,11 +143,13 @@ function HideChip({
   onClick,
   label,
   variant,
+  ariaLabel,
 }: {
   hidden: boolean;
   onClick: () => void;
-  label: string;
+  label: React.ReactNode;
   variant?: string;
+  ariaLabel?: string;
 }) {
   const cls = [
     "fc__chip",
@@ -152,16 +158,21 @@ function HideChip({
   ]
     .filter(Boolean)
     .join(" ");
+  const tip = hidden
+    ? `${ariaLabel ?? (typeof label === "string" ? label : "")} — hidden (click to show)`
+    : `${ariaLabel ?? (typeof label === "string" ? label : "")} — showing (click to hide)`;
   return (
-    <button
-      type="button"
-      className={cls}
-      onClick={onClick}
-      aria-pressed={hidden}
-      title={hidden ? `${label} — hidden (click to show)` : `${label} — showing (click to hide)`}
-    >
-      {label}
-    </button>
+    <Tooltip label={tip}>
+      <button
+        type="button"
+        className={cls}
+        onClick={onClick}
+        aria-pressed={hidden}
+        aria-label={ariaLabel}
+      >
+        {label}
+      </button>
+    </Tooltip>
   );
 }
 

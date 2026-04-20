@@ -27,6 +27,8 @@ import { useSessions } from "../state/SessionStore";
 import { dirtyAncestors, stalenessFor, useRepos } from "../state/RepoStore";
 import type { TabStore } from "../state/TabStore";
 import { useTabs } from "../state/TabStore";
+import { Icon } from "../icons";
+import { Tooltip } from "./ui";
 import type { MenuItem } from "./common/ContextMenu";
 import {
   contextMenuHandler,
@@ -95,6 +97,22 @@ export function Sidebar() {
     setRevealRequest({ repo, path, nonce: Date.now() });
   });
 
+  const repoAnchorsRef = useRef<Map<string, HTMLLIElement>>(new Map());
+  const registerRepoAnchor = (name: string, el: HTMLLIElement | null) => {
+    if (el) repoAnchorsRef.current.set(name, el);
+    else repoAnchorsRef.current.delete(name);
+  };
+
+  useAppCommand("reveal-repo", ({ repo }) => {
+    setExpanded((prev) => ({ ...prev, [repo]: true }));
+    const el = repoAnchorsRef.current.get(repo);
+    if (el) {
+      requestAnimationFrame(() =>
+        el.scrollIntoView({ block: "start", behavior: "smooth" }),
+      );
+    }
+  });
+
   const toggleRepo = (name: string) =>
     setExpanded((prev) => ({ ...prev, [name]: !prev[name] }));
 
@@ -155,18 +173,19 @@ export function Sidebar() {
     <div className="sidebar">
       <div className="sidebar__header">
         <span className="sidebar__logo">sulion</span>
-        <button
-          type="button"
-          className="sidebar__icon-button"
-          onClick={() => {
-            setNewRepoOpen((v) => !v);
-            setNewSessionFor(null);
-          }}
-          title="New repo"
-          aria-label="New repo"
-        >
-          +
-        </button>
+        <Tooltip label="New repo">
+          <button
+            type="button"
+            className="sidebar__icon-button"
+            onClick={() => {
+              setNewRepoOpen((v) => !v);
+              setNewSessionFor(null);
+            }}
+            aria-label="New repo"
+          >
+            <Icon name="plus" size={14} />
+          </button>
+        </Tooltip>
       </div>
 
       {newRepoOpen && (
@@ -204,6 +223,7 @@ export function Sidebar() {
             revealRequest={
               revealRequest?.repo === group.name ? revealRequest : null
             }
+            anchorRef={(el) => registerRepoAnchor(group.name, el)}
           />
         ))}
       </ul>
@@ -270,6 +290,7 @@ function RepoGroup({
   isUnread,
   onError,
   revealRequest,
+  anchorRef,
 }: {
   group: RepoGroupData;
   expanded: boolean;
@@ -292,6 +313,7 @@ function RepoGroup({
   isUnread: (sessionId: string, lastEventAt: string | null) => boolean;
   onError: (message: string | null) => void;
   revealRequest: { repo: string; path: string; nonce: number } | null;
+  anchorRef?: (el: HTMLLIElement | null) => void;
 }) {
   const { setExpanded, repoState } = useRepos(
     useShallow((store) => ({
@@ -330,7 +352,7 @@ function RepoGroup({
   const staleness = stalenessFor(git, latestEventAt);
 
   return (
-    <li className="sidebar__group">
+    <li className="sidebar__group" ref={anchorRef}>
       <div className="sidebar__group-header">
         <button
           type="button"
@@ -344,7 +366,7 @@ function RepoGroup({
                 : "sidebar__chevron"
             }
           >
-            ▸
+            <Icon name="chevron-right" size={12} />
           </span>
           <span className="sidebar__group-name">{group.name}</span>
           {git && <RepoBadge git={git} staleness={staleness} />}
@@ -361,19 +383,20 @@ function RepoGroup({
             }
             count={group.sessions.length}
             rightSlot={
-              <button
-                type="button"
-                className="sidebar__icon-button"
-                title={`New session in ${group.name}`}
-                aria-label={`New session in ${group.name}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onNewSession();
-                }}
-                disabled={!group.exists}
-              >
-                +
-              </button>
+              <Tooltip label={`New session in ${group.name}`}>
+                <button
+                  type="button"
+                  className="sidebar__icon-button"
+                  aria-label={`New session in ${group.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onNewSession();
+                  }}
+                  disabled={!group.exists}
+                >
+                  <Icon name="plus" size={14} />
+                </button>
+              </Tooltip>
             }
           >
             {newSessionOpen && (
@@ -458,7 +481,7 @@ function Subsection({
                 : "sidebar__chevron"
             }
           >
-            ▸
+            <Icon name="chevron-right" size={12} />
           </span>
           <span className="sidebar__sub-label">{label}</span>
           {count != null && (
@@ -480,21 +503,27 @@ function RepoBadge({
   staleness: "green" | "amber" | "red";
 }) {
   const age = git.last_commit ? relativeAge(git.last_commit.committed_at) : "—";
+  const tooltip = git.last_commit
+    ? `${git.branch ?? "detached"} · ${git.uncommitted_count} uncommitted · last ${age}\n“${git.last_commit.subject}”`
+    : `${git.branch ?? "detached"} · no commits`;
   return (
-    <span
-      className={`sidebar__repo-badge sidebar__repo-badge--${staleness}`}
-      title={
-        git.last_commit
-          ? `${git.branch ?? "detached"} · ${git.uncommitted_count} uncommitted · last ${age}\n"${git.last_commit.subject}"`
-          : `${git.branch ?? "detached"} · no commits`
-      }
-    >
-      <span className="sidebar__repo-branch">{git.branch ?? "—"}</span>
-      {git.uncommitted_count > 0 && (
-        <span className="sidebar__repo-dot">⚫{git.uncommitted_count}</span>
-      )}
-      <span className="sidebar__repo-age">{age}</span>
-    </span>
+    <Tooltip label={tooltip}>
+      <span
+        className={`sidebar__repo-badge sidebar__repo-badge--${staleness}`}
+      >
+        <span className="sidebar__repo-branch">
+          <Icon name="git-branch" size={12} />
+          <span>{git.branch ?? "—"}</span>
+        </span>
+        {git.uncommitted_count > 0 && (
+          <span className="sidebar__repo-dot">
+            <Icon name="dirty" size={12} />
+            <span className="tabular">{git.uncommitted_count}</span>
+          </span>
+        )}
+        <span className="sidebar__repo-age tabular">{age}</span>
+      </span>
+    </Tooltip>
   );
 }
 
@@ -778,47 +807,60 @@ function TreeRow({
 
   const childEntries = state?.tree[fullPath];
 
+  const tooltip = entry.dirty ? `${entry.dirty.trim()} ${fullPath}` : fullPath;
   return (
     <li className="sidebar__tree-item">
-      <button
-        ref={rowRef}
-        type="button"
-        className={
-          "sidebar__tree-row" +
-          (entry.kind === "dir" ? " sidebar__tree-row--dir" : "") +
-          (dragOver ? " sidebar__tree-row--drag-over" : "") +
-          (entry.dirty ? " sidebar__tree-row--dirty" : "") +
-          (isRevealTarget ? " sidebar__tree-row--revealed" : "")
-        }
-        // eslint-disable-next-line local/no-inline-styles -- depth is per-row; can't be expressed as a finite class set
-        style={{ paddingLeft: 4 + depth * 12 }}
-        onClick={onClickRow}
-        onContextMenu={onContextMenu}
-        {...dropHandlers}
-        title={entry.dirty ? `${entry.dirty.trim()} ${fullPath}` : fullPath}
-      >
-        {entry.kind === "dir" && (
-          <span
-            className={
-              isExpanded
-                ? "sidebar__chevron sidebar__chevron--open"
-                : "sidebar__chevron"
-            }
-          >
-            ▸
-          </span>
-        )}
-        {entry.kind === "file" && <span className="sidebar__tree-indent" />}
-        <span className="sidebar__tree-name">{entry.name}</span>
-        {entry.dirty && (
-          <span className="sidebar__tree-dirty">{entry.dirty.trim() || entry.dirty}</span>
-        )}
-        {entry.diff && (
-          <span className="sidebar__tree-diff">
-            +{entry.diff.additions} -{entry.diff.deletions}
-          </span>
-        )}
-      </button>
+      <Tooltip label={tooltip}>
+        <button
+          ref={rowRef}
+          type="button"
+          className={
+            "sidebar__tree-row" +
+            (entry.kind === "dir" ? " sidebar__tree-row--dir" : "") +
+            (dragOver ? " sidebar__tree-row--drag-over" : "") +
+            (entry.dirty ? " sidebar__tree-row--dirty" : "") +
+            (isRevealTarget ? " sidebar__tree-row--revealed" : "")
+          }
+          // eslint-disable-next-line local/no-inline-styles -- depth is per-row; can't be expressed as a finite class set
+          style={{ paddingLeft: 4 + depth * 12 }}
+          onClick={onClickRow}
+          onContextMenu={onContextMenu}
+          {...dropHandlers}
+        >
+          {entry.kind === "dir" && (
+            <span
+              className={
+                isExpanded
+                  ? "sidebar__chevron sidebar__chevron--open"
+                  : "sidebar__chevron"
+              }
+            >
+              <Icon name="chevron-right" size={12} />
+            </span>
+          )}
+          {entry.kind === "file" && <span className="sidebar__tree-indent" />}
+          {entry.kind === "dir" ? (
+            <Icon
+              name={isExpanded ? "folder-open" : "folder"}
+              size={14}
+              className="sidebar__tree-glyph"
+            />
+          ) : (
+            <Icon name="file" size={14} className="sidebar__tree-glyph" />
+          )}
+          <span className="sidebar__tree-name">{entry.name}</span>
+          {entry.dirty && (
+            <span className="sidebar__tree-dirty tabular">
+              {entry.dirty.trim() || entry.dirty}
+            </span>
+          )}
+          {entry.diff && (
+            <span className="sidebar__tree-diff tabular">
+              +{entry.diff.additions} -{entry.diff.deletions}
+            </span>
+          )}
+        </button>
+      </Tooltip>
       {entry.kind === "dir" && (
         <input
           ref={uploadInputRef}
@@ -888,12 +930,14 @@ function GitPanel({ git }: { git: GitStatus | null }) {
 
 function RecentCommit({ commit }: { commit: GitCommit }) {
   return (
-    <li className="sidebar__git-recent-item" title={commit.subject}>
-      <span className="sidebar__git-recent-age">
-        {relativeAge(commit.committed_at)}
-      </span>
-      <span className="sidebar__git-recent-subject">{commit.subject}</span>
-    </li>
+    <Tooltip label={commit.subject}>
+      <li className="sidebar__git-recent-item">
+        <span className="sidebar__git-recent-age tabular">
+          {relativeAge(commit.committed_at)}
+        </span>
+        <span className="sidebar__git-recent-subject">{commit.subject}</span>
+      </li>
+    </Tooltip>
   );
 }
 
@@ -1039,6 +1083,23 @@ function SessionRow({
     .filter(Boolean)
     .join(" ");
 
+  const stateIcon =
+    s.state === "dead"
+      ? "session-dead"
+      : s.state === "orphaned"
+        ? "session-orphan"
+        : s.state === "deleted"
+          ? "session-dead"
+          : "session-live";
+  const stateTone =
+    s.state === "dead"
+      ? "crit"
+      : s.state === "orphaned"
+        ? "atn"
+        : s.state === "deleted"
+          ? "mute"
+          : "ok";
+
   return (
     <div className={rowClass} onContextMenu={onRowContextMenu}>
       {s.color && <span className="sidebar__color-accent" aria-hidden />}
@@ -1053,44 +1114,52 @@ function SessionRow({
           onCancel={() => setRenaming(false)}
         />
       ) : (
-        <button
-          type="button"
-          className={
-            selected
-              ? "sidebar__session sidebar__session--active"
-              : "sidebar__session"
-          }
-          onClick={onSelect}
-          onDoubleClick={() => setRenaming(true)}
-          title="Right-click for session actions"
-        >
-          <span className={`sidebar__dot sidebar__dot--${s.state}`} />
-          <span className="sidebar__session-main">
-            <span className="sidebar__session-id">
-              {s.pinned && (
-                <span
-                  className="sidebar__pin-indicator"
-                  aria-label="pinned"
-                  title="pinned"
-                >
-                  ★
-                </span>
-              )}
-              {displayName}
-            </span>
-            <span className="sidebar__session-meta">
-              {ageSince(s.created_at)} · {sessionLabel}
-              {cwdHint && <> · <span className="sidebar__cwd">{cwdHint}</span></>}
-            </span>
-          </span>
-          {unread && !selected && (
+        <Tooltip label="Right-click for session actions">
+          <button
+            type="button"
+            className={
+              selected
+                ? "sidebar__session sidebar__session--active"
+                : "sidebar__session"
+            }
+            onClick={onSelect}
+            onDoubleClick={() => setRenaming(true)}
+          >
             <span
-              className="sidebar__unread"
-              aria-label="new activity since last view"
-              title="New events since you last viewed this session"
-            />
-          )}
-        </button>
+              className={`sidebar__dot sidebar__dot--${s.state} sidebar__dot--tone-${stateTone}`}
+              aria-hidden
+            >
+              <Icon name={stateIcon} size={12} />
+            </span>
+            <span className="sidebar__session-main">
+              <span className="sidebar__session-id">
+                {s.pinned && (
+                  <span className="sidebar__pin-indicator" aria-label="pinned">
+                    <Icon name="pin" size={12} />
+                  </span>
+                )}
+                {displayName}
+              </span>
+              <span className="sidebar__session-meta tabular">
+                {ageSince(s.created_at)} · {sessionLabel}
+                {cwdHint && (
+                  <>
+                    {" · "}
+                    <span className="sidebar__cwd">{cwdHint}</span>
+                  </>
+                )}
+              </span>
+            </span>
+            {unread && !selected && (
+              <span
+                className="sidebar__unread"
+                aria-label="new activity since last view"
+              >
+                <Icon name="unread" size={12} />
+              </span>
+            )}
+          </button>
+        </Tooltip>
       )}
     </div>
   );

@@ -1,28 +1,24 @@
 .tf__card {
   position: fixed;
-  z-index: 9997;
-  width: min(520px, 90vw);
+  z-index: var(--z-overlay);
+  width: min(560px, 90vw);
   max-height: 60vh;
-  background: #1a0d2a;
-  border: 1px solid #a855f7;
-  border-radius: 6px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
-  color: #e9d5ff;
+  background: var(--canvas-2);
+  border: 1px solid var(--hairline);
+  border-left: 2px solid var(--atn-mark);
+  border-radius: var(--r-2);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+  color: var(--text);
   display: flex;
   flex-direction: column;
-  font-family:
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    sans-serif;
+  font-family: var(--font-sans);
 }
 
 .tf__sheet-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  z-index: 9997;
+  background: var(--scrim);
+  z-index: var(--z-overlay);
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -31,47 +27,54 @@
 .tf__sheet {
   width: 100%;
   max-height: 70vh;
-  background: #1a0d2a;
-  border-top: 1px solid #a855f7;
-  border-radius: 8px 8px 0 0;
-  color: #e9d5ff;
+  background: var(--canvas-2);
+  border-top: 2px solid var(--atn-mark);
+  border-radius: var(--r-2) var(--r-2) 0 0;
+  color: var(--text);
   display: flex;
   flex-direction: column;
-  font-family:
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    sans-serif;
+  font-family: var(--font-sans);
 }
 
 .tf__header {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid #3a1e66;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--canvas-3);
 }
 
 .tf__title {
   flex: 1;
-  font-size: 12px;
-  font-weight: 600;
-  color: #c4b5fd;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: var(--w-600);
+  color: var(--atn-fg);
 }
 
 .tf__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
   background: transparent;
-  color: #c4b5fd;
-  border: none;
+  color: var(--text-mid);
+  border: 0;
   cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
-  padding: 0 4px;
+  border-radius: var(--r-1);
+  transition: background var(--dur-0) var(--ease), color var(--dur-0) var(--ease);
 }
 
 .tf__close:hover {
-  color: #f3e8ff;
+  background: var(--canvas-1);
+  color: var(--text-hi);
 }
 
 .tf__body {
@@ -79,14 +82,10 @@
   overflow: auto;
   padding: 10px 12px;
   margin: 0;
-  font-family:
-    ui-monospace,
-    SFMono-Regular,
-    Consolas,
-    monospace;
-  font-size: 12px;
-  line-height: 1.5;
+  font-family: var(--font-mono);
+  font-size: var(--t-ui);
+  line-height: var(--lh-prose);
   white-space: pre-wrap;
   word-break: break-word;
-  color: #e9d5ff;
+  color: var(--text);
 }

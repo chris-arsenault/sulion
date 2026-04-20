@@ -1,43 +1,38 @@
 .cd__backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--scrim);
   display: grid;
   place-items: center;
-  z-index: 9999;
+  z-index: var(--z-modal);
   backdrop-filter: blur(2px);
 }
 
 .cd__content {
-  background: #14161b;
-  border: 1px solid #1f232b;
-  border-radius: 8px;
+  background: var(--canvas-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-2);
   padding: 20px;
   min-width: 320px;
   max-width: 480px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-  color: #e5e7eb;
-  font-family:
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    Roboto,
-    sans-serif;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+  color: var(--text);
+  font-family: var(--font-sans);
 }
 
 .cd__title {
   margin: 0 0 10px;
-  font-size: 15px;
-  font-weight: 600;
-  color: #f3f4f6;
+  font-size: var(--t-head);
+  font-weight: var(--w-600);
+  color: var(--text-hi);
+  letter-spacing: 0.01em;
 }
 
 .cd__message {
   margin: 0 0 16px;
-  font-size: 13px;
-  line-height: 1.5;
-  color: #d1d5db;
+  font-size: var(--t-body);
+  line-height: var(--lh-prose);
+  color: var(--text);
 }
 
 .cd__actions {
@@ -47,35 +42,41 @@
 }
 
 .cd__btn {
-  background: #1f232b;
-  color: #d1d5db;
-  border: none;
-  padding: 7px 14px;
-  border-radius: 4px;
+  background: var(--canvas-3);
+  color: var(--text);
+  border: 1px solid var(--hairline);
+  padding: 0 14px;
+  min-height: var(--lane-md);
+  border-radius: var(--r-1);
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--t-ui);
+  transition: background var(--dur-0) var(--ease), color var(--dur-0) var(--ease);
 }
 
 .cd__btn:hover {
-  filter: brightness(1.2);
-}
-
-.cd__btn:focus-visible {
-  outline: 2px solid #3b82f6;
-  outline-offset: 2px;
+  background: var(--hairline);
+  color: var(--text-hi);
 }
 
 .cd__btn--primary {
-  background: #2563eb;
-  color: #fff;
+  background: var(--accent);
+  color: var(--canvas-0);
+  border-color: var(--accent);
+  font-weight: var(--w-500);
+}
+
+.cd__btn--primary:hover {
+  background: var(--accent-hi);
 }
 
 .cd__btn--destructive {
-  background: #991b1b;
-  color: #fee2e2;
+  background: var(--crit-bg);
+  color: var(--crit-fg);
+  border-color: color-mix(in oklab, var(--crit-mark) 40%, transparent);
 }
 
 .cd__btn--destructive:hover {
-  background: #b91c1c;
+  background: color-mix(in oklab, var(--crit-bg) 70%, var(--crit-mark));
+  color: var(--text-hi);
 }

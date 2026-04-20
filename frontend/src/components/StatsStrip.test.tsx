@@ -57,7 +57,8 @@ describe("StatsStrip", () => {
       // "120 / 500 MB"
       expect(screen.getByText(/120 \/ 500 MB/i)).toBeDefined();
       expect(screen.getByText(/4%/)).toBeDefined();
-      expect(screen.getByText(/▶ 3/)).toBeDefined();
+      // pty session pill uses the terminal sigil + count; match the count.
+      expect(screen.getByText(/^3$/)).toBeDefined();
     });
   });
 

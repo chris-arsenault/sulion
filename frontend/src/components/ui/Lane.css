@@ -1,0 +1,108 @@
+.ui-lane {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--t-ui);
+  line-height: var(--lh-dense);
+  background: transparent;
+  border: 0;
+  width: 100%;
+  text-align: left;
+  cursor: default;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.ui-lane--xs {
+  min-height: var(--lane-xs);
+  padding: var(--pad-xs-y) var(--pad-xs-x);
+  font-size: var(--t-meta);
+}
+
+.ui-lane--sm {
+  min-height: var(--lane-sm);
+  padding: var(--pad-sm-y) var(--pad-sm-x);
+}
+
+.ui-lane--md {
+  min-height: var(--lane-md);
+  padding: var(--pad-md-y) var(--pad-md-x);
+  font-size: var(--t-body);
+}
+
+.ui-lane--lg {
+  min-height: var(--lane-lg);
+  padding: var(--pad-lg-y) var(--pad-lg-x);
+  font-size: var(--t-body);
+}
+
+.ui-lane__slot {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-mid);
+}
+
+.ui-lane__slot--leading {
+  width: var(--slot-leading);
+}
+
+.ui-lane__slot--trailing {
+  width: var(--slot-trailing);
+}
+
+.ui-lane__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-lane__meta {
+  flex: 0 0 auto;
+  color: var(--text-lo);
+  font-size: var(--t-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+button.ui-lane,
+a.ui-lane {
+  cursor: pointer;
+  transition: background var(--dur-0) var(--ease);
+}
+
+button.ui-lane:hover,
+a.ui-lane:hover {
+  background: var(--canvas-3);
+}
+
+.ui-lane--selected {
+  background: var(--accent-lo);
+  color: var(--text-hi);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.ui-lane--selected .ui-lane__slot,
+.ui-lane--selected .ui-lane__meta {
+  color: var(--accent-hi);
+}
+
+.ui-lane--muted {
+  color: var(--text-lo);
+}
+
+button.ui-lane:focus-visible,
+a.ui-lane:focus-visible {
+  outline-offset: -2px;
+}
+
+@media (max-width: 767px) {
+  .ui-lane--sm {
+    min-height: var(--lane-lg);
+    padding: var(--pad-lg-y) var(--pad-lg-x);
+  }
+}

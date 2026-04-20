@@ -1,0 +1,191 @@
+/*
+ * sulion IDT framework tokens.
+ * One source of truth for canvas, text, accent, semantic, category,
+ * typography, lanes, motion, focus. See docs/design.md for the rules.
+ */
+
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
+:root {
+  /* Canvas (dark-only MVP) */
+  --canvas-0: #07080b;
+  --canvas-1: #0c0e13;
+  --canvas-2: #14171d;
+  --canvas-3: #1c2029;
+  --hairline: #262b35;
+  --scrim: rgba(0, 0, 0, 0.55);
+
+  /* Text */
+  --text-hi: #f3f4f6;
+  --text: #d7dae0;
+  --text-mid: #9aa0ac;
+  --text-lo: #6a707c;
+  --text-dis: #4a4f59;
+
+  /* Accent — single axis for interactive / active / focus */
+  --accent: #5aa6ff;
+  --accent-hi: #8cc3ff;
+  --accent-lo: #1f4a7a;
+
+  /* Semantic state — triple {bg, fg, mark} per state.
+   * Components pick ONE axis (semantic OR category), never mix. */
+  --ok-bg: #10281c;
+  --ok-fg: #8fe8b4;
+  --ok-mark: #2fbf71;
+
+  --warn-bg: #2a1f08;
+  --warn-fg: #f4c878;
+  --warn-mark: #d99a2b;
+
+  --crit-bg: #2a0e12;
+  --crit-fg: #f5a3a8;
+  --crit-mark: #e0484f;
+
+  --info-bg: #0e2030;
+  --info-fg: #8cc3ff;
+  --info-mark: #4a90e2;
+
+  --atn-bg: #261433;
+  --atn-fg: #d8a8f2;
+  --atn-mark: #a665de;
+
+  --mute-bg: #1a1d23;
+  --mute-fg: #9aa0ac;
+  --mute-mark: #6a707c;
+
+  /* Category — tool-family axis. Independent of semantic. */
+  --cat-create: #2fbf71;
+  --cat-util: #4a90e2;
+  --cat-delegate: #a665de;
+  --cat-workflow: #d99a2b;
+  --cat-inspect: #3cc5c9;
+  --cat-research: #7b8cf4;
+  --cat-other: #6a707c;
+
+  /* Typography */
+  --font-sans:
+    "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    sans-serif;
+  --font-mono:
+    "IBM Plex Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+
+  --t-meta: 11px;
+  --t-ui: 12px;
+  --t-body: 13px;
+  --t-head: 15px;
+  --t-splash: 18px;
+
+  --w-400: 400;
+  --w-500: 500;
+  --w-600: 600;
+
+  --lh-dense: 1.35;
+  --lh-prose: 1.5;
+
+  /* Density lanes */
+  --lane-xs: 20px;
+  --lane-sm: 28px;
+  --lane-md: 36px;
+  --lane-lg: 44px;
+
+  --pad-xs-y: 4px;
+  --pad-xs-x: 8px;
+  --pad-sm-y: 6px;
+  --pad-sm-x: 10px;
+  --pad-md-y: 8px;
+  --pad-md-x: 12px;
+  --pad-lg-y: 12px;
+  --pad-lg-x: 14px;
+
+  --slot-leading: 16px;
+  --slot-trailing: 16px;
+
+  /* Motion */
+  --dur-0: 80ms;
+  --dur-1: 160ms;
+  --dur-2: 240ms;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+
+  /* Focus ring */
+  --ring-w: 2px;
+  --ring-off: 2px;
+  --ring: var(--accent);
+
+  /* Radii — engineering telemetry stays sharp. */
+  --r-0: 0;
+  --r-1: 2px;
+  --r-2: 4px;
+
+  /* Z-index scale (centralised so overlays don't fight) */
+  --z-tab: 1;
+  --z-sticky: 10;
+  --z-drawer-scrim: 50;
+  --z-drawer: 60;
+  --z-dropdown: 100;
+  --z-context-menu: 201;
+  --z-tooltip: 400;
+  --z-overlay: 500;
+  --z-modal: 600;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--canvas-0);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--t-body);
+  line-height: var(--lh-prose);
+  font-feature-settings:
+    "ss01" on,
+    "cv01" on;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  font: inherit;
+}
+
+/* Uniform focus — apply globally, components override the target surface if needed. */
+:focus-visible {
+  outline: var(--ring-w) solid var(--ring);
+  outline-offset: var(--ring-off);
+}
+
+/* Tabular numerals wherever numbers are displayed as data. */
+.tabular,
+[data-tabular] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Pulse reserved for stale-red and unread only. */
+@keyframes sulion-pulse {
+  0%,
+  100% {
+    opacity: 0.95;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0ms !important;
+  }
+}

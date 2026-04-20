@@ -61,7 +61,11 @@ describe("TurnRow", () => {
         onSelect={() => {}}
       />,
     );
-    expect(screen.getByText(/💭3/)).toBeDefined();
-    expect(screen.getByText("⚠")).toBeDefined();
+    // Thinking badge renders the count alongside a sparkles sigil.
+    expect(screen.getByText("3")).toBeDefined();
+    // Error badge uses an alert-triangle sigil with an accessible label.
+    expect(
+      document.querySelector(".tr__badge--error"),
+    ).not.toBeNull();
   });
 });

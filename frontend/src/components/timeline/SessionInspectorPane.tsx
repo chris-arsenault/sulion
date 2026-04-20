@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import { createPortal } from "react-dom";
 
 import type { ToolPair, Turn } from "./grouping";
+import { Icon } from "../../icons";
 import { TurnDetail } from "./TurnDetail";
 import "./SessionInspectorPane.css";
 
@@ -72,7 +73,7 @@ export function SessionInspectorPane({
               onClick={onClose}
               aria-label="Close turn detail"
             >
-              ×
+              <Icon name="x" size={14} />
             </button>
           </div>
           {body}

@@ -1,15 +1,15 @@
 .jsont {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--t-ui);
   line-height: 1.6;
-  color: #e5e7eb;
+  color: var(--text);
 }
 
 .jsont__list {
   list-style: none;
   padding: 0 0 0 16px;
   margin: 0;
-  border-left: 1px dashed #1f232b;
+  border-left: 1px dashed var(--canvas-3);
 }
 
 .jsont__list > li {
@@ -17,16 +17,16 @@
 }
 
 .jsont__key {
-  color: #93c5fd;
+  color: var(--accent-hi);
 }
 
-.jsont__null { color: #6b7280; font-style: italic; }
-.jsont__bool { color: #fca5a5; }
-.jsont__num { color: #fcd34d; }
-.jsont__str { color: #86efac; white-space: pre-wrap; word-break: break-word; }
+.jsont__null { color: var(--text-lo); font-style: italic; }
+.jsont__bool { color: var(--crit-fg); }
+.jsont__num { color: var(--warn-fg); }
+.jsont__str { color: var(--ok-fg); white-space: pre-wrap; word-break: break-word; }
 
 .jsont__meta {
-  color: #9ca3af;
+  color: var(--text-mid);
   font-style: italic;
 }
 
@@ -47,35 +47,35 @@
 }
 
 .jsont__toggle:hover .jsont__meta {
-  color: #e5e7eb;
+  color: var(--text);
 }
 
 .jsont__chev {
   display: inline-block;
   width: 9px;
-  color: #6b7280;
-  font-size: 10px;
+  color: var(--text-lo);
+  font-size: var(--t-meta);
   transition: transform 0.1s;
 }
 
 .jsont__chev--open {
   transform: rotate(90deg);
-  color: #93c5fd;
+  color: var(--accent-hi);
 }
 
 .jsont__expand {
-  background: #14161b;
-  color: #9ca3af;
-  border: 1px solid #1f232b;
+  background: var(--canvas-2);
+  color: var(--text-mid);
+  border: 1px solid var(--canvas-3);
   padding: 0 6px;
   border-radius: 3px;
   font: inherit;
-  font-size: 10px;
+  font-size: var(--t-meta);
   margin-left: 4px;
   cursor: pointer;
 }
 
 .jsont__expand:hover {
-  background: #1f232b;
-  color: #e5e7eb;
+  background: var(--canvas-3);
+  color: var(--text);
 }

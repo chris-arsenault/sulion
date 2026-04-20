@@ -100,7 +100,6 @@ export function FileTracePanel({ repo, path }: { repo: string; path: string }) {
                 className={canOpenTimeline ? "ft__trace-item" : "ft__trace-item ft__trace-item--disabled"}
                 onClick={() => openTurn(touch)}
                 onContextMenu={onContextMenu}
-                title={canOpenTimeline ? "Click to open turn. Right-click for more actions." : undefined}
               >
                 <div className="ft__trace-body">
                   <div className="ft__trace-line">

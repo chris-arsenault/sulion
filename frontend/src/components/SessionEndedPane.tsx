@@ -6,6 +6,8 @@ import { useState } from "react";
 
 import type { SessionView } from "../api/types";
 import { useSessions } from "../state/SessionStore";
+import { Icon } from "../icons";
+import { Tooltip } from "./ui";
 import "./SessionEndedPane.css";
 
 interface Props {
@@ -82,11 +84,19 @@ export function SessionEndedPane({ session }: Props) {
     return "Spawn a new PTY and run `claude --resume` against this Claude session";
   })();
 
+  const sigil =
+    session.state === "orphaned"
+      ? "session-orphan"
+      : session.state === "dead"
+        ? "session-dead"
+        : "session-dead";
+
   return (
     <div className="sep" data-testid="session-ended-pane">
       <div className="sep__card">
         <div className={`sep__badge sep__badge--${session.state}`}>
-          {session.state}
+          <Icon name={sigil} size={14} />
+          <span>{session.state}</span>
         </div>
         <h2 className="sep__title">{title}</h2>
         <p className="sep__message">{explanation}</p>
@@ -117,15 +127,16 @@ export function SessionEndedPane({ session }: Props) {
 
         <div className="sep__actions">
           {canResume && (
-            <button
-              type="button"
-              className="sep__btn sep__btn--primary"
-              onClick={onResume}
-              disabled={busy}
-              title={resumeTitle}
-            >
-              {busy ? "Resuming…" : "Resume with new PTY"}
-            </button>
+            <Tooltip label={resumeTitle}>
+              <button
+                type="button"
+                className="sep__btn sep__btn--primary"
+                onClick={onResume}
+                disabled={busy}
+              >
+                {busy ? "Resuming…" : "Resume with new PTY"}
+              </button>
+            </Tooltip>
           )}
           <button
             type="button"

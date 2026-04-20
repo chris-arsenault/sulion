@@ -1,8 +1,16 @@
 .terminal-pane {
   position: relative;
-  background: #0b0d12;
+  background: var(--canvas-1);
   height: 100%;
   overflow: hidden;
+  transition: box-shadow var(--dur-0) var(--ease);
+  box-shadow: inset 0 0 0 1px transparent;
+}
+
+/* The frame is the focus affordance. xterm swallows keyboard events so
+ * without this you can't tell which pane is live. */
+.terminal-pane--focused {
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 .terminal-pane__host {
@@ -12,22 +20,27 @@
   box-sizing: border-box;
 }
 
-/* xterm's default .xterm-viewport background should match our theme */
+/* Match xterm's background to the token canvas — eliminates the hair
+ * stripe at the left/right of the canvas at narrow widths. */
 .terminal-pane .xterm,
 .terminal-pane .xterm-viewport {
-  background: #0b0d12 !important;
+  background: var(--canvas-1) !important;
 }
 
 .terminal-pane__status {
   position: absolute;
   top: 8px;
   right: 12px;
-  font-size: 11px;
-  color: #fde68a;
-  background: rgba(0, 0, 0, 0.5);
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-family: ui-monospace, monospace;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--t-meta);
+  color: var(--warn-fg);
+  background: var(--canvas-2);
+  border: 1px solid var(--hairline);
+  padding: 2px 8px;
+  border-radius: var(--r-1);
+  font-family: var(--font-mono);
   pointer-events: none;
 }
 
@@ -37,8 +50,9 @@
   left: 0;
   right: 0;
   padding: 6px 10px;
-  background: #7f1d1d;
-  color: #fecaca;
-  font-size: 12px;
+  background: var(--crit-bg);
+  color: var(--crit-fg);
+  border-top: 1px solid var(--crit-mark);
+  font-size: var(--t-ui);
   text-align: center;
 }

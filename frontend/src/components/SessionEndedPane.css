@@ -2,61 +2,75 @@
   display: grid;
   place-items: center;
   height: 100%;
-  background: #0b0d12;
-  padding: 20px;
+  background: var(--canvas-1);
+  padding: 24px;
   overflow: auto;
 }
 
 .sep__card {
-  max-width: 520px;
+  max-width: 560px;
   width: 100%;
-  padding: 24px;
-  border: 1px solid #1f232b;
-  background: #14161b;
-  border-radius: 8px;
-  color: #e5e7eb;
+  padding: 28px;
+  border: 1px solid var(--hairline);
+  background: var(--canvas-2);
+  border-radius: var(--r-2);
+  color: var(--text);
 }
 
 .sep__badge {
-  display: inline-block;
-  font-size: 10px;
-  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  font-weight: var(--w-600);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  padding: 2px 8px;
-  border-radius: 3px;
-  margin-bottom: 10px;
+  padding: 3px 10px;
+  border-radius: var(--r-1);
+  margin-bottom: 12px;
+  border: 1px solid transparent;
 }
 
 .sep__badge--orphaned {
-  background: #581c87;
-  color: #f3e8ff;
+  background: var(--atn-bg);
+  color: var(--atn-fg);
+  border-color: color-mix(in oklab, var(--atn-mark) 40%, transparent);
 }
 
 .sep__badge--dead {
-  background: #7c2d12;
-  color: #fed7aa;
+  background: var(--crit-bg);
+  color: var(--crit-fg);
+  border-color: color-mix(in oklab, var(--crit-mark) 40%, transparent);
+}
+
+.sep__badge--deleted {
+  background: var(--mute-bg);
+  color: var(--mute-fg);
+  border-color: var(--hairline);
 }
 
 .sep__title {
-  margin: 0 0 8px;
-  font-size: 16px;
-  font-weight: 600;
+  margin: 0 0 10px;
+  font-size: var(--t-head);
+  font-weight: var(--w-600);
+  color: var(--text-hi);
+  letter-spacing: 0.01em;
 }
 
 .sep__message {
-  margin: 0 0 16px;
-  font-size: 13px;
-  line-height: 1.5;
-  color: #d1d5db;
+  margin: 0 0 18px;
+  font-size: var(--t-body);
+  line-height: var(--lh-prose);
+  color: var(--text);
 }
 
 .sep__meta {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 4px 12px;
-  font-size: 12px;
-  margin: 0 0 18px;
+  gap: 6px 14px;
+  font-size: var(--t-ui);
+  margin: 0 0 20px;
 }
 
 .sep__meta div {
@@ -64,24 +78,27 @@
 }
 
 .sep__meta dt {
-  color: #6b7280;
+  color: var(--text-lo);
   text-transform: uppercase;
-  font-size: 10px;
-  letter-spacing: 0.05em;
+  font-size: var(--t-meta);
+  font-family: var(--font-mono);
+  letter-spacing: 0.06em;
   align-self: center;
 }
 
 .sep__meta dd {
   margin: 0;
-  color: #d1d5db;
+  color: var(--text);
 }
 
 .sep__meta code {
-  font-family: ui-monospace, monospace;
-  font-size: 12px;
-  background: #0b0d12;
+  font-family: var(--font-mono);
+  font-size: var(--t-ui);
+  background: var(--canvas-1);
+  border: 1px solid var(--hairline);
   padding: 1px 6px;
-  border-radius: 3px;
+  border-radius: var(--r-1);
+  color: var(--text-hi);
 }
 
 .sep__actions {
@@ -91,18 +108,21 @@
 }
 
 .sep__btn {
-  background: #1f232b;
-  color: #d1d5db;
-  border: none;
-  padding: 7px 14px;
-  border-radius: 4px;
+  background: var(--canvas-3);
+  color: var(--text);
+  border: 1px solid var(--hairline);
+  padding: 0 14px;
+  min-height: var(--lane-md);
+  border-radius: var(--r-1);
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--t-ui);
+  transition: background var(--dur-0) var(--ease), color var(--dur-0) var(--ease);
 }
 
 .sep__btn:hover:not(:disabled) {
-  filter: brightness(1.2);
+  background: var(--hairline);
+  color: var(--text-hi);
 }
 
 .sep__btn:disabled {
@@ -111,20 +131,34 @@
 }
 
 .sep__btn--primary {
-  background: #2563eb;
-  color: #fff;
+  background: var(--accent);
+  color: var(--canvas-0);
+  border-color: var(--accent);
+  font-weight: var(--w-500);
+}
+
+.sep__btn--primary:hover:not(:disabled) {
+  background: var(--accent-hi);
+  color: var(--canvas-0);
 }
 
 .sep__btn--destructive {
-  background: #7f1d1d;
-  color: #fee2e2;
+  background: var(--crit-bg);
+  color: var(--crit-fg);
+  border-color: color-mix(in oklab, var(--crit-mark) 40%, transparent);
+}
+
+.sep__btn--destructive:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--crit-bg) 70%, var(--crit-mark));
+  color: var(--text-hi);
 }
 
 .sep__error {
   margin-top: 12px;
   padding: 8px 10px;
-  background: #441c1c;
-  color: #fecaca;
-  border-radius: 4px;
-  font-size: 12px;
+  background: var(--crit-bg);
+  color: var(--crit-fg);
+  border-left: 2px solid var(--crit-mark);
+  border-radius: var(--r-1);
+  font-size: var(--t-ui);
 }

@@ -2,41 +2,41 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #0f1115;
-  color: #e5e7eb;
+  background: var(--canvas-0);
+  color: var(--text);
 }
 
 .dt__header {
   display: flex;
   align-items: center;
   padding: 6px 12px;
-  background: #14161b;
-  border-bottom: 1px solid #1f232b;
+  background: var(--canvas-2);
+  border-bottom: 1px solid var(--canvas-3);
   gap: 12px;
   flex-shrink: 0;
 }
 
 .dt__title {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  color: #fcd34d;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--warn-fg);
+  font-size: var(--t-ui);
   flex: 1;
 }
 
 .dt__refresh {
-  background: #1f232b;
-  color: #d1d5db;
+  background: var(--canvas-3);
+  color: var(--text);
   border: none;
   padding: 3px 8px;
   border-radius: 3px;
   font: inherit;
-  font-size: 10px;
+  font-size: var(--t-meta);
   cursor: pointer;
 }
-.dt__refresh:hover { background: #2a2e37; }
+.dt__refresh:hover { background: var(--canvas-3); }
 
-.dt__err { padding: 8px 12px; color: #fecaca; font-size: 12px; }
-.dt__muted { padding: 12px; color: #6b7280; font-style: italic; }
+.dt__err { padding: 8px 12px; color: var(--crit-fg); font-size: var(--t-ui); }
+.dt__muted { padding: 12px; color: var(--text-lo); font-style: italic; }
 
 .dt__body {
   flex: 1;
@@ -48,9 +48,9 @@
 }
 
 .dt__file {
-  border: 1px solid #1f232b;
+  border: 1px solid var(--canvas-3);
   border-radius: 4px;
-  background: #14161b;
+  background: var(--canvas-2);
 }
 
 .dt__file-header {
@@ -67,34 +67,34 @@
   gap: 6px;
   background: transparent;
   border: none;
-  color: #e5e7eb;
+  color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--t-ui);
   cursor: pointer;
   text-align: left;
   min-width: 0;
   padding: 4px 6px;
   border-radius: 3px;
 }
-.dt__file-toggle:hover { background: #1f232b; }
+.dt__file-toggle:hover { background: var(--canvas-3); }
 
 .dt__chev {
   display: inline-block;
   width: 10px;
-  color: #6b7280;
+  color: var(--text-lo);
 }
-.dt__chev--open { transform: rotate(90deg); color: #93c5fd; }
+.dt__chev--open { transform: rotate(90deg); color: var(--accent-hi); }
 
 .dt__file-code {
-  color: #fcd34d;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 10px;
+  color: var(--warn-fg);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
   width: 14px;
 }
 
 .dt__file-path {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  color: #d1d5db;
+  font-family: var(--font-mono);
+  color: var(--text);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -102,35 +102,35 @@
 }
 
 .dt__stage {
-  background: #1f232b;
-  color: #9ca3af;
+  background: var(--canvas-3);
+  color: var(--text-mid);
   border: none;
   padding: 3px 8px;
   border-radius: 3px;
   font: inherit;
-  font-size: 10px;
+  font-size: var(--t-meta);
   cursor: pointer;
 }
-.dt__stage:hover { background: #2a2e37; color: #e5e7eb; }
+.dt__stage:hover { background: var(--canvas-3); color: var(--text); }
 .dt__stage--staged {
-  background: #053929;
-  color: #86efac;
+  background: var(--ok-bg);
+  color: var(--ok-fg);
 }
-.dt__stage--staged:hover { background: #065f46; }
+.dt__stage--staged:hover { background: var(--ok-bg); }
 
 .dt__hunks {
   margin: 0;
   padding: 6px 0;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
   line-height: 1.45;
   overflow-x: auto;
-  border-top: 1px solid #1f232b;
+  border-top: 1px solid var(--canvas-3);
 }
 
 .dt__ln { display: block; padding: 0 8px; white-space: pre; }
-.dt__ln--add { background: #052a1a; color: #86efac; }
-.dt__ln--del { background: #2a0f12; color: #fecaca; }
-.dt__ln--hunk { background: #0f1a2a; color: #93c5fd; }
-.dt__ln--idx { color: #6b7280; font-size: 10px; }
-.dt__ln--ctx { color: #9ca3af; }
+.dt__ln--add { background: #052a1a; color: var(--ok-fg); }
+.dt__ln--del { background: var(--crit-bg); color: var(--crit-fg); }
+.dt__ln--hunk { background: #0f1a2a; color: var(--accent-hi); }
+.dt__ln--idx { color: var(--text-lo); font-size: var(--t-meta); }
+.dt__ln--ctx { color: var(--text-mid); }

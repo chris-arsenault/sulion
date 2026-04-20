@@ -9,6 +9,7 @@ import {
   useContextMenu,
 } from "../common/ContextMenu";
 import { copyToClipboard } from "../terminal/clipboard";
+import { Icon } from "../../icons";
 import type { ToolPair, Turn } from "./grouping";
 import { Markdown } from "./Markdown";
 import {
@@ -133,7 +134,6 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
           <div
             className="td__prompt-text"
             onContextMenu={onPromptContextMenu}
-            title={turn.user_prompt_text ? "Right-click for prompt actions" : undefined}
           >
             {turn.user_prompt_text ? (
               <Markdown source={turn.user_prompt_text} />
@@ -143,12 +143,19 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
           </div>
         </div>
         <div className="td__header-meta">
-          <span>{turn.event_count} events</span>
-          <span>{turn.operation_count} tool calls</span>
+          <span className="tabular">{turn.event_count} events</span>
+          <span className="tabular">{turn.operation_count} tool calls</span>
           {turn.thinking_count > 0 && showThinking && (
-            <span>💭 {turn.thinking_count}</span>
+            <span className="td__thinking-tally">
+              <Icon name="sparkles" size={12} />
+              <span className="tabular">{turn.thinking_count}</span>
+            </span>
           )}
-          {turn.has_errors && <span className="td__errors">⚠ errors</span>}
+          {turn.has_errors && (
+            <span className="td__errors">
+              <Icon name="alert-triangle" size={12} /> errors
+            </span>
+          )}
         </div>
         {saveError && <div className="td__save-error">save failed: {saveError}</div>}
       </div>
@@ -302,7 +309,6 @@ function AssistantBlock({
     <div
       className="td__sub td__sub--assistant"
       onContextMenu={onContextMenu}
-      title={hasCopyable || fullBody ? "Right-click for assistant actions" : undefined}
     >
       {texts.map((text, idx) => (
         <div key={`t-${idx}`} className="td__text">
@@ -319,10 +325,15 @@ function AssistantBlock({
               onClick={(e: MouseEvent<HTMLButtonElement>) =>
                 onThinkingChip(e.currentTarget, text)
               }
-              title="View thinking"
+              aria-label="View thinking"
             >
-              💭 thinking
-              {thinking.length > 1 ? ` ${idx + 1}/${thinking.length}` : ""}
+              <Icon name="sparkles" size={12} />
+              <span>thinking</span>
+              {thinking.length > 1 ? (
+                <span className="tabular">
+                  {idx + 1}/{thinking.length}
+                </span>
+              ) : null}
             </button>
           ))}
         </div>
@@ -391,7 +402,15 @@ function ToolPairRow({
           onClick={() => setExpanded((value) => !value)}
           aria-label={expanded ? "Collapse tool details" : "Expand tool details"}
         >
-          <span className="td__tool-chevron">{expanded ? "▾" : "▸"}</span>
+          <span
+            className={
+              expanded
+                ? "td__tool-chevron td__tool-chevron--open"
+                : "td__tool-chevron"
+            }
+          >
+            <Icon name="chevron-right" size={12} />
+          </span>
           <span
             className={`td__tool-name td__tool-name--${toolType(pair).toLowerCase()}`}
           >

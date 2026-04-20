@@ -1,17 +1,1 @@
-html,
-body,
-#root {
-  margin: 0;
-  padding: 0;
-  height: 100%;
-  background: #0f1115;
-  color: #e5e7eb;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-button {
-  font: inherit;
-}
+@import "./styles/tokens.css";

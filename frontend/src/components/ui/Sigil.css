@@ -1,0 +1,61 @@
+.ui-sigil {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-mid);
+  flex: 0 0 auto;
+}
+
+.ui-sigil--ring {
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 2px;
+}
+
+.ui-sigil--pulse {
+  animation: sulion-pulse 2s infinite ease-in-out;
+}
+
+.ui-sigil--tone-ok {
+  color: var(--ok-mark);
+}
+.ui-sigil--tone-warn {
+  color: var(--warn-mark);
+}
+.ui-sigil--tone-crit {
+  color: var(--crit-mark);
+}
+.ui-sigil--tone-info {
+  color: var(--info-mark);
+}
+.ui-sigil--tone-atn {
+  color: var(--atn-mark);
+}
+.ui-sigil--tone-mute {
+  color: var(--mute-mark);
+}
+.ui-sigil--tone-accent {
+  color: var(--accent);
+}
+
+.ui-sigil--cat-create {
+  color: var(--cat-create);
+}
+.ui-sigil--cat-util {
+  color: var(--cat-util);
+}
+.ui-sigil--cat-delegate {
+  color: var(--cat-delegate);
+}
+.ui-sigil--cat-workflow {
+  color: var(--cat-workflow);
+}
+.ui-sigil--cat-inspect {
+  color: var(--cat-inspect);
+}
+.ui-sigil--cat-research {
+  color: var(--cat-research);
+}
+.ui-sigil--cat-other {
+  color: var(--cat-other);
+}

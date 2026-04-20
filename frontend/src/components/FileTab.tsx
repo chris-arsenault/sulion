@@ -13,6 +13,8 @@
 import { useEffect, useRef, useState } from "react";
 
 import { getRepoFile } from "../api/client";
+import { Icon } from "../icons";
+import { Tooltip } from "./ui";
 import type { FileResponse } from "../api/types";
 import { useRepos } from "../state/RepoStore";
 import { useTabs } from "../state/TabStore";
@@ -86,29 +88,35 @@ export function FileTab({ repo, path }: { repo: string; path: string }) {
           </span>
         )}
         {dirty && (
-          <button
-            type="button"
-            className="ft__diff-btn"
-            title={`Open diff (${dirty.trim()})`}
-            onClick={() => openTab({ kind: "diff", repo, path })}
-          >
-            {dirty.trim() || "•"} view diff
-          </button>
+          <Tooltip label={`Open diff (${dirty.trim()})`}>
+            <button
+              type="button"
+              className="ft__diff-btn"
+              onClick={() => openTab({ kind: "diff", repo, path })}
+            >
+              <Icon name="diff" size={12} />
+              <span className="tabular">{dirty.trim() || "•"}</span>
+              <span>diff</span>
+            </button>
+          </Tooltip>
         )}
         {canToggleRaw(data) && (
-          <button
-            type="button"
-            className="ft__raw-btn"
-            aria-pressed={raw}
-            onClick={() => setRaw((v) => !v)}
-            title={
+          <Tooltip
+            label={
               raw
                 ? "Switch back to the formatted view"
                 : "Switch to a raw monospace view"
             }
           >
-            {raw ? "formatted" : "raw"}
-          </button>
+            <button
+              type="button"
+              className="ft__raw-btn"
+              aria-pressed={raw}
+              onClick={() => setRaw((v) => !v)}
+            >
+              {raw ? "formatted" : "raw"}
+            </button>
+          </Tooltip>
         )}
       </div>
       <div className="ft__body">
