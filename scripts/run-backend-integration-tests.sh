@@ -14,6 +14,7 @@ TEST_TARGETS=(
   ws_integration
   ingester_integration
 )
+INTEGRATION_FEATURE="integration-tests"
 
 DOCKER_CONTAINER_NAME=""
 
@@ -73,10 +74,10 @@ ensure_test_db() {
 
 run_target() {
   local target="$1"
-  echo "==> cargo test --release --test ${target} -- --ignored --test-threads=1"
+  echo "==> cargo test --release --features ${INTEGRATION_FEATURE} --test ${target} -- --test-threads=1"
   (
     cd "${BACKEND_DIR}"
-    cargo test --release --test "${target}" -- --ignored --test-threads=1
+    cargo test --release --features "${INTEGRATION_FEATURE}" --test "${target}" -- --test-threads=1
   )
 }
 

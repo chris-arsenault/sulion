@@ -13,6 +13,7 @@ pub mod correlate;
 pub mod db;
 pub mod e2e;
 pub mod emulator;
+pub mod future_prompts;
 pub mod git;
 pub mod ingest;
 pub mod library;

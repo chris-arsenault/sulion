@@ -1,3 +1,5 @@
+#![cfg(feature = "integration-tests")]
+
 //! JSONL ingester integration tests. Exercise the full file-to-Postgres
 //! path with synthetic .jsonl fixtures in a tempdir.
 
@@ -145,7 +147,6 @@ fn codex_rollout_path(root: &std::path::Path, session_uuid: Uuid) -> PathBuf {
 }
 
 #[tokio::test]
-#[ignore]
 async fn ingests_a_simple_event() {
     let pool = fresh_pool().await;
     let fx = Fixture::new();
@@ -166,7 +167,6 @@ async fn ingests_a_simple_event() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn ingests_a_codex_rollout_event_from_codex_sessions_dir() {
     let pool = fresh_pool().await;
     let fx = CodexFixture::new();
@@ -213,7 +213,6 @@ async fn ingests_a_codex_rollout_event_from_codex_sessions_dir() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn codex_fixture_preserves_subagent_lineage() {
     let pool = fresh_pool().await;
     let claude_root = tempfile::tempdir().unwrap();
@@ -336,7 +335,6 @@ async fn codex_fixture_preserves_subagent_lineage() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn claude_edit_tool_result_payload_is_persisted_canonically() {
     let pool = fresh_pool().await;
     let fx = Fixture::new();
@@ -382,7 +380,6 @@ async fn claude_edit_tool_result_payload_is_persisted_canonically() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn partial_trailing_line_is_not_committed() {
     let pool = fresh_pool().await;
     let fx = Fixture::new();
@@ -412,7 +409,6 @@ async fn partial_trailing_line_is_not_committed() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn unknown_event_type_is_stored_with_unknown_kind() {
     let pool = fresh_pool().await;
     let fx = Fixture::new();
@@ -437,7 +433,6 @@ async fn unknown_event_type_is_stored_with_unknown_kind() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn malformed_line_is_skipped_without_stalling() {
     let pool = fresh_pool().await;
     let fx = Fixture::new();
@@ -460,7 +455,6 @@ async fn malformed_line_is_skipped_without_stalling() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn restart_resumes_from_committed_offset_without_duplicates() {
     let pool = fresh_pool().await;
     let fx = Fixture::new();
@@ -493,7 +487,6 @@ async fn restart_resumes_from_committed_offset_without_duplicates() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn claude_sessions_row_is_created_with_project_hash() {
     let pool = fresh_pool().await;
     let fx = Fixture::new();
@@ -512,7 +505,6 @@ async fn claude_sessions_row_is_created_with_project_hash() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn non_uuid_filename_is_skipped() {
     let pool = fresh_pool().await;
     let fx = Fixture::new();
@@ -538,7 +530,6 @@ async fn non_uuid_filename_is_skipped() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn compaction_event_links_parent_session_uuid() {
     let pool = fresh_pool().await;
     let fx = Fixture::new();
@@ -563,7 +554,6 @@ async fn compaction_event_links_parent_session_uuid() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn compaction_linkage_uses_parent_session_uuid_field_too() {
     let pool = fresh_pool().await;
     let fx = Fixture::new();
@@ -586,7 +576,6 @@ async fn compaction_linkage_uses_parent_session_uuid_field_too() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn compaction_linkage_ignored_when_self_referencing() {
     let pool = fresh_pool().await;
     let fx = Fixture::new();
@@ -611,7 +600,6 @@ async fn compaction_linkage_ignored_when_self_referencing() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn file_truncation_resets_offset() {
     let pool = fresh_pool().await;
     let fx = Fixture::new();

@@ -9,12 +9,14 @@ interface Props {
   turn: Turn;
   selected: boolean;
   showThinking: boolean;
-  onSelect: (id: number) => void;
+  onSelect: (key: string) => void;
 }
 
 export function TurnRow({ turn, selected, showThinking, onSelect }: Props) {
   const badges = useMemo(() => toolBadges(turn.tool_pairs), [turn.tool_pairs]);
-  const onClick = useCallback(() => onSelect(turn.id), [onSelect, turn.id]);
+  const sessionBadge = useMemo(() => sessionMeta(turn), [turn]);
+  const turnKey = turn.turn_key ?? `${turn.id}`;
+  const onClick = useCallback(() => onSelect(turnKey), [onSelect, turnKey]);
 
   return (
     <button
@@ -38,6 +40,18 @@ export function TurnRow({ turn, selected, showThinking, onSelect }: Props) {
           <span className="tr__duration tabular">
             {formatDuration(turn.duration_ms)}
           </span>
+        )}
+        {sessionBadge && (
+          <>
+            <span className="tr__dot" aria-hidden>
+              ·
+            </span>
+            <Tooltip label={sessionBadge.title}>
+              <span className="tr__badge tr__badge--session">
+                {sessionBadge.label}
+              </span>
+            </Tooltip>
+          </>
         )}
         {badges.length > 0 && (
           <span className="tr__dot" aria-hidden>
@@ -112,4 +126,23 @@ function formatTime(iso: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function sessionMeta(turn: Turn): { label: string; title: string } | null {
+  const sessionUuid = turn.session_uuid?.trim();
+  if (!sessionUuid) return null;
+  const label =
+    turn.session_label?.trim() ||
+    turn.pty_session_id?.slice(0, 8) ||
+    sessionUuid.slice(0, 8);
+  const parts = [
+    turn.session_agent ?? "session",
+    label,
+    turn.session_state ?? "unknown",
+    sessionUuid,
+  ];
+  return {
+    label,
+    title: parts.join(" · "),
+  };
 }

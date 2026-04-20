@@ -21,7 +21,7 @@ vi.mock("react-virtuoso", () => ({
 import { TimelinePane as TimelinePaneRaw } from "./TimelinePane";
 import { ContextMenuHost } from "./common/ContextMenu";
 
-const TimelinePane = (props: { sessionId: string }) => (
+const TimelinePane = (props: { sessionId?: string; repo?: string }) => (
   <>
     <TimelinePaneRaw {...props} />
     <ContextMenuHost />
@@ -70,6 +70,12 @@ function timelineBody(overrides: Partial<Record<string, unknown>> = {}) {
         has_errors: false,
         markdown: "**Prompt**\n\n> hello",
         chunks: [{ kind: "assistant", items: [{ kind: "text", text: "hi there" }], thinking: [] }],
+        turn_key: "00000000-0000-0000-0000-000000000001:1",
+        pty_session_id: "abc",
+        session_uuid: "00000000-0000-0000-0000-000000000001",
+        session_agent: "claude-code",
+        session_label: "investigation",
+        session_state: "dead",
       },
     ],
     ...overrides,
@@ -138,5 +144,20 @@ describe("TimelinePane", () => {
     render(<TimelinePane sessionId="abc" />);
     await waitFor(() => expect(screen.getByText(/1 turn/)).toBeDefined());
     expect(screen.getByText(/3 events/)).toBeDefined();
+  });
+
+  it("fetches the repo timeline endpoint in repo mode", async () => {
+    const urls: string[] = [];
+    stubFetch((url) => {
+      urls.push(url);
+      return new Response(timelineBody({ session_uuid: null, session_agent: null }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    render(<TimelinePane repo="alpha" />);
+    await waitFor(() => expect(screen.getByText(/repo alpha/i)).toBeDefined());
+    expect(urls[0]).toMatch(/\/api\/repos\/alpha\/timeline/);
   });
 });

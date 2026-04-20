@@ -75,11 +75,18 @@ The container image places the hook at `/opt/sulion/hooks/session-start.sh`. Hoo
 make ci          # run the full CI check locally
 make lint-rust   # clippy
 make fmt-rust    # fmt --check
-make test-rust   # cargo test
+make test-rust   # backend unit/non-DB tests
+make test-rust-integration   # Postgres-backed backend integration suite
 make lint-ts     # eslint
 make typecheck-ts
 make test-ts     # vitest run
 ```
+
+Backend integration contract: Postgres-backed tests live in `backend/tests/*_integration.rs`,
+are gated with `#![cfg(feature = "integration-tests")]`, and run through
+`scripts/run-backend-integration-tests.sh` / `make test-rust-integration`. Do not add
+`#[ignore]` to those tests. When you add a new backend integration target, register it in the
+script so the harness remains the single supported path.
 
 ## CI
 

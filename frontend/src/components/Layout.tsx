@@ -4,6 +4,7 @@ import { Icon } from "../icons";
 import { Rail } from "./Rail";
 import { Sidebar } from "./Sidebar";
 import { WorkArea } from "./WorkArea";
+import { FuturePromptsModal } from "./FuturePromptsModal";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { appCommands, useAppCommand } from "../state/AppCommands";
 import { useTabs } from "../state/TabStore";
@@ -36,6 +37,7 @@ export function Layout() {
   const isMobile = useMediaQuery("(max-width: 767px)");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [futurePromptsSessionId, setFuturePromptsSessionId] = useState<string | null>(null);
 
   const [pinned, setPinned] = useState<boolean>(() => {
     if (typeof localStorage === "undefined") return true;
@@ -70,6 +72,9 @@ export function Layout() {
   useAppCommand("open-diff", ({ repo, path }) => {
     openTabRef.current({ kind: "diff", repo, path });
   });
+  useAppCommand("open-future-prompts", ({ sessionId }) => {
+    setFuturePromptsSessionId(sessionId);
+  });
   useAppCommand("close-drawer", () => {
     setDrawerOpen(false);
   });
@@ -88,6 +93,7 @@ export function Layout() {
 
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   const closePalette = useCallback(() => setPaletteOpen(false), []);
+  const closeFuturePrompts = useCallback(() => setFuturePromptsSessionId(null), []);
   const openDrawer = useCallback(() => setDrawerOpen(true), []);
   const closeDrawerLocal = useCallback(() => setDrawerOpen(false), []);
   const togglePinned = useCallback(() => setPinned((v) => !v), []);
@@ -129,6 +135,11 @@ export function Layout() {
           onClose={closePalette}
           commands={commands}
         />
+        <FuturePromptsModal
+          open={futurePromptsSessionId !== null}
+          sessionId={futurePromptsSessionId}
+          onClose={closeFuturePrompts}
+        />
       </div>
     );
   }
@@ -159,6 +170,11 @@ export function Layout() {
         open={paletteOpen}
         onClose={closePalette}
         commands={commands}
+      />
+      <FuturePromptsModal
+        open={futurePromptsSessionId !== null}
+        sessionId={futurePromptsSessionId}
+        onClose={closeFuturePrompts}
       />
     </div>
   );

@@ -554,6 +554,7 @@ function liveLabel(
     case "terminal":
       return sessionTag ? `${sessionTag} · term` : "terminal";
     case "timeline":
+      if (tab.repo) return `${tab.repo} · time`;
       return sessionTag ? `${sessionTag} · time` : "timeline";
     case "file":
       return tab.path ? basename(tab.path) : "file";
@@ -600,7 +601,8 @@ function TabContent({ tab }: { tab: TabData }) {
       case "timeline":
         return (
           <TimelinePane
-            sessionId={tab.sessionId!}
+            sessionId={tab.sessionId}
+            repo={tab.repo}
             focusTurnId={tab.focusTurnId}
             focusKey={tab.focusKey}
           />

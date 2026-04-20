@@ -111,6 +111,12 @@
   border-color: color-mix(in oklab, var(--crit-mark) 35%, transparent);
 }
 
+.tr__badge--session {
+  background: var(--canvas-3);
+  color: var(--text-mid);
+  border-color: color-mix(in oklab, var(--text-mid) 24%, transparent);
+}
+
 /* Category-bg + text. These map tool names to the category axis;
  * they're the one place category and specific-name meet. */
 .tr__badge--edit,

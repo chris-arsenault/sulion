@@ -31,6 +31,11 @@
   color: var(--cat-inspect);
 }
 
+.timeline-pane__scope {
+  font-family: var(--font-mono);
+  color: var(--cat-research);
+}
+
 .timeline-pane__count {
   color: var(--text-lo);
   margin-left: auto;

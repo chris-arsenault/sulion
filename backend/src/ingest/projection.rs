@@ -373,6 +373,116 @@ fn empty_timeline_response(total_event_count: i64) -> TimelineResponse {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct TimelineSessionMeta {
+    pub pty_session_id: Option<Uuid>,
+    pub session_uuid: Uuid,
+    pub session_agent: Option<String>,
+    pub session_label: Option<String>,
+    pub session_state: Option<String>,
+}
+
+#[derive(FromRow)]
+struct SessionMetaRow {
+    pty_session_id: Option<Uuid>,
+    session_uuid: Uuid,
+    session_agent: Option<String>,
+    session_label: Option<String>,
+    session_state: Option<String>,
+}
+
+pub async fn load_timeline_session_meta(
+    pool: &Pool,
+    session_uuid: Uuid,
+) -> anyhow::Result<TimelineSessionMeta> {
+    let row: SessionMetaRow = sqlx::query_as(
+        "SELECT cs.pty_session_id AS pty_session_id, \
+                cs.session_uuid AS session_uuid, \
+                cs.agent AS session_agent, \
+                ps.label AS session_label, \
+                ps.state AS session_state \
+           FROM claude_sessions cs \
+           LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
+          WHERE cs.session_uuid = $1",
+    )
+    .bind(session_uuid)
+    .fetch_one(pool)
+    .await
+    .context("load timeline session metadata")?;
+
+    Ok(TimelineSessionMeta {
+        pty_session_id: row.pty_session_id,
+        session_uuid: row.session_uuid,
+        session_agent: row.session_agent,
+        session_label: row.session_label,
+        session_state: row.session_state,
+    })
+}
+
+pub async fn load_repo_timeline_response(
+    pool: &Pool,
+    repo_name: &str,
+    filters: &ProjectionFilters,
+) -> anyhow::Result<TimelineResponse> {
+    let rows: Vec<SessionMetaRow> = sqlx::query_as(
+        "SELECT cs.pty_session_id AS pty_session_id, \
+                cs.session_uuid AS session_uuid, \
+                cs.agent AS session_agent, \
+                ps.label AS session_label, \
+                ps.state AS session_state \
+           FROM claude_sessions cs \
+           JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
+          WHERE ps.repo = $1 \
+          ORDER BY cs.started_at ASC, cs.session_uuid ASC",
+    )
+    .bind(repo_name)
+    .fetch_all(pool)
+    .await
+    .context("load repo timeline sessions")?;
+
+    let mut total_event_count = 0_i64;
+    let mut turns = Vec::new();
+    for row in rows {
+        let meta = TimelineSessionMeta {
+            pty_session_id: row.pty_session_id,
+            session_uuid: row.session_uuid,
+            session_agent: row.session_agent,
+            session_label: row.session_label,
+            session_state: row.session_state,
+        };
+        let mut response = load_timeline_response(pool, meta.session_uuid, filters).await?;
+        total_event_count += response.total_event_count;
+        annotate_timeline_turns(&mut response.turns, &meta);
+        turns.extend(response.turns);
+    }
+
+    turns.sort_by(|left, right| {
+        left.start_timestamp
+            .cmp(&right.start_timestamp)
+            .then_with(|| left.end_timestamp.cmp(&right.end_timestamp))
+            .then_with(|| left.session_uuid.cmp(&right.session_uuid))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    Ok(TimelineResponse {
+        session_uuid: None,
+        session_agent: None,
+        total_event_count,
+        turns,
+    })
+}
+
+pub fn annotate_timeline_turns(turns: &mut [TimelineTurn], meta: &TimelineSessionMeta) {
+    for turn in turns {
+        turn.turn_key = Some(format!("{}:{}", meta.session_uuid, turn.id));
+        turn.pty_session_id = meta.pty_session_id;
+        turn.session_uuid = Some(meta.session_uuid);
+        turn.session_agent = meta.session_agent.clone();
+        turn.session_label = meta.session_label.clone();
+        turn.session_state = meta.session_state.clone();
+    }
+}
+
 async fn load_referenced_turn_ids(
     pool: &Pool,
     session_uuid: Uuid,
@@ -544,6 +654,7 @@ fn build_projected_turn(
     let turn_id = row.turn_id;
     Ok(TimelineTurn {
         id: turn_id,
+        turn_key: None,
         preview: row.preview,
         user_prompt_text: row.user_prompt_text,
         start_timestamp: row.start_timestamp,
@@ -557,6 +668,11 @@ fn build_projected_turn(
         markdown: row.markdown,
         chunks: serde_json::from_value(row.chunks_json)
             .with_context(|| format!("deserialize projected timeline chunks for turn {turn_id}"))?,
+        pty_session_id: None,
+        session_uuid: None,
+        session_agent: None,
+        session_label: None,
+        session_state: None,
     })
 }
 

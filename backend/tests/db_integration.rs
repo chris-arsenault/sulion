@@ -1,7 +1,10 @@
+#![cfg(feature = "integration-tests")]
+
 //! Integration tests that require a live Postgres.
 //!
 //! Run via `make test-rust-integration`, or point `SULION_TEST_DB`
-//! at an existing Postgres and invoke this binary with `--ignored`.
+//! at an existing Postgres and invoke
+//! `cargo test --release --features integration-tests --test db_integration -- --test-threads=1`.
 
 use sulion::db;
 
@@ -23,7 +26,6 @@ async fn reset_schema(pool: &db::Pool) {
 }
 
 #[tokio::test]
-#[ignore]
 async fn migrations_apply_on_empty_db() {
     let Some(url) = test_db_url() else {
         eprintln!("skipping: SULION_TEST_DB not set");
@@ -64,7 +66,6 @@ async fn migrations_apply_on_empty_db() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn migrations_are_idempotent() {
     let Some(url) = test_db_url() else {
         eprintln!("skipping: SULION_TEST_DB not set");

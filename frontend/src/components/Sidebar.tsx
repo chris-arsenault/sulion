@@ -370,6 +370,8 @@ function RepoGroup({
   onError,
   revealRequest,
 }: RepoGroupProps) {
+  const openTab = useTabs((store) => store.openTab);
+  const openCtx = useContextMenu((store) => store.open);
   const { selectedSessionId, onSelectSession } = selection;
   const { onRequestDelete, onUpdateSession } = sessionOps;
   const { toggleRepo, setNewSessionFor, createSession, registerAnchor } =
@@ -452,6 +454,24 @@ function RepoGroup({
     return max > 0 ? max : null;
   }, [group.sessions]);
   const staleness = stalenessFor(git, latestEventAt);
+  const onRepoContextMenu = useMemo(
+    () =>
+      contextMenuHandler(openCtx, () => [
+        {
+          kind: "item" as const,
+          id: "open-repo-timeline",
+          label: "Open repo timeline",
+          onSelect: () => openTab({ kind: "timeline", repo: group.name }, "bottom"),
+        },
+        {
+          kind: "item" as const,
+          id: "open-repo-diff",
+          label: "Open repo diff",
+          onSelect: () => openTab({ kind: "diff", repo: group.name }),
+        },
+      ]),
+    [openCtx, openTab, group.name],
+  );
 
   return (
     <li className="sidebar__group" ref={anchorRef} data-repo-name={group.name}>
@@ -460,6 +480,7 @@ function RepoGroup({
           type="button"
           className="sidebar__group-toggle"
           onClick={onToggle}
+          onContextMenu={onRepoContextMenu}
         >
           <span
             className={
@@ -1097,6 +1118,12 @@ function buildSessionMenuItems({
       id: "open-timeline",
       label: "Open timeline",
       onSelect: () => openTab({ kind: "timeline", sessionId: session.id }, "bottom"),
+    },
+    {
+      kind: "item",
+      id: "future-prompts",
+      label: "Future prompts",
+      onSelect: () => appCommands.openFuturePrompts({ sessionId: session.id }),
     },
     {
       kind: "item",

@@ -1,3 +1,5 @@
+#![cfg(feature = "integration-tests")]
+
 //! REST API integration tests: full axum stack, real Postgres, real
 //! filesystem for repo scans. Gated on `SULION_TEST_DB`.
 
@@ -5,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use serde_json::json;
 use sulion::db;
 use sulion::{app, AppState};
@@ -74,7 +77,6 @@ impl Harness {
 }
 
 #[tokio::test]
-#[ignore]
 async fn sessions_crud_roundtrip() {
     let h = Harness::new().await;
     // Create a repo dir so working_dir is valid.
@@ -135,7 +137,6 @@ async fn sessions_crud_roundtrip() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn create_session_with_missing_repo_returns_400() {
     let h = Harness::new().await;
     let resp = h
@@ -149,7 +150,6 @@ async fn create_session_with_missing_repo_returns_400() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn history_returns_events_after_ingest_and_correlate() {
     let h = Harness::new().await;
 
@@ -354,7 +354,6 @@ async fn history_returns_events_after_ingest_and_correlate() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn history_with_no_current_session_returns_empty() {
     let h = Harness::new().await;
     std::fs::create_dir_all(h.repos_root().join("r")).unwrap();
@@ -387,7 +386,6 @@ async fn history_with_no_current_session_returns_empty() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn history_on_unknown_session_returns_404() {
     let h = Harness::new().await;
     let resp = h
@@ -404,7 +402,6 @@ async fn history_on_unknown_session_returns_404() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn timeline_returns_projected_turns() {
     let h = Harness::new().await;
 
@@ -535,6 +532,8 @@ async fn timeline_returns_projected_turns() {
     assert_eq!(body["total_event_count"], 3);
     assert_eq!(body["turns"].as_array().unwrap().len(), 1);
     assert_eq!(body["turns"][0]["preview"], "hello");
+    assert_eq!(body["turns"][0]["session_uuid"], session_uuid.to_string());
+    assert_eq!(body["turns"][0]["pty_session_id"], pty_id.to_string());
     assert_eq!(body["turns"][0]["operation_count"], 1);
     assert_eq!(body["turns"][0]["tool_pairs"][0]["name"], "read");
     assert_eq!(body["turns"][0]["tool_pairs"][0]["category"], "inspect");
@@ -557,7 +556,143 @@ async fn timeline_returns_projected_turns() {
 }
 
 #[tokio::test]
-#[ignore]
+async fn repo_timeline_returns_merged_turns_across_sessions() {
+    let h = Harness::new().await;
+
+    std::fs::create_dir_all(h.repos_root().join("r")).unwrap();
+
+    let first_created: serde_json::Value = h
+        .client
+        .post(format!("{}/api/sessions", h.base))
+        .json(&json!({ "repo": "r" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let first_pty_id = first_created["id"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+
+    let second_created: serde_json::Value = h
+        .client
+        .post(format!("{}/api/sessions", h.base))
+        .json(&json!({ "repo": "r" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let second_pty_id = second_created["id"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+
+    let first_session_uuid = Uuid::new_v4();
+    sulion::correlate::apply(
+        &h.state.pool,
+        &sulion::correlate::CorrelateMsg {
+            pty_id: first_pty_id,
+            session_uuid: first_session_uuid,
+            agent: "codex".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE pty_sessions SET label = 'one' WHERE id = $1")
+        .bind(first_pty_id)
+        .execute(&h.state.pool)
+        .await
+        .unwrap();
+
+    let second_session_uuid = Uuid::new_v4();
+    sulion::correlate::apply(
+        &h.state.pool,
+        &sulion::correlate::CorrelateMsg {
+            pty_id: second_pty_id,
+            session_uuid: second_session_uuid,
+            agent: "claude-code".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE pty_sessions SET label = 'two' WHERE id = $1")
+        .bind(second_pty_id)
+        .execute(&h.state.pool)
+        .await
+        .unwrap();
+
+    let ts_one = DateTime::parse_from_rfc3339("2026-04-20T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let ts_two = DateTime::parse_from_rfc3339("2026-04-20T01:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+
+    for (session_uuid, ts, prompt) in [
+        (first_session_uuid, ts_one, "first prompt"),
+        (second_session_uuid, ts_two, "second prompt"),
+    ] {
+        sqlx::query(
+            "INSERT INTO events \
+             (session_uuid, byte_offset, timestamp, kind, payload, agent, speaker, content_kind, \
+              event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype, search_text) \
+             VALUES ($1, 0, $2, 'user', '{}'::jsonb, 'codex', 'user', 'text', NULL, NULL, NULL, false, false, NULL, '')",
+        )
+        .bind(session_uuid)
+        .bind(ts)
+        .execute(&h.state.pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO event_blocks \
+             (session_uuid, byte_offset, ord, kind, text, tool_id, tool_name, tool_name_canonical, tool_input, is_error, raw) \
+             VALUES ($1, 0, 0, 'text', $2, NULL, NULL, NULL, NULL, NULL, NULL)",
+        )
+        .bind(session_uuid)
+        .bind(prompt)
+        .execute(&h.state.pool)
+        .await
+        .unwrap();
+
+        sulion::ingest::rebuild_session_projection(&h.state.pool, session_uuid)
+            .await
+            .unwrap();
+    }
+
+    let body: serde_json::Value = h
+        .client
+        .get(format!("{}/api/repos/r/timeline", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert!(body["session_uuid"].is_null());
+    assert!(body["session_agent"].is_null());
+    assert_eq!(body["turns"].as_array().unwrap().len(), 2);
+    assert_eq!(body["turns"][0]["preview"], "first prompt");
+    assert_eq!(body["turns"][0]["session_label"], "one");
+    assert_eq!(body["turns"][0]["pty_session_id"], first_pty_id.to_string());
+    assert_eq!(body["turns"][1]["preview"], "second prompt");
+    assert_eq!(body["turns"][1]["session_label"], "two");
+    assert_eq!(
+        body["turns"][1]["pty_session_id"],
+        second_pty_id.to_string()
+    );
+
+    h.shutdown_sessions().await;
+}
+
+#[tokio::test]
 async fn file_trace_returns_related_turns() {
     let h = Harness::new().await;
 
@@ -648,7 +783,6 @@ async fn file_trace_returns_related_turns() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn repos_list_reflects_directory_scan() {
     let h = Harness::new().await;
     std::fs::create_dir_all(h.repos_root().join("aaa")).unwrap();
@@ -674,7 +808,6 @@ async fn repos_list_reflects_directory_scan() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn create_repo_init_creates_git_dir() {
     let h = Harness::new().await;
     let resp = h
@@ -691,7 +824,6 @@ async fn create_repo_init_creates_git_dir() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn create_repo_rejects_duplicate_and_invalid_names() {
     let h = Harness::new().await;
     // pre-existing
@@ -717,7 +849,6 @@ async fn create_repo_rejects_duplicate_and_invalid_names() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn health_endpoint_reports_ok_when_db_reachable() {
     let h = Harness::new().await;
     let resp = h

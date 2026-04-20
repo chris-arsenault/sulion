@@ -1,3 +1,5 @@
+#![cfg(feature = "integration-tests")]
+
 //! Correlation socket integration tests. Exercise the SessionStart-hook
 //! path end-to-end: bind a socket, write a JSON line, verify the DB rows.
 
@@ -61,7 +63,6 @@ fn write_fake_codex(path: &Path) {
 }
 
 #[tokio::test]
-#[ignore]
 async fn apply_upserts_claude_session_and_points_pty() {
     let pool = fresh_pool().await;
     let mgr = PtyManager::new(pool.clone());
@@ -110,7 +111,6 @@ async fn apply_upserts_claude_session_and_points_pty() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn second_claude_session_in_same_pty_updates_pointer() {
     let pool = fresh_pool().await;
     let mgr = PtyManager::new(pool.clone());
@@ -171,7 +171,6 @@ async fn second_claude_session_in_same_pty_updates_pointer() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn socket_listener_accepts_json_line_and_updates_db() {
     let pool = fresh_pool().await;
     let mgr = PtyManager::new(pool.clone());
@@ -223,7 +222,6 @@ async fn socket_listener_accepts_json_line_and_updates_db() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[ignore]
 async fn codex_launcher_correlates_session_uuid_from_open_rollout_file() {
     let pool = fresh_pool().await;
     let pty_id = Uuid::new_v4();
@@ -302,7 +300,6 @@ async fn codex_launcher_correlates_session_uuid_from_open_rollout_file() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[ignore]
 async fn codex_launcher_exits_when_correlation_ack_never_arrives() {
     let tmp = tempfile::tempdir().unwrap();
     let sessions_dir = tmp.path().join("sessions");

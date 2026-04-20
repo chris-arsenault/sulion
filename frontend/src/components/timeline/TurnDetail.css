@@ -62,10 +62,24 @@
   margin-top: 8px;
   font-size: var(--t-meta);
   color: var(--text-lo);
+  flex-wrap: wrap;
 }
 
 .td__header-meta .td__errors {
   color: var(--crit-fg);
+}
+
+.td__session-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 6px;
+  border-radius: var(--r-1);
+  background: var(--canvas-3);
+  color: var(--text-mid);
+  border: 1px solid color-mix(in oklab, var(--text-mid) 24%, transparent);
+  font-family: var(--font-mono);
+  letter-spacing: 0.03em;
 }
 
 .td__save-error {

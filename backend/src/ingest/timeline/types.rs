@@ -79,6 +79,8 @@ pub struct TimelineResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineTurn {
     pub id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_key: Option<String>,
     pub preview: String,
     pub user_prompt_text: Option<String>,
     pub start_timestamp: DateTime<Utc>,
@@ -91,6 +93,16 @@ pub struct TimelineTurn {
     pub has_errors: bool,
     pub markdown: String,
     pub chunks: Vec<TimelineChunk>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pty_session_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_uuid: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

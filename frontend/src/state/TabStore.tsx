@@ -264,8 +264,11 @@ export function tabKey(
 ): string {
   switch (spec.kind) {
     case "terminal":
-    case "timeline":
       return `${spec.kind}:${spec.sessionId ?? ""}`;
+    case "timeline":
+      return spec.repo
+        ? `timeline:repo:${spec.repo}`
+        : `timeline:session:${spec.sessionId ?? ""}`;
     case "file":
       return `file:${spec.repo ?? ""}:${spec.path ?? ""}`;
     case "diff":

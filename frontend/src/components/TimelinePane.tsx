@@ -17,7 +17,7 @@ import {
 } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 
-import { getTimeline } from "../api/client";
+import { getRepoTimeline, getTimeline } from "../api/client";
 import type { TimelineQuery, TimelineResponse, TimelineSubagent } from "../api/types";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { FilterChips } from "./timeline/FilterChips";
@@ -37,10 +37,12 @@ const MAX_INSPECTOR_FRACTION = 0.78;
 
 export function TimelinePane({
   sessionId,
+  repo,
   focusTurnId,
   focusKey,
 }: {
-  sessionId: string;
+  sessionId?: string;
+  repo?: string;
   focusTurnId?: number;
   focusKey?: string;
 }) {
@@ -50,7 +52,7 @@ export function TimelinePane({
   const [loadError, setLoadError] = useState<string | null>(null);
   const virtuoso = useRef<VirtuosoHandle | null>(null);
   const [subagent, setSubagent] = useState<TimelineSubagent | null>(null);
-  const [selectedTurnId, setSelectedTurnId] = useState<number | null>(null);
+  const [selectedTurnKey, setSelectedTurnKey] = useState<string | null>(null);
 
   const filterHook = useTimelineFilters();
   const { filters } = filterHook;
@@ -99,17 +101,20 @@ export function TimelinePane({
     setCurrentSessionAgent(null);
     setLoadError(null);
     setSubagent(null);
-    setSelectedTurnId(null);
-  }, [sessionId]);
+    setSelectedTurnKey(null);
+  }, [sessionId, repo]);
 
   useEffect(() => {
+    if (!sessionId && !repo) return;
     let cancelled = false;
     let inFlight = false;
     const tick = async () => {
       if (cancelled || inFlight) return;
       inFlight = true;
       try {
-        const resp = await getTimeline(sessionId, query);
+        const resp = sessionId
+          ? await getTimeline(sessionId, query)
+          : await getRepoTimeline(repo!, query);
         if (cancelled) return;
         setCurrentSessionUuid(resp.session_uuid);
         setCurrentSessionAgent(resp.session_agent);
@@ -130,7 +135,7 @@ export function TimelinePane({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [sessionId, query, queryKey]);
+  }, [sessionId, repo, query, queryKey]);
 
   const turns = useMemo<Turn[]>(
     () => timeline?.turns ?? [],
@@ -141,7 +146,7 @@ export function TimelinePane({
     if (focusTurnId == null) return;
     const exists = turns.findIndex((turn) => turn.id === focusTurnId);
     if (exists === -1) return;
-    setSelectedTurnId(focusTurnId);
+    setSelectedTurnKey(turnIdentity(turns[exists]!));
     virtuoso.current?.scrollToIndex({
       index: exists,
       align: "center",
@@ -151,10 +156,10 @@ export function TimelinePane({
 
   const selectedTurn = useMemo<Turn | null>(
     () =>
-      selectedTurnId == null
+      selectedTurnKey == null
         ? null
-        : turns.find((t) => t.id === selectedTurnId) ?? null,
-    [selectedTurnId, turns],
+        : turns.find((t) => turnIdentity(t) === selectedTurnKey) ?? null,
+    [selectedTurnKey, turns],
   );
 
   const handleSubagent = useCallback((pair: ToolPair) => {
@@ -200,7 +205,7 @@ export function TimelinePane({
   const listFraction = 1 - inspectorFraction;
   const empty = turns.length === 0;
 
-  const clearSelectedTurn = useCallback(() => setSelectedTurnId(null), []);
+  const clearSelectedTurn = useCallback(() => setSelectedTurnKey(null), []);
   const splitStyle = useMemo(
     () => ({
       gridTemplateColumns: `${listFraction}fr 6px ${inspectorFraction}fr`,
@@ -212,13 +217,15 @@ export function TimelinePane({
     <div className="timeline-pane" data-testid="timeline-pane">
       <div className="timeline-pane__header">
         <span className="timeline-pane__title">Timeline</span>
-        {currentSessionUuid && (
+        {repo ? (
+          <span className="timeline-pane__scope">repo {repo}</span>
+        ) : currentSessionUuid ? (
           <Tooltip label={`${currentSessionAgent ?? "session"} ${currentSessionUuid}`}>
             <span className="timeline-pane__session">
               {(currentSessionAgent ?? "session")} {currentSessionUuid.slice(0, 8)}
             </span>
           </Tooltip>
-        )}
+        ) : null}
         <span className="timeline-pane__count tabular">
           {turns.length} turn{turns.length === 1 ? "" : "s"} · {timeline?.total_event_count ?? 0} events
         </span>
@@ -232,7 +239,9 @@ export function TimelinePane({
       {empty ? (
         <div className="timeline-pane__empty">
           {(timeline?.total_event_count ?? 0) === 0
-            ? currentSessionUuid
+            ? repo
+              ? "No timeline data for this repo yet."
+              : currentSessionUuid
               ? "Waiting for events…"
               : "No transcript session correlated yet."
             : "No turns match current filters."}
@@ -242,9 +251,9 @@ export function TimelinePane({
           <div className="timeline-pane__list-narrow">
             <TurnList
               turns={turns}
-              selectedTurnId={selectedTurnId}
+              selectedTurnKey={selectedTurnKey}
               showThinking={filters.showThinking}
-              onSelect={setSelectedTurnId}
+              onSelect={setSelectedTurnKey}
               virtuosoRef={virtuoso}
             />
           </div>
@@ -265,9 +274,9 @@ export function TimelinePane({
           <div className="timeline-pane__list">
             <TurnList
               turns={turns}
-              selectedTurnId={selectedTurnId}
+              selectedTurnKey={selectedTurnKey}
               showThinking={filters.showThinking}
-              onSelect={setSelectedTurnId}
+              onSelect={setSelectedTurnKey}
               virtuosoRef={virtuoso}
             />
           </div>
@@ -303,32 +312,36 @@ export function TimelinePane({
 }
 
 function turnKey(_i: number, t: Turn): string {
-  return `${t.id}`;
+  return turnIdentity(t);
+}
+
+function turnIdentity(turn: Turn): string {
+  return turn.turn_key ?? `${turn.id}`;
 }
 
 function TurnList({
   turns,
-  selectedTurnId,
+  selectedTurnKey,
   showThinking,
   onSelect,
   virtuosoRef,
 }: {
   turns: Turn[];
-  selectedTurnId: number | null;
+  selectedTurnKey: string | null;
   showThinking: boolean;
-  onSelect: (id: number) => void;
+  onSelect: (key: string) => void;
   virtuosoRef: MutableRefObject<VirtuosoHandle | null>;
 }) {
   const renderItem = useCallback(
     (_i: number, t: Turn) => (
       <TurnRow
         turn={t}
-        selected={selectedTurnId === t.id}
+        selected={selectedTurnKey === turnIdentity(t)}
         showThinking={showThinking}
         onSelect={onSelect}
       />
     ),
-    [selectedTurnId, showThinking, onSelect],
+    [selectedTurnKey, showThinking, onSelect],
   );
   return (
     <Virtuoso

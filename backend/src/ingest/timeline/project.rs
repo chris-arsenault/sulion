@@ -177,6 +177,7 @@ pub(crate) fn project_turn(
 
     TimelineTurn {
         id: turn.id,
+        turn_key: None,
         preview: turn_preview(turn.user_prompt, &turn.events),
         user_prompt_text: turn.user_prompt.map(user_prompt_text),
         start_timestamp: turn.start_timestamp,
@@ -189,6 +190,11 @@ pub(crate) fn project_turn(
         has_errors,
         markdown,
         chunks,
+        pty_session_id: None,
+        session_uuid: None,
+        session_agent: None,
+        session_label: None,
+        session_state: None,
     }
 }
 

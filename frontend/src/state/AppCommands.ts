@@ -5,6 +5,7 @@ import type { LibraryKind } from "../api/types";
 export type AppCommand =
   | { type: "open-file"; repo: string; path: string }
   | { type: "open-diff"; repo: string; path?: string }
+  | { type: "open-future-prompts"; sessionId: string }
   | { type: "reveal-file"; repo: string; path: string }
   | { type: "reveal-repo"; repo: string }
   | { type: "close-drawer" }
@@ -30,6 +31,10 @@ export const appCommands = {
 
   openDiff(detail: Omit<AppCommandOf<"open-diff">, "type">) {
     dispatchAppCommand({ type: "open-diff", ...detail });
+  },
+
+  openFuturePrompts(detail: Omit<AppCommandOf<"open-future-prompts">, "type">) {
+    dispatchAppCommand({ type: "open-future-prompts", ...detail });
   },
 
   revealFile(detail: Omit<AppCommandOf<"reveal-file">, "type">) {

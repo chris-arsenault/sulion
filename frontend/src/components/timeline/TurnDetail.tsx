@@ -26,6 +26,7 @@ import {
 import { ThinkingFlyout } from "./ThinkingFlyout";
 import { ToolHoverCard } from "./ToolHoverCard";
 import { ToolCallRenderer } from "./tools/renderers";
+import { Tooltip } from "../ui";
 import "./TurnDetail.css";
 
 interface Props {
@@ -55,6 +56,27 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
   const [hover, setHover] = useState<HoverAnchor | null>(null);
   const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const openCtx = useContextMenu((store) => store.open);
+  const sessionBadge = useMemo(() => {
+    const sessionUuid = turn.session_uuid?.trim();
+    if (!sessionUuid) return null;
+    const label =
+      turn.session_label?.trim() ||
+      turn.pty_session_id?.slice(0, 8) ||
+      sessionUuid.slice(0, 8);
+    const title = [
+      turn.session_agent ?? "session",
+      label,
+      turn.session_state ?? "unknown",
+      sessionUuid,
+    ].join(" · ");
+    return { label, title };
+  }, [
+    turn.session_uuid,
+    turn.session_label,
+    turn.pty_session_id,
+    turn.session_agent,
+    turn.session_state,
+  ]);
 
   const savePrompt = useCallback(async () => {
     const body = turn.user_prompt_text?.trim();
@@ -192,6 +214,11 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
           </div>
         </div>
         <div className="td__header-meta">
+          {sessionBadge && (
+            <Tooltip label={sessionBadge.title}>
+              <span className="td__session-chip">{sessionBadge.label}</span>
+            </Tooltip>
+          )}
           <span className="tabular">{turn.event_count} events</span>
           <span className="tabular">{turn.operation_count} tool calls</span>
           {turn.thinking_count > 0 && showThinking && (

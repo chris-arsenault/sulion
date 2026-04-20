@@ -10,7 +10,8 @@ fmt-rust:
 	cd backend && cargo fmt -- --check
 
 test-rust:
-	cd backend && cargo test --release
+	cd backend && cargo test --release --lib --bins
+	cd backend && cargo test --release --doc
 
 test-rust-integration:
 	./scripts/run-backend-integration-tests.sh

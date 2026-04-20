@@ -222,6 +222,7 @@ export type TimelineChunk =
 
 export interface TimelineTurn {
   id: number;
+  turn_key?: string | null;
   preview: string;
   user_prompt_text?: string | null;
   start_timestamp: string;
@@ -234,6 +235,11 @@ export interface TimelineTurn {
   has_errors: boolean;
   markdown: string;
   chunks: TimelineChunk[];
+  pty_session_id?: string | null;
+  session_uuid?: string | null;
+  session_agent?: string | null;
+  session_label?: string | null;
+  session_state?: SessionState | null;
 }
 
 export interface TimelineResponse {
@@ -354,4 +360,29 @@ export type LibraryKind = "references" | "prompts";
 export interface SaveLibraryInput {
   name: string;
   body: string;
+}
+
+export type FuturePromptState = "pending" | "sent";
+
+export interface FuturePromptEntry {
+  id: string;
+  state: FuturePromptState;
+  created_at: string | null;
+  updated_at: string | null;
+  text: string;
+}
+
+export interface FuturePromptListResponse {
+  session_uuid: string | null;
+  session_agent: string | null;
+  prompts: FuturePromptEntry[];
+}
+
+export interface CreateFuturePromptInput {
+  text: string;
+}
+
+export interface UpdateFuturePromptInput {
+  text?: string;
+  state?: FuturePromptState;
 }

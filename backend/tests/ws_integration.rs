@@ -1,3 +1,5 @@
+#![cfg(feature = "integration-tests")]
+
 //! WebSocket attach integration test. Spawns the full axum stack on a
 //! random loopback port, connects a tungstenite client, and asserts the
 //! snapshot + live stream + resize paths. Gated on `SULION_TEST_DB`.
@@ -70,7 +72,6 @@ async fn collect_for(
 }
 
 #[tokio::test]
-#[ignore]
 async fn connect_receives_snapshot_then_ready_then_live_bytes() {
     let pool = fresh_pool().await;
     let (base, state) = start_server(pool.clone()).await;
@@ -132,7 +133,6 @@ async fn connect_receives_snapshot_then_ready_then_live_bytes() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn resize_message_is_accepted() {
     let pool = fresh_pool().await;
     let (base, state) = start_server(pool.clone()).await;
@@ -186,7 +186,6 @@ async fn resize_message_is_accepted() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn input_sent_to_shell_appears_in_output() {
     let pool = fresh_pool().await;
     let (base, state) = start_server(pool.clone()).await;
@@ -236,7 +235,6 @@ async fn input_sent_to_shell_appears_in_output() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn unknown_session_id_returns_404() {
     let pool = fresh_pool().await;
     let (base, _state) = start_server(pool.clone()).await;

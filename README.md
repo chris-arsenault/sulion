@@ -18,8 +18,9 @@ Requires Rust (for the backend), pnpm + Node 24 (for the frontend), and either D
 
 ```bash
 make ci              # full lint + unit tests + backend integration tests
+make test-rust       # backend unit/non-DB tests
 make e2e             # Playwright suite against real backend + Postgres + seeded ingest data
-make test-rust-integration   # ignored backend integration suite; auto-starts Postgres via Docker if needed
+make test-rust-integration   # backend integration suite; auto-starts Postgres via Docker if needed
 
 # Backend
 cd backend && cargo run                        # SULION_DB_URL must be set
@@ -32,9 +33,11 @@ SULION_TEST_DB='postgres://postgres:testpass@127.0.0.1:55432/sulion' \
 cd frontend && pnpm install && pnpm dev       # proxies /api and /ws to :8080
 ```
 
-`make test-rust-integration` runs the ignored backend integration binaries one at a time with
-`--test-threads=1`. If `SULION_TEST_DB` is unset, the script starts an ephemeral
-`postgres:16` container through Docker, waits for readiness, runs the suite, and cleans it up.
+`make test-rust-integration` is the supported path for Postgres-backed backend tests. The
+harness enables the `integration-tests` Cargo feature, runs each backend integration target one
+at a time with `--test-threads=1`, and auto-starts an ephemeral `postgres:16` container through
+Docker when `SULION_TEST_DB` is unset. Do not mark backend integration tests `#[ignore]`; wire
+them into this harness instead.
 
 ## First-run on TrueNAS
 

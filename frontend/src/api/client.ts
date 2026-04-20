@@ -3,10 +3,13 @@
 import type {
   CreateRepoRequest,
   CreateSessionRequest,
+  CreateFuturePromptInput,
   DiffResponse,
   DirListing,
   FileTraceResponse,
   FileResponse,
+  FuturePromptEntry,
+  FuturePromptListResponse,
   GitStatus,
   HistoryQuery,
   HistoryResponse,
@@ -21,6 +24,7 @@ import type {
   TimelineQuery,
   TimelineResponse,
   UpdateSessionRequest,
+  UpdateFuturePromptInput,
 } from "./types";
 
 export class ApiError extends Error {
@@ -125,6 +129,28 @@ export function getTimeline(
   const suffix = qs ? `?${qs}` : "";
   return request<TimelineResponse>(
     `/api/sessions/${sessionId}/timeline${suffix}`,
+  );
+}
+
+export function getRepoTimeline(
+  repo: string,
+  query: TimelineQuery = {},
+): Promise<TimelineResponse> {
+  const params = new URLSearchParams();
+  if (query.hidden_speakers?.length) {
+    params.set("hide_speakers", query.hidden_speakers.join(","));
+  }
+  if (query.hidden_operation_categories?.length) {
+    params.set("hide_categories", query.hidden_operation_categories.join(","));
+  }
+  if (query.errors_only) params.set("errors_only", "true");
+  if (query.show_bookkeeping) params.set("show_bookkeeping", "true");
+  if (query.show_sidechain) params.set("show_sidechain", "true");
+  if (query.file_path) params.set("file_path", query.file_path);
+  const qs = params.toString();
+  const suffix = qs ? `?${qs}` : "";
+  return request<TimelineResponse>(
+    `/api/repos/${encodeURIComponent(repo)}/timeline${suffix}`,
   );
 }
 
@@ -251,4 +277,53 @@ export function deleteLibraryEntry(
   return request<void>(`/api/library/${kind}/${encodeURIComponent(slug)}`, {
     method: "DELETE",
   });
+}
+
+// ─── future prompts ──────────────────────────────────────────────────
+
+export function listFuturePrompts(
+  sessionId: string,
+): Promise<FuturePromptListResponse> {
+  return request<FuturePromptListResponse>(
+    `/api/sessions/${sessionId}/future-prompts`,
+  );
+}
+
+export function createFuturePrompt(
+  sessionId: string,
+  input: CreateFuturePromptInput,
+): Promise<FuturePromptEntry> {
+  return request<FuturePromptEntry>(
+    `/api/sessions/${sessionId}/future-prompts`,
+    {
+      method: "PUT",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export function updateFuturePrompt(
+  sessionId: string,
+  id: string,
+  input: UpdateFuturePromptInput,
+): Promise<FuturePromptEntry> {
+  return request<FuturePromptEntry>(
+    `/api/sessions/${sessionId}/future-prompts/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export function deleteFuturePrompt(
+  sessionId: string,
+  id: string,
+): Promise<void> {
+  return request<void>(
+    `/api/sessions/${sessionId}/future-prompts/${encodeURIComponent(id)}`,
+    {
+      method: "DELETE",
+    },
+  );
 }

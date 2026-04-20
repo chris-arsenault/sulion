@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 
 import { Sidebar } from "./Sidebar";
 import { ContextMenuHost } from "./common/ContextMenu";
+import { resetTabStore, useTabStore } from "../state/TabStore";
+import { subscribeToAppCommands } from "../state/AppCommands";
 
 const REPO_ALPHA = "alpha";
 const REPO_ALPHA_PATH = "/tmp/alpha";
@@ -131,6 +133,7 @@ function installFetchMock(): MockState {
 describe("Sidebar", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    resetTabStore();
   });
 
   function setup() {
@@ -143,6 +146,13 @@ describe("Sidebar", () => {
   }
 
   async function openSessionContextMenu(user: ReturnType<typeof userEvent.setup>, text: RegExp) {
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: screen.getByText(text),
+    });
+  }
+
+  async function openRepoContextMenu(user: ReturnType<typeof userEvent.setup>, text: string) {
     await user.pointer({
       keys: "[MouseRight]",
       target: screen.getByText(text),
@@ -288,6 +298,54 @@ describe("Sidebar", () => {
       id: "44444444-4444-4444-4444-444444444444",
       body: { pinned: true },
     });
+  });
+
+  it("opens a repo timeline tab from the repo context menu", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    setup();
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText(REPO_ALPHA)).toBeDefined());
+    await openRepoContextMenu(user, REPO_ALPHA);
+    await user.click(screen.getByRole("menuitem", { name: /open repo timeline/i }));
+
+    const tab = Object.values(useTabStore.getState().tabs).find(
+      (item) => item.kind === "timeline" && item.repo === REPO_ALPHA,
+    );
+    expect(tab).toBeDefined();
+  });
+
+  it("dispatches the future-prompts command from the session context menu", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.sessions.push({
+      id: "77777777-7777-7777-7777-777777777777",
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
+      state: "live",
+      created_at: new Date().toISOString(),
+      ended_at: null,
+      exit_code: null,
+      current_session_uuid: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      current_session_agent: "codex",
+    });
+    const seen: Array<unknown> = [];
+    const unsubscribe = subscribeToAppCommands((command) => {
+      seen.push(command);
+    });
+    setup();
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText(/77777777/)).toBeDefined());
+    await openSessionContextMenu(user, /77777777/);
+    await user.click(screen.getByRole("menuitem", { name: /future prompts/i }));
+
+    expect(seen).toContainEqual({
+      type: "open-future-prompts",
+      sessionId: "77777777-7777-7777-7777-777777777777",
+    });
+    unsubscribe();
   });
 
   it("renames a session through the menu", async () => {

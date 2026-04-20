@@ -1,3 +1,5 @@
+#![cfg(feature = "integration-tests")]
+
 //! PTY lifecycle integration tests. Require a test Postgres — gated behind
 //! `SULION_TEST_DB`. The supported path is `make test-rust-integration`.
 
@@ -50,7 +52,6 @@ async fn wait_for_state(
 }
 
 #[tokio::test]
-#[ignore]
 async fn spawn_persists_row_in_live_state() {
     let pool = fresh_pool().await;
     let mgr = PtyManager::new(pool.clone());
@@ -74,7 +75,6 @@ async fn spawn_persists_row_in_live_state() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn child_exit_transitions_to_dead() {
     let pool = fresh_pool().await;
     let mgr = PtyManager::new(pool.clone());
@@ -97,7 +97,6 @@ async fn child_exit_transitions_to_dead() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn delete_terminates_live_session_and_marks_deleted() {
     let pool = fresh_pool().await;
     let mgr = PtyManager::new(pool.clone());
@@ -121,7 +120,6 @@ async fn delete_terminates_live_session_and_marks_deleted() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn list_returns_live_and_dead_but_not_deleted() {
     let pool = fresh_pool().await;
     let mgr = PtyManager::new(pool.clone());
@@ -173,7 +171,6 @@ async fn list_returns_live_and_dead_but_not_deleted() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn startup_reconciliation_transitions_live_rows_to_orphaned() {
     let pool = fresh_pool().await;
     // Insert a fake 'live' row simulating a PTY from the prior backend.
@@ -202,7 +199,6 @@ async fn startup_reconciliation_transitions_live_rows_to_orphaned() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn pty_id_env_is_propagated_to_shell() {
     let pool = fresh_pool().await;
     let mgr = PtyManager::new(pool.clone());
