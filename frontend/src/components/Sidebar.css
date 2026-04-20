@@ -5,12 +5,16 @@
   gap: 4px;
   font-size: var(--t-body);
   height: 100%;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
-.sidebar__spacer {
+.sidebar__scroll {
   flex: 1;
-  min-height: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 /* ─── Header ─────────────────────────────────────────────────────── */

@@ -17,12 +17,12 @@ export function useMediaQuery(query: string): boolean {
     // deprecated `addListener` for Safari versions in the wild.
     if (m.addEventListener) m.addEventListener("change", onChange);
     else m.addListener(onChange);
-    setMatches(m.matches);
+    if (matches !== m.matches) setMatches(m.matches);
     return () => {
       if (m.removeEventListener) m.removeEventListener("change", onChange);
       else m.removeListener(onChange);
     };
-  }, [query]);
+  }, [matches, query]);
 
   return matches;
 }

@@ -9,6 +9,19 @@ import { subscribeToAppCommands } from "../state/AppCommands";
 const SESSION_ID = "11111111-1111-1111-1111-111111111111";
 const SESSION_UUID = "22222222-2222-2222-2222-222222222222";
 
+function deferred<T>() {
+  let resolveFn: ((value: T) => void) | null = null;
+  return {
+    promise: new Promise<T>((resolve) => {
+      resolveFn = resolve;
+    }),
+    resolve(value: T) {
+      if (!resolveFn) throw new Error("deferred promise was not initialized");
+      resolveFn(value);
+    },
+  };
+}
+
 describe("FuturePromptsModal", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -43,6 +56,7 @@ describe("FuturePromptsModal", () => {
 
   it("creates a new pending future prompt", async () => {
     seedSession();
+    const createResponse = deferred<Response>();
     const fetchMock = vi.fn(async (input: RequestInfo, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.url;
       const method = init?.method ?? "GET";
@@ -70,16 +84,7 @@ describe("FuturePromptsModal", () => {
       }
       if (url === `/api/sessions/${SESSION_ID}/future-prompts` && method === "PUT") {
         expect(JSON.parse(init?.body as string)).toEqual({ text: "ask about tests later" });
-        return new Response(JSON.stringify({
-          id: "fp-1",
-          state: "pending",
-          created_at: "2026-04-20T01:00:00Z",
-          updated_at: "2026-04-20T01:00:00Z",
-          text: "ask about tests later",
-        }), {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
-        });
+        return createResponse.promise;
       }
       return new Response("", { status: 404 });
     });
@@ -93,12 +98,30 @@ describe("FuturePromptsModal", () => {
     await waitFor(() =>
       expect(screen.getByPlaceholderText(/queue the next thing/i)).toBeDefined(),
     );
-    await user.type(screen.getByPlaceholderText(/queue the next thing/i), "ask about tests later");
+    const composer = screen.getByPlaceholderText(/queue the next thing/i) as HTMLTextAreaElement;
+    await user.type(composer, "ask about tests later");
     await user.click(screen.getByRole("button", { name: "Add" }));
 
-    await waitFor(() =>
-      expect(screen.getByText("ask about tests later")).toBeDefined(),
+    const createdPrompt = screen.findByText("ask about tests later");
+    const draftCleared = waitFor(() => expect(composer.value).toBe(""));
+    const composerEnabled = waitFor(() => expect(composer.disabled).toBe(false));
+
+    createResponse.resolve(
+      new Response(JSON.stringify({
+        id: "fp-1",
+        state: "pending",
+        created_at: "2026-04-20T01:00:00Z",
+        updated_at: "2026-04-20T01:00:00Z",
+        text: "ask about tests later",
+      }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      }),
     );
+
+    expect(await createdPrompt).toBeDefined();
+    await draftCleared;
+    await composerEnabled;
   });
 
   it("injects a pending prompt and marks it sent", async () => {
@@ -108,6 +131,7 @@ describe("FuturePromptsModal", () => {
       seen.push(command);
     });
 
+    const patchResponse = deferred<Response>();
     const fetchMock = vi.fn(async (input: RequestInfo, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.url;
       const method = init?.method ?? "GET";
@@ -143,16 +167,7 @@ describe("FuturePromptsModal", () => {
       }
       if (url === `/api/sessions/${SESSION_ID}/future-prompts/fp-1` && method === "PATCH") {
         expect(JSON.parse(init?.body as string)).toEqual({ state: "sent" });
-        return new Response(JSON.stringify({
-          id: "fp-1",
-          state: "sent",
-          created_at: "2026-04-20T01:00:00Z",
-          updated_at: "2026-04-20T01:05:00Z",
-          text: "follow up after this run",
-        }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return patchResponse.promise;
       }
       return new Response("", { status: 404 });
     });
@@ -168,13 +183,32 @@ describe("FuturePromptsModal", () => {
     );
     await user.click(screen.getByRole("button", { name: "Send" }));
 
-    await waitFor(() =>
+    const injected = waitFor(() =>
       expect(seen).toContainEqual({
         type: "inject-terminal",
         sessionId: SESSION_ID,
         text: "follow up after this run",
       }),
     );
+    const sendGone = waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Send" })).toBeNull(),
+    );
+
+    patchResponse.resolve(
+      new Response(JSON.stringify({
+        id: "fp-1",
+        state: "sent",
+        created_at: "2026-04-20T01:00:00Z",
+        updated_at: "2026-04-20T01:05:00Z",
+        text: "follow up after this run",
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await injected;
+    await sendGone;
     unsubscribe();
   });
 });

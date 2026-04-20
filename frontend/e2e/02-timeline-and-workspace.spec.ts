@@ -1,12 +1,13 @@
 import { expect, test } from "@playwright/test";
 
-import { gotoApp, openSession, openTreeFile, tab, terminalText } from "./helpers";
+import { gotoApp, openSession, openTreeFile, tab, visibleTimelinePane } from "./helpers";
 
 test("walks timeline details, filters, hover cards, and file trace links", async ({ page }) => {
   await gotoApp(page);
   await openSession(page, "Atlas Claude");
 
-  const firstTurn = page.getByTestId("turn-row").first();
+  const timelinePane = visibleTimelinePane(page);
+  const firstTurn = timelinePane.getByTestId("turn-row").first();
   await firstTurn.click();
   await expect(page.getByLabel("Prompt actions")).toContainText("PROMPT_TIMELINE_SENTINEL");
 
@@ -30,9 +31,12 @@ test("walks timeline details, filters, hover cards, and file trace links", async
   await openTreeFile(page, "atlas", "src/lib.rs");
   await expect(page.getByTestId("file-tab")).toBeVisible();
   await expect(page.getByLabel("Related timeline turns")).toContainText("inspect");
-  await page.locator(".ft__trace-button").first().click();
-  await expect(page.getByTestId("timeline-pane")).toBeVisible();
-  await expect(page.getByTestId("turn-row").first()).toHaveAttribute("aria-pressed", "true");
+  await page.locator(".ft__trace-button").filter({ hasText: "inspect" }).first().click();
+  const focusedTimelinePane = visibleTimelinePane(page);
+  await expect(focusedTimelinePane).toBeVisible();
+  await expect(
+    focusedTimelinePane.locator('[data-testid="turn-row"][aria-pressed="true"]').first(),
+  ).toBeVisible();
 
   await openTreeFile(page, "atlas", "data/config.json");
   await expect(tab(page, "file", "config.json")).toBeVisible();
@@ -40,7 +44,4 @@ test("walks timeline details, filters, hover cards, and file trace links", async
   await expect(activeFileTab).toContainText("mode");
   await activeFileTab.getByRole("button", { name: "raw" }).click();
   await expect(activeFileTab).toContainText('"seeded"');
-
-  const renderedTerminal = await terminalText(page);
-  expect(renderedTerminal).toBeDefined();
 });

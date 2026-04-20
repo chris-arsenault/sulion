@@ -113,6 +113,10 @@ export function tab(page: Page, kind: string, match?: string) {
   return match ? base.filter({ hasText: match }) : base;
 }
 
+export function visibleTimelinePane(page: Page) {
+  return page.locator('[data-testid="timeline-pane"]:visible').first();
+}
+
 export async function openContextMenu(locator: Locator) {
   await locator.click({ button: "right" });
 }

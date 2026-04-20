@@ -30,6 +30,7 @@ let shuttingDown = false;
 
 async function main() {
   try {
+    cleanupStaleResources();
     prepareBackendDist();
     buildBackendImage();
 
@@ -81,6 +82,36 @@ async function main() {
     console.error(error instanceof Error ? error.stack : String(error));
     await cleanup();
     process.exit(1);
+  }
+}
+
+function cleanupStaleResources() {
+  const staleContainers = spawnSync(
+    "bash",
+    [
+      "-lc",
+      "docker ps -a --format '{{.Names}}' | rg '^sulion-e2e-(backend|db)-' || true",
+    ],
+    { cwd: REPO_ROOT, encoding: "utf8" },
+  );
+  if (staleContainers.status === 0) {
+    for (const name of staleContainers.stdout.split("\n").map((value) => value.trim()).filter(Boolean)) {
+      spawnSync("docker", ["rm", "-f", name], { cwd: REPO_ROOT, stdio: "ignore" });
+    }
+  }
+
+  const staleNetworks = spawnSync(
+    "bash",
+    [
+      "-lc",
+      "docker network ls --format '{{.Name}}' | rg '^sulion-e2e-net-' || true",
+    ],
+    { cwd: REPO_ROOT, encoding: "utf8" },
+  );
+  if (staleNetworks.status === 0) {
+    for (const name of staleNetworks.stdout.split("\n").map((value) => value.trim()).filter(Boolean)) {
+      spawnSync("docker", ["network", "rm", name], { cwd: REPO_ROOT, stdio: "ignore" });
+    }
   }
 }
 

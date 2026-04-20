@@ -67,7 +67,14 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
   async loadSessions() {
     try {
       const data = await listSessions();
-      set({ sessions: data.sessions, sessionsLoaded: true });
+      set((state) => {
+        const sameSessions = sameFlatRecordArray(state.sessions, data.sessions);
+        if (sameSessions && state.sessionsLoaded) return state;
+        return {
+          sessions: sameSessions ? state.sessions : data.sessions,
+          sessionsLoaded: true,
+        };
+      });
     } catch (err) {
       console.error("listSessions failed", err);
       if (err instanceof ApiError) set({ lastError: err.message });
@@ -77,7 +84,10 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
   async loadRepos() {
     try {
       const data = await listRepos();
-      set({ repos: data.repos });
+      set((state) => {
+        if (sameFlatRecordArray(state.repos, data.repos)) return state;
+        return { repos: data.repos };
+      });
     } catch (err) {
       console.error("listRepos failed", err);
       if (err instanceof ApiError) set({ lastError: err.message });
@@ -247,4 +257,29 @@ function writeSessionIdToUrl(id: string | null) {
   if (id) url.searchParams.set("session", id);
   else url.searchParams.delete("session");
   window.history.replaceState({}, "", url.toString());
+}
+
+function sameFlatRecordArray<T extends object>(
+  current: T[],
+  next: T[],
+): boolean {
+  if (current === next) return true;
+  if (current.length !== next.length) return false;
+  for (let i = 0; i < current.length; i += 1) {
+    if (!sameFlatRecord(current[i]!, next[i]!)) return false;
+  }
+  return true;
+}
+
+function sameFlatRecord<T extends object>(a: T, b: T): boolean {
+  if (a === b) return true;
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const aKeys = Object.keys(left);
+  const bKeys = Object.keys(right);
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    if (left[key] !== right[key]) return false;
+  }
+  return true;
 }

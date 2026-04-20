@@ -328,20 +328,21 @@ export interface StatsResponse {
     cpu_percent: number;
     memory_limit_bytes: number | null;
   };
-  ingester: {
-    files_seen_total: number;
-    events_inserted_total: number;
-    parse_errors_total: number;
-  };
   pty: {
-    tracked_sessions: number;
+    live_sessions: number;
+    live_agent_sessions: number;
   };
   db: {
     database_size_bytes: number;
-    events_rowcount: number;
-    agent_sessions_rowcount: number;
-    pty_sessions_rowcount: number;
-    ingester_state_rowcount: number;
+  };
+  inventory: {
+    event_rows: number;
+    agent_sessions: number;
+    pty_sessions: number;
+    tracked_files: number;
+    files_seen_since_boot: number;
+    events_inserted_since_boot: number;
+    parse_errors_since_boot: number;
   };
 }
 

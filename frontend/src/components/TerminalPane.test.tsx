@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 
 // xterm.js depends on canvas/layout APIs that happy-dom doesn't fully
 // implement. We mock just enough to verify the component wires up the
@@ -122,7 +122,9 @@ describe("TerminalPane", () => {
     await waitFor(() => expect(connectPtyMock).toHaveBeenCalled());
     const handlers = (connectPtyMock as unknown as { last: { onServerMsg: (m: unknown) => void } })
       .last;
-    handlers.onServerMsg({ t: "dead", exit: 0 });
+    act(() => {
+      handlers.onServerMsg({ t: "dead", exit: 0 });
+    });
     expect(await findByText(/shell exited/)).toBeDefined();
   });
 

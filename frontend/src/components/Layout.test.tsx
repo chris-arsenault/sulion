@@ -2,6 +2,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+vi.mock("./LibraryPanel", () => ({
+  LibraryPanel: () => null,
+}));
+
+vi.mock("./StatsStrip", () => ({
+  StatsStrip: () => null,
+}));
+
+vi.mock("./ui", async () => {
+  const actual = await vi.importActual<typeof import("./ui")>("./ui");
+  return {
+    ...actual,
+    Tooltip: ({ children }: { children: unknown }) => children,
+  };
+});
+
 import { ContextMenuHost } from "./common/ContextMenu";
 import { Layout } from "./Layout";
 import { appCommands } from "../state/AppCommands";
@@ -77,18 +93,18 @@ beforeEach(() => {
         return json({
           uptime_seconds: 1,
           process: { memory_rss_bytes: 0, cpu_percent: 0, memory_limit_bytes: null },
-          ingester: {
-            files_seen_total: 0,
-            events_inserted_total: 0,
-            parse_errors_total: 0,
-          },
-          pty: { tracked_sessions: 0 },
+          pty: { live_sessions: 0, live_agent_sessions: 0 },
           db: {
             database_size_bytes: 0,
-            events_rowcount: 0,
-            agent_sessions_rowcount: 0,
-            pty_sessions_rowcount: 0,
-            ingester_state_rowcount: 0,
+          },
+          inventory: {
+            event_rows: 0,
+            agent_sessions: 0,
+            pty_sessions: 0,
+            tracked_files: 0,
+            files_seen_since_boot: 0,
+            events_inserted_since_boot: 0,
+            parse_errors_since_boot: 0,
           },
         });
       }

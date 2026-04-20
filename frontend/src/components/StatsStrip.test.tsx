@@ -12,18 +12,18 @@ function statsPayload(overrides: Record<string, unknown> = {}) {
       cpu_percent: 4.2,
       memory_limit_bytes: 500 * 1024 * 1024,
     },
-    ingester: {
-      files_seen_total: 100,
-      events_inserted_total: 250,
-      parse_errors_total: 0,
-    },
-    pty: { tracked_sessions: 3 },
+    pty: { live_sessions: 3, live_agent_sessions: 2 },
     db: {
       database_size_bytes: 50 * 1024 * 1024,
-      events_rowcount: 1234,
-      agent_sessions_rowcount: 7,
-      pty_sessions_rowcount: 5,
-      ingester_state_rowcount: 7,
+    },
+    inventory: {
+      event_rows: 1234,
+      agent_sessions: 7,
+      pty_sessions: 5,
+      tracked_files: 7,
+      files_seen_since_boot: 100,
+      events_inserted_since_boot: 250,
+      parse_errors_since_boot: 0,
     },
     ...overrides,
   };
@@ -50,19 +50,18 @@ describe("StatsStrip", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders the compact mem/cpu/sessions summary after the first poll", async () => {
+  it("renders the compact live-load summary after the first poll", async () => {
     installStatsFetch(statsPayload());
     render(<StatsStrip />);
     await waitFor(() => {
-      // "120 / 500 MB"
       expect(screen.getByText(/120 \/ 500 MB/i)).toBeDefined();
       expect(screen.getByText(/4%/)).toBeDefined();
-      // pty session pill uses the terminal sigil + count; match the count.
+      expect(screen.getByText(/50.0 MB/)).toBeDefined();
       expect(screen.getByText(/^3$/)).toBeDefined();
     });
   });
 
-  it("expands to show db size and ingester totals", async () => {
+  it("expands to separate current load from inventory", async () => {
     installStatsFetch(statsPayload());
     render(<StatsStrip />);
     await waitFor(() => {
@@ -70,11 +69,12 @@ describe("StatsStrip", () => {
     });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await user.click(screen.getByLabelText(/toggle stats details/i));
-    // One of the <dt> entries is "events"; there are other text matches
-    // but the exact dt text is unique.
-    expect(screen.getByText((t) => t === "events")).toBeDefined();
+    expect(screen.getByText("Current")).toBeDefined();
+    expect(screen.getByText("Inventory")).toBeDefined();
+    expect(screen.getByText((t) => t === "event rows")).toBeDefined();
     expect(screen.getByText("1,234")).toBeDefined();
-    expect(screen.getByText(/50.0 MB/)).toBeDefined();
+    expect(screen.getAllByText(/50.0 MB/)).toHaveLength(2);
+    expect(screen.getByText((t) => t === "agent PTYs")).toBeDefined();
   });
 
   it("shows 'stats unavailable' when the endpoint fails on first load", async () => {

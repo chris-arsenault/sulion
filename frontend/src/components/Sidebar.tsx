@@ -1,7 +1,7 @@
-// Sidebar: global library at the top, then repo-centric navigation
-// (Sessions / Files / Git) with compact repo status badges. Repos are
-// still the main navigation axis for workspace state; prompts and
-// references are global because they are cross-repo user tools.
+// Sidebar: repo-centric navigation (Sessions / Files / Git) scrolls in
+// the middle; the cross-repo Library (References / Prompts) is pinned
+// to the bottom so it stays reachable regardless of how far the user
+// has scrolled the repo list. StatsStrip sits beneath Library.
 
 import {
   type FormEvent,
@@ -247,28 +247,30 @@ export function Sidebar() {
 
       {formError && <div className="sidebar__error">{formError}</div>}
 
-      <LibraryPanel />
+      <div className="sidebar__scroll">
+        {grouped.length === 0 && (
+          <div className="sidebar__muted">No repos yet.</div>
+        )}
 
-      {grouped.length === 0 && <div className="sidebar__muted">No repos yet.</div>}
-
-      <ul className="sidebar__tree">
-        {grouped.map((group) => (
-          <RepoGroup
-            key={group.name}
-            group={group}
-            expanded={expanded[group.name] ?? true}
-            newSessionRepoName={newSessionFor}
-            handlers={repoGroupHandlers}
-            selection={repoGroupSelection}
-            sessionOps={repoGroupSessionOps}
-            isUnread={isUnread}
-            onError={setFormError}
-            revealRequest={
-              revealRequest?.repo === group.name ? revealRequest : null
-            }
-          />
-        ))}
-      </ul>
+        <ul className="sidebar__tree">
+          {grouped.map((group) => (
+            <RepoGroup
+              key={group.name}
+              group={group}
+              expanded={expanded[group.name] ?? true}
+              newSessionRepoName={newSessionFor}
+              handlers={repoGroupHandlers}
+              selection={repoGroupSelection}
+              sessionOps={repoGroupSessionOps}
+              isUnread={isUnread}
+              onError={setFormError}
+              revealRequest={
+                revealRequest?.repo === group.name ? revealRequest : null
+              }
+            />
+          ))}
+        </ul>
+      </div>
       {pendingDeleteId && (
         <ConfirmDialog
           title="Delete session?"
@@ -279,7 +281,7 @@ export function Sidebar() {
           onCancel={cancelPendingDelete}
         />
       )}
-      <div className="sidebar__spacer" />
+      <LibraryPanel />
       <StatsStrip />
     </div>
   );
