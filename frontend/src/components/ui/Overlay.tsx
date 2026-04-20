@@ -89,6 +89,7 @@ export function Overlay({
       <div
         ref={dialogRef}
         className="ui-overlay__surface"
+        // eslint-disable-next-line local/no-inline-styles -- surface size/anchor is caller-driven (width/maxWidth/maxHeight props, optional anchorTo position); no finite class set
         style={surfaceStyle}
         role={modal ? "dialog" : "group"}
         aria-modal={modal ? true : undefined}

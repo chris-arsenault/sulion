@@ -86,6 +86,7 @@ export function Tooltip({
           <div
             ref={refs.setFloating}
             className="ui-tooltip"
+            // eslint-disable-next-line local/no-inline-styles -- Floating UI recomputes position/top/left on every render based on viewport; no finite class set
             style={floatingStyle}
             {...getFloatingProps()}
           >

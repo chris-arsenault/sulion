@@ -136,6 +136,7 @@ export function Layout() {
   return (
     <div
       className={`layout ${pinned ? "layout--pinned" : "layout--collapsed"}`}
+      // eslint-disable-next-line local/no-inline-styles -- sidebar width is drag-resized per user; pass-through CSS custom property drives the grid-template-columns
       style={layoutStyle}
     >
       <Rail
