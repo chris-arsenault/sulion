@@ -5,6 +5,8 @@ import userEvent from "@testing-library/user-event";
 import { FilterChips } from "./FilterChips";
 import { DEFAULT_FILTERS, useTimelineFilters } from "./filters";
 
+const ARIA_PRESSED = "aria-pressed";
+
 function Host() {
   const hook = useTimelineFilters();
   return <FilterChips {...hook} />;
@@ -27,10 +29,10 @@ describe("FilterChips — exclusion UI", () => {
     const user = userEvent.setup();
     render(<Host />);
     const createChip = screen.getByRole("button", { name: /create content/i });
-    expect(createChip.getAttribute("aria-pressed")).toBe("false");
+    expect(createChip.getAttribute(ARIA_PRESSED)).toBe("false");
     expect(createChip.className).toContain("visible");
     await user.click(createChip);
-    expect(createChip.getAttribute("aria-pressed")).toBe("true");
+    expect(createChip.getAttribute(ARIA_PRESSED)).toBe("true");
     expect(createChip.className).toContain("hidden");
   });
 
@@ -56,7 +58,7 @@ describe("FilterChips — exclusion UI", () => {
     const clear = screen.getByRole("button", { name: /show all/i });
     await user.click(clear);
     const createChip = screen.getByRole("button", { name: /create content/i });
-    expect(createChip.getAttribute("aria-pressed")).toBe("false");
+    expect(createChip.getAttribute(ARIA_PRESSED)).toBe("false");
   });
 
   it("typing in the file-path input updates state", async () => {
@@ -71,9 +73,9 @@ describe("FilterChips — exclusion UI", () => {
     const user = userEvent.setup();
     render(<Host />);
     const chip = screen.getByRole("button", { name: /errors only/i });
-    expect(chip.getAttribute("aria-pressed")).toBe("false");
+    expect(chip.getAttribute(ARIA_PRESSED)).toBe("false");
     await user.click(chip);
-    expect(chip.getAttribute("aria-pressed")).toBe("true");
+    expect(chip.getAttribute(ARIA_PRESSED)).toBe("true");
     expect(chip.className).toContain("include-active");
   });
 

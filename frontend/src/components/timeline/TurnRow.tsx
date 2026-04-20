@@ -1,3 +1,5 @@
+import { useCallback, useMemo } from "react";
+
 import type { ToolPair, Turn } from "./grouping";
 import { Icon } from "../../icons";
 import { Tooltip } from "../ui";
@@ -7,11 +9,12 @@ interface Props {
   turn: Turn;
   selected: boolean;
   showThinking: boolean;
-  onSelect: () => void;
+  onSelect: (id: number) => void;
 }
 
 export function TurnRow({ turn, selected, showThinking, onSelect }: Props) {
-  const badges = toolBadges(turn.tool_pairs);
+  const badges = useMemo(() => toolBadges(turn.tool_pairs), [turn.tool_pairs]);
+  const onClick = useCallback(() => onSelect(turn.id), [onSelect, turn.id]);
 
   return (
     <button
@@ -19,7 +22,7 @@ export function TurnRow({ turn, selected, showThinking, onSelect }: Props) {
       className={`tr ${selected ? "tr--selected" : ""} ${
         turn.has_errors ? "tr--errors" : ""
       }`}
-      onClick={onSelect}
+      onClick={onClick}
       data-testid="turn-row"
       aria-pressed={selected}
     >
@@ -98,7 +101,8 @@ function formatDuration(ms: number): string {
   if (seconds < 60) return `${seconds.toFixed(1)}s`;
   const minutes = Math.floor(seconds / 60);
   const remainder = Math.round(seconds - minutes * 60);
-  return `${minutes}m${remainder > 0 ? `${remainder}s` : ""}`;
+  const seconds_suffix = remainder > 0 ? `${remainder}s` : "";
+  return `${minutes}m${seconds_suffix}`;
 }
 
 function formatTime(iso: string): string {

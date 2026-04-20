@@ -4,7 +4,14 @@
 // Click-to-pin makes the card persistent until closed (× / Esc /
 // another peek opens).
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 
 import type { ToolPair } from "./grouping";
@@ -18,9 +25,19 @@ interface Props {
   pinned: boolean;
   onPin: () => void;
   onClose: () => void;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
 }
 
-export function ToolHoverCard({ anchor, pair, pinned, onPin, onClose }: Props) {
+export function ToolHoverCard({
+  anchor,
+  pair,
+  pinned,
+  onPin,
+  onClose,
+  onMouseEnter,
+  onMouseLeave,
+}: Props) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
@@ -65,6 +82,35 @@ export function ToolHoverCard({ anchor, pair, pinned, onPin, onClose }: Props) {
     return body.length > 1200 ? `${body.slice(0, 1200)}\n… (${body.length} chars)` : body;
   })();
 
+  const cardStyle = useMemo(
+    () => (pos ? { top: pos.top, left: pos.left } : undefined),
+    [pos],
+  );
+  const onCloseClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      onClose();
+    },
+    [onClose],
+  );
+  const onPinClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      onPin();
+    },
+    [onPin],
+  );
+  const toolProp = useMemo(
+    () => ({
+      id: pair.id,
+      name: pair.name,
+      operationType: pair.operation_type,
+      input: pair.input,
+      fileTouches: pair.file_touches,
+    }),
+    [pair.id, pair.name, pair.operation_type, pair.input, pair.file_touches],
+  );
+
   return createPortal(
     <div
       ref={cardRef}
@@ -72,45 +118,40 @@ export function ToolHoverCard({ anchor, pair, pinned, onPin, onClose }: Props) {
         pair.is_error ? "thc--error" : ""
       }`}
       // eslint-disable-next-line local/no-inline-styles -- hover card position is anchor-relative, computed at render time
-      style={pos ? { top: pos.top, left: pos.left } : undefined}
-      role="tooltip"
+      style={cardStyle}
+      role="dialog"
+      aria-label="Tool call detail"
       data-testid="tool-hover-card"
-      onMouseDown={(e) => {
-        // Clicking inside the card is how you pin it.
-        e.stopPropagation();
-        if (!pinned) onPin();
-      }}
+      onPointerEnter={onMouseEnter}
+      onPointerLeave={onMouseLeave}
     >
       <div className="thc__header">
         <span className="thc__name">{toolType(pair)}</span>
         {pair.is_pending && <span className="thc__status">pending</span>}
         {pair.is_error && <span className="thc__status thc__status--error">error</span>}
-        {pinned && (
+        {pinned ? (
           <button
             type="button"
             className="thc__close"
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose();
-            }}
+            onClick={onCloseClick}
             aria-label="Close card"
           >
             <Icon name="x" size={12} />
           </button>
+        ) : (
+          <button
+            type="button"
+            className="thc__pin"
+            onClick={onPinClick}
+            aria-label="Pin card open"
+          >
+            pin
+          </button>
         )}
-        {!pinned && <span className="thc__hint">click to pin</span>}
       </div>
       <div className="thc__input">
         <div className="thc__label">input</div>
-        <ToolCallRenderer
-          tool={{
-            id: pair.id,
-            name: pair.name,
-            operationType: pair.operation_type,
-            input: pair.input,
-            fileTouches: pair.file_touches,
-          }}
-        />
+        <ToolCallRenderer tool={toolProp} />
       </div>
       {pair.result && (
         <div className={`thc__result ${pair.is_error ? "thc__result--error" : ""}`}>

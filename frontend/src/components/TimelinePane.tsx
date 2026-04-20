@@ -6,7 +6,15 @@
 // The inspector's TurnDetail is reused by the SubagentModal so drill-in
 // into sidechain logs renders the same way.
 
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type MutableRefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type MutableRefObject,
+} from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 
 import { getTimeline } from "../api/client";
@@ -124,7 +132,10 @@ export function TimelinePane({
     };
   }, [sessionId, query, queryKey]);
 
-  const turns = timeline?.turns ?? [];
+  const turns = useMemo<Turn[]>(
+    () => timeline?.turns ?? [],
+    [timeline],
+  );
 
   useEffect(() => {
     if (focusTurnId == null) return;
@@ -146,33 +157,56 @@ export function TimelinePane({
     [selectedTurnId, turns],
   );
 
-  const handleSubagent = (pair: ToolPair) => {
+  const handleSubagent = useCallback((pair: ToolPair) => {
     if (pair.subagent) setSubagent(pair.subagent);
-  };
+  }, []);
+  const closeSubagent = useCallback(() => setSubagent(null), []);
 
-  const onDividerMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const container = (e.target as HTMLElement).parentElement;
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    const onMove = (ev: MouseEvent) => {
-      const fraction = (ev.clientX - rect.left) / rect.width;
-      const listFraction = Math.max(
-        1 - MAX_INSPECTOR_FRACTION,
-        Math.min(1 - MIN_INSPECTOR_FRACTION, fraction),
-      );
-      setInspectorFraction(1 - listFraction);
-    };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
+  const onDividerMouseDown = useCallback(
+    (e: ReactMouseEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const container = (e.target as HTMLElement).parentElement;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const onMove = (ev: MouseEvent) => {
+        const fraction = (ev.clientX - rect.left) / rect.width;
+        const listFraction = Math.max(
+          1 - MAX_INSPECTOR_FRACTION,
+          Math.min(1 - MIN_INSPECTOR_FRACTION, fraction),
+        );
+        setInspectorFraction(1 - listFraction);
+      };
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [],
+  );
+
+  const onDividerKeyDown = useCallback((e: React.KeyboardEvent) => {
+    const step = e.shiftKey ? 0.1 : 0.03;
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      setInspectorFraction((v) => Math.min(MAX_INSPECTOR_FRACTION, v + step));
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      setInspectorFraction((v) => Math.max(MIN_INSPECTOR_FRACTION, v - step));
+    }
+  }, []);
 
   const listFraction = 1 - inspectorFraction;
   const empty = turns.length === 0;
+
+  const clearSelectedTurn = useCallback(() => setSelectedTurnId(null), []);
+  const splitStyle = useMemo(
+    () => ({
+      gridTemplateColumns: `${listFraction}fr 6px ${inspectorFraction}fr`,
+    }),
+    [listFraction, inspectorFraction],
+  );
 
   return (
     <div className="timeline-pane" data-testid="timeline-pane">
@@ -219,16 +253,14 @@ export function TimelinePane({
             showThinking={filters.showThinking}
             onOpenSubagent={handleSubagent}
             asOverlay
-            onClose={() => setSelectedTurnId(null)}
+            onClose={clearSelectedTurn}
           />
         </>
       ) : (
         <div
           className="timeline-pane__split"
           // eslint-disable-next-line local/no-inline-styles -- resizable split fractions are per-user-drag; can't be CSS classes
-          style={{
-            gridTemplateColumns: `${listFraction}fr 6px ${inspectorFraction}fr`,
-          }}
+          style={splitStyle}
         >
           <div className="timeline-pane__list">
             <TurnList
@@ -241,9 +273,15 @@ export function TimelinePane({
           </div>
           <div
             className="timeline-pane__divider"
-            role="separator"
+            role="slider"
             aria-orientation="vertical"
+            aria-label="Resize inspector"
+            aria-valuemin={Math.round(MIN_INSPECTOR_FRACTION * 100)}
+            aria-valuemax={Math.round(MAX_INSPECTOR_FRACTION * 100)}
+            aria-valuenow={Math.round(inspectorFraction * 100)}
+            tabIndex={0}
             onMouseDown={onDividerMouseDown}
+            onKeyDown={onDividerKeyDown}
           />
           <SessionInspectorPane
             turn={selectedTurn}
@@ -257,11 +295,15 @@ export function TimelinePane({
         <SubagentModal
           subagent={subagent}
           showThinking={filters.showThinking}
-          onClose={() => setSubagent(null)}
+          onClose={closeSubagent}
         />
       )}
     </div>
   );
+}
+
+function turnKey(_i: number, t: Turn): string {
+  return `${t.id}`;
 }
 
 function TurnList({
@@ -277,19 +319,23 @@ function TurnList({
   onSelect: (id: number) => void;
   virtuosoRef: MutableRefObject<VirtuosoHandle | null>;
 }) {
+  const renderItem = useCallback(
+    (_i: number, t: Turn) => (
+      <TurnRow
+        turn={t}
+        selected={selectedTurnId === t.id}
+        showThinking={showThinking}
+        onSelect={onSelect}
+      />
+    ),
+    [selectedTurnId, showThinking, onSelect],
+  );
   return (
     <Virtuoso
       ref={virtuosoRef}
       data={turns}
-      computeItemKey={(_i, t) => `${t.id}`}
-      itemContent={(_i, t) => (
-        <TurnRow
-          turn={t}
-          selected={selectedTurnId === t.id}
-          showThinking={showThinking}
-          onSelect={() => onSelect(t.id)}
-        />
-      )}
+      computeItemKey={turnKey}
+      itemContent={renderItem}
       followOutput="smooth"
       className="timeline-pane__virtuoso"
     />

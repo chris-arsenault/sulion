@@ -4,7 +4,7 @@
 // ingester details. No history, no alerting; this exists to answer
 // "is this deploy sized correctly?" at a glance (ticket #27).
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { getStats } from "../api/client";
 import type { StatsResponse } from "../api/types";
@@ -40,6 +40,8 @@ export function StatsStrip() {
     };
   }, []);
 
+  const toggleExpanded = useCallback(() => setExpanded((v) => !v), []);
+
   if (!stats && !error) {
     return (
       <div className="stats-strip stats-strip--loading" aria-live="polite">
@@ -73,7 +75,7 @@ export function StatsStrip() {
         <button
           type="button"
           className="stats-strip__summary"
-          onClick={() => setExpanded((v) => !v)}
+          onClick={toggleExpanded}
           aria-expanded={expanded}
           aria-label="Toggle stats details"
         >
@@ -106,19 +108,7 @@ export function StatsStrip() {
           </Tooltip>
         </button>
       </Tooltip>
-      {memPct != null && (
-        <div
-          className="stats-strip__mem-bar"
-          aria-label="Memory usage vs. container limit"
-        >
-          <div
-            className="stats-strip__mem-fill"
-            // eslint-disable-next-line local/no-inline-styles -- memPct is a computed percentage, not a finite state
-            style={{ width: `${memPct}%` }}
-            data-danger={memPct > 85 ? "true" : "false"}
-          />
-        </div>
-      )}
+      {memPct != null && <MemBar pct={memPct} />}
       {expanded && (
         <dl className="stats-strip__details">
           <div>
@@ -155,6 +145,23 @@ export function StatsStrip() {
           </div>
         </dl>
       )}
+    </div>
+  );
+}
+
+function MemBar({ pct }: { pct: number }) {
+  const style = useMemo(() => ({ width: `${pct}%` }), [pct]);
+  return (
+    <div
+      className="stats-strip__mem-bar"
+      aria-label="Memory usage vs. container limit"
+    >
+      <div
+        className="stats-strip__mem-fill"
+        // eslint-disable-next-line local/no-inline-styles -- pct is a computed percentage, not a finite state
+        style={style}
+        data-danger={pct > 85 ? "true" : "false"}
+      />
     </div>
   );
 }

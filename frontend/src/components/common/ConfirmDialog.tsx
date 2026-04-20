@@ -49,16 +49,18 @@ export function ConfirmDialog({
   }, [onConfirm, onCancel]);
 
   return createPortal(
-    <div
-      className="cd__backdrop"
-      onMouseDown={onCancel}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="cd-title"
-    >
+    <div className="cd__backdrop">
+      <button
+        type="button"
+        className="cd__dismiss"
+        aria-label="Dismiss dialog"
+        onClick={onCancel}
+      />
       <div
         className="cd__content"
-        onMouseDown={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cd-title"
       >
         <h3 id="cd-title" className="cd__title">
           {title}

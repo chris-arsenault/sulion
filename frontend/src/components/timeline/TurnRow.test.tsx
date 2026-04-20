@@ -5,6 +5,8 @@ import userEvent from "@testing-library/user-event";
 import { TurnRow } from "./TurnRow";
 import { makePair, makeTurn } from "./test-helpers";
 
+const noop = () => {};
+
 describe("TurnRow", () => {
   it("renders the backend-projected preview", () => {
     render(
@@ -12,7 +14,7 @@ describe("TurnRow", () => {
         turn={makeTurn({ preview: "do the thing" })}
         selected={false}
         showThinking={true}
-        onSelect={() => {}}
+        onSelect={noop}
       />,
     );
     expect(screen.getByText(/do the thing/)).toBeDefined();
@@ -45,7 +47,7 @@ describe("TurnRow", () => {
         })}
         selected={false}
         showThinking={true}
-        onSelect={() => {}}
+        onSelect={noop}
       />,
     );
     expect(screen.getByText("edit×2")).toBeDefined();
@@ -58,7 +60,7 @@ describe("TurnRow", () => {
         turn={makeTurn({ thinking_count: 3, has_errors: true })}
         selected={false}
         showThinking={true}
-        onSelect={() => {}}
+        onSelect={noop}
       />,
     );
     // Thinking badge renders the count alongside a sparkles sigil.

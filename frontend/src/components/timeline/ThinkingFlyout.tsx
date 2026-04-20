@@ -4,7 +4,13 @@
 // clicked. Card stays pinned until explicitly closed (× / Esc / click
 // another chip). One card at a time.
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 
 import { Icon } from "../../icons";
@@ -57,20 +63,29 @@ export function ThinkingFlyout({ anchor, thinkingText, onClose }: Props) {
     setPos({ top, left });
   }, [anchor, isNarrow, thinkingText]);
 
+  const cardStyle = useMemo(
+    () => (pos ? { top: pos.top, left: pos.left } : undefined),
+    [pos],
+  );
+
   if (isNarrow) {
     return createPortal(
       <div
         className="tf__sheet-backdrop"
-        onMouseDown={onClose}
-        role="dialog"
-        aria-modal="true"
-        aria-label="thinking"
         data-testid="thinking-flyout"
       >
+        <button
+          type="button"
+          className="tf__sheet-dismiss"
+          aria-label="Dismiss thinking"
+          onClick={onClose}
+        />
         <div
           ref={cardRef}
           className="tf__sheet"
-          onMouseDown={(e) => e.stopPropagation()}
+          role="dialog"
+          aria-modal="true"
+          aria-label="thinking"
         >
           <div className="tf__header">
             <span className="tf__title">
@@ -98,20 +113,23 @@ export function ThinkingFlyout({ anchor, thinkingText, onClose }: Props) {
       ref={cardRef}
       className="tf__card"
       // eslint-disable-next-line local/no-inline-styles -- popover position is anchor-relative, computed at render time
-      style={pos ? { top: pos.top, left: pos.left } : undefined}
+      style={cardStyle}
       role="dialog"
       aria-label="thinking"
       data-testid="thinking-flyout"
     >
       <div className="tf__header">
-        <span className="tf__title">💭 thinking</span>
+        <span className="tf__title">
+          <Icon name="sparkles" size={12} />
+          <span>thinking</span>
+        </span>
         <button
           type="button"
           className="tf__close"
           onClick={onClose}
           aria-label="Close thinking"
         >
-          ×
+          <Icon name="x" size={12} />
         </button>
       </div>
       <pre className="tf__body">{thinkingText}</pre>

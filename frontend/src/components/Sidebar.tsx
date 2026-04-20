@@ -5,6 +5,7 @@
 
 import {
   type FormEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -29,11 +30,12 @@ import type { TabStore } from "../state/TabStore";
 import { useTabs } from "../state/TabStore";
 import { Icon } from "../icons";
 import { Tooltip } from "./ui";
-import type { MenuItem } from "./common/ContextMenu";
+import type { MenuItem } from "./common/contextMenuStore";
 import {
   contextMenuHandler,
+  contextMenuTriggerProps,
   useContextMenu,
-} from "./common/ContextMenu";
+} from "./common/contextMenuStore";
 import { ConfirmDialog } from "./common/ConfirmDialog";
 import { LibraryPanel } from "./LibraryPanel";
 import { StatsStrip } from "./StatsStrip";
@@ -73,12 +75,15 @@ export function Sidebar() {
   // Called directly from the click handler (no useEffect on selected
   // session) so sidebar interaction doesn't fight file/tab
   // activation through the global tab state.
-  const openSessionTabs = (id: string) => {
-    selectSession(id);
-    openTab({ kind: "terminal", sessionId: id }, "top");
-    openTab({ kind: "timeline", sessionId: id }, "bottom");
-    appCommands.closeDrawer();
-  };
+  const openSessionTabs = useCallback(
+    (id: string) => {
+      selectSession(id);
+      openTab({ kind: "terminal", sessionId: id }, "top");
+      openTab({ kind: "timeline", sessionId: id }, "bottom");
+      appCommands.closeDrawer();
+    },
+    [openTab, selectSession],
+  );
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(grouped.map((g) => [g.name, true])),
   );
@@ -98,10 +103,13 @@ export function Sidebar() {
   });
 
   const repoAnchorsRef = useRef<Map<string, HTMLLIElement>>(new Map());
-  const registerRepoAnchor = (name: string, el: HTMLLIElement | null) => {
-    if (el) repoAnchorsRef.current.set(name, el);
-    else repoAnchorsRef.current.delete(name);
-  };
+  const registerRepoAnchor = useCallback(
+    (name: string, el: HTMLLIElement | null) => {
+      if (el) repoAnchorsRef.current.set(name, el);
+      else repoAnchorsRef.current.delete(name);
+    },
+    [],
+  );
 
   useAppCommand("reveal-repo", ({ repo }) => {
     setExpanded((prev) => ({ ...prev, [repo]: true }));
@@ -113,40 +121,49 @@ export function Sidebar() {
     }
   });
 
-  const toggleRepo = (name: string) =>
-    setExpanded((prev) => ({ ...prev, [name]: !prev[name] }));
+  const toggleRepo = useCallback(
+    (name: string) =>
+      setExpanded((prev) => ({ ...prev, [name]: !prev[name] })),
+    [],
+  );
 
-  const onCreateRepo = async (form: { name: string; git_url: string }) => {
-    setFormError(null);
-    try {
-      await createRepo({
-        name: form.name,
-        git_url: form.git_url.trim() || undefined,
-      });
-      setNewRepoOpen(false);
-    } catch (err) {
-      setFormError(messageOf(err));
-    }
-  };
+  const onCreateRepo = useCallback(
+    async (form: { name: string; git_url: string }) => {
+      setFormError(null);
+      try {
+        await createRepo({
+          name: form.name,
+          git_url: form.git_url.trim() || undefined,
+        });
+        setNewRepoOpen(false);
+      } catch (err) {
+        setFormError(messageOf(err));
+      }
+    },
+    [createRepo],
+  );
 
-  const onCreateSession = async (
-    repoName: string,
-    form: { working_dir: string },
-  ) => {
-    setFormError(null);
-    try {
-      await createSession({
-        repo: repoName,
-        working_dir: form.working_dir.trim() || undefined,
-      });
-      setNewSessionFor(null);
-    } catch (err) {
-      setFormError(messageOf(err));
-    }
-  };
+  const onCreateSession = useCallback(
+    async (repoName: string, form: { working_dir: string }) => {
+      setFormError(null);
+      try {
+        await createSession({
+          repo: repoName,
+          working_dir: form.working_dir.trim() || undefined,
+        });
+        setNewSessionFor(null);
+      } catch (err) {
+        setFormError(messageOf(err));
+      }
+    },
+    [createSession],
+  );
 
-  const requestDelete = (id: string) => setPendingDeleteId(id);
-  const confirmDelete = async () => {
+  const requestDelete = useCallback(
+    (id: string) => setPendingDeleteId(id),
+    [],
+  );
+  const confirmDelete = useCallback(async () => {
     const id = pendingDeleteId;
     if (!id) return;
     setPendingDeleteId(null);
@@ -155,19 +172,58 @@ export function Sidebar() {
     } catch (err) {
       setFormError(messageOf(err));
     }
-  };
+  }, [deleteSession, pendingDeleteId]);
 
-  const onUpdateSession = async (
-    id: string,
-    patch: Parameters<typeof updateSession>[1],
-  ) => {
-    setFormError(null);
-    try {
-      await updateSession(id, patch);
-    } catch (err) {
-      setFormError(messageOf(err));
-    }
-  };
+  const onUpdateSession = useCallback(
+    async (id: string, patch: Parameters<typeof updateSession>[1]) => {
+      setFormError(null);
+      try {
+        await updateSession(id, patch);
+      } catch (err) {
+        setFormError(messageOf(err));
+      }
+    },
+    [updateSession],
+  );
+
+  const cancelPendingDelete = useCallback(
+    () => setPendingDeleteId(null),
+    [],
+  );
+
+  const toggleNewRepoOpen = useCallback(() => {
+    setNewRepoOpen((v) => !v);
+    setNewSessionFor(null);
+  }, []);
+  const closeNewRepo = useCallback(() => setNewRepoOpen(false), []);
+
+  const setNewSessionForFn = useCallback(
+    (next: (prev: string | null) => string | null) => setNewSessionFor(next),
+    [],
+  );
+  const repoGroupHandlers = useMemo<RepoGroupBaseHandlers>(
+    () => ({
+      toggleRepo,
+      setNewSessionFor: setNewSessionForFn,
+      createSession: onCreateSession,
+      registerAnchor: registerRepoAnchor,
+    }),
+    [toggleRepo, setNewSessionForFn, onCreateSession, registerRepoAnchor],
+  );
+  const repoGroupSelection = useMemo<RepoGroupSelection>(
+    () => ({
+      selectedSessionId,
+      onSelectSession: openSessionTabs,
+    }),
+    [selectedSessionId, openSessionTabs],
+  );
+  const repoGroupSessionOps = useMemo<RepoGroupSessionOps>(
+    () => ({
+      onRequestDelete: requestDelete,
+      onUpdateSession,
+    }),
+    [requestDelete, onUpdateSession],
+  );
 
   return (
     <div className="sidebar">
@@ -177,10 +233,7 @@ export function Sidebar() {
           <button
             type="button"
             className="sidebar__icon-button"
-            onClick={() => {
-              setNewRepoOpen((v) => !v);
-              setNewSessionFor(null);
-            }}
+            onClick={toggleNewRepoOpen}
             aria-label="New repo"
           >
             <Icon name="plus" size={14} />
@@ -189,10 +242,7 @@ export function Sidebar() {
       </div>
 
       {newRepoOpen && (
-        <NewRepoForm
-          onSubmit={onCreateRepo}
-          onCancel={() => setNewRepoOpen(false)}
-        />
+        <NewRepoForm onSubmit={onCreateRepo} onCancel={closeNewRepo} />
       )}
 
       {formError && <div className="sidebar__error">{formError}</div>}
@@ -207,23 +257,15 @@ export function Sidebar() {
             key={group.name}
             group={group}
             expanded={expanded[group.name] ?? true}
-            onToggle={() => toggleRepo(group.name)}
-            selectedSessionId={selectedSessionId}
-            onSelectSession={openSessionTabs}
-            onRequestDelete={requestDelete}
-            onUpdateSession={onUpdateSession}
-            onNewSession={() =>
-              setNewSessionFor((v) => (v === group.name ? null : group.name))
-            }
-            newSessionOpen={newSessionFor === group.name}
-            onNewSessionSubmit={(form) => onCreateSession(group.name, form)}
-            onNewSessionCancel={() => setNewSessionFor(null)}
+            newSessionRepoName={newSessionFor}
+            handlers={repoGroupHandlers}
+            selection={repoGroupSelection}
+            sessionOps={repoGroupSessionOps}
             isUnread={isUnread}
             onError={setFormError}
             revealRequest={
               revealRequest?.repo === group.name ? revealRequest : null
             }
-            anchorRef={(el) => registerRepoAnchor(group.name, el)}
           />
         ))}
       </ul>
@@ -234,7 +276,7 @@ export function Sidebar() {
           confirmLabel="Delete"
           destructive
           onConfirm={confirmDelete}
-          onCancel={() => setPendingDeleteId(null)}
+          onCancel={cancelPendingDelete}
         />
       )}
       <div className="sidebar__spacer" />
@@ -275,28 +317,12 @@ function sessionCompare(a: SessionView, b: SessionView): number {
 
 // ─── Repo group ─────────────────────────────────────────────────────
 
-function RepoGroup({
-  group,
-  expanded,
-  onToggle,
-  selectedSessionId,
-  onSelectSession,
-  onRequestDelete,
-  onUpdateSession,
-  onNewSession,
-  newSessionOpen,
-  onNewSessionSubmit,
-  onNewSessionCancel,
-  isUnread,
-  onError,
-  revealRequest,
-  anchorRef,
-}: {
-  group: RepoGroupData;
-  expanded: boolean;
-  onToggle: () => void;
+interface RepoGroupSelection {
   selectedSessionId: string | null;
   onSelectSession: (id: string) => void;
+}
+
+interface RepoGroupSessionOps {
   onRequestDelete: (id: string) => void;
   onUpdateSession: (
     id: string,
@@ -306,15 +332,91 @@ function RepoGroup({
       color?: SessionColor | null;
     },
   ) => void | Promise<void>;
-  onNewSession: () => void;
-  newSessionOpen: boolean;
-  onNewSessionSubmit: (form: { working_dir: string }) => void;
-  onNewSessionCancel: () => void;
+}
+
+/** Base handlers — stable at the parent level and curried per-repo by
+ * RepoGroup itself. Keeping the curry inside the group avoids creating
+ * new closure/object literals in the parent map body on every render. */
+interface RepoGroupBaseHandlers {
+  toggleRepo: (name: string) => void;
+  setNewSessionFor: (next: (prev: string | null) => string | null) => void;
+  createSession: (
+    repoName: string,
+    form: { working_dir: string },
+  ) => void | Promise<void>;
+  registerAnchor: (name: string, el: HTMLLIElement | null) => void;
+}
+
+interface RepoGroupProps {
+  group: RepoGroupData;
+  expanded: boolean;
+  newSessionRepoName: string | null;
+  handlers: RepoGroupBaseHandlers;
+  selection: RepoGroupSelection;
+  sessionOps: RepoGroupSessionOps;
   isUnread: (sessionId: string, lastEventAt: string | null) => boolean;
   onError: (message: string | null) => void;
   revealRequest: { repo: string; path: string; nonce: number } | null;
-  anchorRef?: (el: HTMLLIElement | null) => void;
-}) {
+}
+
+function RepoGroup({
+  group,
+  expanded,
+  newSessionRepoName,
+  handlers,
+  selection,
+  sessionOps,
+  isUnread,
+  onError,
+  revealRequest,
+}: RepoGroupProps) {
+  const { selectedSessionId, onSelectSession } = selection;
+  const { onRequestDelete, onUpdateSession } = sessionOps;
+  const { toggleRepo, setNewSessionFor, createSession, registerAnchor } =
+    handlers;
+  const anchorRef = useCallback(
+    (el: HTMLLIElement | null) => registerAnchor(group.name, el),
+    [registerAnchor, group.name],
+  );
+
+  const onToggle = useCallback(
+    () => toggleRepo(group.name),
+    [toggleRepo, group.name],
+  );
+  const newSessionOpen = newSessionRepoName === group.name;
+  const newSessionOnStart = useCallback(
+    () =>
+      setNewSessionFor((prev) => (prev === group.name ? null : group.name)),
+    [setNewSessionFor, group.name],
+  );
+  const newSessionOnSubmit = useCallback(
+    (form: { working_dir: string }) => createSession(group.name, form),
+    [createSession, group.name],
+  );
+  const newSessionOnCancel = useCallback(
+    () => setNewSessionFor(() => null),
+    [setNewSessionFor],
+  );
+  const newSessionOnStartClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      newSessionOnStart();
+    },
+    [newSessionOnStart],
+  );
+
+  const toggleSessionsSub = useCallback(
+    () => setSubOpen((p) => ({ ...p, sessions: !p.sessions })),
+    [],
+  );
+  const toggleFilesSub = useCallback(
+    () => setSubOpen((p) => ({ ...p, files: !p.files })),
+    [],
+  );
+  const toggleGitSub = useCallback(
+    () => setSubOpen((p) => ({ ...p, gitSection: !p.gitSection })),
+    [],
+  );
   const { setExpanded, repoState } = useRepos(
     useShallow((store) => ({
       setExpanded: store.setExpanded,
@@ -378,9 +480,7 @@ function RepoGroup({
           <Subsection
             label="Sessions"
             open={subOpen.sessions}
-            onToggle={() =>
-              setSubOpen((p) => ({ ...p, sessions: !p.sessions }))
-            }
+            onToggle={toggleSessionsSub}
             count={group.sessions.length}
             rightSlot={
               <Tooltip label={`New session in ${group.name}`}>
@@ -388,10 +488,7 @@ function RepoGroup({
                   type="button"
                   className="sidebar__icon-button"
                   aria-label={`New session in ${group.name}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onNewSession();
-                  }}
+                  onClick={newSessionOnStartClick}
                   disabled={!group.exists}
                 >
                   <Icon name="plus" size={14} />
@@ -402,8 +499,8 @@ function RepoGroup({
             {newSessionOpen && (
               <NewSessionForm
                 repoName={group.name}
-                onSubmit={onNewSessionSubmit}
-                onCancel={onNewSessionCancel}
+                onSubmit={newSessionOnSubmit}
+                onCancel={newSessionOnCancel}
               />
             )}
             {group.sessions.length === 0 && (
@@ -415,18 +512,14 @@ function RepoGroup({
                 session={s}
                 selected={s.id === selectedSessionId}
                 unread={isUnread(s.id, s.last_event_at)}
-                onSelect={() => onSelectSession(s.id)}
-                onDelete={() => onRequestDelete(s.id)}
-                onUpdate={(patch) => onUpdateSession(s.id, patch)}
+                onSelect={onSelectSession}
+                onDelete={onRequestDelete}
+                onUpdate={onUpdateSession}
               />
             ))}
           </Subsection>
 
-          <Subsection
-            label="Files"
-            open={subOpen.files}
-            onToggle={() => setSubOpen((p) => ({ ...p, files: !p.files }))}
-          >
+          <Subsection label="Files" open={subOpen.files} onToggle={toggleFilesSub}>
             {subOpen.files && (
               <FileTree
                 repoName={group.name}
@@ -439,9 +532,7 @@ function RepoGroup({
           <Subsection
             label="Git"
             open={subOpen.gitSection}
-            onToggle={() =>
-              setSubOpen((p) => ({ ...p, gitSection: !p.gitSection }))
-            }
+            onToggle={toggleGitSub}
           >
             <GitPanel git={git} />
           </Subsection>
@@ -561,6 +652,12 @@ function FileTree({
     [state?.git?.dirty_by_path],
   );
 
+  const onShowAllChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) =>
+      setShowAll(repoName, e.target.checked),
+    [setShowAll, repoName],
+  );
+
   const root = state?.tree[""];
   if (root === undefined) {
     return <div className="sidebar__muted">loading…</div>;
@@ -584,7 +681,7 @@ function FileTree({
         <input
           type="checkbox"
           checked={state?.showAll ?? false}
-          onChange={(e) => setShowAll(repoName, e.target.checked)}
+          onChange={onShowAllChange}
         />
         show all (incl. ignored)
       </label>
@@ -681,24 +778,31 @@ function TreeRow({
     rowRef.current?.scrollIntoView({ block: "center" });
   }, [isRevealTarget, revealRequest?.nonce]);
 
-  const onClickRow = () => {
+  const onClickRow = useCallback(() => {
     if (entry.kind === "dir") {
       toggleDir(repoName, fullPath, isExpanded);
     } else {
       appCommands.openFile({ repo: repoName, path: fullPath });
     }
-  };
+  }, [entry.kind, toggleDir, repoName, fullPath, isExpanded]);
 
-  const openFileTab = () => appCommands.openFile({ repo: repoName, path: fullPath });
+  const openFileTab = useCallback(
+    () => appCommands.openFile({ repo: repoName, path: fullPath }),
+    [repoName, fullPath],
+  );
 
-  const copyPath = (variant: "absolute" | "relative") => {
-    const text = variant === "absolute"
-      ? `/home/dev/repos/${repoName}/${fullPath}`
-      : fullPath;
-    void navigator.clipboard?.writeText(text).catch(() => {
-      /* ignore — HTTP deploys lack permission */
-    });
-  };
+  const copyPath = useCallback(
+    (variant: "absolute" | "relative") => {
+      const text =
+        variant === "absolute"
+          ? `/home/dev/repos/${repoName}/${fullPath}`
+          : fullPath;
+      void navigator.clipboard?.writeText(text).catch(() => {
+        /* ignore — HTTP deploys lack permission */
+      });
+    },
+    [repoName, fullPath],
+  );
 
   const onContextMenu = contextMenuHandler(openCtx, () => {
     const items: MenuItem[] = [];
@@ -766,47 +870,64 @@ function TreeRow({
     return items;
   });
 
-  const onUploadChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    for (const f of files) {
-      try {
-        await uploadRepoFile(repoName, fullPath, f);
-      } catch (err) {
-        onError(`Upload failed for ${f.name}: ${messageOf(err)}`);
-      }
-    }
-    refresh(repoName);
-    e.target.value = "";
-  };
-
-  const dropHandlers =
-    entry.kind === "dir"
-      ? {
-          onDragOver: (ev: React.DragEvent) => {
-            if (ev.dataTransfer.types.includes("Files")) {
-              ev.preventDefault();
-              setDragOver(true);
-            }
-          },
-          onDragLeave: () => setDragOver(false),
-          onDrop: async (ev: React.DragEvent) => {
-            ev.preventDefault();
-            setDragOver(false);
-            const files = Array.from(ev.dataTransfer.files);
-            for (const f of files) {
-              try {
-                await uploadRepoFile(repoName, fullPath, f);
-              } catch (err) {
-                onError(`Upload failed for ${f.name}: ${messageOf(err)}`);
-              }
-            }
-            refresh(repoName);
-          },
+  const onUploadChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(e.target.files ?? []);
+      for (const f of files) {
+        try {
+          await uploadRepoFile(repoName, fullPath, f);
+        } catch (err) {
+          onError(`Upload failed for ${f.name}: ${messageOf(err)}`);
         }
-      : {};
+      }
+      refresh(repoName);
+      e.target.value = "";
+    },
+    [onError, refresh, repoName, fullPath],
+  );
+
+  const isDir = entry.kind === "dir";
+  const onDirDragOver = useCallback((ev: React.DragEvent) => {
+    if (ev.dataTransfer.types.includes("Files")) {
+      ev.preventDefault();
+      setDragOver(true);
+    }
+  }, []);
+  const onDirDragLeave = useCallback(() => setDragOver(false), []);
+  const onDirDrop = useCallback(
+    async (ev: React.DragEvent) => {
+      ev.preventDefault();
+      setDragOver(false);
+      const files = Array.from(ev.dataTransfer.files);
+      for (const f of files) {
+        try {
+          await uploadRepoFile(repoName, fullPath, f);
+        } catch (err) {
+          onError(`Upload failed for ${f.name}: ${messageOf(err)}`);
+        }
+      }
+      refresh(repoName);
+    },
+    [onError, refresh, repoName, fullPath],
+  );
+  const dropHandlers = useMemo(
+    () =>
+      isDir
+        ? {
+            onDragOver: onDirDragOver,
+            onDragLeave: onDirDragLeave,
+            onDrop: onDirDrop,
+          }
+        : {},
+    [isDir, onDirDragOver, onDirDragLeave, onDirDrop],
+  );
 
   const childEntries = state?.tree[fullPath];
 
+  const rowStyle = useMemo(
+    () => ({ paddingLeft: 4 + depth * 12 }),
+    [depth],
+  );
   const tooltip = entry.dirty ? `${entry.dirty.trim()} ${fullPath}` : fullPath;
   return (
     <li className="sidebar__tree-item">
@@ -822,7 +943,7 @@ function TreeRow({
             (isRevealTarget ? " sidebar__tree-row--revealed" : "")
           }
           // eslint-disable-next-line local/no-inline-styles -- depth is per-row; can't be expressed as a finite class set
-          style={{ paddingLeft: 4 + depth * 12 }}
+          style={rowStyle}
           onClick={onClickRow}
           onContextMenu={onContextMenu}
           {...dropHandlers}
@@ -1017,6 +1138,22 @@ function buildSessionMenuItems({
   ];
 }
 
+interface SessionRowProps {
+  session: SessionView;
+  selected: boolean;
+  unread: boolean;
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
+  onUpdate: (
+    id: string,
+    patch: {
+      label?: string | null;
+      pinned?: boolean;
+      color?: SessionColor | null;
+    },
+  ) => void | Promise<void>;
+}
+
 function SessionRow({
   session: s,
   selected,
@@ -1024,30 +1161,37 @@ function SessionRow({
   onSelect,
   onDelete,
   onUpdate,
-}: {
-  session: SessionView;
-  selected: boolean;
-  unread: boolean;
-  onSelect: () => void;
-  onDelete: () => void;
-  onUpdate: (patch: {
-    label?: string | null;
-    pinned?: boolean;
-    color?: SessionColor | null;
-  }) => void | Promise<void>;
-}) {
+}: SessionRowProps) {
   const [renaming, setRenaming] = useState(false);
   const openTab = useTabs((store) => store.openTab);
   const openCtx = useContextMenu((store) => store.open);
 
-  const menuItems = buildSessionMenuItems({
-    session: s,
-    openTab,
-    onRename: () => setRenaming(true),
-    onUpdate,
-    onDelete,
-  });
-  const onRowContextMenu = contextMenuHandler(openCtx, () => menuItems);
+  const selectThis = useCallback(() => onSelect(s.id), [onSelect, s.id]);
+  const deleteThis = useCallback(() => onDelete(s.id), [onDelete, s.id]);
+  const updateThis = useCallback(
+    (patch: Parameters<SessionRowProps["onUpdate"]>[1]) => onUpdate(s.id, patch),
+    [onUpdate, s.id],
+  );
+  const startRenaming = useCallback(() => setRenaming(true), []);
+  const stopRenaming = useCallback(() => setRenaming(false), []);
+
+  const menuItems = useMemo(
+    () =>
+      buildSessionMenuItems({
+        session: s,
+        openTab,
+        onRename: startRenaming,
+        onUpdate: updateThis,
+        onDelete: deleteThis,
+      }),
+    [s, openTab, startRenaming, updateThis, deleteThis],
+  );
+  const buildMenuItems = useCallback(() => menuItems, [menuItems]);
+  const { onContextMenu: onRowContextMenu, onKeyDown: onRowContextMenuKey } =
+    useMemo(
+      () => contextMenuTriggerProps(openCtx, buildMenuItems),
+      [openCtx, buildMenuItems],
+    );
 
   const sessionLabel = (() => {
     if (s.state === "dead") return "ended";
@@ -1100,18 +1244,23 @@ function SessionRow({
           ? "mute"
           : "ok";
 
+  const submitRename = useCallback(
+    (value: string) => {
+      const v = value.trim();
+      void updateThis({ label: v.length === 0 ? null : v });
+      setRenaming(false);
+    },
+    [updateThis],
+  );
+
   return (
-    <div className={rowClass} onContextMenu={onRowContextMenu}>
+    <div className={rowClass}>
       {s.color && <span className="sidebar__color-accent" aria-hidden />}
       {renaming ? (
         <RenameInput
           initial={s.label ?? ""}
-          onSubmit={(value) => {
-            const v = value.trim();
-            void onUpdate({ label: v.length === 0 ? null : v });
-            setRenaming(false);
-          }}
-          onCancel={() => setRenaming(false)}
+          onSubmit={submitRename}
+          onCancel={stopRenaming}
         />
       ) : (
         <Tooltip label="Right-click for session actions">
@@ -1122,8 +1271,10 @@ function SessionRow({
                 ? "sidebar__session sidebar__session--active"
                 : "sidebar__session"
             }
-            onClick={onSelect}
-            onDoubleClick={() => setRenaming(true)}
+            onClick={selectThis}
+            onDoubleClick={startRenaming}
+            onContextMenu={onRowContextMenu}
+            onKeyDown={onRowContextMenuKey}
           >
             <span
               className={`sidebar__dot sidebar__dot--${s.state} sidebar__dot--tone-${stateTone}`}
@@ -1175,30 +1326,40 @@ function RenameInput({
   onCancel: () => void;
 }) {
   const [value, setValue] = useState(initial);
-  return (
-    <form
-      className="sidebar__rename"
-      onSubmit={(e) => {
+  const onFormSubmit = useCallback(
+    (e: FormEvent) => {
+      e.preventDefault();
+      onSubmit(value);
+    },
+    [onSubmit, value],
+  );
+  const onInputChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => setValue(e.target.value),
+    [],
+  );
+  const onInputKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Escape") {
         e.preventDefault();
-        onSubmit(value);
-      }}
-    >
+        onCancel();
+      }
+    },
+    [onCancel],
+  );
+  const onInputBlur = useCallback(() => onSubmit(value), [onSubmit, value]);
+  return (
+    <form className="sidebar__rename" onSubmit={onFormSubmit}>
       <input
         type="text"
         className="sidebar__rename-input"
         value={value}
-        onChange={(e) => setValue(e.target.value)}
+        onChange={onInputChange}
         autoFocus
         maxLength={100}
         placeholder="Session name (empty to clear)"
         aria-label="Session name"
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            e.preventDefault();
-            onCancel();
-          }
-        }}
-        onBlur={() => onSubmit(value)}
+        onKeyDown={onInputKeyDown}
+        onBlur={onInputBlur}
       />
     </form>
   );
@@ -1213,23 +1374,35 @@ function NewRepoForm({
 }) {
   const [name, setName] = useState("");
   const [gitUrl, setGitUrl] = useState("");
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    if (!name.trim()) return;
-    onSubmit({ name: name.trim(), git_url: gitUrl });
-  };
+  const submit = useCallback(
+    (e: FormEvent) => {
+      e.preventDefault();
+      if (!name.trim()) return;
+      onSubmit({ name: name.trim(), git_url: gitUrl });
+    },
+    [name, gitUrl, onSubmit],
+  );
+  const cancelOnEscape = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Escape") onCancel();
+    },
+    [onCancel],
+  );
+  const onNameChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => setName(e.target.value),
+    [],
+  );
+  const onGitUrlChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => setGitUrl(e.target.value),
+    [],
+  );
   return (
-    <form
-      className="sidebar__form"
-      onSubmit={submit}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onCancel();
-      }}
-    >
+    <form className="sidebar__form" onSubmit={submit}>
       <input
         type="text"
         value={name}
-        onChange={(e) => setName(e.target.value)}
+        onChange={onNameChange}
+        onKeyDown={cancelOnEscape}
         placeholder="repo name"
         autoFocus
         aria-label="repo name"
@@ -1237,7 +1410,8 @@ function NewRepoForm({
       <input
         type="text"
         value={gitUrl}
-        onChange={(e) => setGitUrl(e.target.value)}
+        onChange={onGitUrlChange}
+        onKeyDown={cancelOnEscape}
         placeholder="git url (optional)"
         aria-label="git url"
       />
@@ -1261,22 +1435,30 @@ function NewSessionForm({
   onCancel: () => void;
 }) {
   const [workingDir, setWorkingDir] = useState("");
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    onSubmit({ working_dir: workingDir });
-  };
+  const submit = useCallback(
+    (e: FormEvent) => {
+      e.preventDefault();
+      onSubmit({ working_dir: workingDir });
+    },
+    [onSubmit, workingDir],
+  );
+  const onInputChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => setWorkingDir(e.target.value),
+    [],
+  );
+  const onInputKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Escape") onCancel();
+    },
+    [onCancel],
+  );
   return (
-    <form
-      className="sidebar__form"
-      onSubmit={submit}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onCancel();
-      }}
-    >
+    <form className="sidebar__form" onSubmit={submit}>
       <input
         type="text"
         value={workingDir}
-        onChange={(e) => setWorkingDir(e.target.value)}
+        onChange={onInputChange}
+        onKeyDown={onInputKeyDown}
         placeholder={`working dir (default: repos/${repoName})`}
         autoFocus
         aria-label="working directory"

@@ -64,11 +64,28 @@
   border-color: color-mix(in oklab, var(--crit-mark) 40%, transparent);
 }
 
-.thc__hint {
+.thc__pin {
   margin-left: auto;
-  font-size: var(--t-meta);
-  color: var(--text-lo);
-  font-style: italic;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  background: transparent;
+  color: var(--text-mid);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-1);
+  font-family: var(--font-mono);
+  font-size: calc(var(--t-meta) - 1px);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background var(--dur-0) var(--ease), color var(--dur-0) var(--ease);
+}
+
+.thc__pin:hover {
+  background: var(--canvas-1);
+  color: var(--text-hi);
+  border-color: var(--accent-lo);
 }
 
 .thc__close {

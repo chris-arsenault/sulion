@@ -5,6 +5,8 @@ import userEvent from "@testing-library/user-event";
 import { SessionInspectorPane } from "./SessionInspectorPane";
 import { assistantChunk, makeTurn } from "./test-helpers";
 
+const noop = () => {};
+
 describe("SessionInspectorPane", () => {
   it("inline mode renders empty state when no turn is selected", () => {
     render(
@@ -43,7 +45,7 @@ describe("SessionInspectorPane", () => {
         turn={makeTurn({ user_prompt_text: "phone prompt" })}
         showThinking={true}
         asOverlay={true}
-        onClose={() => {}}
+        onClose={noop}
       />,
     );
     expect(screen.getByTestId("inspector-overlay")).toBeDefined();
@@ -56,7 +58,7 @@ describe("SessionInspectorPane", () => {
         turn={null}
         showThinking={true}
         asOverlay={true}
-        onClose={() => {}}
+        onClose={noop}
       />,
     );
     expect(screen.queryByTestId("inspector-overlay")).toBeNull();

@@ -6,7 +6,7 @@
 // Kept dependency-free. Not a general-purpose JSON editor — this is
 // a read-only browser for payload shapes.
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { Tooltip } from "../ui";
 import "./JsonTree.css";
@@ -100,6 +100,7 @@ const STRING_TRUNCATE = 160;
 
 function StringValue({ text }: { text: string }) {
   const [full, setFull] = useState(false);
+  const showFull = useCallback(() => setFull(true), []);
   if (text.length <= STRING_TRUNCATE || full) {
     return <span className="jsont__str">{JSON.stringify(text)}</span>;
   }
@@ -112,7 +113,7 @@ function StringValue({ text }: { text: string }) {
         <button
           type="button"
           className="jsont__expand"
-          onClick={() => setFull(true)}
+          onClick={showFull}
         >
           …+{text.length - STRING_TRUNCATE}
         </button>
@@ -131,12 +132,13 @@ function Collapsible({
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const toggle = useCallback(() => setOpen((v) => !v), []);
   return (
     <span className="jsont__coll">
       <button
         type="button"
         className="jsont__toggle"
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
         aria-expanded={open}
       >
         <span className={open ? "jsont__chev jsont__chev--open" : "jsont__chev"}>▸</span>

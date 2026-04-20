@@ -4,9 +4,13 @@ import userEvent from "@testing-library/user-event";
 
 import { JsonTree } from "./JsonTree";
 
+const PRIMITIVES = { flag: true, count: 42, name: "hi", empty: null };
+const DEEP_NESTED = { deep: { buried: { thing: "hidden" } } };
+const OUTER_INNER = { outer: { inner: "reveal-me" } };
+
 describe("JsonTree", () => {
   it("renders primitive values with type-specific classes", () => {
-    render(<JsonTree value={{ flag: true, count: 42, name: "hi", empty: null }} />);
+    render(<JsonTree value={PRIMITIVES} />);
     expect(screen.getByText("true")).toBeDefined();
     expect(screen.getByText("42")).toBeDefined();
     expect(screen.getByText('"hi"')).toBeDefined();
@@ -14,23 +18,13 @@ describe("JsonTree", () => {
   });
 
   it("collapses arrays beyond the depth limit", () => {
-    render(
-      <JsonTree
-        value={{ deep: { buried: { thing: "hidden" } } }}
-        depthLimit={1}
-      />,
-    );
+    render(<JsonTree value={DEEP_NESTED} depthLimit={1} />);
     // At depth 0 we render the outer object open; depth 1+ closed.
     expect(screen.queryByText('"hidden"')).toBeNull();
   });
 
   it("expands a collapsed node on click", async () => {
-    render(
-      <JsonTree
-        value={{ outer: { inner: "reveal-me" } }}
-        depthLimit={1}
-      />,
-    );
+    render(<JsonTree value={OUTER_INNER} depthLimit={1} />);
     const user = userEvent.setup();
     // Click the {1 key} toggle of `outer`.
     const toggles = screen.getAllByRole("button");

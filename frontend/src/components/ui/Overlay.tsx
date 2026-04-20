@@ -1,5 +1,5 @@
 import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Icon } from "../../icons";
 
 type DivProps = Omit<HTMLAttributes<HTMLDivElement>, "title">;
@@ -54,19 +54,18 @@ export function Overlay({
     }
   }, [open]);
 
-  if (!open) return null;
+  const surfaceStyle = useMemo<CSSProperties>(() => {
+    const base: CSSProperties = { width, maxWidth, maxHeight };
+    if (anchorTo) {
+      base.position = "fixed";
+      base.top = anchorTo.top;
+      base.left = anchorTo.left;
+      if (anchorTo.width !== undefined) base.width = anchorTo.width;
+    }
+    return base;
+  }, [width, maxWidth, maxHeight, anchorTo]);
 
-  const surfaceStyle: CSSProperties = {
-    width,
-    maxWidth,
-    maxHeight,
-  };
-  if (anchorTo) {
-    surfaceStyle.position = "fixed";
-    surfaceStyle.top = anchorTo.top;
-    surfaceStyle.left = anchorTo.left;
-    if (anchorTo.width !== undefined) surfaceStyle.width = anchorTo.width;
-  }
+  if (!open) return null;
 
   const classes = [
     "ui-overlay",

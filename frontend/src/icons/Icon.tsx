@@ -1,4 +1,4 @@
-import type { CSSProperties, ComponentType, SVGProps } from "react";
+import type { ComponentType, SVGProps } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -116,7 +116,6 @@ interface IconProps {
   name: IconName;
   size?: IconSize;
   className?: string;
-  style?: CSSProperties;
   "aria-label"?: string;
 }
 
@@ -124,7 +123,6 @@ export function Icon({
   name,
   size = 16,
   className,
-  style,
   "aria-label": ariaLabel,
 }: IconProps) {
   const Glyph = REGISTRY[name];
@@ -136,7 +134,6 @@ export function Icon({
       width={size}
       height={size}
       className={className}
-      style={style}
       strokeWidth={1.5}
       {...ariaProps}
     />

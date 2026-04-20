@@ -7,6 +7,8 @@ import { resetTabStore, useTabStore } from "../state/TabStore";
 import { ContextMenuHost } from "./common/ContextMenu";
 import { appCommands } from "../state/AppCommands";
 
+const TURN_PREVIEW = "Update lib.rs";
+
 describe("FileTracePanel", () => {
   beforeEach(() => {
     resetTabStore();
@@ -31,7 +33,7 @@ describe("FileTracePanel", () => {
                   session_label: "investigation",
                   session_state: "dead",
                   turn_id: 42,
-                  turn_preview: "Update lib.rs",
+                  turn_preview: TURN_PREVIEW,
                   turn_timestamp: "2026-04-19T00:00:00Z",
                   operation_type: "edit",
                   operation_category: "create_content",
@@ -64,11 +66,11 @@ describe("FileTracePanel", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Update lib.rs")).toBeDefined();
+      expect(screen.getByText(TURN_PREVIEW)).toBeDefined();
     });
 
     const user = userEvent.setup();
-    await user.click(screen.getByText("Update lib.rs"));
+    await user.click(screen.getByText(TURN_PREVIEW));
 
     const tabs = useTabStore.getState().tabs;
     const timelineTab = Object.values(tabs).find((tab) => tab.kind === "timeline");
@@ -88,13 +90,13 @@ describe("FileTracePanel", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Update lib.rs")).toBeDefined();
+      expect(screen.getByText(TURN_PREVIEW)).toBeDefined();
     });
 
     const user = userEvent.setup();
     await user.pointer({
       keys: "[MouseRight]",
-      target: screen.getByText("Update lib.rs"),
+      target: screen.getByText(TURN_PREVIEW),
     });
     await user.click(screen.getByRole("menuitem", { name: /open file/i }));
 

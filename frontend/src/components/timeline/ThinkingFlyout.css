@@ -24,6 +24,19 @@
   justify-content: center;
 }
 
+.tf__sheet-dismiss {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.tf__sheet {
+  position: relative;
+}
+
 .tf__sheet {
   width: 100%;
   max-height: 70vh;

@@ -5,6 +5,8 @@
 // The left-bar "errors only" and the file-path textbox are include-only
 // filters (they're labeled as such and behave intuitively).
 
+import { useCallback } from "react";
+
 import {
   KNOWN_OPERATION_CATEGORIES,
   OPERATION_CATEGORY_LABELS,
@@ -14,6 +16,12 @@ import type { OperationCategory } from "../../api/types";
 import { Icon } from "../../icons";
 import { Tooltip } from "../ui";
 import "./FilterChips.css";
+
+const THINKING_LABEL = (
+  <>
+    <Icon name="sparkles" size={12} /> thinking
+  </>
+);
 
 interface Props {
   filters: TimelineFilters;
@@ -47,23 +55,47 @@ export function FilterChips({
     filters.showBookkeeping ||
     filters.showSidechain;
 
+  const toggleErrorsOnly = useCallback(
+    () => setErrorsOnly(!filters.errorsOnly),
+    [filters.errorsOnly, setErrorsOnly],
+  );
+  const toggleThinking = useCallback(
+    () => setShowThinking(!filters.showThinking),
+    [filters.showThinking, setShowThinking],
+  );
+  const toggleBookkeeping = useCallback(
+    () => setShowBookkeeping(!filters.showBookkeeping),
+    [filters.showBookkeeping, setShowBookkeeping],
+  );
+  const toggleSidechain = useCallback(
+    () => setShowSidechain(!filters.showSidechain),
+    [filters.showSidechain, setShowSidechain],
+  );
+  const onFilePathChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => setFilePath(e.target.value),
+    [setFilePath],
+  );
+
   return (
     <div className="fc" data-testid="filter-chips">
       <div className="fc__group">
         <span className="fc__label">Show</span>
-        <HideChip
+        <SpeakerChip
+          speaker="user"
           hidden={filters.hiddenSpeakers.has("user")}
-          onClick={() => toggleSpeaker("user")}
+          toggle={toggleSpeaker}
           label="user"
         />
-        <HideChip
+        <SpeakerChip
+          speaker="assistant"
           hidden={filters.hiddenSpeakers.has("assistant")}
-          onClick={() => toggleSpeaker("assistant")}
+          toggle={toggleSpeaker}
           label="assistant"
         />
-        <HideChip
+        <SpeakerChip
+          speaker="tool_result"
           hidden={filters.hiddenSpeakers.has("tool_result")}
-          onClick={() => toggleSpeaker("tool_result")}
+          toggle={toggleSpeaker}
           label="tool result"
         />
       </div>
@@ -71,12 +103,11 @@ export function FilterChips({
       <div className="fc__group">
         <span className="fc__label">Operations</span>
         {KNOWN_OPERATION_CATEGORIES.map((category) => (
-          <HideChip
+          <CategoryChip
             key={category}
+            category={category}
             hidden={filters.hiddenOperationCategories.has(category)}
-            onClick={() => toggleOperationCategory(category)}
-            label={OPERATION_CATEGORY_LABELS[category]}
-            variant={variantClass(category)}
+            toggle={toggleOperationCategory}
           />
         ))}
       </div>
@@ -84,27 +115,23 @@ export function FilterChips({
       <div className="fc__group">
         <IncludeChip
           active={filters.errorsOnly}
-          onClick={() => setErrorsOnly(!filters.errorsOnly)}
+          onClick={toggleErrorsOnly}
           label="errors only"
         />
         <HideChip
           hidden={!filters.showThinking}
-          onClick={() => setShowThinking(!filters.showThinking)}
-          label={
-            <>
-              <Icon name="sparkles" size={12} /> thinking
-            </>
-          }
+          onClick={toggleThinking}
+          label={THINKING_LABEL}
           ariaLabel="thinking"
         />
         <HideChip
           hidden={!filters.showBookkeeping}
-          onClick={() => setShowBookkeeping(!filters.showBookkeeping)}
+          onClick={toggleBookkeeping}
           label="bookkeeping"
         />
         <HideChip
           hidden={!filters.showSidechain}
-          onClick={() => setShowSidechain(!filters.showSidechain)}
+          onClick={toggleSidechain}
           label="sidechain"
         />
       </div>
@@ -116,7 +143,7 @@ export function FilterChips({
           className="fc__input"
           placeholder="show only turns touching this path…"
           value={filters.filePath}
-          onChange={(e) => setFilePath(e.target.value)}
+          onChange={onFilePathChange}
           aria-label="Filter to turns referencing file path"
         />
       </div>
@@ -129,6 +156,41 @@ export function FilterChips({
         </Tooltip>
       )}
     </div>
+  );
+}
+
+function SpeakerChip({
+  speaker,
+  hidden,
+  toggle,
+  label,
+}: {
+  speaker: "user" | "assistant" | "tool_result";
+  hidden: boolean;
+  toggle: (s: "user" | "assistant" | "tool_result") => void;
+  label: string;
+}) {
+  const onClick = useCallback(() => toggle(speaker), [toggle, speaker]);
+  return <HideChip hidden={hidden} onClick={onClick} label={label} />;
+}
+
+function CategoryChip({
+  category,
+  hidden,
+  toggle,
+}: {
+  category: OperationCategory;
+  hidden: boolean;
+  toggle: (c: OperationCategory) => void;
+}) {
+  const onClick = useCallback(() => toggle(category), [toggle, category]);
+  return (
+    <HideChip
+      hidden={hidden}
+      onClick={onClick}
+      label={OPERATION_CATEGORY_LABELS[category]}
+      variant={variantClass(category)}
+    />
   );
 }
 

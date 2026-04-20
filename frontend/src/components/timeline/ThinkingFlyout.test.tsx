@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 
 import { ThinkingFlyout } from "./ThinkingFlyout";
 
+const noop = () => {};
+
 function makeAnchor(): HTMLElement {
   const el = document.createElement("div");
   el.textContent = "anchor";
@@ -17,7 +19,7 @@ describe("ThinkingFlyout", () => {
       <ThinkingFlyout
         anchor={makeAnchor()}
         thinkingText="my inner monologue"
-        onClose={() => {}}
+        onClose={noop}
       />,
     );
     expect(screen.getByTestId("thinking-flyout")).toBeDefined();

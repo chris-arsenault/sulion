@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { appCommands } from "../state/AppCommands";
@@ -121,12 +121,17 @@ function RailRepo({ item }: { item: RailRepoItem }) {
     </span>
   );
 
+  const onClick = useCallback(
+    () => appCommands.revealRepo({ repo: item.name }),
+    [item.name],
+  );
+
   return (
     <Tooltip label={tooltip} placement="right">
       <button
         type="button"
         className={`rail__sigil ${toneClass}${pulse ? " rail__sigil--pulse" : ""}`}
-        onClick={() => appCommands.revealRepo({ repo: item.name })}
+        onClick={onClick}
         aria-label={`Jump to ${item.name}`}
       >
         <span className="rail__sigil-letter">{letter}</span>

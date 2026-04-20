@@ -19,7 +19,9 @@ export type SigilCategory =
   | "research"
   | "other";
 
-interface SigilProps extends HTMLAttributes<HTMLSpanElement> {
+type SpanAttrsWithoutStyle = Omit<HTMLAttributes<HTMLSpanElement>, "style">;
+
+interface SigilProps extends SpanAttrsWithoutStyle {
   icon: IconName;
   size?: IconSize;
   tone?: SigilTone;
@@ -36,7 +38,6 @@ export function Sigil({
   ring,
   pulse,
   className,
-  style,
   ...rest
 }: SigilProps) {
   const classes = [
@@ -50,7 +51,7 @@ export function Sigil({
     .filter(Boolean)
     .join(" ");
   return (
-    <span className={classes} style={style} {...rest}>
+    <span className={classes} {...rest}>
       <Icon name={icon} size={size} />
     </span>
   );

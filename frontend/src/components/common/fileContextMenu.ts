@@ -1,6 +1,6 @@
 import { appCommands } from "../../state/AppCommands";
 import { copyToClipboard } from "../terminal/clipboard";
-import type { MenuItem } from "./ContextMenu";
+import type { MenuItem } from "./contextMenuStore";
 
 export function buildWorkspaceFileMenuItems({
   repo,

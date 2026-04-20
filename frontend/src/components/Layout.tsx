@@ -86,20 +86,34 @@ export function Layout() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
+  const openDrawer = useCallback(() => setDrawerOpen(true), []);
+  const closeDrawerLocal = useCallback(() => setDrawerOpen(false), []);
+  const togglePinned = useCallback(() => setPinned((v) => !v), []);
+
   const commands = usePaletteCommands({
     setPinned,
-    onOpenPalette: () => setPaletteOpen(true),
+    onOpenPalette: openPalette,
   });
+
+  const layoutStyle = useMemo(
+    () =>
+      ({
+        "--sulion-sidebar-width": `${sidebarWidth}px`,
+      }) as React.CSSProperties,
+    [sidebarWidth],
+  );
 
   if (isMobile) {
     return (
       <div className="layout layout--mobile">
-        <MobileTopBar onOpenDrawer={() => setDrawerOpen(true)} />
+        <MobileTopBar onOpenDrawer={openDrawer} />
         {drawerOpen && (
           <>
             <div
               className="layout__scrim"
-              onClick={() => setDrawerOpen(false)}
+              onClick={closeDrawerLocal}
               aria-hidden
             />
             <aside className="layout__drawer" aria-label="Sessions">
@@ -112,7 +126,7 @@ export function Layout() {
         </main>
         <CommandPalette
           open={paletteOpen}
-          onClose={() => setPaletteOpen(false)}
+          onClose={closePalette}
           commands={commands}
         />
       </div>
@@ -122,22 +136,19 @@ export function Layout() {
   return (
     <div
       className={`layout ${pinned ? "layout--pinned" : "layout--collapsed"}`}
-      style={{ "--sulion-sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}
+      style={layoutStyle}
     >
       <Rail
         pinned={pinned}
-        onTogglePinned={() => setPinned((v) => !v)}
-        onOpenPalette={() => setPaletteOpen(true)}
+        onTogglePinned={togglePinned}
+        onOpenPalette={openPalette}
       />
       {pinned ? (
         <>
           <aside className="layout__sidebar" aria-label="Workspace">
             <Sidebar />
           </aside>
-          <SidebarResizer
-            width={sidebarWidth}
-            onChange={setSidebarWidth}
-          />
+          <SidebarResizer width={sidebarWidth} onChange={setSidebarWidth} />
         </>
       ) : null}
       <main className="layout__main">
@@ -145,7 +156,7 @@ export function Layout() {
       </main>
       <CommandPalette
         open={paletteOpen}
-        onClose={() => setPaletteOpen(false)}
+        onClose={closePalette}
         commands={commands}
       />
     </div>
@@ -183,27 +194,29 @@ function SidebarResizer({
     };
   }, [onChange]);
 
-  const start = () => {
+  const start = useCallback(() => {
     dragging.current = true;
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
-  };
+  }, []);
 
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowLeft") onChange(Math.max(MIN_WIDTH, width - 12));
-    if (e.key === "ArrowRight") onChange(Math.min(MAX_WIDTH, width + 12));
-  };
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "ArrowLeft") onChange(Math.max(MIN_WIDTH, width - 12));
+      if (e.key === "ArrowRight") onChange(Math.min(MAX_WIDTH, width + 12));
+    },
+    [onChange, width],
+  );
 
   return (
     <div
       className="layout__resizer"
-      role="separator"
+      role="slider"
       aria-orientation="vertical"
       aria-label="Resize sidebar"
       aria-valuenow={width}
       aria-valuemin={MIN_WIDTH}
       aria-valuemax={MAX_WIDTH}
-      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- resize handle needs keyboard arrow support
       tabIndex={0}
       onMouseDown={start}
       onKeyDown={onKeyDown}

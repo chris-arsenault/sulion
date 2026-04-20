@@ -226,6 +226,24 @@
   outline-offset: -2px;
 }
 
+/* Pane drop-zone button. Invisible, fills the content area, only
+ * reachable by pointer during a tab drag. A native <button> so the
+ * drag handlers live on an interactive element. */
+.wa__drop-zone {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  pointer-events: none;
+  cursor: default;
+  z-index: 5;
+}
+
+body.is-dragging-tab .wa__drop-zone {
+  pointer-events: auto;
+}
+
 .wa__splash {
   position: absolute;
   inset: 0;

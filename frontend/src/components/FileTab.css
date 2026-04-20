@@ -182,20 +182,33 @@
 
 .ft__trace-item {
   display: block;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--canvas-3);
+  padding: 0;
+  border-radius: var(--r-1);
+  border: 1px solid var(--hairline);
   background: var(--canvas-1);
-  cursor: pointer;
-}
-
-.ft__trace-item:hover {
-  background: var(--canvas-2);
-  border-color: var(--hairline);
 }
 
 .ft__trace-item--disabled {
+  padding: 8px 10px;
   cursor: context-menu;
+}
+
+.ft__trace-button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  border-radius: var(--r-1);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--dur-0) var(--ease);
+}
+
+.ft__trace-button:hover {
+  background: var(--canvas-2);
 }
 
 .ft__trace-body {

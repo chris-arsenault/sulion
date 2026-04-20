@@ -6,7 +6,7 @@
 // Mobile mode (viewport <768px) collapses to a single-pane strip
 // showing every open tab mixed together, no divider.
 
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import type { SessionView } from "../api/types";
@@ -16,11 +16,11 @@ import { useSessions } from "../state/SessionStore";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { Icon, type IconName } from "../icons";
 import { Tooltip } from "./ui";
-import type { MenuItem } from "./common/ContextMenu";
+import type { MenuItem } from "./common/contextMenuStore";
 import {
   contextMenuHandler,
   useContextMenu,
-} from "./common/ContextMenu";
+} from "./common/contextMenuStore";
 import { TerminalPane } from "./TerminalPane";
 import { TimelinePane } from "./TimelinePane";
 import { SessionEndedPane } from "./SessionEndedPane";
@@ -28,6 +28,8 @@ import { FileTab } from "./FileTab";
 import { DiffTab } from "./DiffTab";
 import { RefTab } from "./RefTab";
 import "./WorkArea.css";
+
+const TAB_DRAG_MIME = "application/x-sulion-tab";
 
 export function WorkArea() {
   const { panes, activeByPane, tabs } = useTabs(
@@ -44,19 +46,29 @@ export function WorkArea() {
   // state fully user-driven and avoids the "refresh wipes everything"
   // failure mode.
 
+  const mobileTabIds = useMemo(
+    () => [...panes.top, ...panes.bottom],
+    [panes.top, panes.bottom],
+  );
+
+  const splitStyle = useMemo(
+    () => ({
+      gridTemplateRows: `${topFraction}fr 6px ${1 - topFraction}fr`,
+    }),
+    [topFraction],
+  );
+
   if (isMobile) {
-    // Mobile: fold all tabs into a single pane strip.
-    const allTabIds = [...panes.top, ...panes.bottom];
     const activeId =
-      activeByPane.top ?? activeByPane.bottom ?? allTabIds[0] ?? null;
-    if (allTabIds.length === 0) {
+      activeByPane.top ?? activeByPane.bottom ?? mobileTabIds[0] ?? null;
+    if (mobileTabIds.length === 0) {
       return <EmptyWorkArea mobile />;
     }
     return (
       <div className="wa wa--mobile">
         <Pane
           paneId="top"
-          tabIds={allTabIds}
+          tabIds={mobileTabIds}
           activeId={activeId}
           tabs={tabs}
           mobile
@@ -73,7 +85,7 @@ export function WorkArea() {
     <div
       className="wa wa--split"
       // eslint-disable-next-line local/no-inline-styles -- resizable split fractions are per-user-drag; can't be CSS classes
-      style={{ gridTemplateRows: `${topFraction}fr 6px ${1 - topFraction}fr` }}
+      style={splitStyle}
     >
       <Pane
         paneId="top"
@@ -81,7 +93,7 @@ export function WorkArea() {
         activeId={activeByPane.top}
         tabs={tabs}
       />
-      <Divider onDrag={setTopFraction} />
+      <Divider fraction={topFraction} onDrag={setTopFraction} />
       <Pane
         paneId="bottom"
         tabIds={panes.bottom}
@@ -114,29 +126,57 @@ function EmptyWorkArea({ mobile = false }: { mobile?: boolean }) {
   );
 }
 
-function Divider({ onDrag }: { onDrag: (f: number) => void }) {
-  const onMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const container = (e.target as HTMLElement).parentElement;
-    if (!container) return;
-    const { top, height } = container.getBoundingClientRect();
-    const onMove = (ev: MouseEvent) => {
-      const f = Math.max(0.15, Math.min(0.85, (ev.clientY - top) / height));
-      onDrag(f);
-    };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
+function Divider({
+  fraction,
+  onDrag,
+}: {
+  fraction: number;
+  onDrag: (f: number) => void;
+}) {
+  const onMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const container = (e.target as HTMLElement).parentElement;
+      if (!container) return;
+      const { top, height } = container.getBoundingClientRect();
+      const onMove = (ev: MouseEvent) => {
+        const f = Math.max(0.15, Math.min(0.85, (ev.clientY - top) / height));
+        onDrag(f);
+      };
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [onDrag],
+  );
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const step = e.shiftKey ? 0.1 : 0.03;
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        onDrag(Math.max(0.15, fraction - step));
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        onDrag(Math.min(0.85, fraction + step));
+      }
+    },
+    [fraction, onDrag],
+  );
   return (
     <div
       className="wa__divider"
-      role="separator"
+      role="slider"
       aria-orientation="horizontal"
+      aria-label="Resize top and bottom panes"
+      aria-valuemin={15}
+      aria-valuemax={85}
+      aria-valuenow={Math.round(fraction * 100)}
+      tabIndex={0}
       onMouseDown={onMouseDown}
+      onKeyDown={onKeyDown}
     />
   );
 }
@@ -163,34 +203,49 @@ function Pane({
   );
   const [dragTargetActive, setDragTargetActive] = useState(false);
 
+  const onActivate = useCallback(
+    (id: string) => activateTab(paneId, id),
+    [activateTab, paneId],
+  );
+  const onDropTab = useCallback(
+    (id: string, index: number) => moveTab(id, paneId, index),
+    [moveTab, paneId],
+  );
+  const onDropZoneDragOver = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes(TAB_DRAG_MIME)) {
+      e.preventDefault();
+      setDragTargetActive(true);
+    }
+  }, []);
+  const onDropZoneDragLeave = useCallback(
+    () => setDragTargetActive(false),
+    [],
+  );
+  const onDropZoneDrop = useCallback(
+    (e: React.DragEvent) => {
+      const id = e.dataTransfer.getData(TAB_DRAG_MIME);
+      setDragTargetActive(false);
+      if (!id) return;
+      e.preventDefault();
+      moveTab(id, paneId);
+    },
+    [moveTab, paneId],
+  );
+
   return (
     <div
       className={`wa__pane${mobile ? " wa__pane--mobile" : ""}${
         dragTargetActive ? " wa__pane--drop-target" : ""
       }`}
-      onDragOver={(e) => {
-        if (e.dataTransfer.types.includes("application/x-sulion-tab")) {
-          e.preventDefault();
-          setDragTargetActive(true);
-        }
-      }}
-      onDragLeave={() => setDragTargetActive(false)}
-      onDrop={(e) => {
-        const id = e.dataTransfer.getData("application/x-sulion-tab");
-        setDragTargetActive(false);
-        if (!id) return;
-        e.preventDefault();
-        moveTab(id, paneId);
-      }}
     >
       <TabStrip
         paneId={paneId}
         tabIds={tabIds}
         activeId={activeId}
         tabs={tabs}
-        onActivate={(id) => activateTab(paneId, id)}
+        onActivate={onActivate}
         onClose={closeTab}
-        onDropTab={(id, index) => moveTab(id, paneId, index)}
+        onDropTab={onDropTab}
       />
       <div className="wa__content">
         {tabIds.length === 0 && <PaneSplash paneId={paneId} />}
@@ -212,6 +267,14 @@ function Pane({
             </div>
           );
         })}
+        <button
+          type="button"
+          className="wa__drop-zone"
+          aria-label={`Drop tab into ${paneId} pane`}
+          onDragOver={onDropZoneDragOver}
+          onDragLeave={onDropZoneDragLeave}
+          onDrop={onDropZoneDrop}
+        />
       </div>
     </div>
   );
@@ -254,23 +317,36 @@ function TabStrip({
   const stripRef = useRef<HTMLDivElement>(null);
   const [dragHoverIndex, setDragHoverIndex] = useState<number | null>(null);
 
+  const onStripDragOver = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes(TAB_DRAG_MIME)) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+    }
+  }, []);
+  const onStripDrop = useCallback(
+    (e: React.DragEvent) => {
+      const id = e.dataTransfer.getData(TAB_DRAG_MIME);
+      if (!id) return;
+      e.preventDefault();
+      onDropTab(id, dragHoverIndex ?? tabIds.length);
+      setDragHoverIndex(null);
+    },
+    [onDropTab, dragHoverIndex, tabIds.length],
+  );
+  const onDragOverIndex = useCallback(
+    (i: number) => setDragHoverIndex(i),
+    [],
+  );
+
   return (
     <div
       ref={stripRef}
+      role="tablist"
+      aria-label={`${paneId} pane tabs`}
+      tabIndex={-1}
       className={`wa__tabs wa__tabs--${paneId}`}
-      onDragOver={(e) => {
-        if (e.dataTransfer.types.includes("application/x-sulion-tab")) {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "move";
-        }
-      }}
-      onDrop={(e) => {
-        const id = e.dataTransfer.getData("application/x-sulion-tab");
-        if (!id) return;
-        e.preventDefault();
-        onDropTab(id, dragHoverIndex ?? tabIds.length);
-        setDragHoverIndex(null);
-      }}
+      onDragOver={onStripDragOver}
+      onDrop={onStripDrop}
     >
       {tabIds.map((id, i) => {
         const tab = tabs[id];
@@ -283,9 +359,9 @@ function TabStrip({
             paneTabIds={tabIds}
             index={i}
             active={id === activeId}
-            onActivate={() => onActivate(id)}
-            onClose={() => onClose(id)}
-            onDragOverIndex={() => setDragHoverIndex(i)}
+            onActivate={onActivate}
+            onClose={onClose}
+            onDragOverIndex={onDragOverIndex}
           />
         );
       })}
@@ -308,10 +384,19 @@ function TabHandle({
   paneTabIds: string[];
   index: number;
   active: boolean;
-  onActivate: () => void;
-  onClose: () => void;
-  onDragOverIndex: () => void;
+  onActivate: (id: string) => void;
+  onClose: (id: string) => void;
+  onDragOverIndex: (index: number) => void;
 }) {
+  const activateThis = useCallback(
+    () => onActivate(tab.id),
+    [onActivate, tab.id],
+  );
+  const closeThis = useCallback(() => onClose(tab.id), [onClose, tab.id]);
+  const dragOverIndexThis = useCallback(
+    () => onDragOverIndex(index),
+    [onDragOverIndex, index],
+  );
   // Derive the label live from session / repo state so renames reflect
   // without touching every open tab's persisted title.
   const sessions = useSessions((store) => store.sessions);
@@ -324,12 +409,12 @@ function TabHandle({
   const openCtx = useContextMenu((store) => store.open);
   const label = useMemo(() => liveLabel(tab, sessions), [tab, sessions]);
 
-  const onContextMenu = contextMenuHandler(openCtx, () => {
+  const buildMenuItems = useCallback((): MenuItem[] => {
     const otherPane: PaneId = paneId === "top" ? "bottom" : "top";
     const others = paneTabIds.filter((id) => id !== tab.id);
     const toRight = paneTabIds.slice(index + 1);
-    const items: MenuItem[] = [
-      { kind: "item", id: "close", label: "Close", onSelect: onClose },
+    return [
+      { kind: "item", id: "close", label: "Close", onSelect: closeThis },
       {
         kind: "item",
         id: "close-others",
@@ -352,8 +437,11 @@ function TabHandle({
         onSelect: () => moveTab(tab.id, otherPane),
       },
     ];
-    return items;
-  });
+  }, [paneId, paneTabIds, tab.id, index, closeThis, closeTab, moveTab]);
+  const onContextMenu = useMemo(
+    () => contextMenuHandler(openCtx, buildMenuItems),
+    [openCtx, buildMenuItems],
+  );
 
   const boundSession = tab.sessionId
     ? sessions.find((s) => s.id === tab.sessionId) ?? null
@@ -366,22 +454,56 @@ function TabHandle({
         : "crit"
     : null;
 
+  const onDragStart = useCallback(
+    (e: React.DragEvent) => {
+      e.dataTransfer.setData(TAB_DRAG_MIME, tab.id);
+      e.dataTransfer.effectAllowed = "move";
+      document.body.classList.add("is-dragging-tab");
+    },
+    [tab.id],
+  );
+  const onDragEnd = useCallback(() => {
+    document.body.classList.remove("is-dragging-tab");
+  }, []);
+  const onDragOver = useCallback(
+    (e: React.DragEvent) => {
+      if (e.dataTransfer.types.includes(TAB_DRAG_MIME)) {
+        e.preventDefault();
+        dragOverIndexThis();
+      }
+    },
+    [dragOverIndexThis],
+  );
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        activateThis();
+      }
+    },
+    [activateThis],
+  );
+  const onCloseClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      closeThis();
+    },
+    [closeThis],
+  );
+
   return (
     <Tooltip label={tabTitle(tab, label)}>
       <div
+        role="tab"
+        aria-selected={active}
+        tabIndex={active ? 0 : -1}
         className={active ? "wa__tab-handle wa__tab-handle--active" : "wa__tab-handle"}
         draggable
-        onDragStart={(e) => {
-          e.dataTransfer.setData("application/x-sulion-tab", tab.id);
-          e.dataTransfer.effectAllowed = "move";
-        }}
-        onDragOver={(e) => {
-          if (e.dataTransfer.types.includes("application/x-sulion-tab")) {
-            e.preventDefault();
-            onDragOverIndex();
-          }
-        }}
-        onClick={onActivate}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onDragOver={onDragOver}
+        onClick={activateThis}
+        onKeyDown={onKeyDown}
         onContextMenu={onContextMenu}
       >
         {bindingTone ? (
@@ -398,10 +520,7 @@ function TabHandle({
           <button
             type="button"
             className="wa__tab-close"
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose();
-            }}
+            onClick={onCloseClick}
             aria-label="Close tab"
           >
             <Icon name="x" size={12} />

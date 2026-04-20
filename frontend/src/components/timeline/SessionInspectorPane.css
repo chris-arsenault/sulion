@@ -24,9 +24,18 @@
 .sip__overlay-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.75);
-  z-index: 9995;
+  background: var(--scrim);
+  z-index: var(--z-overlay);
   backdrop-filter: blur(2px);
+}
+
+.sip__overlay-dismiss {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
 }
 
 .sip__overlay-content {

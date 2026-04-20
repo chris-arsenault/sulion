@@ -1,7 +1,7 @@
 import { afterEach, beforeEach } from "vitest";
 import { cleanup } from "@testing-library/react";
 
-import { resetContextMenuStore } from "../components/common/ContextMenu";
+import { resetContextMenuStore } from "../components/common/contextMenuStore";
 import { resetAppCommands } from "../state/AppCommands";
 import { resetRepoStore } from "../state/RepoStore";
 import { resetSessionStore } from "../state/SessionStore";

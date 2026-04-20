@@ -5,6 +5,9 @@ import userEvent from "@testing-library/user-event";
 import { Sidebar } from "./Sidebar";
 import { ContextMenuHost } from "./common/ContextMenu";
 
+const REPO_ALPHA = "alpha";
+const REPO_ALPHA_PATH = "/tmp/alpha";
+
 type Endpoint = "/api/sessions" | "/api/repos" | string;
 
 interface MockState {
@@ -148,12 +151,12 @@ describe("Sidebar", () => {
 
   it("renders repo groups and their sessions", async () => {
     const state = installFetchMock();
-    state.repos.push({ name: "alpha", path: "/tmp/alpha" });
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
     state.repos.push({ name: "beta", path: "/tmp/beta" });
     state.sessions.push({
       id: "11111111-1111-1111-1111-111111111111",
-      repo: "alpha",
-      working_dir: "/tmp/alpha",
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
       state: "live",
       created_at: new Date().toISOString(),
       ended_at: null,
@@ -163,7 +166,7 @@ describe("Sidebar", () => {
     });
     setup();
     await waitFor(() => {
-      expect(screen.getByText("alpha")).toBeDefined();
+      expect(screen.getByText(REPO_ALPHA)).toBeDefined();
       expect(screen.getByText("beta")).toBeDefined();
     });
     await waitFor(() => {
@@ -173,11 +176,11 @@ describe("Sidebar", () => {
 
   it("new-session inline form creates a session via the API", async () => {
     const state = installFetchMock();
-    state.repos.push({ name: "alpha", path: "/tmp/alpha" });
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
     setup();
     const user = userEvent.setup();
 
-    await waitFor(() => expect(screen.getByText("alpha")).toBeDefined());
+    await waitFor(() => expect(screen.getByText(REPO_ALPHA)).toBeDefined());
 
     // Find the "+" button scoped to the alpha group.
     const spawnBtn = screen.getByLabelText("New session in alpha");
@@ -188,16 +191,16 @@ describe("Sidebar", () => {
     await waitFor(() => {
       expect(state.createSessionCalls.length).toBe(1);
     });
-    expect(state.createSessionCalls[0]).toEqual({ repo: "alpha" });
+    expect(state.createSessionCalls[0]).toEqual({ repo: REPO_ALPHA });
   });
 
   it("deletes a session from the shared context menu", async () => {
     const state = installFetchMock();
-    state.repos.push({ name: "alpha", path: "/tmp/alpha" });
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
     state.sessions.push({
       id: "22222222-2222-2222-2222-222222222222",
-      repo: "alpha",
-      working_dir: "/tmp/alpha",
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
       state: "live",
       created_at: new Date().toISOString(),
       ended_at: null,
@@ -226,11 +229,11 @@ describe("Sidebar", () => {
 
   it("cancelling the delete dialog does not fire DELETE", async () => {
     const state = installFetchMock();
-    state.repos.push({ name: "alpha", path: "/tmp/alpha" });
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
     state.sessions.push({
       id: "33333333-3333-3333-3333-333333333333",
-      repo: "alpha",
-      working_dir: "/tmp/alpha",
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
       state: "live",
       created_at: new Date().toISOString(),
       ended_at: null,
@@ -256,11 +259,11 @@ describe("Sidebar", () => {
 
   it("fires PATCH { pinned: true } on Pin to top from the context menu", async () => {
     const state = installFetchMock();
-    state.repos.push({ name: "alpha", path: "/tmp/alpha" });
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
     state.sessions.push({
       id: "44444444-4444-4444-4444-444444444444",
-      repo: "alpha",
-      working_dir: "/tmp/alpha",
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
       state: "live",
       created_at: new Date().toISOString(),
       ended_at: null,
@@ -289,11 +292,11 @@ describe("Sidebar", () => {
 
   it("renames a session through the menu", async () => {
     const state = installFetchMock();
-    state.repos.push({ name: "alpha", path: "/tmp/alpha" });
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
     state.sessions.push({
       id: "55555555-5555-5555-5555-555555555555",
-      repo: "alpha",
-      working_dir: "/tmp/alpha",
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
       state: "live",
       created_at: new Date().toISOString(),
       ended_at: null,
@@ -328,11 +331,11 @@ describe("Sidebar", () => {
 
   it("picks a colour through the context-menu submenu", async () => {
     const state = installFetchMock();
-    state.repos.push({ name: "alpha", path: "/tmp/alpha" });
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
     state.sessions.push({
       id: "66666666-6666-6666-6666-666666666666",
-      repo: "alpha",
-      working_dir: "/tmp/alpha",
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
       state: "live",
       created_at: new Date().toISOString(),
       ended_at: null,
@@ -363,12 +366,12 @@ describe("Sidebar", () => {
 
   it("pinned sessions float to the top of their repo group", async () => {
     const state = installFetchMock();
-    state.repos.push({ name: "alpha", path: "/tmp/alpha" });
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
     // Newer session, unpinned.
     state.sessions.push({
       id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-      repo: "alpha",
-      working_dir: "/tmp/alpha",
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
       state: "live",
       created_at: new Date(Date.now()).toISOString(),
       ended_at: null,
@@ -383,8 +386,8 @@ describe("Sidebar", () => {
     // Older session, pinned — should appear first.
     state.sessions.push({
       id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-      repo: "alpha",
-      working_dir: "/tmp/alpha",
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
       state: "live",
       created_at: new Date(Date.now() - 3_600_000).toISOString(),
       ended_at: null,

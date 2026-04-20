@@ -99,8 +99,9 @@ export function getHistory(
   if (query.kind) params.set("kind", query.kind);
   if (query.session) params.set("session", query.session);
   const qs = params.toString();
+  const suffix = qs ? `?${qs}` : "";
   return request<HistoryResponse>(
-    `/api/sessions/${sessionId}/history${qs ? `?${qs}` : ""}`,
+    `/api/sessions/${sessionId}/history${suffix}`,
   );
 }
 
@@ -121,8 +122,9 @@ export function getTimeline(
   if (query.show_sidechain) params.set("show_sidechain", "true");
   if (query.file_path) params.set("file_path", query.file_path);
   const qs = params.toString();
+  const suffix = qs ? `?${qs}` : "";
   return request<TimelineResponse>(
-    `/api/sessions/${sessionId}/timeline${qs ? `?${qs}` : ""}`,
+    `/api/sessions/${sessionId}/timeline${suffix}`,
   );
 }
 
@@ -153,8 +155,9 @@ export function getRepoFiles(
   const qs = new URLSearchParams();
   if (path) qs.set("path", path);
   if (all) qs.set("all", "true");
+  const suffix = qs.toString() ? `?${qs}` : "";
   return request<DirListing>(
-    `/api/repos/${encodeURIComponent(name)}/files${qs.toString() ? `?${qs}` : ""}`,
+    `/api/repos/${encodeURIComponent(name)}/files${suffix}`,
   );
 }
 

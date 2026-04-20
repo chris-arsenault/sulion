@@ -7,51 +7,85 @@ import { appCommands } from "../../../state/AppCommands";
 import { resetRepoStore, useRepoStore } from "../../../state/RepoStore";
 import { ContextMenuHost } from "../../common/ContextMenu";
 
+const LIB_RS_PATH = "src/lib.rs";
+
+const EDIT_TOOL = {
+  name: "edit",
+  input: {
+    path: "/tmp/foo.ts",
+    old_text: "hello",
+    new_text: "hello world",
+  },
+};
+const BASH_TOOL = {
+  name: "bash",
+  input: { command: "ls -la", description: "list files" },
+};
+const READ_TOOL = {
+  name: "read",
+  input: { path: "/a/b.txt", offset: 10, limit: 50 },
+};
+const GREP_TOOL = {
+  name: "grep",
+  input: { pattern: "TODO", path: "src/" },
+};
+const TASK_TOOL = {
+  name: "task",
+  input: {
+    agent: "Explore",
+    description: "find stuff",
+    prompt: "go look around",
+  },
+};
+const UNKNOWN_TOOL = {
+  name: "AsYetUninventedTool",
+  input: { x: 1, y: [2, 3] },
+};
+const MULTI_EDIT_TOOL = {
+  name: "multi_edit",
+  input: {
+    path: "/tmp/x.ts",
+    edits: [
+      { old_text: "a", new_text: "b" },
+      { old_text: "c", new_text: "d" },
+      { old_text: "e", new_text: "f" },
+    ],
+  },
+};
+
+const READ_WITH_TOUCHES = {
+  name: "read",
+  input: { path: LIB_RS_PATH },
+  fileTouches: [
+    {
+      repo: "alpha",
+      path: LIB_RS_PATH,
+      touch_kind: "inspect",
+      is_write: false,
+    },
+  ],
+};
+
 describe("ToolCallRenderer", () => {
   beforeEach(() => {
     resetRepoStore();
   });
 
   it("renders an Edit with old/new diff blocks", () => {
-    render(
-      <ToolCallRenderer
-        tool={{
-          name: "edit",
-          input: {
-            path: "/tmp/foo.ts",
-            old_text: "hello",
-            new_text: "hello world",
-          },
-        }}
-      />,
-    );
+    render(<ToolCallRenderer tool={EDIT_TOOL} />);
     expect(screen.getByText("/tmp/foo.ts")).toBeDefined();
     expect(screen.getByText("hello")).toBeDefined();
     expect(screen.getByText("hello world")).toBeDefined();
   });
 
   it("renders a Bash command with description", () => {
-    render(
-      <ToolCallRenderer
-        tool={{
-          name: "bash",
-          input: { command: "ls -la", description: "list files" },
-        }}
-      />,
-    );
+    render(<ToolCallRenderer tool={BASH_TOOL} />);
     expect(screen.getByText("list files")).toBeDefined();
     expect(screen.getByText(/\$ ls -la/)).toBeDefined();
   });
 
   it("renders a Read with path + optional offset/limit", () => {
-    render(
-      <ToolCallRenderer
-        tool={{
-          name: "read",
-          input: { path: "/a/b.txt", offset: 10, limit: 50 },
-        }}
-      />,
-    );
+    render(<ToolCallRenderer tool={READ_TOOL} />);
     expect(screen.getByText("/a/b.txt")).toBeDefined();
     expect(
       screen.getByText((t) => /line 10/.test(t) && /limit 50/.test(t)),
@@ -59,64 +93,25 @@ describe("ToolCallRenderer", () => {
   });
 
   it("renders a Grep with pattern and path", () => {
-    render(
-      <ToolCallRenderer
-        tool={{
-          name: "grep",
-          input: { pattern: "TODO", path: "src/" },
-        }}
-      />,
-    );
+    render(<ToolCallRenderer tool={GREP_TOOL} />);
     expect(screen.getByText("TODO")).toBeDefined();
     expect(screen.getByText("src/")).toBeDefined();
   });
 
   it("renders a Task with agent + prompt", () => {
-    render(
-      <ToolCallRenderer
-        tool={{
-          name: "task",
-          input: {
-            agent: "Explore",
-            description: "find stuff",
-            prompt: "go look around",
-          },
-        }}
-      />,
-    );
+    render(<ToolCallRenderer tool={TASK_TOOL} />);
     expect(screen.getByText(/Explore/)).toBeDefined();
     expect(screen.getByText("find stuff")).toBeDefined();
     expect(screen.getByText(/go look around/)).toBeDefined();
   });
 
   it("falls back to generic JSON for unknown tools", () => {
-    render(
-      <ToolCallRenderer
-        tool={{
-          name: "AsYetUninventedTool",
-          input: { x: 1, y: [2, 3] },
-        }}
-      />,
-    );
+    render(<ToolCallRenderer tool={UNKNOWN_TOOL} />);
     expect(screen.getByText(/"x": 1/)).toBeDefined();
   });
 
   it("renders MultiEdit with multiple diff blocks", () => {
-    render(
-      <ToolCallRenderer
-        tool={{
-          name: "multi_edit",
-          input: {
-            path: "/tmp/x.ts",
-            edits: [
-              { old_text: "a", new_text: "b" },
-              { old_text: "c", new_text: "d" },
-              { old_text: "e", new_text: "f" },
-            ],
-          },
-        }}
-      />,
-    );
+    render(<ToolCallRenderer tool={MULTI_EDIT_TOOL} />);
     expect(screen.getByText("/tmp/x.ts")).toBeDefined();
     expect(screen.getByText("3 edits")).toBeDefined();
   });
@@ -131,8 +126,8 @@ describe("ToolCallRenderer", () => {
             untracked_count: 0,
             last_commit: null,
             recent_commits: [],
-            dirty_by_path: { "src/lib.rs": " M" },
-            diff_stats_by_path: { "src/lib.rs": { additions: 12, deletions: 3 } },
+            dirty_by_path: { [LIB_RS_PATH]: " M" },
+            diff_stats_by_path: { [LIB_RS_PATH]: { additions: 12, deletions: 3 } },
           },
           gitLastFetched: Date.now(),
           gitError: null,
@@ -157,20 +152,7 @@ describe("ToolCallRenderer", () => {
 
     render(
       <>
-        <ToolCallRenderer
-          tool={{
-            name: "read",
-            input: { path: "src/lib.rs" },
-            fileTouches: [
-              {
-                repo: "alpha",
-                path: "src/lib.rs",
-                touch_kind: "inspect",
-                is_write: false,
-              },
-            ],
-          }}
-        />
+        <ToolCallRenderer tool={READ_WITH_TOUCHES} />
         <ContextMenuHost />
       </>,
     );
@@ -195,8 +177,8 @@ describe("ToolCallRenderer", () => {
     });
     await user.click(screen.getByRole("menuitem", { name: /open diff/i }));
 
-    expect(revealSpy).toHaveBeenCalledWith({ repo: "alpha", path: "src/lib.rs" });
-    expect(openSpy).toHaveBeenCalledWith({ repo: "alpha", path: "src/lib.rs" });
-    expect(diffSpy).toHaveBeenCalledWith({ repo: "alpha", path: "src/lib.rs" });
+    expect(revealSpy).toHaveBeenCalledWith({ repo: "alpha", path: LIB_RS_PATH });
+    expect(openSpy).toHaveBeenCalledWith({ repo: "alpha", path: LIB_RS_PATH });
+    expect(diffSpy).toHaveBeenCalledWith({ repo: "alpha", path: LIB_RS_PATH });
   });
 });

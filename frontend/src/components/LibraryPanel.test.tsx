@@ -7,6 +7,8 @@ import { appCommands, subscribeToAppCommands } from "../state/AppCommands";
 import { useTabStore } from "../state/TabStore";
 import { LibraryPanel } from "./LibraryPanel";
 
+const DEPLOY_PROMPT_NAME = "Deploy prompt";
+
 describe("LibraryPanel", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -19,7 +21,7 @@ describe("LibraryPanel", () => {
       .mockResolvedValueOnce([
         {
           slug: "deploy",
-          name: "Deploy prompt",
+          name: DEPLOY_PROMPT_NAME,
           created_at: null,
           updated_at: null,
           body: "first body",
@@ -37,7 +39,7 @@ describe("LibraryPanel", () => {
 
     render(<LibraryPanel />);
 
-    await waitFor(() => expect(screen.getByText("Deploy prompt")).toBeDefined());
+    await waitFor(() => expect(screen.getByText(DEPLOY_PROMPT_NAME)).toBeDefined());
 
     appCommands.libraryChanged({ kind: "prompts" });
 
@@ -50,7 +52,7 @@ describe("LibraryPanel", () => {
       .mockResolvedValueOnce([
         {
           slug: "deploy",
-          name: "Deploy prompt",
+          name: DEPLOY_PROMPT_NAME,
           created_at: null,
           updated_at: null,
           body: "echo deploy\r\nnow",
@@ -66,8 +68,8 @@ describe("LibraryPanel", () => {
     render(<LibraryPanel />);
     const user = userEvent.setup();
 
-    await waitFor(() => expect(screen.getByText("Deploy prompt")).toBeDefined());
-    await user.click(screen.getByText("Deploy prompt"));
+    await waitFor(() => expect(screen.getByText(DEPLOY_PROMPT_NAME)).toBeDefined());
+    await user.click(screen.getByText(DEPLOY_PROMPT_NAME));
 
     expect(seen).toContainEqual({
       type: "inject-terminal",

@@ -56,14 +56,18 @@ export function SessionInspectorPane({
     return createPortal(
       <div
         className="sip__overlay-backdrop"
-        onMouseDown={onClose}
-        role="dialog"
-        aria-modal="true"
         data-testid="inspector-overlay"
       >
+        <button
+          type="button"
+          className="sip__overlay-dismiss"
+          aria-label="Dismiss turn detail"
+          onClick={onClose}
+        />
         <div
           className="sip__overlay-content"
-          onMouseDown={(e) => e.stopPropagation()}
+          role="dialog"
+          aria-modal="true"
         >
           <div className="sip__overlay-header">
             <span className="sip__overlay-title">Turn detail</span>

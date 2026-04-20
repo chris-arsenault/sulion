@@ -18,11 +18,11 @@ import { appCommands, useAppCommand } from "../state/AppCommands";
 import { useTabs } from "../state/TabStore";
 import { Icon } from "../icons";
 import { Tooltip } from "./ui";
-import type { MenuItem } from "./common/ContextMenu";
+import type { MenuItem } from "./common/contextMenuStore";
 import {
   contextMenuHandler,
   useContextMenu,
-} from "./common/ContextMenu";
+} from "./common/contextMenuStore";
 
 export function LibraryPanel() {
   const [references, setReferences] = useState<LibraryEntry[] | null>(null);
@@ -163,7 +163,7 @@ export function LibraryPanel() {
       return items;
     });
 
-  const savePrompt = async (draft: PromptDraft) => {
+  const savePrompt = useCallback(async (draft: PromptDraft) => {
     try {
       await saveLibraryEntry(
         "prompts",
@@ -176,7 +176,18 @@ export function LibraryPanel() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "save failed");
     }
-  };
+  }, []);
+
+  const toggleReferences = useCallback(
+    () => setReferencesOpen((v) => !v),
+    [],
+  );
+  const togglePrompts = useCallback(() => setPromptsOpen((v) => !v), []);
+  const startNewPrompt = useCallback(
+    () => setEditingPrompt({ slug: undefined, name: "", body: "" }),
+    [],
+  );
+  const cancelEdit = useCallback(() => setEditingPrompt(null), []);
 
   return (
     <div className="lib-panel">
@@ -189,7 +200,7 @@ export function LibraryPanel() {
         label="References"
         count={references?.length}
         open={referencesOpen}
-        onToggle={() => setReferencesOpen((value) => !value)}
+        onToggle={toggleReferences}
       >
         {references === null && <div className="lib-sec__muted">loading…</div>}
         {references?.length === 0 && (
@@ -200,19 +211,12 @@ export function LibraryPanel() {
         {references && references.length > 0 && (
           <ul className="lib-sec__list">
             {references.map((entry) => (
-              <li key={entry.slug}>
-                <Tooltip label={entry.body.slice(0, 200)}>
-                  <button
-                    type="button"
-                    className="lib-sec__entry"
-                    onClick={() => openTab({ kind: "ref", slug: entry.slug })}
-                    onContextMenu={onReferenceContextMenu(entry)}
-                  >
-                    <span className="lib-sec__entry-name">{entry.name}</span>
-                    <span className="lib-sec__entry-preview">{preview(entry.body)}</span>
-                  </button>
-                </Tooltip>
-              </li>
+              <ReferenceRow
+                key={entry.slug}
+                entry={entry}
+                openTab={openTab}
+                onContextMenu={onReferenceContextMenu(entry)}
+              />
             ))}
           </ul>
         )}
@@ -222,13 +226,13 @@ export function LibraryPanel() {
         label="Prompts"
         count={prompts?.length}
         open={promptsOpen}
-        onToggle={() => setPromptsOpen((value) => !value)}
+        onToggle={togglePrompts}
         rightSlot={
           <Tooltip label="New prompt">
             <button
               type="button"
               className="lib-sec__new"
-              onClick={() => setEditingPrompt({ slug: undefined, name: "", body: "" })}
+              onClick={startNewPrompt}
               aria-label="New prompt"
             >
               <Icon name="plus" size={12} />
@@ -239,7 +243,7 @@ export function LibraryPanel() {
         {editingPrompt && (
           <PromptForm
             draft={editingPrompt}
-            onCancel={() => setEditingPrompt(null)}
+            onCancel={cancelEdit}
             onSave={savePrompt}
           />
         )}
@@ -252,19 +256,12 @@ export function LibraryPanel() {
         {prompts && prompts.length > 0 && (
           <ul className="lib-sec__list">
             {prompts.map((entry) => (
-              <li key={entry.slug}>
-                <Tooltip label={entry.body.slice(0, 200)}>
-                  <button
-                    type="button"
-                    className="lib-sec__entry"
-                    onClick={() => injectPrompt(entry)}
-                    onContextMenu={onPromptContextMenu(entry)}
-                  >
-                    <span className="lib-sec__entry-name">{entry.name}</span>
-                    <span className="lib-sec__entry-preview">{preview(entry.body)}</span>
-                  </button>
-                </Tooltip>
-              </li>
+              <PromptRow
+                key={entry.slug}
+                entry={entry}
+                injectPrompt={injectPrompt}
+                onContextMenu={onPromptContextMenu(entry)}
+              />
             ))}
           </ul>
         )}
@@ -336,37 +333,55 @@ function PromptForm({
     nameRef.current?.focus();
   }, [draft]);
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!name.trim() || !body.trim()) return;
-    setSaving(true);
-    try {
-      await onSave({ slug: draft.slug, name, body });
-    } finally {
-      setSaving(false);
-    }
-  };
+  const submit = useCallback(
+    async (event: FormEvent) => {
+      event.preventDefault();
+      if (!name.trim() || !body.trim()) return;
+      setSaving(true);
+      try {
+        await onSave({ slug: draft.slug, name, body });
+      } finally {
+        setSaving(false);
+      }
+    },
+    [name, body, onSave, draft.slug],
+  );
+  const onFormSubmit = useCallback(
+    (event: FormEvent) => void submit(event),
+    [submit],
+  );
 
+  const cancelOnEscape = useCallback(
+    (event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      if (event.key === "Escape") onCancel();
+    },
+    [onCancel],
+  );
+  const onNameChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => setName(event.target.value),
+    [],
+  );
+  const onBodyChange = useCallback(
+    (event: React.ChangeEvent<HTMLTextAreaElement>) =>
+      setBody(event.target.value),
+    [],
+  );
   return (
-    <form
-      className="lib-sec__form"
-      onSubmit={(event) => void submit(event)}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") onCancel();
-      }}
-    >
+    <form className="lib-sec__form" onSubmit={onFormSubmit}>
       <input
         ref={nameRef}
         type="text"
         placeholder="prompt name"
         value={name}
-        onChange={(event) => setName(event.target.value)}
+        onChange={onNameChange}
+        onKeyDown={cancelOnEscape}
         aria-label="Prompt name"
       />
       <textarea
         placeholder="prompt body"
         value={body}
-        onChange={(event) => setBody(event.target.value)}
+        onChange={onBodyChange}
+        onKeyDown={cancelOnEscape}
         rows={4}
         aria-label="Prompt body"
       />
@@ -379,6 +394,66 @@ function PromptForm({
         </button>
       </div>
     </form>
+  );
+}
+
+function ReferenceRow({
+  entry,
+  openTab,
+  onContextMenu,
+}: {
+  entry: LibraryEntry;
+  openTab: (tab: { kind: "ref"; slug: string }) => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+}) {
+  const onClick = useCallback(
+    () => openTab({ kind: "ref", slug: entry.slug }),
+    [openTab, entry.slug],
+  );
+  return (
+    <li>
+      <Tooltip label={entry.body.slice(0, 200)}>
+        <button
+          type="button"
+          className="lib-sec__entry"
+          onClick={onClick}
+          onContextMenu={onContextMenu}
+        >
+          <span className="lib-sec__entry-name">{entry.name}</span>
+          <span className="lib-sec__entry-preview">{preview(entry.body)}</span>
+        </button>
+      </Tooltip>
+    </li>
+  );
+}
+
+function PromptRow({
+  entry,
+  injectPrompt,
+  onContextMenu,
+}: {
+  entry: LibraryEntry;
+  injectPrompt: (entry: LibraryEntry) => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+}) {
+  const onClick = useCallback(
+    () => injectPrompt(entry),
+    [injectPrompt, entry],
+  );
+  return (
+    <li>
+      <Tooltip label={entry.body.slice(0, 200)}>
+        <button
+          type="button"
+          className="lib-sec__entry"
+          onClick={onClick}
+          onContextMenu={onContextMenu}
+        >
+          <span className="lib-sec__entry-name">{entry.name}</span>
+          <span className="lib-sec__entry-preview">{preview(entry.body)}</span>
+        </button>
+      </Tooltip>
+    </li>
   );
 }
 

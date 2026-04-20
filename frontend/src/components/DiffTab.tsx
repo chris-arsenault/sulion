@@ -52,15 +52,18 @@ export function DiffTab({ repo, path }: { repo: string; path?: string }) {
 
   useEffect(load, [load]);
 
-  const onStage = async (p: string, stage: boolean) => {
-    try {
-      await stageRepoPath(repo, p, stage);
-      refreshRepo(repo);
-      load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "stage failed");
-    }
-  };
+  const onStage = useCallback(
+    async (p: string, stage: boolean) => {
+      try {
+        await stageRepoPath(repo, p, stage);
+        refreshRepo(repo);
+        load();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "stage failed");
+      }
+    },
+    [repo, refreshRepo, load],
+  );
 
   return (
     <div className="dt">
@@ -89,7 +92,7 @@ export function DiffTab({ repo, path }: { repo: string; path?: string }) {
               diff={fd}
               statusCode={code}
               staged={staged}
-              onToggleStage={() => onStage(fd.path, !staged)}
+              onStage={onStage}
             />
           );
         })}
@@ -102,21 +105,26 @@ function FileDiffView({
   diff,
   statusCode,
   staged,
-  onToggleStage,
+  onStage,
 }: {
   diff: FileDiff;
   statusCode: string;
   staged: boolean;
-  onToggleStage: () => void;
+  onStage: (path: string, stage: boolean) => void | Promise<void>;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const onToggleCollapsed = useCallback(() => setCollapsed((v) => !v), []);
+  const onToggleStage = useCallback(
+    () => onStage(diff.path, !staged),
+    [onStage, diff.path, staged],
+  );
   return (
     <div className="dt__file">
       <div className="dt__file-header">
         <button
           type="button"
           className="dt__file-toggle"
-          onClick={() => setCollapsed((v) => !v)}
+          onClick={onToggleCollapsed}
         >
           <span className={collapsed ? "dt__chev" : "dt__chev dt__chev--open"}>
             <Icon name="chevron-right" size={12} />

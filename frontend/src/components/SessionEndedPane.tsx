@@ -2,7 +2,7 @@
 // `live`. Orphaned supported-agent sessions offer a one-click Resume
 // into a fresh PTY. Dead/deleted sessions just offer cleanup.
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import type { SessionView } from "../api/types";
 import { useSessions } from "../state/SessionStore";
@@ -27,7 +27,7 @@ export function SessionEndedPane({ session }: Props) {
     session.current_session_uuid != null &&
     (resumeAgent === "claude-code" || resumeAgent === "codex");
 
-  const onResume = async () => {
+  const onResume = useCallback(async () => {
     if (!session.current_session_uuid) return;
     setBusy(true);
     setError(null);
@@ -44,9 +44,15 @@ export function SessionEndedPane({ session }: Props) {
     } finally {
       setBusy(false);
     }
-  };
+  }, [
+    createSession,
+    session.current_session_uuid,
+    session.repo,
+    session.working_dir,
+    resumeAgent,
+  ]);
 
-  const onDelete = async () => {
+  const onDelete = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
@@ -57,7 +63,7 @@ export function SessionEndedPane({ session }: Props) {
     } finally {
       setBusy(false);
     }
-  };
+  }, [deleteSession, selectSession, session.id]);
 
   const title = (() => {
     if (session.state === "orphaned") return "Session orphaned";

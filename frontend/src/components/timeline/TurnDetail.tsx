@@ -1,13 +1,19 @@
-import { type MouseEvent, useMemo, useRef, useState } from "react";
+import {
+  type MouseEvent,
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { saveLibraryEntry } from "../../api/client";
 import type { TimelineAssistantItem } from "../../api/types";
 import { appCommands } from "../../state/AppCommands";
-import type { MenuItem } from "../common/ContextMenu";
+import type { MenuItem } from "../common/contextMenuStore";
 import {
-  contextMenuHandler,
+  contextMenuTriggerProps,
   useContextMenu,
-} from "../common/ContextMenu";
+} from "../common/contextMenuStore";
 import { copyToClipboard } from "../terminal/clipboard";
 import { Icon } from "../../icons";
 import type { ToolPair, Turn } from "./grouping";
@@ -50,7 +56,7 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
   const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const openCtx = useContextMenu((store) => store.open);
 
-  const savePrompt = async () => {
+  const savePrompt = useCallback(async () => {
     const body = turn.user_prompt_text?.trim();
     if (!body) return;
     try {
@@ -63,48 +69,65 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "prompt save failed");
     }
-  };
+  }, [turn.user_prompt_text]);
 
-  const saveReference = async (body: string, name: string) => {
-    if (!body.trim()) return;
-    try {
-      await saveLibraryEntry("references", {
-        name,
-        body,
-      });
-      appCommands.libraryChanged({ kind: "references" });
-      setSaveError(null);
-    } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "reference save failed");
-    }
-  };
+  const saveReference = useCallback(
+    async (body: string, name: string) => {
+      if (!body.trim()) return;
+      try {
+        await saveLibraryEntry("references", { name, body });
+        appCommands.libraryChanged({ kind: "references" });
+        setSaveError(null);
+      } catch (err) {
+        setSaveError(
+          err instanceof Error ? err.message : "reference save failed",
+        );
+      }
+    },
+    [],
+  );
+  const saveReferenceFireAndForget = useCallback(
+    (body: string, name: string) => void saveReference(body, name),
+    [saveReference],
+  );
 
-  const openHover = (el: HTMLElement, pair: ToolPair) => {
+  const openHover = useCallback((el: HTMLElement, pair: ToolPair) => {
     if (dismissTimer.current) clearTimeout(dismissTimer.current);
     setHover((prev) => {
       if (prev?.pinned && prev.pair.id === pair.id) return prev;
-      return { el, pair, pinned: prev?.pinned && prev.pair.id === pair.id ? true : false };
+      return {
+        el,
+        pair,
+        pinned: prev?.pinned && prev.pair.id === pair.id ? true : false,
+      };
     });
-  };
-  const scheduleDismiss = () => {
+  }, []);
+  const scheduleDismiss = useCallback(() => {
     if (dismissTimer.current) clearTimeout(dismissTimer.current);
     dismissTimer.current = setTimeout(() => {
       setHover((prev) => (prev?.pinned ? prev : null));
     }, 180);
-  };
+  }, []);
 
-  const onHeaderContextMenu = contextMenuHandler(openCtx, () => [
-    {
-      kind: "item",
-      id: "copy-turn",
-      label: "Copy turn as markdown",
-      onSelect: () => {
-        void copyToClipboard(formatTurn(turn));
+  const buildHeaderMenu = useCallback(
+    () => [
+      {
+        kind: "item" as const,
+        id: "copy-turn",
+        label: "Copy turn as markdown",
+        onSelect: () => {
+          void copyToClipboard(formatTurn(turn));
+        },
       },
-    },
-  ]);
+    ],
+    [turn],
+  );
+  const headerTriggerProps = useMemo(
+    () => contextMenuTriggerProps(openCtx, buildHeaderMenu),
+    [openCtx, buildHeaderMenu],
+  );
 
-  const onPromptContextMenu = contextMenuHandler(openCtx, () => {
+  const buildPromptMenu = useCallback(() => {
     const body = turn.user_prompt_text?.trim();
     if (!body) return null;
     const items: MenuItem[] = [
@@ -124,16 +147,42 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
       },
     ];
     return items;
-  });
+  }, [turn.user_prompt_text, savePrompt]);
+  const promptTriggerProps = useMemo(
+    () => contextMenuTriggerProps(openCtx, buildPromptMenu),
+    [openCtx, buildPromptMenu],
+  );
+
+  const onClearThinking = useCallback(() => setThinking(null), []);
+  const onClearHover = useCallback(() => setHover(null), []);
+  const onPinHover = useCallback(
+    () => setHover((prev) => (prev ? { ...prev, pinned: true } : prev)),
+    [],
+  );
+  const onThinkingChip = useCallback(
+    (el: HTMLElement, text: string) => {
+      setHover(null);
+      setThinking({ el, text });
+    },
+    [],
+  );
+  const onHoverEnter = useCallback(() => {
+    if (dismissTimer.current) clearTimeout(dismissTimer.current);
+  }, []);
 
   return (
     <div className="td">
-      <div className="td__header" onContextMenu={onHeaderContextMenu}>
+      <div
+        className="td__header"
+        aria-label="Turn actions"
+        {...headerTriggerProps}
+      >
         <div className="td__header-prompt">
           <span className="td__header-label">Prompt</span>
           <div
             className="td__prompt-text"
-            onContextMenu={onPromptContextMenu}
+            aria-label="Prompt actions"
+            {...promptTriggerProps}
           >
             {turn.user_prompt_text ? (
               <Markdown source={turn.user_prompt_text} />
@@ -170,11 +219,8 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
                 thinking={chunk.thinking}
                 pairById={pairById}
                 showThinking={showThinking}
-                onSaveReference={(body, name) => void saveReference(body, name)}
-                onThinkingChip={(el, text) => {
-                  setHover(null);
-                  setThinking({ el, text });
-                }}
+                onSaveReference={saveReferenceFireAndForget}
+                onThinkingChip={onThinkingChip}
               />
             );
           }
@@ -187,7 +233,7 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
                 key={`t-${pair.id || idx}`}
                 pair={pair}
                 onOpenSubagent={onOpenSubagent}
-                onEnter={(el) => openHover(el, pair)}
+                onEnter={openHover}
                 onLeave={scheduleDismiss}
               />
             );
@@ -229,26 +275,19 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
         <ThinkingFlyout
           anchor={thinking.el}
           thinkingText={thinking.text}
-          onClose={() => setThinking(null)}
+          onClose={onClearThinking}
         />
       )}
       {hover && (
-        <div
-          onMouseEnter={() => {
-            if (dismissTimer.current) clearTimeout(dismissTimer.current);
-          }}
+        <ToolHoverCard
+          anchor={hover.el}
+          pair={hover.pair}
+          pinned={hover.pinned}
+          onPin={onPinHover}
+          onClose={onClearHover}
+          onMouseEnter={onHoverEnter}
           onMouseLeave={scheduleDismiss}
-        >
-          <ToolHoverCard
-            anchor={hover.el}
-            pair={hover.pair}
-            pinned={hover.pinned}
-            onPin={() =>
-              setHover((prev) => (prev ? { ...prev, pinned: true } : prev))
-            }
-            onClose={() => setHover(null)}
-          />
-        </div>
+        />
       )}
     </div>
   );
@@ -269,12 +308,21 @@ function AssistantBlock({
   onSaveReference: (body: string, name: string) => void;
   onThinkingChip: (el: HTMLElement, text: string) => void;
 }) {
-  const texts = items.flatMap((item) => (item.kind === "text" ? [item.text] : []));
+  const texts = useMemo(
+    () => items.flatMap((item) => (item.kind === "text" ? [item.text] : [])),
+    [items],
+  );
   const hasCopyable = texts.length > 0;
-  const fullBody = formatAssistantItems(items, pairById);
-  const name = defaultReferenceName(formatAssistantText(items) || fullBody);
+  const fullBody = useMemo(
+    () => formatAssistantItems(items, pairById),
+    [items, pairById],
+  );
+  const name = useMemo(
+    () => defaultReferenceName(formatAssistantText(items) || fullBody),
+    [items, fullBody],
+  );
   const openCtx = useContextMenu((store) => store.open);
-  const onContextMenu = contextMenuHandler(openCtx, () => {
+  const buildAssistantMenu = useCallback((): MenuItem[] | null => {
     const menu: MenuItem[] = [];
     if (hasCopyable) {
       menu.push({
@@ -303,12 +351,17 @@ function AssistantBlock({
       });
     }
     return menu.length > 0 ? menu : null;
-  });
+  }, [hasCopyable, fullBody, items, name, onSaveReference]);
+  const triggerProps = useMemo(
+    () => contextMenuTriggerProps(openCtx, buildAssistantMenu),
+    [openCtx, buildAssistantMenu],
+  );
 
   return (
     <div
       className="td__sub td__sub--assistant"
-      onContextMenu={onContextMenu}
+      aria-label="Assistant block actions"
+      {...triggerProps}
     >
       {texts.map((text, idx) => (
         <div key={`t-${idx}`} className="td__text">
@@ -318,27 +371,50 @@ function AssistantBlock({
       {showThinking && thinking.length > 0 && (
         <div className="td__thinking-chips">
           {thinking.map((text, idx) => (
-            <button
+            <ThinkingChip
               key={`k-${idx}`}
-              type="button"
-              className="td__thinking-chip"
-              onClick={(e: MouseEvent<HTMLButtonElement>) =>
-                onThinkingChip(e.currentTarget, text)
-              }
-              aria-label="View thinking"
-            >
-              <Icon name="sparkles" size={12} />
-              <span>thinking</span>
-              {thinking.length > 1 ? (
-                <span className="tabular">
-                  {idx + 1}/{thinking.length}
-                </span>
-              ) : null}
-            </button>
+              text={text}
+              index={idx}
+              total={thinking.length}
+              onOpen={onThinkingChip}
+            />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+function ThinkingChip({
+  text,
+  index,
+  total,
+  onOpen,
+}: {
+  text: string;
+  index: number;
+  total: number;
+  onOpen: (el: HTMLElement, text: string) => void;
+}) {
+  const onClick = useCallback(
+    (e: MouseEvent<HTMLButtonElement>) => onOpen(e.currentTarget, text),
+    [onOpen, text],
+  );
+  return (
+    <button
+      type="button"
+      className="td__thinking-chip"
+      onClick={onClick}
+      aria-label="View thinking"
+    >
+      <Icon name="sparkles" size={12} />
+      <span>thinking</span>
+      {total > 1 ? (
+        <span className="tabular">
+          {index + 1}/{total}
+        </span>
+      ) : null}
+    </button>
   );
 }
 
@@ -363,7 +439,7 @@ function ToolPairRow({
 }: {
   pair: ToolPair;
   onOpenSubagent?: (pair: ToolPair) => void;
-  onEnter: (el: HTMLElement) => void;
+  onEnter: (el: HTMLElement, pair: ToolPair) => void;
   onLeave: () => void;
 }) {
   const lowSignal = !pair.is_error && !pair.is_pending;
@@ -371,19 +447,37 @@ function ToolPairRow({
   const rowRef = useRef<HTMLDivElement>(null);
   const enterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleEnter = () => {
+  const handleEnter = useCallback(() => {
     if (enterTimer.current) clearTimeout(enterTimer.current);
     enterTimer.current = setTimeout(() => {
-      if (rowRef.current) onEnter(rowRef.current);
+      if (rowRef.current) onEnter(rowRef.current, pair);
     }, 160);
-  };
-  const handleLeave = () => {
+  }, [onEnter, pair]);
+  const handleLeave = useCallback(() => {
     if (enterTimer.current) {
       clearTimeout(enterTimer.current);
       enterTimer.current = null;
     }
     onLeave();
-  };
+  }, [onLeave]);
+  const toggleExpanded = useCallback(() => setExpanded((v) => !v), []);
+  const onOpenSubagentClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (onOpenSubagent) onOpenSubagent(pair);
+    },
+    [onOpenSubagent, pair],
+  );
+  const toolProp = useMemo(
+    () => ({
+      id: pair.id,
+      name: pair.name,
+      operationType: pair.operation_type,
+      input: pair.input,
+      fileTouches: pair.file_touches,
+    }),
+    [pair.id, pair.name, pair.operation_type, pair.input, pair.file_touches],
+  );
 
   return (
     <div
@@ -391,15 +485,17 @@ function ToolPairRow({
       className={`td__tool ${pair.is_error ? "td__tool--error" : ""} ${
         pair.is_pending ? "td__tool--pending" : ""
       }`}
-      onMouseEnter={handleEnter}
-      onMouseLeave={handleLeave}
       data-testid="tool-pair-row"
     >
       <div className="td__tool-header">
         <button
           type="button"
           className="td__tool-toggle"
-          onClick={() => setExpanded((value) => !value)}
+          onClick={toggleExpanded}
+          onMouseEnter={handleEnter}
+          onMouseLeave={handleLeave}
+          onFocus={handleEnter}
+          onBlur={handleLeave}
           aria-label={expanded ? "Collapse tool details" : "Expand tool details"}
         >
           <span
@@ -429,10 +525,7 @@ function ToolPairRow({
           <button
             type="button"
             className="td__tool-subagent"
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenSubagent(pair);
-            }}
+            onClick={onOpenSubagentClick}
           >
             View agent log →
           </button>
@@ -440,15 +533,7 @@ function ToolPairRow({
       </div>
       {expanded && (
         <div className="td__tool-body">
-          <ToolCallRenderer
-            tool={{
-              id: pair.id,
-              name: pair.name,
-              operationType: pair.operation_type,
-              input: pair.input,
-              fileTouches: pair.file_touches,
-            }}
-          />
+          <ToolCallRenderer tool={toolProp} />
           {pair.result && <ToolResultRender pair={pair} />}
         </div>
       )}

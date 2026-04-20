@@ -1,18 +1,11 @@
-// Context-menu primitive. Surfaces attach:
-//
-//   onContextMenu={(e) => {
-//     if (e.shiftKey) return;          // pass to browser's native menu
-//     e.preventDefault();
-//     open(e, items);
-//   }}
-//
-// A single <ContextMenuHost> at the app root renders the menu in a
-// portal. Submenus open one level deep, flip horizontally/vertically
-// to stay in the viewport, and are keyboard-navigable (arrows / Enter
-// / Esc / ←→ for submenu).
+// <ContextMenuHost> renders the single portal menu at the app root.
+// Surfaces attach trigger props from `contextMenuStore` (preferred) or
+// the lower-level `contextMenuHandler`. Submenus open one level deep,
+// flip horizontally/vertically to stay in the viewport, and are
+// keyboard-navigable (arrows / Enter / Esc / ←→ for submenu).
 
 import {
-  type ReactNode,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -20,90 +13,16 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { create } from "zustand";
 
+import type { MenuItem, MenuState, OpenAt } from "./contextMenuStore";
+import { useContextMenu } from "./contextMenuStore";
 import "./ContextMenu.css";
-
-export type MenuItem =
-  | {
-      kind: "item";
-      id?: string;
-      label: string;
-      icon?: ReactNode;
-      keyHint?: string;
-      disabled?: boolean;
-      destructive?: boolean;
-      onSelect: () => void;
-    }
-  | {
-      kind: "submenu";
-      id?: string;
-      label: string;
-      icon?: ReactNode;
-      items: MenuItem[];
-      disabled?: boolean;
-    }
-  | { kind: "separator" }
-  | { kind: "header"; label: string };
-
-interface OpenAt {
-  clientX: number;
-  clientY: number;
-}
-
-interface MenuState {
-  anchor: OpenAt;
-  items: MenuItem[];
-}
-
-interface ContextMenuHandle {
-  open: (at: OpenAt, items: MenuItem[]) => void;
-  close: () => void;
-}
-
-interface ContextMenuStore extends ContextMenuHandle {
-  state: MenuState | null;
-}
-
-const initialState = { state: null as MenuState | null };
-
-export const useContextMenuStore = create<ContextMenuStore>()((set) => ({
-  ...initialState,
-  open: (at, items) => set({ state: { anchor: at, items } }),
-  close: () => set({ state: null }),
-}));
-
-export function useContextMenu<T>(selector: (state: ContextMenuStore) => T): T {
-  return useContextMenuStore(selector);
-}
 
 export function ContextMenuHost() {
   const state = useContextMenu((store) => store.state);
   const close = useContextMenu((store) => store.close);
   if (!state) return null;
   return createPortal(<MenuRoot state={state} onClose={close} />, document.body);
-}
-
-/** Convenience: returns an onContextMenu handler that opens the menu
- * unless the user held Shift (in which case the native browser menu
- * appears). Callers that need access to the event itself (e.g. for a
- * row-local action) should use the hook directly. */
-export function contextMenuHandler(
-  open: ContextMenuHandle["open"],
-  build: (e: React.MouseEvent) => MenuItem[] | null,
-): (e: React.MouseEvent) => void {
-  return (e) => {
-    if (e.shiftKey) return;
-    const items = build(e);
-    if (!items || items.length === 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    open({ clientX: e.clientX, clientY: e.clientY }, items);
-  };
-}
-
-export function resetContextMenuStore() {
-  useContextMenuStore.setState(initialState);
 }
 
 // ─── Menu rendering ────────────────────────────────────────────────
@@ -134,17 +53,25 @@ function MenuRoot({
     };
   }, [onClose]);
 
+  const onScrimContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      // Right-click on the scrim closes the menu rather than opening
+      // another one or leaking to the surface below.
+      e.preventDefault();
+      onClose();
+    },
+    [onClose],
+  );
+
   return (
-    <div
-      className="ctxm-scrim"
-      onMouseDown={onClose}
-      onContextMenu={(e) => {
-        // Right-click on the scrim closes the menu rather than opening
-        // another one or leaking to the surface below.
-        e.preventDefault();
-        onClose();
-      }}
-    >
+    <div className="ctxm-scrim">
+      <button
+        type="button"
+        className="ctxm-scrim__dismiss"
+        aria-label="Dismiss context menu"
+        onMouseDown={onClose}
+        onContextMenu={onScrimContextMenu}
+      />
       <Menu
         items={state.items}
         anchor={state.anchor}
@@ -220,38 +147,71 @@ function Menu({
 
   const focusableIdxs = useMemo(() => focusablePositions(items), [items]);
 
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setFocusIdx((cur) => nextFocusable(focusableIdxs, cur, +1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setFocusIdx((cur) => nextFocusable(focusableIdxs, cur, -1));
-    } else if (e.key === "ArrowRight") {
-      e.preventDefault();
-      const item = items[focusIdx];
-      if (item?.kind === "submenu") setOpenSub(focusIdx);
-    } else if (e.key === "ArrowLeft") {
-      e.preventDefault();
-      if (level > 0) onClose();
-    } else if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      const item = items[focusIdx];
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setFocusIdx((cur) => nextFocusable(focusableIdxs, cur, +1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setFocusIdx((cur) => nextFocusable(focusableIdxs, cur, -1));
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        const item = items[focusIdx];
+        if (item?.kind === "submenu") setOpenSub(focusIdx);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        if (level > 0) onClose();
+      } else if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        const item = items[focusIdx];
+        if (!item) return;
+        if (item.kind === "item" && !item.disabled) {
+          item.onSelect();
+          onClose();
+        } else if (item.kind === "submenu") {
+          setOpenSub(focusIdx);
+        }
+      }
+    },
+    [focusableIdxs, items, focusIdx, level, onClose],
+  );
+
+  const onHoverIndex = useCallback(
+    (i: number, kind: MenuItem["kind"]) => {
+      setFocusIdx(i);
+      if (kind === "submenu") {
+        if (submenuTimer.current) clearTimeout(submenuTimer.current);
+        submenuTimer.current = setTimeout(() => setOpenSub(i), 120);
+      } else {
+        if (submenuTimer.current) clearTimeout(submenuTimer.current);
+        setOpenSub(null);
+      }
+    },
+    [],
+  );
+  const onActivateIndex = useCallback(
+    (i: number) => {
+      const item = items[i];
       if (!item) return;
       if (item.kind === "item" && !item.disabled) {
         item.onSelect();
-        bubbleTopClose(onClose);
-      } else if (item.kind === "submenu") {
-        setOpenSub(focusIdx);
+        onClose();
+      } else if (item.kind === "submenu" && !item.disabled) {
+        setOpenSub(i);
       }
-    }
-  };
-
-  // Closing the top-level menu should close everything; submenus call
-  // their parent's onClose (we wire that via the prop).
-  const bubbleTopClose = (close: () => void) => {
-    close();
-  };
+    },
+    [items, onClose],
+  );
+  const onCloseSub = useCallback(() => setOpenSub(null), []);
+  const menuStyle = useMemo(
+    () => ({ left: pos.left, top: pos.top }),
+    [pos.left, pos.top],
+  );
+  const onMenuMouseDown = useCallback(
+    (e: React.MouseEvent) => e.stopPropagation(),
+    [],
+  );
 
   return (
     <div
@@ -260,83 +220,86 @@ function Menu({
       role="menu"
       tabIndex={-1}
       // eslint-disable-next-line local/no-inline-styles -- cursor-anchored positioning, not representable as CSS classes
-      style={{ left: pos.left, top: pos.top }}
-      onMouseDown={(e) => e.stopPropagation()}
+      style={menuStyle}
+      onMouseDown={onMenuMouseDown}
       onKeyDown={onKeyDown}
     >
-      {items.map((item, i) => renderItem(item, i, {
-        focused: i === focusIdx,
-        openSub: openSub === i,
-        onHover: () => {
-          setFocusIdx(i);
-          if (item.kind === "submenu") {
-            if (submenuTimer.current) clearTimeout(submenuTimer.current);
-            submenuTimer.current = setTimeout(() => setOpenSub(i), 120);
-          } else {
-            if (submenuTimer.current) clearTimeout(submenuTimer.current);
-            setOpenSub(null);
-          }
-        },
-        onActivate: () => {
-          if (item.kind === "item" && !item.disabled) {
-            item.onSelect();
-            onClose();
-          } else if (item.kind === "submenu" && !item.disabled) {
-            setOpenSub(i);
-          }
-        },
-        onCloseSub: () => setOpenSub(null),
-        onClose,
-        submenuAnchor: (rect: DOMRect) => rect,
-      }))}
+      {items.map((item, i) => (
+        <MenuItemRow
+          key={menuItemKey(item, i)}
+          item={item}
+          index={i}
+          focused={i === focusIdx}
+          openSub={openSub === i}
+          onHover={onHoverIndex}
+          onActivate={onActivateIndex}
+          onCloseSub={onCloseSub}
+          onClose={onClose}
+        />
+      ))}
     </div>
   );
 }
 
-function renderItem(
-  item: MenuItem,
-  i: number,
-  ctx: {
-    focused: boolean;
-    openSub: boolean;
-    onHover: () => void;
-    onActivate: () => void;
-    onCloseSub: () => void;
-    onClose: () => void;
-    submenuAnchor: (rect: DOMRect) => DOMRect;
-  },
-): ReactNode {
+function menuItemKey(item: MenuItem, i: number): string {
+  if (item.kind === "separator") return `sep-${i}`;
+  if (item.kind === "header") return `h-${i}`;
+  return item.id ?? `${item.kind}-${i}`;
+}
+
+function MenuItemRow({
+  item,
+  index,
+  focused,
+  openSub,
+  onHover,
+  onActivate,
+  onCloseSub,
+  onClose,
+}: {
+  item: MenuItem;
+  index: number;
+  focused: boolean;
+  openSub: boolean;
+  onHover: (i: number, kind: MenuItem["kind"]) => void;
+  onActivate: (i: number) => void;
+  onCloseSub: () => void;
+  onClose: () => void;
+}) {
+  const hoverThis = useCallback(
+    () => onHover(index, item.kind),
+    [onHover, index, item.kind],
+  );
+  const activateThis = useCallback(
+    () => onActivate(index),
+    [onActivate, index],
+  );
+
   if (item.kind === "separator") {
-    return <div key={`sep-${i}`} className="ctxm__sep" role="separator" />;
+    return <div className="ctxm__sep" role="separator" />;
   }
   if (item.kind === "header") {
-    return (
-      <div key={`h-${i}`} className="ctxm__header">
-        {item.label}
-      </div>
-    );
+    return <div className="ctxm__header">{item.label}</div>;
   }
   if (item.kind === "item") {
     return (
       <ItemRow
-        key={item.id ?? `i-${i}`}
         item={item}
-        focused={ctx.focused}
-        onHover={ctx.onHover}
-        onActivate={ctx.onActivate}
+        focused={focused}
+        onHover={hoverThis}
+        onActivate={activateThis}
       />
     );
   }
   return (
     <SubmenuRow
-      key={item.id ?? `sm-${i}`}
       item={item}
-      focused={ctx.focused}
-      open={ctx.openSub}
-      onHover={ctx.onHover}
-      onActivate={ctx.onActivate}
-      onCloseSub={ctx.onCloseSub}
-      onCloseAll={ctx.onClose}
+      focused={focused}
+      open={openSub}
+      onHover={hoverThis}
+      onActivate={activateThis}
+      onCloseSub={onCloseSub}
+      onCloseAll={onClose}
     />
   );
 }
@@ -356,6 +319,13 @@ function ItemRow({
   useEffect(() => {
     if (focused) ref.current?.focus();
   }, [focused]);
+  const onClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      onActivate();
+    },
+    [onActivate],
+  );
   return (
     <button
       ref={ref}
@@ -369,10 +339,7 @@ function ItemRow({
       }
       onMouseEnter={onHover}
       onMouseMove={onHover}
-      onClick={(e) => {
-        e.stopPropagation();
-        onActivate();
-      }}
+      onClick={onClick}
       tabIndex={-1}
     >
       {item.icon && <span className="ctxm__icon" aria-hidden>{item.icon}</span>}
@@ -416,6 +383,25 @@ function SubmenuRow({
     if (focused) rowRef.current?.focus();
   }, [focused]);
 
+  const onClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      onActivate();
+    },
+    [onActivate],
+  );
+  const onSubClose = useCallback(() => {
+    onCloseSub();
+    onCloseAll();
+  }, [onCloseSub, onCloseAll]);
+  const submenuAnchor = useMemo(
+    () =>
+      anchorRect
+        ? { x: anchorRect.right, y: anchorRect.top, from: anchorRect }
+        : null,
+    [anchorRect],
+  );
+
   return (
     <>
       <button
@@ -432,24 +418,18 @@ function SubmenuRow({
         }
         onMouseEnter={onHover}
         onMouseMove={onHover}
-        onClick={(e) => {
-          e.stopPropagation();
-          onActivate();
-        }}
+        onClick={onClick}
         tabIndex={-1}
       >
         {item.icon && <span className="ctxm__icon" aria-hidden>{item.icon}</span>}
         <span className="ctxm__label">{item.label}</span>
         <span className="ctxm__chevron" aria-hidden>▸</span>
       </button>
-      {open && anchorRect && (
+      {open && submenuAnchor && (
         <Menu
           items={item.items}
-          anchor={{ x: anchorRect.right, y: anchorRect.top, from: anchorRect }}
-          onClose={() => {
-            onCloseSub();
-            onCloseAll();
-          }}
+          anchor={submenuAnchor}
+          onClose={onSubClose}
           level={1}
         />
       )}

@@ -90,7 +90,8 @@ export function flattenEventContent(event: TimelineEvent): string {
     if (b.kind === "text" && b.text) parts.push(b.text);
     else if (b.kind === "tool_use") parts.push(`[tool_use: ${b.tool_name_canonical ?? ""}]`);
     else if (b.kind === "tool_result") {
-      parts.push(`[tool_result]${b.text ? ` ${b.text}` : ""}`);
+      const suffix = b.text ? ` ${b.text}` : "";
+      parts.push(`[tool_result]${suffix}`);
     }
   }
   return parts.join(" ");

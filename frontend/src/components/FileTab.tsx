@@ -10,7 +10,7 @@
 // shows a truncation banner. Raw toggle in the header flips anything
 // non-image to a plain <pre> view without changing the stored format.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { getRepoFile } from "../api/client";
 import { Icon } from "../icons";
@@ -48,6 +48,12 @@ export function FileTab({ repo, path }: { repo: string; path: string }) {
       cancelled = true;
     };
   }, [repo, path]);
+
+  const openDiffTab = useCallback(
+    () => openTab({ kind: "diff", repo, path }),
+    [openTab, repo, path],
+  );
+  const toggleRaw = useCallback(() => setRaw((v) => !v), []);
 
   if (error) {
     return (
@@ -92,7 +98,7 @@ export function FileTab({ repo, path }: { repo: string; path: string }) {
             <button
               type="button"
               className="ft__diff-btn"
-              onClick={() => openTab({ kind: "diff", repo, path })}
+              onClick={openDiffTab}
             >
               <Icon name="diff" size={12} />
               <span className="tabular">{dirty.trim() || "•"}</span>
@@ -112,7 +118,7 @@ export function FileTab({ repo, path }: { repo: string; path: string }) {
               type="button"
               className="ft__raw-btn"
               aria-pressed={raw}
-              onClick={() => setRaw((v) => !v)}
+              onClick={toggleRaw}
             >
               {raw ? "formatted" : "raw"}
             </button>
@@ -230,12 +236,7 @@ function FileBody({
     );
   }
   if (kind.kind === "image-svg") {
-    return (
-      <div
-        className="ft__svg"
-        dangerouslySetInnerHTML={{ __html: kind.svg }}
-      />
-    );
+    return <SvgBody svg={kind.svg} />;
   }
   if (kind.kind === "markdown") {
     return (
@@ -313,12 +314,17 @@ function HighlightedCode({ lang, code }: { lang: string; code: string }) {
       <pre className="ft__code ft__code--loading">{code}</pre>
     );
   }
-  return (
-    <div
-      className="ft__highlighted"
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
-  );
+  return <HighlightedBody html={html} />;
+}
+
+function SvgBody({ svg }: { svg: string }) {
+  const html = useMemo(() => ({ __html: svg }), [svg]);
+  return <div className="ft__svg" dangerouslySetInnerHTML={html} />;
+}
+
+function HighlightedBody({ html }: { html: string }) {
+  const inner = useMemo(() => ({ __html: html }), [html]);
+  return <div className="ft__highlighted" dangerouslySetInnerHTML={inner} />;
 }
 
 function formatSize(bytes: number): string {

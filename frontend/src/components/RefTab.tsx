@@ -8,9 +8,9 @@ import type { LibraryEntry } from "../api/types";
 import { appCommands } from "../state/AppCommands";
 import { useTabs } from "../state/TabStore";
 import {
-  contextMenuHandler,
+  contextMenuTriggerProps,
   useContextMenu,
-} from "./common/ContextMenu";
+} from "./common/contextMenuStore";
 import { copyToClipboard } from "./terminal/clipboard";
 import { Markdown } from "./timeline/Markdown";
 import { Tooltip } from "./ui";
@@ -88,7 +88,7 @@ export function RefTab({ slug }: { slug: string }) {
     );
   }
 
-  const onContextMenu = contextMenuHandler(openCtx, () => [
+  const triggerProps = contextMenuTriggerProps(openCtx, () => [
     {
       kind: "item",
       id: "copy-body",
@@ -106,13 +106,17 @@ export function RefTab({ slug }: { slug: string }) {
   ]);
 
   return (
-    <div className="lib-tab" onContextMenu={onContextMenu}>
+    <div className="lib-tab">
       <Tooltip label="Right-click for reference actions">
-        <div className="lib-tab__header">
+        <div
+          className="lib-tab__header"
+          aria-label="Reference actions"
+          {...triggerProps}
+        >
           <span className="lib-tab__path">
-          <strong className="lib-tab__title">{entry.name}</strong>
-          <span className="lib-tab__muted">· reference · {entry.slug}</span>
-        </span>
+            <strong className="lib-tab__title">{entry.name}</strong>
+            <span className="lib-tab__muted">· reference · {entry.slug}</span>
+          </span>
           <span className="lib-tab__meta">
             {entry.updated_at && <span>updated {formatDate(entry.updated_at)}</span>}
           </span>

@@ -4,6 +4,21 @@
   z-index: calc(var(--z-context-menu) - 1);
 }
 
+/* Test-only surface used by ContextMenu.test.tsx to have some padded
+ * click target; kept here because tests forbid inline styles. */
+.ctxm-test__surface {
+  padding: 40px;
+}
+
+.ctxm-scrim__dismiss {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: default;
+}
+
 .ctxm {
   position: fixed;
   z-index: var(--z-context-menu);

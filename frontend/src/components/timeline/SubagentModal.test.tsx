@@ -5,13 +5,15 @@ import userEvent from "@testing-library/user-event";
 import { SubagentModal } from "./SubagentModal";
 import { assistantChunk, makeSubagent, makeTurn } from "./test-helpers";
 
+const noop = () => {};
+
 describe("SubagentModal", () => {
   it("renders empty copy when there are no subagent turns", () => {
     render(
       <SubagentModal
         subagent={makeSubagent({ event_count: 0, turns: [] })}
         showThinking={true}
-        onClose={() => {}}
+        onClose={noop}
       />,
     );
     expect(
@@ -69,7 +71,7 @@ describe("SubagentModal", () => {
           ],
         })}
         showThinking={true}
-        onClose={() => {}}
+        onClose={noop}
       />,
     );
     expect(screen.getByText(/subagent task/)).toBeDefined();

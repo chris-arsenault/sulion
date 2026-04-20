@@ -8,7 +8,17 @@
   backdrop-filter: blur(2px);
 }
 
+.cd__dismiss {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
 .cd__content {
+  position: relative;
   background: var(--canvas-2);
   border: 1px solid var(--hairline);
   border-radius: var(--r-2);

@@ -57,6 +57,14 @@ export function Tooltip({
   ]);
 
   const child = useMemo(() => Children.only(children), [children]);
+  const floatingStyle = useMemo(
+    () => ({
+      position: strategy,
+      top: y ?? 0,
+      left: x ?? 0,
+    }),
+    [strategy, y, x],
+  );
   if (!isValidElement(child)) return child;
 
   const childProps = (child.props ?? {}) as Record<string, unknown>;
@@ -78,11 +86,7 @@ export function Tooltip({
           <div
             ref={refs.setFloating}
             className="ui-tooltip"
-            style={{
-              position: strategy,
-              top: y ?? 0,
-              left: x ?? 0,
-            }}
+            style={floatingStyle}
             {...getFloatingProps()}
           >
             {label}

@@ -2,18 +2,23 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { ContextMenuHost } from "./ContextMenu";
 import {
-  ContextMenuHost,
   type MenuItem,
-  contextMenuHandler,
+  contextMenuTriggerProps,
   useContextMenu,
-} from "./ContextMenu";
+} from "./contextMenuStore";
 
 function Surface({ items }: { items: MenuItem[] }) {
   const open = useContextMenu((store) => store.open);
-  const onCtx = contextMenuHandler(open, () => items);
+  const triggerProps = contextMenuTriggerProps(open, () => items);
   return (
-    <div data-testid="surface" onContextMenu={onCtx} style={{ padding: 40 }}>
+    <div
+      data-testid="surface"
+      aria-label="Right-click surface"
+      className="ctxm-test__surface"
+      {...triggerProps}
+    >
       right-click me
     </div>
   );

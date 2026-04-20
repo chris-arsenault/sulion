@@ -4,14 +4,16 @@ import userEvent from "@testing-library/user-event";
 
 import { ConfirmDialog } from "./ConfirmDialog";
 
+const noop = () => {};
+
 describe("ConfirmDialog", () => {
   it("renders title, message, and buttons", () => {
     render(
       <ConfirmDialog
         title="Delete?"
         message="Are you sure"
-        onConfirm={() => {}}
-        onCancel={() => {}}
+        onConfirm={noop}
+        onCancel={noop}
       />,
     );
     expect(screen.getByText("Delete?")).toBeDefined();
@@ -82,8 +84,8 @@ describe("ConfirmDialog", () => {
         message="m"
         destructive
         confirmLabel="Delete"
-        onConfirm={() => {}}
-        onCancel={() => {}}
+        onConfirm={noop}
+        onCancel={noop}
       />,
     );
     const btn = screen.getByRole("button", { name: "Delete" });

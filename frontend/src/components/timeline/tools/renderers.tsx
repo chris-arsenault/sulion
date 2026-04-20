@@ -4,9 +4,9 @@ import { useRepos } from "../../../state/RepoStore";
 import type { Maybe } from "../../../lib/types";
 import { buildWorkspaceFileMenuItems } from "../../common/fileContextMenu";
 import {
-  contextMenuHandler,
+  contextMenuTriggerProps,
   useContextMenu,
-} from "../../common/ContextMenu";
+} from "../../common/contextMenuStore";
 
 export interface ToolUseSummary {
   id?: string;
@@ -78,7 +78,7 @@ function FileTouchRow({ touch }: { touch: TimelineFileTouch }) {
   const dirty = repoState?.git?.dirty_by_path[touch.path];
   const diff = repoState?.git?.diff_stats_by_path[touch.path];
   const openCtx = useContextMenu((store) => store.open);
-  const onContextMenu = contextMenuHandler(openCtx, () =>
+  const triggerProps = contextMenuTriggerProps(openCtx, () =>
     buildWorkspaceFileMenuItems({
       repo: touch.repo,
       path: touch.path,
@@ -90,7 +90,8 @@ function FileTouchRow({ touch }: { touch: TimelineFileTouch }) {
   return (
     <div
       className="tr-file"
-      onContextMenu={onContextMenu}
+      aria-label="File actions"
+      {...triggerProps}
     >
       <span className="tr-file__meta">
         <span className="tr-file__kind">{touch.touch_kind}</span>

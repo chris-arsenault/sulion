@@ -82,19 +82,27 @@ export function CommandPalette({
     [onClose],
   );
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setActive((i) => Math.min(i + 1, filtered.length - 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActive((i) => Math.max(i - 1, 0));
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      const cmd = filtered[active];
-      if (cmd) run(cmd);
-    }
-  };
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActive((i) => Math.min(i + 1, filtered.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActive((i) => Math.max(i - 1, 0));
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const cmd = filtered[active];
+        if (cmd) run(cmd);
+      }
+    },
+    [filtered, active, run],
+  );
+
+  const onQueryChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.target.value),
+    [],
+  );
 
   return (
     <Overlay
@@ -113,7 +121,7 @@ export function CommandPalette({
           className="ui-palette__input"
           placeholder={placeholder}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={onQueryChange}
           onKeyDown={onKeyDown}
           spellCheck={false}
           autoComplete="off"
@@ -124,30 +132,63 @@ export function CommandPalette({
           <li className="ui-palette__empty">{emptyMessage}</li>
         ) : (
           filtered.map((cmd, i) => (
-            <li
+            <PaletteItem
               key={cmd.id}
-              role="option"
-              aria-selected={i === active}
-              className={
-                "ui-palette__item" + (i === active ? " ui-palette__item--active" : "")
-              }
-              onMouseEnter={() => setActive(i)}
-              onClick={() => run(cmd)}
-            >
-              <span className="ui-palette__icon">
-                {cmd.icon ? <Icon name={cmd.icon} size={14} /> : null}
-              </span>
-              <span className="ui-palette__label">{cmd.label}</span>
-              {cmd.group ? (
-                <span className="ui-palette__group">{cmd.group}</span>
-              ) : null}
-              {cmd.hint ? (
-                <span className="ui-palette__hint">{cmd.hint}</span>
-              ) : null}
-            </li>
+              cmd={cmd}
+              index={i}
+              active={i === active}
+              setActive={setActive}
+              run={run}
+            />
           ))
         )}
       </ul>
     </Overlay>
+  );
+}
+
+function PaletteItem({
+  cmd,
+  index,
+  active,
+  setActive,
+  run,
+}: {
+  cmd: PaletteCommand;
+  index: number;
+  active: boolean;
+  setActive: (i: number) => void;
+  run: (cmd: PaletteCommand) => void;
+}) {
+  const onMouseEnter = useCallback(
+    () => setActive(index),
+    [setActive, index],
+  );
+  const onClick = useCallback(() => run(cmd), [run, cmd]);
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        run(cmd);
+      }
+    },
+    [run, cmd],
+  );
+  return (
+    <li
+      role="option"
+      aria-selected={active}
+      className={"ui-palette__item" + (active ? " ui-palette__item--active" : "")}
+      onMouseEnter={onMouseEnter}
+      onClick={onClick}
+      onKeyDown={onKeyDown}
+    >
+      <span className="ui-palette__icon">
+        {cmd.icon ? <Icon name={cmd.icon} size={14} /> : null}
+      </span>
+      <span className="ui-palette__label">{cmd.label}</span>
+      {cmd.group ? <span className="ui-palette__group">{cmd.group}</span> : null}
+      {cmd.hint ? <span className="ui-palette__hint">{cmd.hint}</span> : null}
+    </li>
   );
 }
