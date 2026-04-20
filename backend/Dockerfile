@@ -79,12 +79,10 @@ RUN groupadd --gid ${DEV_GID} dev \
   && chown -R dev:dev /home/dev /run/sulion
 
 COPY dist/sulion /usr/local/bin/sulion
-COPY dist/e2e_seed /usr/local/bin/e2e_seed
 COPY bin/sulion-agent /opt/sulion/bin/sulion-agent
 COPY hooks/session-start.sh /opt/sulion/hooks/session-start.sh
 COPY entrypoint.sh /opt/sulion/entrypoint.sh
-RUN chmod +x /usr/local/bin/sulion /usr/local/bin/e2e_seed /opt/sulion/bin/sulion-agent /opt/sulion/hooks/session-start.sh /opt/sulion/entrypoint.sh
-
+RUN chmod +x /usr/local/bin/sulion /opt/sulion/bin/sulion-agent /opt/sulion/hooks/session-start.sh /opt/sulion/entrypoint.sh
 USER dev
 WORKDIR /home/dev
 

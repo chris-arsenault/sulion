@@ -13,6 +13,8 @@ const FRONTEND_PORT = Number(process.env.SULION_E2E_FRONTEND_PORT ?? "34173");
 const BACKEND_BASE_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 const FRONTEND_URL = `http://127.0.0.1:${FRONTEND_PORT}`;
 const BACKEND_IMAGE = process.env.SULION_E2E_BACKEND_IMAGE ?? "sulion-e2e-backend:local";
+const BACKEND_RUNTIME_IMAGE =
+  process.env.SULION_E2E_BACKEND_RUNTIME_IMAGE ?? `${BACKEND_IMAGE}-runtime`;
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sulion-e2e-"));
 const containerPaths = {
@@ -150,9 +152,24 @@ function copyExecutable(source, target) {
 
 function buildBackendImage() {
   runCommand(
-    "docker-build",
+    "docker-build-runtime",
     "docker",
-    ["build", "-t", BACKEND_IMAGE, "backend"],
+    ["build", "-t", BACKEND_RUNTIME_IMAGE, "backend"],
+    { cwd: REPO_ROOT },
+  );
+  runCommand(
+    "docker-build-e2e",
+    "docker",
+    [
+      "build",
+      "-f",
+      "backend/Dockerfile.e2e",
+      "--build-arg",
+      `BASE_IMAGE=${BACKEND_RUNTIME_IMAGE}`,
+      "-t",
+      BACKEND_IMAGE,
+      "backend",
+    ],
     { cwd: REPO_ROOT },
   );
 }

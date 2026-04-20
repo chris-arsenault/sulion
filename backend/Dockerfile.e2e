@@ -1,0 +1,8 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+USER root
+COPY dist/e2e_seed /usr/local/bin/e2e_seed
+RUN chmod +x /usr/local/bin/e2e_seed
+
+USER dev
