@@ -32,4 +32,4 @@ Full list in [docs/architecture.md](docs/architecture.md#invariants--do-not-brea
 
 ## Companion doc
 
-[`AGENTS.md`](AGENTS.md) carries the same orientation for Codex and other non-Claude agents — keep the two in sync when the content applies equally.
+[`CLAUDE.md`](CLAUDE.md) is the Claude Code–facing twin of this doc — keep the two in sync when the content applies equally.
