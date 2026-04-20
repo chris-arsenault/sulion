@@ -2,22 +2,22 @@
 
 set -euo pipefail
 
-REAL_CODEX="${SHUTTLECRAFT_REAL_CODEX:-}"
+REAL_CODEX="${SULION_REAL_CODEX:-}"
 if [[ -z "${REAL_CODEX}" ]]; then
-  echo "shuttlecraft codex wrapper: SHUTTLECRAFT_REAL_CODEX is not set" >&2
+  echo "sulion codex wrapper: SULION_REAL_CODEX is not set" >&2
   exit 1
 fi
 
-if [[ -z "${SHUTTLECRAFT_PTY_ID:-}" ]]; then
+if [[ -z "${SULION_PTY_ID:-}" ]]; then
   exec "${REAL_CODEX}" "$@"
 fi
 
-SESSIONS_DIR="${SHUTTLECRAFT_CODEX_SESSIONS:-${HOME:-/home/dev}/.codex/sessions}"
-CORRELATE_SOCK="${SHUTTLECRAFT_CORRELATE_SOCK:-/run/shuttlecraft/correlate.sock}"
+SESSIONS_DIR="${SULION_CODEX_SESSIONS:-${HOME:-/home/dev}/.codex/sessions}"
+CORRELATE_SOCK="${SULION_CORRELATE_SOCK:-/run/sulion/correlate.sock}"
 
-exec /usr/local/bin/shuttlecraft codex-launcher \
+exec /usr/local/bin/sulion codex-launcher \
   --codex-bin "${REAL_CODEX}" \
-  --pty-id "${SHUTTLECRAFT_PTY_ID}" \
+  --pty-id "${SULION_PTY_ID}" \
   --sessions-dir "${SESSIONS_DIR}" \
   --correlate-sock "${CORRELATE_SOCK}" \
   -- "$@"

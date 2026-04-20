@@ -6,20 +6,20 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use shuttlecraft::codex::{run_launcher, LauncherConfig};
-use shuttlecraft::correlate::{self, CorrelateMsg};
-use shuttlecraft::db;
-use shuttlecraft::pty::{PtyManager, SpawnParams};
+use sulion::codex::{run_launcher, LauncherConfig};
+use sulion::correlate::{self, CorrelateMsg};
+use sulion::db;
+use sulion::pty::{PtyManager, SpawnParams};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use uuid::Uuid;
 
 fn test_db_url() -> Option<String> {
-    std::env::var("SHUTTLECRAFT_TEST_DB").ok()
+    std::env::var("SULION_TEST_DB").ok()
 }
 
 async fn fresh_pool() -> db::Pool {
-    let url = test_db_url().expect("SHUTTLECRAFT_TEST_DB");
+    let url = test_db_url().expect("SULION_TEST_DB");
     let pool = db::connect(&url).await.expect("connect");
     sqlx::query(
         "TRUNCATE events, ingester_state, claude_sessions, pty_sessions, repos RESTART IDENTITY CASCADE",
@@ -32,7 +32,7 @@ async fn fresh_pool() -> db::Pool {
 }
 
 fn tmp_sock() -> PathBuf {
-    std::env::temp_dir().join(format!("shuttlecraft-corr-{}.sock", Uuid::new_v4()))
+    std::env::temp_dir().join(format!("sulion-corr-{}.sock", Uuid::new_v4()))
 }
 
 async fn wait_for_socket(path: &Path) {
@@ -255,7 +255,7 @@ async fn codex_launcher_correlates_session_uuid_from_open_rollout_file() {
     let session_uuid = Uuid::new_v4();
     let rollout_path = day_dir.join(format!("rollout-2026-04-19T01-53-43-{session_uuid}.jsonl"));
     assert_eq!(
-        shuttlecraft::ingest::parse_codex_session_uuid(&rollout_path),
+        sulion::ingest::parse_codex_session_uuid(&rollout_path),
         Some(session_uuid)
     );
 

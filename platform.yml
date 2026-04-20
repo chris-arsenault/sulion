@@ -1,5 +1,5 @@
-project: shuttlecraft
-prefix: shuttlecraft
+project: sulion
+prefix: sulion
 stack:
   - rust
   - typescript
@@ -9,4 +9,4 @@ images:
   - frontend
 rust_artifacts:
   binaries:
-    - { bin: shuttlecraft, image: backend }
+    - { bin: sulion, image: backend }

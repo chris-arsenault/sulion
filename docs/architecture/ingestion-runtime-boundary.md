@@ -8,8 +8,8 @@ Keep ingestion in-process with the API server today.
 
 If operational pressure forces a split later, split once into:
 
-- `shuttlecraft` API server
-- one `shuttlecraft-ingester` worker
+- `sulion` API server
+- one `sulion-ingester` worker
 
 Do not split into separate Claude and Codex ingestion containers unless the transcript roots, failure modes, or scaling profile diverge materially. They do not today.
 
@@ -58,7 +58,7 @@ The correct follow-up is one ingestion worker, not two.
 
 Required changes:
 
-- add a second Rust binary, likely `src/bin/shuttlecraft-ingester.rs`
+- add a second Rust binary, likely `src/bin/sulion-ingester.rs`
 - keep DB migrations owned by the API startup path or by a dedicated migration job, not by both containers
 - move transcript polling, canonical block backfill, and timeline projection backfill/rebuild ownership into the ingester worker
 - keep API containers read-only with respect to transcript JSONL

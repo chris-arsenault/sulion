@@ -1,6 +1,6 @@
 # Feature Backlog
 
-Synthesized research on high-value additions for shuttlecraft, drawn from Zellij / Warp / Wave / Tabby community feedback, xterm.js patterns, and Claude Code user threads (r/ClaudeAI, anthropics/claude-code GitHub). Organized by fit for shuttlecraft's two-pane (live PTY + typed-event timeline) design and importance.
+Synthesized research on high-value additions for sulion, drawn from Zellij / Warp / Wave / Tabby community feedback, xterm.js patterns, and Claude Code user threads (r/ClaudeAI, anthropics/claude-code GitHub). Organized by fit for sulion's two-pane (live PTY + typed-event timeline) design and importance.
 
 Filed issues link to the numbered items below.
 
@@ -60,9 +60,9 @@ These came out of the #26/#19 workshop — alternatives to inline expansion that
 
 ## Speculative / big bets
 
-**A. Semantic timeline — collapse by inferred "task".** Group prompt → tool calls → summary into collapsible Warp-style blocks. The feature that would make shuttlecraft feel categorically different rather than "xterm + sidebar." Big design lift but our typed events make it tractable.
+**A. Semantic timeline — collapse by inferred "task".** Group prompt → tool calls → summary into collapsible Warp-style blocks. The feature that would make sulion feel categorically different rather than "xterm + sidebar." Big design lift but our typed events make it tractable.
 
-**B. Cross-session search.** "What did I ask Claude about file X last week, across any session?" Shared Postgres already has the data. Turns shuttlecraft into a knowledge base over your own Claude history — no single-session CLI can match this.
+**B. Cross-session search.** "What did I ask Claude about file X last week, across any session?" Shared Postgres already has the data. Turns sulion into a knowledge base over your own Claude history — no single-session CLI can match this.
 
 **C. Browser approval gates via PreToolUse hooks.** Claude Code hooks can pause on risky operations; route the pause to a browser modal any LAN device can approve. Leverages existing hook system + multi-device mirror. Real safety win for walk-away use.
 

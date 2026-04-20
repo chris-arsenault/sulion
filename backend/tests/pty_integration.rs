@@ -1,20 +1,20 @@
 //! PTY lifecycle integration tests. Require a test Postgres — gated behind
-//! `SHUTTLECRAFT_TEST_DB`. The supported path is `make test-rust-integration`.
+//! `SULION_TEST_DB`. The supported path is `make test-rust-integration`.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
-use shuttlecraft::db;
-use shuttlecraft::pty::{
+use sulion::db;
+use sulion::pty::{
     default_shell, read_meta, reconcile_orphans_on_startup, PtyManager, PtyState, SpawnParams,
 };
 
 fn test_db_url() -> Option<String> {
-    std::env::var("SHUTTLECRAFT_TEST_DB").ok()
+    std::env::var("SULION_TEST_DB").ok()
 }
 
 async fn fresh_pool() -> db::Pool {
-    let url = test_db_url().expect("SHUTTLECRAFT_TEST_DB");
+    let url = test_db_url().expect("SULION_TEST_DB");
     let pool = db::connect(&url).await.expect("connect");
     // Clean slate between tests — they run serially under cargo's default
     // test harness when sharing a DB, but --test-threads=1 is what the
@@ -207,16 +207,16 @@ async fn pty_id_env_is_propagated_to_shell() {
     let pool = fresh_pool().await;
     let mgr = PtyManager::new(pool.clone());
 
-    // The shell will write SHUTTLECRAFT_PTY_ID to a tempfile, exit, and
+    // The shell will write SULION_PTY_ID to a tempfile, exit, and
     // we'll read the file to verify the env var was propagated. Using a
     // file avoids racing the broadcast-channel subscriber against the
     // shell's exit.
     let tmp = std::env::temp_dir().join(format!(
-        "shuttlecraft-envcheck-{}.txt",
+        "sulion-envcheck-{}.txt",
         uuid::Uuid::new_v4()
     ));
     let tmp_str = tmp.to_string_lossy().into_owned();
-    let cmd = format!("printf '%s' \"$SHUTTLECRAFT_PTY_ID\" > {tmp_str}; exit 0");
+    let cmd = format!("printf '%s' \"$SULION_PTY_ID\" > {tmp_str}; exit 0");
 
     let meta = mgr
         .spawn(SpawnParams {
@@ -236,7 +236,7 @@ async fn pty_id_env_is_propagated_to_shell() {
     assert_eq!(
         contents.trim(),
         meta.id.to_string(),
-        "shell should have seen SHUTTLECRAFT_PTY_ID={}",
+        "shell should have seen SULION_PTY_ID={}",
         meta.id
     );
 }

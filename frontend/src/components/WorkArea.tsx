@@ -94,7 +94,7 @@ function EmptyWorkArea({ mobile = false }: { mobile?: boolean }) {
   return (
     <div className="wa wa--empty">
       <div>
-        <h1>shuttlecraft</h1>
+        <h1>sulion</h1>
         <p>
           {mobile
             ? "Tap ☰ to open the session list."
@@ -160,14 +160,14 @@ function Pane({
         dragTargetActive ? " wa__pane--drop-target" : ""
       }`}
       onDragOver={(e) => {
-        if (e.dataTransfer.types.includes("application/x-shuttlecraft-tab")) {
+        if (e.dataTransfer.types.includes("application/x-sulion-tab")) {
           e.preventDefault();
           setDragTargetActive(true);
         }
       }}
       onDragLeave={() => setDragTargetActive(false)}
       onDrop={(e) => {
-        const id = e.dataTransfer.getData("application/x-shuttlecraft-tab");
+        const id = e.dataTransfer.getData("application/x-sulion-tab");
         setDragTargetActive(false);
         if (!id) return;
         e.preventDefault();
@@ -248,13 +248,13 @@ function TabStrip({
       ref={stripRef}
       className={`wa__tabs wa__tabs--${paneId}`}
       onDragOver={(e) => {
-        if (e.dataTransfer.types.includes("application/x-shuttlecraft-tab")) {
+        if (e.dataTransfer.types.includes("application/x-sulion-tab")) {
           e.preventDefault();
           e.dataTransfer.dropEffect = "move";
         }
       }}
       onDrop={(e) => {
-        const id = e.dataTransfer.getData("application/x-shuttlecraft-tab");
+        const id = e.dataTransfer.getData("application/x-sulion-tab");
         if (!id) return;
         e.preventDefault();
         onDropTab(id, dragHoverIndex ?? tabIds.length);
@@ -349,11 +349,11 @@ function TabHandle({
       className={active ? "wa__tab-handle wa__tab-handle--active" : "wa__tab-handle"}
       draggable
       onDragStart={(e) => {
-        e.dataTransfer.setData("application/x-shuttlecraft-tab", tab.id);
+        e.dataTransfer.setData("application/x-sulion-tab", tab.id);
         e.dataTransfer.effectAllowed = "move";
       }}
       onDragOver={(e) => {
-        if (e.dataTransfer.types.includes("application/x-shuttlecraft-tab")) {
+        if (e.dataTransfer.types.includes("application/x-sulion-tab")) {
           e.preventDefault();
           onDragOverIndex();
         }

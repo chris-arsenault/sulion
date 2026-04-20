@@ -1,5 +1,5 @@
-use shuttlecraft::ingest::{Ingester, IngesterConfig};
-use shuttlecraft::{app, config::Config, db, AppState};
+use sulion::ingest::{Ingester, IngesterConfig};
+use sulion::{app, config::Config, db, AppState};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -10,8 +10,8 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|s| s.to_str())
         .is_some_and(|s| s == "codex-launcher")
     {
-        let cfg = shuttlecraft::codex::parse_launcher_args(&argv[2..])?;
-        let code = shuttlecraft::codex::run_launcher(cfg).await?;
+        let cfg = sulion::codex::parse_launcher_args(&argv[2..])?;
+        let code = sulion::codex::run_launcher(cfg).await?;
         std::process::exit(code);
     }
 
@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cfg = Config::from_env()?;
-    tracing::info!(listen = %cfg.listen, "shuttlecraft starting");
+    tracing::info!(listen = %cfg.listen, "sulion starting");
 
     let pool = db::connect(&cfg.db_url).await?;
     db::run_migrations(&pool).await?;
@@ -32,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
     // Any row still marked 'live' belongs to a shell the prior backend
     // was supervising — the process died with its parent and nobody
     // captured exit. Roll those to 'orphaned'.
-    let orphaned = shuttlecraft::pty::reconcile_orphans_on_startup(&pool).await?;
+    let orphaned = sulion::pty::reconcile_orphans_on_startup(&pool).await?;
     if orphaned > 0 {
         tracing::info!(count = orphaned, "reconciled orphaned PTY sessions");
     }
@@ -41,13 +41,13 @@ async fn main() -> anyhow::Result<()> {
     // events ingested before the canonical-block migration. No-op once
     // complete. Cheap — corpus is small and the SELECT anti-joins are
     // indexed.
-    match shuttlecraft::ingest::backfill_canonical_blocks(&pool).await {
+    match sulion::ingest::backfill_canonical_blocks(&pool).await {
         Ok(0) => {}
         Ok(n) => tracing::info!(count = n, "backfilled canonical event blocks"),
         Err(err) => tracing::warn!(%err, "canonical block backfill failed"),
     }
 
-    match shuttlecraft::ingest::backfill_timeline_projection(&pool).await {
+    match sulion::ingest::backfill_timeline_projection(&pool).await {
         Ok(0) => {}
         Ok(n) => tracing::info!(sessions = n, "backfilled app timeline projection"),
         Err(err) => tracing::warn!(%err, "timeline projection backfill failed"),
@@ -74,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
     let correlate_pool = pool.clone();
     let correlate_sock = cfg.correlate_sock_path.clone();
     tokio::spawn(async move {
-        if let Err(err) = shuttlecraft::correlate::run(correlate_pool, correlate_sock).await {
+        if let Err(err) = sulion::correlate::run(correlate_pool, correlate_sock).await {
             tracing::error!(%err, "correlate socket exited");
         }
     });

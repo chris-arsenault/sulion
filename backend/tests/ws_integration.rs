@@ -1,22 +1,22 @@
 //! WebSocket attach integration test. Spawns the full axum stack on a
 //! random loopback port, connects a tungstenite client, and asserts the
-//! snapshot + live stream + resize paths. Gated on `SHUTTLECRAFT_TEST_DB`.
+//! snapshot + live stream + resize paths. Gated on `SULION_TEST_DB`.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
-use shuttlecraft::pty::{PtyManager, SpawnParams};
-use shuttlecraft::{app, db, AppState};
+use sulion::pty::{PtyManager, SpawnParams};
+use sulion::{app, db, AppState};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
 fn test_db_url() -> Option<String> {
-    std::env::var("SHUTTLECRAFT_TEST_DB").ok()
+    std::env::var("SULION_TEST_DB").ok()
 }
 
 async fn fresh_pool() -> db::Pool {
-    let url = test_db_url().expect("SHUTTLECRAFT_TEST_DB");
+    let url = test_db_url().expect("SULION_TEST_DB");
     let pool = db::connect(&url).await.expect("connect");
     sqlx::query(
         "TRUNCATE events, ingester_state, claude_sessions, pty_sessions, repos RESTART IDENTITY CASCADE",
@@ -32,8 +32,8 @@ async fn start_server(pool: db::Pool) -> (String, std::sync::Arc<AppState>) {
     let state = AppState::new(
         pool,
         std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from("/tmp/shuttlecraft-library-test"),
-        std::sync::Arc::new(shuttlecraft::ingest::Ingester::new()),
+        std::path::PathBuf::from("/tmp/sulion-library-test"),
+        std::sync::Arc::new(sulion::ingest::Ingester::new()),
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().unwrap();

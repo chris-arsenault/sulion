@@ -1,4 +1,4 @@
-//! Global prompt/reference library stored under Shuttlecraft's own
+//! Global prompt/reference library stored under Sulion's own
 //! app directory. These entries are intentionally lightweight:
 //!
 //! - prompts are reusable instructions the user injects into the

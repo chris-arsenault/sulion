@@ -52,8 +52,8 @@ describe("App", () => {
 
   it("shows the sidebar logo", async () => {
     render(<App />);
-    // shuttlecraft appears in both the sidebar header and the empty state;
+    // sulion appears in both the sidebar header and the empty state;
     // getAllByText confirms both presence and count.
-    expect(screen.getAllByText("shuttlecraft").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("sulion").length).toBeGreaterThanOrEqual(1);
   });
 });

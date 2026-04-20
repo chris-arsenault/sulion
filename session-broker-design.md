@@ -44,7 +44,7 @@ Two layers:
 The UI's primary object is the PTY session. The dashboard/timeline filters to the *current* Claude session within that PTY by default but allows browsing prior ones.
 
 ### Session correlation
-When the backend spawns a PTY shell, it injects `SHUTTLECRAFT_PTY_ID=<pty_id>` into the shell's environment. A Claude Code `SessionStart` hook reads that env var and posts `{pty_id, claude_session_uuid}` to a local Unix socket the backend listens on (e.g., `/run/shuttlecraft/correlate.sock` inside the container). The backend records the association in Postgres.
+When the backend spawns a PTY shell, it injects `SULION_PTY_ID=<pty_id>` into the shell's environment. A Claude Code `SessionStart` hook reads that env var and posts `{pty_id, claude_session_uuid}` to a local Unix socket the backend listens on (e.g., `/run/sulion/correlate.sock` inside the container). The backend records the association in Postgres.
 
 The correlation runs once per `claude` invocation. When the user starts a new Claude session in the same PTY, the hook fires again and updates the current-claude-session pointer.
 
@@ -117,7 +117,7 @@ Focus-based. Terminal focused = all keys go to PTY (xterm.js handles copy-vs-SIG
 ## Deployment & Packaging
 
 ### Target: TrueNAS via Komodo (Docker Compose)
-Shuttlecraft deploys as a Docker Compose stack on the TrueNAS server, orchestrated by Komodo — consistent with the rest of the ahara ecosystem. No systemd, no bare binaries. GHCR image, `compose.yaml`, Komodo handles pull/up/rollback.
+Sulion deploys as a Docker Compose stack on the TrueNAS server, orchestrated by Komodo — consistent with the rest of the ahara ecosystem. No systemd, no bare binaries. GHCR image, `compose.yaml`, Komodo handles pull/up/rollback.
 
 ### Multi-image packaging (backend + frontend)
 Two images per the ahara shared-workflow convention for `rust + typescript` stacks:
@@ -128,10 +128,10 @@ Two images per the ahara shared-workflow convention for `rust + typescript` stac
 Both built by the shared workflow: Rust binary via `rust_artifacts.binaries` into `backend/dist/`, frontend via `pnpm run build` into `frontend/dist/`. Each Dockerfile COPYs pre-built artifacts — no in-container compilation.
 
 ### Dataset-backed workbench
-TrueNAS hosts one dataset at `/mnt/apps/apps/shuttlecraft`. It is bind-mounted directly as `/home/dev` in the backend container — the dataset root *is* the dev user's home. No subpath layout to pre-create.
+TrueNAS hosts one dataset at `/mnt/apps/apps/sulion`. It is bind-mounted directly as `/home/dev` in the backend container — the dataset root *is* the dev user's home. No subpath layout to pre-create.
 
 ```
-/mnt/apps/apps/shuttlecraft   →   /home/dev/
+/mnt/apps/apps/sulion   →   /home/dev/
   .claude/                         (Claude creds, session JSONLs under projects/)
   .ssh/                            (keys for git clone — chmod 0700)
   .gitconfig
@@ -148,7 +148,7 @@ UID/GID is **7321**: deliberately unusual to dodge the 1000-series collision tha
 Postgres data does not live here — the platform's shared TrueNAS Postgres owns its own storage at `192.168.66.3:5432`.
 
 ### Postgres: shared TrueNAS Postgres via ahara-db-migrate-truenas
-The backend connects to `192.168.66.3:5432` (the platform's shared TrueNAS Postgres) using per-project credentials auto-provisioned by the `ahara-db-migrate-truenas` Lambda. Registration is a single-line addition to `var.truenas_db_projects` in `ahara-infra/infrastructure/terraform/services/db-migrate-truenas.tf`. On first deploy the Lambda creates the `shuttlecraft` database, an app role, and publishes credentials to SSM at `/ahara/truenas-db/shuttlecraft/{username,password}`. `secret-paths.yml` binds those SSM paths into the compose env — no manual SSM puts, no sidecar. This is the same pattern `nas-sonarqube` uses.
+The backend connects to `192.168.66.3:5432` (the platform's shared TrueNAS Postgres) using per-project credentials auto-provisioned by the `ahara-db-migrate-truenas` Lambda. Registration is a single-line addition to `var.truenas_db_projects` in `ahara-infra/infrastructure/terraform/services/db-migrate-truenas.tf`. On first deploy the Lambda creates the `sulion` database, an app role, and publishes credentials to SSM at `/ahara/truenas-db/sulion/{username,password}`. `secret-paths.yml` binds those SSM paths into the compose env — no manual SSM puts, no sidecar. This is the same pattern `nas-sonarqube` uses.
 
 ### Tool installation strategy
 Base image carries `git`, `bash`, `curl`, `openssh-client`, `node` (for `npm i -g claude`), core toolchain. User-installed tools go to `~/.local/` which lives in the dataset — `uv tool install`, `pipx install`, `npm i -g` with prefix `/home/dev/.local`, `cargo install --root ~/.local/` all persist across container restarts and image rebuilds without Dockerfile edits. `claude` itself is installed this way so it can be pinned independently of the base image.
@@ -161,11 +161,11 @@ The ingester and the containerized PTY shell must see the same `~/.claude/projec
 ### Standards followed
 - **Stack:** Rust backend, TypeScript/React frontend, PostgreSQL 16, Docker, GitHub Actions shared workflow.
 - **Repo layout:** `backend/`, `frontend/`, `compose.yaml`, `secret-paths.yml`, `Dockerfile`, `platform.yml`, `Makefile` (with `ci` target), `CLAUDE.md`, `README.md`, `LICENSE`, `scripts/deploy.sh`, `.github/workflows/ci.yml` (minimal caller invoking `chris-arsenault/ahara/.github/workflows/ci.yml@main`).
-- **Project registration:** `platform.yml` declares `project: shuttlecraft`, `prefix: shuttlecraft`, `stack: [rust, typescript]`, `truenas: true`, `images: [backend, frontend]`, `rust_artifacts.binaries: [{bin: shuttlecraft, image: backend}]`. No `migrations` in the stack list because the sidecar Postgres is stack-local, not the shared platform RDS.
+- **Project registration:** `platform.yml` declares `project: sulion`, `prefix: sulion`, `stack: [rust, typescript]`, `truenas: true`, `images: [backend, frontend]`, `rust_artifacts.binaries: [{bin: sulion, image: backend}]`. No `migrations` in the stack list because the sidecar Postgres is stack-local, not the shared platform RDS.
 
 ### Cross-repo registrations
-- **`ahara-infra/infrastructure/terraform/control/project-shuttlecraft.tf`**: deployer role with `policy_modules = ["terraform-state", "komodo-deploy"]`. `module_bundles = []` (no ALB/website/cognito-app yet).
-- **`ahara-infra/infrastructure/terraform/services/db-migrate-truenas.tf`**: add `shuttlecraft = { db_name = "shuttlecraft" }` to `var.truenas_db_projects`. This triggers the Lambda to provision DB + role + SSM creds on first deploy.
+- **`ahara-infra/infrastructure/terraform/control/project-sulion.tf`**: deployer role with `policy_modules = ["terraform-state", "komodo-deploy"]`. `module_bundles = []` (no ALB/website/cognito-app yet).
+- **`ahara-infra/infrastructure/terraform/services/db-migrate-truenas.tf`**: add `sulion = { db_name = "sulion" }` to `var.truenas_db_projects`. This triggers the Lambda to provision DB + role + SSM creds on first deploy.
 
 ### Not needed for MVP
 - **No `infrastructure/terraform/` directory** in this repo — nothing project-local to apply.
@@ -183,7 +183,7 @@ Compose publishes the port on the TrueNAS LAN interface explicitly, not `0.0.0.0
 
 Implement:
 
-- Backend: PTY spawn (with `SHUTTLECRAFT_PTY_ID` env injection), WebSocket attach with headless-emulator snapshot on connect, shadow emulator fed continuously, JSONL watcher with partial-line handling and `(session_uuid, byte_offset)` idempotency key, Postgres schema with `parent_session_uuid` column, Unix-socket correlation endpoint for `SessionStart` hook, REST endpoints (new/list/delete/history, repos list/create).
+- Backend: PTY spawn (with `SULION_PTY_ID` env injection), WebSocket attach with headless-emulator snapshot on connect, shadow emulator fed continuously, JSONL watcher with partial-line handling and `(session_uuid, byte_offset)` idempotency key, Postgres schema with `parent_session_uuid` column, Unix-socket correlation endpoint for `SessionStart` hook, REST endpoints (new/list/delete/history, repos list/create).
 - Frontend: sidebar with repo tree, two-pane landscape layout, terminal pane working with xterm.js outside React, timeline pane rendering collapsible exchange blocks with tool-call expansion (virtualized), 1–2s polling refresh.
 - Packaging: Dockerfile, compose.yaml with sidecar Postgres and dataset bind mounts, `platform.yml`, Makefile, minimal caller CI workflow, sample `SessionStart` hook.
 
@@ -206,7 +206,7 @@ The MVP's job is to prove the architecture end-to-end and let the user run real 
 - **Transcript JSONL format is not a stable public API.** It's an implementation detail of Claude Code. Build the ingester to be tolerant of unknown event types (log and skip, don't crash) so upstream changes don't take the whole system down.
 - **Alt-screen mode.** Claude's TUI uses the alternate screen buffer. The headless emulator used for snapshot-on-attach must handle alt-screen correctly or the snapshot will be wrong.
 - **Repo directory scanning.** Needs to be cheap and reactive. Consider inotify or periodic refresh; don't re-scan on every sidebar render.
-- **UID/GID alignment.** The container's `dev` user UID must match the owner of `/tank/dev/shuttlecraft/` on TrueNAS, or writes from the PTY will appear with wrong ownership on the host dataset.
+- **UID/GID alignment.** The container's `dev` user UID must match the owner of `/tank/dev/sulion/` on TrueNAS, or writes from the PTY will appear with wrong ownership on the host dataset.
 
 ## Reasoning Reference
 

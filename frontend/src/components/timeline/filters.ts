@@ -52,7 +52,7 @@ export const DEFAULT_FILTERS: TimelineFilters = {
 // v3 because v2 stored raw tool-name hide state. The app now stores
 // app-facing operation categories instead, so old values should not be
 // replayed into the new semantics.
-const STORAGE_KEY = "shuttlecraft.timeline.filters.v3";
+const STORAGE_KEY = "sulion.timeline.filters.v3";
 
 // ─── persistence ──────────────────────────────────────────────────────
 

@@ -177,7 +177,7 @@ impl PtyManager {
             cmd.arg(arg);
         }
         cmd.cwd(&params.working_dir);
-        cmd.env("SHUTTLECRAFT_PTY_ID", id.to_string());
+        cmd.env("SULION_PTY_ID", id.to_string());
         if let Ok(term) = std::env::var("TERM") {
             cmd.env("TERM", term);
         } else {

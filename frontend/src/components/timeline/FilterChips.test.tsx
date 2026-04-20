@@ -41,7 +41,7 @@ describe("FilterChips — exclusion UI", () => {
     await user.click(userChip);
 
     const stored = window.localStorage.getItem(
-      "shuttlecraft.timeline.filters.v3",
+      "sulion.timeline.filters.v3",
     );
     expect(stored).not.toBeNull();
     const parsed = JSON.parse(stored!);

@@ -154,7 +154,7 @@ export function Sidebar() {
   return (
     <div className="sidebar">
       <div className="sidebar__header">
-        <span className="sidebar__logo">shuttlecraft</span>
+        <span className="sidebar__logo">sulion</span>
         <button
           type="button"
           className="sidebar__icon-button"

@@ -1,4 +1,4 @@
-const STORAGE_KEY = "shuttlecraft.lastViewed.v1";
+const STORAGE_KEY = "sulion.lastViewed.v1";
 
 export type LastViewedMap = Record<string, string>;
 

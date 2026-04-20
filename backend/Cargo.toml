@@ -1,15 +1,15 @@
 [package]
-name = "shuttlecraft"
+name = "sulion"
 version = "0.1.0"
 edition = "2021"
 publish = false
 
 [lib]
-name = "shuttlecraft"
+name = "sulion"
 path = "src/lib.rs"
 
 [[bin]]
-name = "shuttlecraft"
+name = "sulion"
 path = "src/main.rs"
 
 [dependencies]

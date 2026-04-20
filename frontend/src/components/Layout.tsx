@@ -7,7 +7,7 @@ import { useAppCommand } from "../state/AppCommands";
 import { useTabs } from "../state/TabStore";
 import "./Layout.css";
 
-const PIN_STORAGE_KEY = "shuttlecraft.sidebar.pinned.v1";
+const PIN_STORAGE_KEY = "sulion.sidebar.pinned.v1";
 
 /** Root layout: sidebar + WorkArea. On mobile the sidebar becomes a
  * drawer. The split / tab system lives inside WorkArea. */
@@ -125,7 +125,7 @@ function MobileTopBar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
       >
         ☰
       </button>
-      <span className="mobile-topbar__title">shuttlecraft</span>
+      <span className="mobile-topbar__title">sulion</span>
     </div>
   );
 }

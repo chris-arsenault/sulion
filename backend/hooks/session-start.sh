@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
 #
-# shuttlecraft SessionStart hook. Installed into a user's
+# sulion SessionStart hook. Installed into a user's
 # ~/.claude/settings.json under hooks.SessionStart, this script tells
-# the shuttlecraft backend that a new Claude session (UUID) has started
+# the sulion backend that a new Claude session (UUID) has started
 # inside a known PTY (also UUID).
 #
 # Contract:
-#   - SHUTTLECRAFT_PTY_ID must be in the environment. It is, because
+#   - SULION_PTY_ID must be in the environment. It is, because
 #     the backend injects it when it forks the PTY shell.
 #   - Claude's hook payload is delivered on stdin as JSON with a
 #     `session_id` field.
-#   - We post one JSON line to SHUTTLECRAFT_CORRELATE_SOCK (default
-#     /run/shuttlecraft/correlate.sock), then exit 0.
+#   - We post one JSON line to SULION_CORRELATE_SOCK (default
+#     /run/sulion/correlate.sock), then exit 0.
 #
 # Failure MUST NOT crash Claude — every error path exits 0.
 
 set -u
 
-SOCK="${SHUTTLECRAFT_CORRELATE_SOCK:-/run/shuttlecraft/correlate.sock}"
-PTY_ID="${SHUTTLECRAFT_PTY_ID:-}"
+SOCK="${SULION_CORRELATE_SOCK:-/run/sulion/correlate.sock}"
+PTY_ID="${SULION_PTY_ID:-}"
 
 if [[ -z "${PTY_ID}" ]]; then
-  # Not running under shuttlecraft — silent no-op.
+  # Not running under sulion — silent no-op.
   exit 0
 fi
 

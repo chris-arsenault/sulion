@@ -4,19 +4,19 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use shuttlecraft::db;
-use shuttlecraft::ingest::{Ingester, IngesterConfig};
+use sulion::db;
+use sulion::ingest::{Ingester, IngesterConfig};
 use uuid::Uuid;
 
 const CODEX_RICH_LINEAGE_PARENT: &str = include_str!("fixtures/codex-rich-lineage-parent.jsonl");
 const CODEX_RICH_LINEAGE_CHILD: &str = include_str!("fixtures/codex-rich-lineage-child.jsonl");
 
 fn test_db_url() -> Option<String> {
-    std::env::var("SHUTTLECRAFT_TEST_DB").ok()
+    std::env::var("SULION_TEST_DB").ok()
 }
 
 async fn fresh_pool() -> db::Pool {
-    let url = test_db_url().expect("SHUTTLECRAFT_TEST_DB");
+    let url = test_db_url().expect("SULION_TEST_DB");
     let pool = db::connect(&url).await.expect("connect");
     sqlx::query(
         "TRUNCATE events, ingester_state, claude_sessions, pty_sessions, repos RESTART IDENTITY CASCADE",

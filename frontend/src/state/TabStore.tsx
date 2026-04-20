@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-const STORAGE_KEY = "shuttlecraft.tabs.v2";
+const STORAGE_KEY = "sulion.tabs.v2";
 
 export type PaneId = "top" | "bottom";
 export type TabKind =

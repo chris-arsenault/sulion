@@ -1,6 +1,6 @@
 //! Unix-socket listener for SessionStart correlation.
 //!
-//! The backend spawns shells with `SHUTTLECRAFT_PTY_ID=<uuid>` in their
+//! The backend spawns shells with `SULION_PTY_ID=<uuid>` in their
 //! environment. When Claude Code starts a new session in that shell, its
 //! `SessionStart` hook reads the env var and posts a single JSON line to
 //! this socket:

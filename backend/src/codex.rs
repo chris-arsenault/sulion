@@ -9,7 +9,7 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 const FD_SCAN_INTERVAL: Duration = Duration::from_millis(100);
-const DEFAULT_WRAPPER_PATH: &str = "/opt/shuttlecraft/bin/codex";
+const DEFAULT_WRAPPER_PATH: &str = "/opt/sulion/bin/codex";
 
 #[derive(Debug, Clone)]
 pub struct LauncherConfig {
@@ -125,7 +125,7 @@ pub async fn run_launcher(cfg: LauncherConfig) -> anyhow::Result<i32> {
                     Err(err) => {
                         if last_observed_session != Some(session_uuid) {
                             eprintln!(
-                                "shuttlecraft: failed to correlate codex session {session_uuid}: {err}"
+                                "sulion: failed to correlate codex session {session_uuid}: {err}"
                             );
                             last_observed_session = Some(session_uuid);
                         }

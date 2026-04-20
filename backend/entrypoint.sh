@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# shuttlecraft container entrypoint. Runs as the `dev` user (set via
+# sulion container entrypoint. Runs as the `dev` user (set via
 # USER in the Dockerfile). Self-provisions the dataset layout so the
 # TrueNAS operator only has to create the dataset and chown it to
 # the dev UID — nothing else.
@@ -19,9 +19,9 @@ HOME_DIR="${HOME:-/home/dev}"
 REAL_CODEX="$(command -v codex || true)"
 
 if [[ -n "${REAL_CODEX}" ]]; then
-  export SHUTTLECRAFT_REAL_CODEX="${REAL_CODEX}"
+  export SULION_REAL_CODEX="${REAL_CODEX}"
 fi
-export PATH="${HOME_DIR}/.local/bin:/opt/shuttlecraft/bin:${PATH}"
+export PATH="${HOME_DIR}/.local/bin:/opt/sulion/bin:${PATH}"
 
 mkdir -p \
   "${HOME_DIR}/.claude" \
@@ -56,14 +56,14 @@ HISTCONTROL=ignoreboth
 shopt -s histappend
 
 # PATH: user-local installs take precedence over system binaries.
-export PATH="$HOME/.local/bin:/opt/shuttlecraft/bin:$PATH"
+export PATH="$HOME/.local/bin:/opt/sulion/bin:$PATH"
 
 # Quality-of-life
 alias ll='ls -la'
 alias la='ls -A'
 
 # Prompt: user@host:cwd$
-PS1='\[\e[36m\]\u@shuttlecraft\[\e[0m\]:\[\e[33m\]\w\[\e[0m\]\$ '
+PS1='\[\e[36m\]\u@sulion\[\e[0m\]:\[\e[33m\]\w\[\e[0m\]\$ '
 EOF
 fi
 
@@ -73,7 +73,7 @@ fi
 # command if no existing entry references it; otherwise no-op. Other
 # keys in the file (auth, user customisations) are preserved verbatim.
 SETTINGS="${HOME_DIR}/.claude/settings.json"
-HOOK_CMD="/opt/shuttlecraft/hooks/session-start.sh"
+HOOK_CMD="/opt/sulion/hooks/session-start.sh"
 
 if [[ ! -f "${SETTINGS}" ]]; then
   cat > "${SETTINGS}" <<JSON
@@ -104,4 +104,4 @@ elif ! jq -e --arg cmd "${HOOK_CMD}" \
   fi
 fi
 
-exec /usr/local/bin/shuttlecraft
+exec /usr/local/bin/sulion

@@ -55,14 +55,14 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
 # is set to ~/.local in the entrypoint, so user installs shadow these).
 RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
-# shuttlecraft-managed shell aliases. Goes in /etc/bash.bashrc which
+# sulion-managed shell aliases. Goes in /etc/bash.bashrc which
 # Debian sources for interactive non-login shells — which is what a
 # PTY gets. User can still override in their own ~/.bashrc (runs
 # AFTER /etc/bash.bashrc). Keep this list tight; aliases are a
 # product surface, not a dumping ground.
 RUN { \
       echo ''; \
-      echo '# shuttlecraft: agent shortcuts'; \
+      echo '# sulion: agent shortcuts'; \
       echo 'alias cl="claude --dangerously-skip-permissions"'; \
       echo 'alias co="codex --yolo"'; \
     } >> /etc/bash.bashrc
@@ -74,17 +74,17 @@ ARG DEV_UID=7321
 ARG DEV_GID=7321
 RUN groupadd --gid ${DEV_GID} dev \
   && useradd --uid ${DEV_UID} --gid ${DEV_GID} --shell /bin/bash --home-dir /home/dev dev \
-  && mkdir -p /run/shuttlecraft /opt/shuttlecraft/hooks /opt/shuttlecraft/bin \
-  && chown -R dev:dev /run/shuttlecraft
+  && mkdir -p /run/sulion /opt/sulion/hooks /opt/sulion/bin \
+  && chown -R dev:dev /run/sulion
 
-COPY dist/shuttlecraft /usr/local/bin/shuttlecraft
-COPY bin/codex /opt/shuttlecraft/bin/codex
-COPY hooks/session-start.sh /opt/shuttlecraft/hooks/session-start.sh
-COPY entrypoint.sh /opt/shuttlecraft/entrypoint.sh
-RUN chmod +x /opt/shuttlecraft/bin/codex /opt/shuttlecraft/hooks/session-start.sh /opt/shuttlecraft/entrypoint.sh
+COPY dist/sulion /usr/local/bin/sulion
+COPY bin/codex /opt/sulion/bin/codex
+COPY hooks/session-start.sh /opt/sulion/hooks/session-start.sh
+COPY entrypoint.sh /opt/sulion/entrypoint.sh
+RUN chmod +x /opt/sulion/bin/codex /opt/sulion/hooks/session-start.sh /opt/sulion/entrypoint.sh
 
 USER dev
 WORKDIR /home/dev
 
 EXPOSE 8080
-ENTRYPOINT ["/usr/bin/tini", "--", "/opt/shuttlecraft/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/opt/sulion/entrypoint.sh"]

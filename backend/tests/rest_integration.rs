@@ -1,22 +1,22 @@
 //! REST API integration tests: full axum stack, real Postgres, real
-//! filesystem for repo scans. Gated on `SHUTTLECRAFT_TEST_DB`.
+//! filesystem for repo scans. Gated on `SULION_TEST_DB`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
-use shuttlecraft::db;
-use shuttlecraft::{app, AppState};
+use sulion::db;
+use sulion::{app, AppState};
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
 fn test_db_url() -> Option<String> {
-    std::env::var("SHUTTLECRAFT_TEST_DB").ok()
+    std::env::var("SULION_TEST_DB").ok()
 }
 
 async fn fresh_pool() -> db::Pool {
-    let url = test_db_url().expect("SHUTTLECRAFT_TEST_DB");
+    let url = test_db_url().expect("SULION_TEST_DB");
     let pool = db::connect(&url).await.expect("connect");
     sqlx::query(
         "TRUNCATE events, ingester_state, claude_sessions, pty_sessions, repos RESTART IDENTITY CASCADE",
@@ -43,7 +43,7 @@ impl Harness {
             pool,
             tmp_repos.path().to_path_buf(),
             tmp_repos.path().join(".library"),
-            std::sync::Arc::new(shuttlecraft::ingest::Ingester::new()),
+            std::sync::Arc::new(sulion::ingest::Ingester::new()),
         );
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -169,9 +169,9 @@ async fn history_returns_events_after_ingest_and_correlate() {
 
     // Fake a correlation (like the SessionStart hook would).
     let claude_uuid = Uuid::new_v4();
-    shuttlecraft::correlate::apply(
+    sulion::correlate::apply(
         &h.state.pool,
-        &shuttlecraft::correlate::CorrelateMsg {
+        &sulion::correlate::CorrelateMsg {
             pty_id,
             session_uuid: claude_uuid,
             agent: "claude-code".to_string(),
@@ -422,9 +422,9 @@ async fn timeline_returns_projected_turns() {
     let pty_id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
 
     let session_uuid = Uuid::new_v4();
-    shuttlecraft::correlate::apply(
+    sulion::correlate::apply(
         &h.state.pool,
-        &shuttlecraft::correlate::CorrelateMsg {
+        &sulion::correlate::CorrelateMsg {
             pty_id,
             session_uuid,
             agent: "claude-code".to_string(),
@@ -491,7 +491,7 @@ async fn timeline_returns_projected_turns() {
     .await
     .unwrap();
 
-    shuttlecraft::ingest::rebuild_session_projection(&h.state.pool, session_uuid)
+    sulion::ingest::rebuild_session_projection(&h.state.pool, session_uuid)
         .await
         .unwrap();
 
@@ -543,9 +543,9 @@ async fn file_trace_returns_related_turns() {
     let pty_id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
 
     let session_uuid = Uuid::new_v4();
-    shuttlecraft::correlate::apply(
+    sulion::correlate::apply(
         &h.state.pool,
-        &shuttlecraft::correlate::CorrelateMsg {
+        &sulion::correlate::CorrelateMsg {
             pty_id,
             session_uuid,
             agent: "codex".to_string(),
@@ -588,7 +588,7 @@ async fn file_trace_returns_related_turns() {
     .await
     .unwrap();
 
-    shuttlecraft::ingest::rebuild_session_projection(&h.state.pool, session_uuid)
+    sulion::ingest::rebuild_session_projection(&h.state.pool, session_uuid)
         .await
         .unwrap();
 

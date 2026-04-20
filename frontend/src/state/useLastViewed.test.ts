@@ -38,7 +38,7 @@ describe("useLastViewed helpers", () => {
   });
 
   it("ignores malformed localStorage", () => {
-    window.localStorage.setItem("shuttlecraft.lastViewed.v1", "not json");
+    window.localStorage.setItem("sulion.lastViewed.v1", "not json");
     expect(loadLastViewedMap()).toEqual({});
   });
 });

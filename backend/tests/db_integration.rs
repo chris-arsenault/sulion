@@ -1,12 +1,12 @@
 //! Integration tests that require a live Postgres.
 //!
-//! Run via `make test-rust-integration`, or point `SHUTTLECRAFT_TEST_DB`
+//! Run via `make test-rust-integration`, or point `SULION_TEST_DB`
 //! at an existing Postgres and invoke this binary with `--ignored`.
 
-use shuttlecraft::db;
+use sulion::db;
 
 fn test_db_url() -> Option<String> {
-    std::env::var("SHUTTLECRAFT_TEST_DB").ok()
+    std::env::var("SULION_TEST_DB").ok()
 }
 
 async fn reset_schema(pool: &db::Pool) {
@@ -26,7 +26,7 @@ async fn reset_schema(pool: &db::Pool) {
 #[ignore]
 async fn migrations_apply_on_empty_db() {
     let Some(url) = test_db_url() else {
-        eprintln!("skipping: SHUTTLECRAFT_TEST_DB not set");
+        eprintln!("skipping: SULION_TEST_DB not set");
         return;
     };
     let pool = db::connect(&url).await.expect("connect");
@@ -67,7 +67,7 @@ async fn migrations_apply_on_empty_db() {
 #[ignore]
 async fn migrations_are_idempotent() {
     let Some(url) = test_db_url() else {
-        eprintln!("skipping: SHUTTLECRAFT_TEST_DB not set");
+        eprintln!("skipping: SULION_TEST_DB not set");
         return;
     };
     let pool = db::connect(&url).await.expect("connect");

@@ -192,7 +192,7 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
         // confirm() is blunt but this is a rare path.
         const accept = window.confirm(
           `Clipboard is ${raw.length} bytes / ${lineCount} lines — paste as a file instead?\n\n` +
-            "OK  = save to .shuttlecraft-paste/ and inject the path\n" +
+            "OK  = save to .sulion-paste/ and inject the path\n" +
             "Cancel = paste the raw contents inline",
         );
         if (accept) {
@@ -204,7 +204,7 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
           const blob = new File([raw], filename, { type: "text/plain" });
           void uploadRepoFile(
             repoRef.current,
-            ".shuttlecraft-paste",
+            ".sulion-paste",
             blob,
           )
             .then((res) => {

@@ -21,7 +21,7 @@ import { TurnRow } from "./timeline/TurnRow";
 import "./TimelinePane.css";
 
 const POLL_MS = 1500;
-const INSPECTOR_WIDTH_KEY = "shuttlecraft.timeline.inspector.width.v1";
+const INSPECTOR_WIDTH_KEY = "sulion.timeline.inspector.width.v1";
 const DEFAULT_INSPECTOR_FRACTION = 0.55;
 const MIN_INSPECTOR_FRACTION = 0.28;
 const MAX_INSPECTOR_FRACTION = 0.78;
