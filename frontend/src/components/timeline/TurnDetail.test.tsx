@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 
 import * as apiClient from "../../api/client";
 import { subscribeToAppCommands } from "../../state/AppCommands";
 import { TurnDetail } from "./TurnDetail";
+import { ContextMenuHost } from "../common/ContextMenu";
 import {
   assistantChunk,
   assistantItems,
@@ -19,6 +21,15 @@ describe("TurnDetail", () => {
     vi.restoreAllMocks();
   });
 
+  function renderWithContextMenu(ui: ReactNode) {
+    return render(
+      <>
+        {ui}
+        <ContextMenuHost />
+      </>,
+    );
+  }
+
   it("renders prompt, assistant text, and projected tool rows", () => {
     const pair = makePair({
       id: "t1",
@@ -26,7 +37,7 @@ describe("TurnDetail", () => {
       input: { command: "pwd" },
       result: { content: "/tmp", is_error: false },
     });
-    render(
+    renderWithContextMenu(
       <TurnDetail
         turn={makeTurn({
           user_prompt_text: "my prompt",
@@ -46,7 +57,7 @@ describe("TurnDetail", () => {
   });
 
   it("hides thinking chips when showThinking=false", () => {
-    render(
+    renderWithContextMenu(
       <TurnDetail
         turn={makeTurn({
           thinking_count: 1,
@@ -67,7 +78,7 @@ describe("TurnDetail", () => {
       result: { content: "permission denied", is_error: true },
       is_error: true,
     });
-    render(
+    renderWithContextMenu(
       <TurnDetail
         turn={makeTurn({
           tool_pairs: [pair],
@@ -92,7 +103,7 @@ describe("TurnDetail", () => {
       input: { description: "delegate work" },
       subagent: makeSubagent({ title: "Agent log · delegate work" }),
     });
-    render(
+    renderWithContextMenu(
       <TurnDetail
         turn={makeTurn({
           tool_pairs: [pair],
@@ -120,7 +131,7 @@ describe("TurnDetail", () => {
       seen.push(command);
     });
 
-    render(
+    renderWithContextMenu(
       <TurnDetail
         turn={makeTurn({ user_prompt_text: "my prompt" })}
         showThinking={true}
@@ -128,7 +139,11 @@ describe("TurnDetail", () => {
     );
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole("button", { name: /save as prompt/i }));
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: screen.getByText(/my prompt/),
+    });
+    await user.click(screen.getByRole("menuitem", { name: /save as prompt/i }));
 
     expect(apiClient.saveLibraryEntry).toHaveBeenCalledWith("prompts", {
       name: "Prompt: my prompt",
@@ -151,7 +166,7 @@ describe("TurnDetail", () => {
       seen.push(command);
     });
 
-    render(
+    renderWithContextMenu(
       <TurnDetail
         turn={makeTurn({
           chunks: [assistantChunk(assistantItems("before"))],
@@ -161,7 +176,13 @@ describe("TurnDetail", () => {
     );
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole("button", { name: /save ref/i }));
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: screen.getByText("before"),
+    });
+    expect(screen.getByRole("menuitem", { name: /copy text/i })).toBeDefined();
+    expect(screen.getByRole("menuitem", { name: /copy event/i })).toBeDefined();
+    await user.click(screen.getByRole("menuitem", { name: /save as reference/i }));
 
     expect(apiClient.saveLibraryEntry).toHaveBeenCalledWith("references", {
       name: "Reference: before",

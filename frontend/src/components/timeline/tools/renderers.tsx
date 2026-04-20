@@ -1,8 +1,12 @@
 import "./renderers.css";
 import type { TimelineFileTouch } from "../../../api/types";
-import { appCommands } from "../../../state/AppCommands";
 import { useRepos } from "../../../state/RepoStore";
 import type { Maybe } from "../../../lib/types";
+import { buildWorkspaceFileMenuItems } from "../../common/fileContextMenu";
+import {
+  contextMenuHandler,
+  useContextMenu,
+} from "../../common/ContextMenu";
 
 export interface ToolUseSummary {
   id?: string;
@@ -73,43 +77,32 @@ function FileTouchRow({ touch }: { touch: TimelineFileTouch }) {
   const repoState = useRepos((store) => store.repos[touch.repo]);
   const dirty = repoState?.git?.dirty_by_path[touch.path];
   const diff = repoState?.git?.diff_stats_by_path[touch.path];
+  const openCtx = useContextMenu((store) => store.open);
+  const onContextMenu = contextMenuHandler(openCtx, () =>
+    buildWorkspaceFileMenuItems({
+      repo: touch.repo,
+      path: touch.path,
+      dirty,
+      copyText: `${touch.repo}:${touch.path}`,
+    }),
+  );
+
   return (
-    <div className="tr-file">
+    <div
+      className="tr-file"
+      onContextMenu={onContextMenu}
+      title="Right-click for file actions"
+    >
       <span className="tr-file__meta">
         <span className="tr-file__kind">{touch.touch_kind}</span>
         {touch.is_write && <span className="tr-file__write">write</span>}
       </span>
       <code className="tr-file__path">{touch.repo}:{touch.path}</code>
-      <div className="tr-file__actions">
-        <button
-          type="button"
-          className="tr-file__action"
-          onClick={() => appCommands.revealFile({ repo: touch.repo, path: touch.path })}
-        >
-          reveal
-        </button>
-        <button
-          type="button"
-          className="tr-file__action"
-          onClick={() => appCommands.openFile({ repo: touch.repo, path: touch.path })}
-        >
-          open
-        </button>
-        {dirty && (
-          <button
-            type="button"
-            className="tr-file__action tr-file__action--diff"
-            onClick={() => appCommands.openDiff({ repo: touch.repo, path: touch.path })}
-          >
-            {dirty.trim() || "•"} diff
-          </button>
-        )}
-        {diff && (
-          <span className="tr-file__diffstat">
-            +{diff.additions} -{diff.deletions}
-          </span>
-        )}
-      </div>
+      {diff && (
+        <span className="tr-file__diffstat">
+          +{diff.additions} -{diff.deletions}
+        </span>
+      )}
     </div>
   );
 }

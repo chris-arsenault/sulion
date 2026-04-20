@@ -139,6 +139,13 @@ describe("Sidebar", () => {
     );
   }
 
+  async function openSessionContextMenu(user: ReturnType<typeof userEvent.setup>, text: RegExp) {
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: screen.getByText(text),
+    });
+  }
+
   it("renders repo groups and their sessions", async () => {
     const state = installFetchMock();
     state.repos.push({ name: "alpha", path: "/tmp/alpha" });
@@ -184,7 +191,7 @@ describe("Sidebar", () => {
     expect(state.createSessionCalls[0]).toEqual({ repo: "alpha" });
   });
 
-  it("delete button removes the session via DELETE", async () => {
+  it("deletes a session from the shared context menu", async () => {
     const state = installFetchMock();
     state.repos.push({ name: "alpha", path: "/tmp/alpha" });
     state.sessions.push({
@@ -203,8 +210,8 @@ describe("Sidebar", () => {
 
     await waitFor(() => expect(screen.getByText(/22222222/)).toBeDefined());
 
-    const deleteButtons = screen.getAllByLabelText("Delete session");
-    await user.click(deleteButtons[0]);
+    await openSessionContextMenu(user, /22222222/);
+    await user.click(screen.getByRole("menuitem", { name: /delete session/i }));
 
     // ConfirmDialog appears with a red Delete button; click it.
     const confirmBtn = await waitFor(() =>
@@ -235,7 +242,8 @@ describe("Sidebar", () => {
     const user = userEvent.setup();
 
     await waitFor(() => expect(screen.getByText(/33333333/)).toBeDefined());
-    await user.click(screen.getAllByLabelText("Delete session")[0]);
+    await openSessionContextMenu(user, /33333333/);
+    await user.click(screen.getByRole("menuitem", { name: /delete session/i }));
     const cancelBtn = await waitFor(() =>
       screen.getByRole("button", { name: "Cancel" }),
     );
@@ -246,7 +254,7 @@ describe("Sidebar", () => {
     expect(state.deletedIds.length).toBe(0);
   });
 
-  it("opens the session menu and fires PATCH { pinned: true } on Pin to top", async () => {
+  it("fires PATCH { pinned: true } on Pin to top from the context menu", async () => {
     const state = installFetchMock();
     state.repos.push({ name: "alpha", path: "/tmp/alpha" });
     state.sessions.push({
@@ -269,7 +277,7 @@ describe("Sidebar", () => {
 
     await waitFor(() => expect(screen.getByText(/44444444/)).toBeDefined());
 
-    await user.click(screen.getAllByLabelText("Session options")[0]);
+    await openSessionContextMenu(user, /44444444/);
     await user.click(screen.getByRole("menuitem", { name: /pin to top/i }));
 
     await waitFor(() => expect(state.patches.length).toBe(1));
@@ -302,7 +310,7 @@ describe("Sidebar", () => {
 
     await waitFor(() => expect(screen.getByText(/55555555/)).toBeDefined());
 
-    await user.click(screen.getAllByLabelText("Session options")[0]);
+    await openSessionContextMenu(user, /55555555/);
     await user.click(screen.getByRole("menuitem", { name: /rename/i }));
 
     const input = screen.getByLabelText("Session name");
@@ -318,7 +326,7 @@ describe("Sidebar", () => {
     await waitFor(() => expect(screen.getByText("deploy-work")).toBeDefined());
   });
 
-  it("picks a colour through the menu swatch", async () => {
+  it("picks a colour through the context-menu submenu", async () => {
     const state = installFetchMock();
     state.repos.push({ name: "alpha", path: "/tmp/alpha" });
     state.sessions.push({
@@ -341,8 +349,10 @@ describe("Sidebar", () => {
 
     await waitFor(() => expect(screen.getByText(/66666666/)).toBeDefined());
 
-    await user.click(screen.getAllByLabelText("Session options")[0]);
-    await user.click(screen.getByLabelText("Colour emerald"));
+    await openSessionContextMenu(user, /66666666/);
+    await user.hover(screen.getByRole("menuitem", { name: /colour/i }));
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: /emerald/i })).toBeDefined());
+    await user.click(screen.getByRole("menuitem", { name: /emerald/i }));
 
     await waitFor(() => expect(state.patches.length).toBe(1));
     expect(state.patches[0]).toEqual({

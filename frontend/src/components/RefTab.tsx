@@ -7,6 +7,11 @@ import { deleteLibraryEntry, getLibraryEntry } from "../api/client";
 import type { LibraryEntry } from "../api/types";
 import { appCommands } from "../state/AppCommands";
 import { useTabs } from "../state/TabStore";
+import {
+  contextMenuHandler,
+  useContextMenu,
+} from "./common/ContextMenu";
+import { copyToClipboard } from "./terminal/clipboard";
 import { Markdown } from "./timeline/Markdown";
 import "./LibraryTab.css";
 
@@ -19,6 +24,7 @@ export function RefTab({ slug }: { slug: string }) {
       tabs: store.tabs,
     })),
   );
+  const openCtx = useContextMenu((store) => store.open);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,11 +59,7 @@ export function RefTab({ slug }: { slug: string }) {
 
   const onCopy = async () => {
     if (!entry) return;
-    try {
-      await navigator.clipboard.writeText(entry.body);
-    } catch {
-      /* HTTP deploys don't have clipboard perm; silent */
-    }
+    await copyToClipboard(entry.body);
   };
 
   if (error) {
@@ -85,9 +87,26 @@ export function RefTab({ slug }: { slug: string }) {
     );
   }
 
+  const onContextMenu = contextMenuHandler(openCtx, () => [
+    {
+      kind: "item",
+      id: "copy-body",
+      label: "Copy body",
+      onSelect: () => void onCopy(),
+    },
+    { kind: "separator" },
+    {
+      kind: "item",
+      id: "delete-reference",
+      label: "Delete reference",
+      destructive: true,
+      onSelect: () => void onDelete(),
+    },
+  ]);
+
   return (
-    <div className="lib-tab">
-      <div className="lib-tab__header">
+    <div className="lib-tab" onContextMenu={onContextMenu}>
+      <div className="lib-tab__header" title="Right-click for reference actions">
         <span className="lib-tab__path">
           <strong className="lib-tab__title">{entry.name}</strong>
           <span className="lib-tab__muted">· reference · {entry.slug}</span>
@@ -95,12 +114,6 @@ export function RefTab({ slug }: { slug: string }) {
         <span className="lib-tab__meta">
           {entry.updated_at && <span>updated {formatDate(entry.updated_at)}</span>}
         </span>
-        <button type="button" className="lib-tab__btn" onClick={onCopy}>
-          copy body
-        </button>
-        <button type="button" className="lib-tab__btn lib-tab__btn--destructive" onClick={onDelete}>
-          delete
-        </button>
       </div>
       <div className="lib-tab__body">
         <Markdown source={entry.body} />

@@ -3,11 +3,18 @@ import { useEffect, useState } from "react";
 import { getRepoFileTrace } from "../api/client";
 import type { FileTraceResponse } from "../api/types";
 import { useTabs } from "../state/TabStore";
+import { buildWorkspaceFileMenuItems } from "./common/fileContextMenu";
+import type { MenuItem } from "./common/ContextMenu";
+import {
+  contextMenuHandler,
+  useContextMenu,
+} from "./common/ContextMenu";
 
 export function FileTracePanel({ repo, path }: { repo: string; path: string }) {
   const [trace, setTrace] = useState<FileTraceResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const openTab = useTabs((store) => store.openTab);
+  const openCtx = useContextMenu((store) => store.open);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,6 +42,19 @@ export function FileTracePanel({ repo, path }: { repo: string; path: string }) {
     return <div className="ft__trace ft__trace--loading">loading trace…</div>;
   }
 
+  const openTurn = (touch: FileTraceResponse["touches"][number]) => {
+    if (!touch.pty_session_id) return;
+    openTab(
+      {
+        kind: "timeline",
+        sessionId: touch.pty_session_id,
+        focusTurnId: touch.turn_id,
+        focusKey: crypto.randomUUID(),
+      },
+      "bottom",
+    );
+  };
+
   return (
     <section className="ft__trace" aria-label="Related timeline turns">
       <div className="ft__trace-header">
@@ -54,30 +74,34 @@ export function FileTracePanel({ repo, path }: { repo: string; path: string }) {
               ? touch.session_label
               : touch.pty_session_id?.slice(0, 8) ?? touch.session_uuid.slice(0, 8);
             const canOpenTimeline = Boolean(touch.pty_session_id);
+            const onContextMenu = contextMenuHandler(openCtx, () => {
+              const items: MenuItem[] = [];
+              if (canOpenTimeline) {
+                items.push({
+                  kind: "item",
+                  id: "open-turn",
+                  label: "Open turn",
+                  onSelect: () => openTurn(touch),
+                });
+                items.push({ kind: "separator" });
+              }
+              items.push(
+                ...buildWorkspaceFileMenuItems({
+                  repo,
+                  path,
+                  dirty: trace.dirty,
+                }),
+              );
+              return items;
+            });
             return (
               <li
                 key={`${touch.session_uuid}:${touch.turn_id}:${touch.turn_timestamp}:${touch.touch_kind}`}
-                className="ft__trace-item"
+                className={canOpenTimeline ? "ft__trace-item" : "ft__trace-item ft__trace-item--disabled"}
+                onClick={() => openTurn(touch)}
+                onContextMenu={onContextMenu}
+                title={canOpenTimeline ? "Click to open turn. Right-click for more actions." : undefined}
               >
-                <button
-                  type="button"
-                  className="ft__trace-open"
-                  disabled={!canOpenTimeline}
-                  onClick={() => {
-                    if (!touch.pty_session_id) return;
-                    openTab(
-                      {
-                        kind: "timeline",
-                        sessionId: touch.pty_session_id,
-                        focusTurnId: touch.turn_id,
-                        focusKey: crypto.randomUUID(),
-                      },
-                      "bottom",
-                    );
-                  }}
-                >
-                  open turn
-                </button>
                 <div className="ft__trace-body">
                   <div className="ft__trace-line">
                     <span className="ft__trace-session">{sessionTag}</span>

@@ -3,7 +3,12 @@ import { type MouseEvent, useMemo, useRef, useState } from "react";
 import { saveLibraryEntry } from "../../api/client";
 import type { TimelineAssistantItem } from "../../api/types";
 import { appCommands } from "../../state/AppCommands";
-import { CopyButton } from "./CopyButton";
+import type { MenuItem } from "../common/ContextMenu";
+import {
+  contextMenuHandler,
+  useContextMenu,
+} from "../common/ContextMenu";
+import { copyToClipboard } from "../terminal/clipboard";
 import type { ToolPair, Turn } from "./grouping";
 import { Markdown } from "./Markdown";
 import {
@@ -42,6 +47,7 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
   const [thinking, setThinking] = useState<ThinkingAnchor | null>(null);
   const [hover, setHover] = useState<HoverAnchor | null>(null);
   const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openCtx = useContextMenu((store) => store.open);
 
   const savePrompt = async () => {
     const body = turn.user_prompt_text?.trim();
@@ -86,29 +92,55 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
     }, 180);
   };
 
+  const onHeaderContextMenu = contextMenuHandler(openCtx, () => [
+    {
+      kind: "item",
+      id: "copy-turn",
+      label: "Copy turn as markdown",
+      onSelect: () => {
+        void copyToClipboard(formatTurn(turn));
+      },
+    },
+  ]);
+
+  const onPromptContextMenu = contextMenuHandler(openCtx, () => {
+    const body = turn.user_prompt_text?.trim();
+    if (!body) return null;
+    const items: MenuItem[] = [
+      {
+        kind: "item",
+        id: "copy-prompt",
+        label: "Copy prompt",
+        onSelect: () => {
+          void copyToClipboard(body);
+        },
+      },
+      {
+        kind: "item",
+        id: "save-prompt",
+        label: "Save as prompt",
+        onSelect: () => void savePrompt(),
+      },
+    ];
+    return items;
+  });
+
   return (
     <div className="td">
-      <div className="td__header">
+      <div className="td__header" onContextMenu={onHeaderContextMenu}>
         <div className="td__header-prompt">
           <span className="td__header-label">Prompt</span>
-          <div className="td__prompt-text">
+          <div
+            className="td__prompt-text"
+            onContextMenu={onPromptContextMenu}
+            title={turn.user_prompt_text ? "Right-click for prompt actions" : undefined}
+          >
             {turn.user_prompt_text ? (
               <Markdown source={turn.user_prompt_text} />
             ) : (
               <span className="td__muted">(orphan turn — no user prompt)</span>
             )}
           </div>
-          {turn.user_prompt_text && (
-            <div className="td__prompt-actions">
-              <button
-                type="button"
-                className="td__action-button"
-                onClick={() => void savePrompt()}
-              >
-                save as prompt
-              </button>
-            </div>
-          )}
         </div>
         <div className="td__header-meta">
           <span>{turn.event_count} events</span>
@@ -117,13 +149,6 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
             <span>💭 {turn.thinking_count}</span>
           )}
           {turn.has_errors && <span className="td__errors">⚠ errors</span>}
-          <CopyButton
-            getText={() => formatTurn(turn)}
-            label="turn"
-            icon="⧉"
-            title="Copy this entire turn as markdown"
-            className="td__copy-turn"
-          />
         </div>
         {saveError && <div className="td__save-error">save failed: {saveError}</div>}
       </div>
@@ -241,39 +266,44 @@ function AssistantBlock({
   const hasCopyable = texts.length > 0;
   const fullBody = formatAssistantItems(items, pairById);
   const name = defaultReferenceName(formatAssistantText(items) || fullBody);
+  const openCtx = useContextMenu((store) => store.open);
+  const onContextMenu = contextMenuHandler(openCtx, () => {
+    const menu: MenuItem[] = [];
+    if (hasCopyable) {
+      menu.push({
+        kind: "item",
+        id: "copy-text",
+        label: "Copy text",
+        onSelect: () => {
+          void copyToClipboard(formatAssistantText(items));
+        },
+      });
+    }
+    if (fullBody) {
+      menu.push({
+        kind: "item",
+        id: "copy-event",
+        label: "Copy event",
+        onSelect: () => {
+          void copyToClipboard(fullBody);
+        },
+      });
+      menu.push({
+        kind: "item",
+        id: "save-reference",
+        label: "Save as reference",
+        onSelect: () => onSaveReference(fullBody, name),
+      });
+    }
+    return menu.length > 0 ? menu : null;
+  });
 
   return (
-    <div className="td__sub td__sub--assistant">
-      {(hasCopyable || fullBody) && (
-        <div className="td__assistant-actions" aria-label="Copy actions">
-          {hasCopyable && (
-            <CopyButton
-              getText={() => formatAssistantText(items)}
-              label="text"
-              icon="⧉"
-              title="Copy just the assistant text as markdown"
-            />
-          )}
-          {fullBody && (
-            <>
-              <CopyButton
-                getText={() => formatAssistantItems(items, pairById)}
-                label="event"
-                icon="⧉"
-                title="Copy text + inline tool calls as markdown"
-              />
-              <button
-                type="button"
-                className="td__action-button"
-                onClick={() => onSaveReference(fullBody, name)}
-                title="Save this assistant output as a reference"
-              >
-                save ref
-              </button>
-            </>
-          )}
-        </div>
-      )}
+    <div
+      className="td__sub td__sub--assistant"
+      onContextMenu={onContextMenu}
+      title={hasCopyable || fullBody ? "Right-click for assistant actions" : undefined}
+    >
       {texts.map((text, idx) => (
         <div key={`t-${idx}`} className="td__text">
           <Markdown source={text} />

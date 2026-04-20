@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 
 import { FileTracePanel } from "./FileTracePanel";
 import { resetTabStore, useTabStore } from "../state/TabStore";
+import { ContextMenuHost } from "./common/ContextMenu";
+import { appCommands } from "../state/AppCommands";
 
 describe("FileTracePanel", () => {
   beforeEach(() => {
@@ -54,19 +56,48 @@ describe("FileTracePanel", () => {
   });
 
   it("opens the related timeline turn with a focus target", async () => {
-    render(<FileTracePanel repo="alpha" path="src/lib.rs" />);
+    render(
+      <>
+        <FileTracePanel repo="alpha" path="src/lib.rs" />
+        <ContextMenuHost />
+      </>,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("Update lib.rs")).toBeDefined();
     });
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "open turn" }));
+    await user.click(screen.getByText("Update lib.rs"));
 
     const tabs = useTabStore.getState().tabs;
     const timelineTab = Object.values(tabs).find((tab) => tab.kind === "timeline");
     expect(timelineTab?.sessionId).toBe("11111111-1111-1111-1111-111111111111");
     expect(timelineTab?.focusTurnId).toBe(42);
     expect(typeof timelineTab?.focusKey).toBe("string");
+  });
+
+  it("opens file actions from the row context menu", async () => {
+    const openFileSpy = vi.spyOn(appCommands, "openFile");
+
+    render(
+      <>
+        <FileTracePanel repo="alpha" path="src/lib.rs" />
+        <ContextMenuHost />
+      </>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Update lib.rs")).toBeDefined();
+    });
+
+    const user = userEvent.setup();
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: screen.getByText("Update lib.rs"),
+    });
+    await user.click(screen.getByRole("menuitem", { name: /open file/i }));
+
+    expect(openFileSpy).toHaveBeenCalledWith({ repo: "alpha", path: "src/lib.rs" });
   });
 });

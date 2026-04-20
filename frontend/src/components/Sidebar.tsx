@@ -25,6 +25,7 @@ import { ApiError, stageRepoPath, uploadRepoFile } from "../api/client";
 import { appCommands, useAppCommand } from "../state/AppCommands";
 import { useSessions } from "../state/SessionStore";
 import { dirtyAncestors, stalenessFor, useRepos } from "../state/RepoStore";
+import type { TabStore } from "../state/TabStore";
 import { useTabs } from "../state/TabStore";
 import type { MenuItem } from "./common/ContextMenu";
 import {
@@ -898,6 +899,80 @@ function RecentCommit({ commit }: { commit: GitCommit }) {
 
 // ─── Session row (unchanged behaviour; reshuffled for subsection) ───
 
+function buildSessionMenuItems({
+  session,
+  openTab,
+  onRename,
+  onUpdate,
+  onDelete,
+}: {
+  session: SessionView;
+  openTab: TabStore["openTab"];
+  onRename: () => void;
+  onUpdate: (patch: {
+    label?: string | null;
+    pinned?: boolean;
+    color?: SessionColor | null;
+  }) => void | Promise<void>;
+  onDelete: () => void;
+}): MenuItem[] {
+  return [
+    {
+      kind: "item",
+      id: "open-terminal",
+      label: "Open terminal",
+      onSelect: () => openTab({ kind: "terminal", sessionId: session.id }, "top"),
+    },
+    {
+      kind: "item",
+      id: "open-timeline",
+      label: "Open timeline",
+      onSelect: () => openTab({ kind: "timeline", sessionId: session.id }, "bottom"),
+    },
+    {
+      kind: "item",
+      id: "open-repo-diff",
+      label: "Open repo diff",
+      onSelect: () => openTab({ kind: "diff", repo: session.repo }),
+    },
+    { kind: "separator" },
+    { kind: "item", id: "rename", label: "Rename", onSelect: onRename },
+    {
+      kind: "item",
+      id: "pin",
+      label: session.pinned ? "Unpin" : "Pin to top",
+      onSelect: () => void onUpdate({ pinned: !session.pinned }),
+    },
+    {
+      kind: "submenu",
+      id: "colour",
+      label: "Colour",
+      items: [
+        {
+          kind: "item",
+          id: "colour-none",
+          label: "None",
+          onSelect: () => void onUpdate({ color: null }),
+        },
+        ...SESSION_COLORS.map<MenuItem>((color) => ({
+          kind: "item",
+          id: `colour-${color}`,
+          label: color,
+          onSelect: () => void onUpdate({ color }),
+        })),
+      ],
+    },
+    { kind: "separator" },
+    {
+      kind: "item",
+      id: "delete",
+      label: "Delete session",
+      destructive: true,
+      onSelect: onDelete,
+    },
+  ];
+}
+
 function SessionRow({
   session: s,
   selected,
@@ -917,69 +992,18 @@ function SessionRow({
     color?: SessionColor | null;
   }) => void | Promise<void>;
 }) {
-  const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const openTab = useTabs((store) => store.openTab);
   const openCtx = useContextMenu((store) => store.open);
 
-  const onRowContextMenu = contextMenuHandler(openCtx, () => {
-    const items: MenuItem[] = [
-      {
-        kind: "item",
-        id: "open-terminal",
-        label: "Open terminal",
-        onSelect: () => openTab({ kind: "terminal", sessionId: s.id }, "top"),
-      },
-      {
-        kind: "item",
-        id: "open-timeline",
-        label: "Open timeline",
-        onSelect: () => openTab({ kind: "timeline", sessionId: s.id }, "bottom"),
-      },
-      {
-        kind: "item",
-        id: "open-repo-diff",
-        label: "Open repo diff",
-        onSelect: () => openTab({ kind: "diff", repo: s.repo }),
-      },
-      { kind: "separator" },
-      { kind: "item", id: "rename", label: "Rename", onSelect: () => setRenaming(true) },
-      {
-        kind: "item",
-        id: "pin",
-        label: s.pinned ? "Unpin" : "Pin to top",
-        onSelect: () => void onUpdate({ pinned: !s.pinned }),
-      },
-      {
-        kind: "submenu",
-        id: "colour",
-        label: "Colour",
-        items: [
-          {
-            kind: "item",
-            id: "colour-none",
-            label: "None",
-            onSelect: () => void onUpdate({ color: null }),
-          },
-          ...SESSION_COLORS.map<MenuItem>((c) => ({
-            kind: "item",
-            id: `colour-${c}`,
-            label: c,
-            onSelect: () => void onUpdate({ color: c }),
-          })),
-        ],
-      },
-      { kind: "separator" },
-      {
-        kind: "item",
-        id: "delete",
-        label: "Delete session",
-        destructive: true,
-        onSelect: onDelete,
-      },
-    ];
-    return items;
+  const menuItems = buildSessionMenuItems({
+    session: s,
+    openTab,
+    onRename: () => setRenaming(true),
+    onUpdate,
+    onDelete,
   });
+  const onRowContextMenu = contextMenuHandler(openCtx, () => menuItems);
 
   const sessionLabel = (() => {
     if (s.state === "dead") return "ended";
@@ -1038,6 +1062,7 @@ function SessionRow({
           }
           onClick={onSelect}
           onDoubleClick={() => setRenaming(true)}
+          title="Right-click for session actions"
         >
           <span className={`sidebar__dot sidebar__dot--${s.state}`} />
           <span className="sidebar__session-main">
@@ -1066,47 +1091,6 @@ function SessionRow({
             />
           )}
         </button>
-      )}
-      {!renaming && (
-        <div className="sidebar__row-actions">
-          <button
-            type="button"
-            className="sidebar__menu-button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setMenuOpen((v) => !v);
-            }}
-            title="Session options"
-            aria-label="Session options"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-          >
-            ⋯
-          </button>
-          {menuOpen && (
-            <SessionMenu
-              session={s}
-              onClose={() => setMenuOpen(false)}
-              onRename={() => {
-                setRenaming(true);
-                setMenuOpen(false);
-              }}
-              onUpdate={onUpdate}
-            />
-          )}
-          <button
-            type="button"
-            className="sidebar__delete"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
-            title="Delete session"
-            aria-label="Delete session"
-          >
-            ×
-          </button>
-        </div>
       )}
     </div>
   );
@@ -1148,126 +1132,6 @@ function RenameInput({
         onBlur={() => onSubmit(value)}
       />
     </form>
-  );
-}
-
-function SessionMenu({
-  session: s,
-  onClose,
-  onRename,
-  onUpdate,
-}: {
-  session: SessionView;
-  onClose: () => void;
-  onRename: () => void;
-  onUpdate: (patch: {
-    label?: string | null;
-    pinned?: boolean;
-    color?: SessionColor | null;
-  }) => void | Promise<void>;
-}) {
-  const menuRef = useRef<HTMLDivElement | null>(null);
-  const openTab = useTabs((store) => store.openTab);
-
-  useEffect(() => {
-    const handleDown = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        onClose();
-      }
-    };
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("mousedown", handleDown);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handleDown);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [onClose]);
-
-  return (
-    <div className="sidebar__menu" role="menu" ref={menuRef}>
-      <button
-        type="button"
-        role="menuitem"
-        className="sidebar__menu-item"
-        onClick={() => {
-          openTab({ kind: "terminal", sessionId: s.id }, "top");
-          onClose();
-        }}
-      >
-        Open terminal
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="sidebar__menu-item"
-        onClick={() => {
-          openTab({ kind: "timeline", sessionId: s.id }, "bottom");
-          onClose();
-        }}
-      >
-        Open timeline
-      </button>
-      <div className="sidebar__menu-divider" />
-      <button
-        type="button"
-        role="menuitem"
-        className="sidebar__menu-item"
-        onClick={onRename}
-      >
-        Rename
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="sidebar__menu-item"
-        onClick={() => {
-          void onUpdate({ pinned: !s.pinned });
-          onClose();
-        }}
-      >
-        {s.pinned ? "Unpin" : "Pin to top"}
-      </button>
-      <div className="sidebar__menu-divider" />
-      <div className="sidebar__menu-section">Colour</div>
-      <div className="sidebar__colors" role="group" aria-label="Session colour">
-        <button
-          type="button"
-          className={
-            s.color == null
-              ? "sidebar__swatch sidebar__swatch--none sidebar__swatch--selected"
-              : "sidebar__swatch sidebar__swatch--none"
-          }
-          aria-label="No colour"
-          title="No colour"
-          onClick={() => {
-            void onUpdate({ color: null });
-            onClose();
-          }}
-        >
-          ∅
-        </button>
-        {SESSION_COLORS.map((c) => (
-          <button
-            key={c}
-            type="button"
-            className={
-              s.color === c
-                ? `sidebar__swatch sidebar__swatch--${c} sidebar__swatch--selected`
-                : `sidebar__swatch sidebar__swatch--${c}`
-            }
-            aria-label={`Colour ${c}`}
-            title={c}
-            onClick={() => {
-              void onUpdate({ color: c });
-              onClose();
-            }}
-          />
-        ))}
-      </div>
-    </div>
   );
 }
 

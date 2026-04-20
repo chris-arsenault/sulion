@@ -249,10 +249,3 @@
   min-width: 32px;
   min-height: 32px;
 }
-.layout__drawer .sidebar__menu-button,
-.layout__drawer .sidebar__delete {
-  padding: 8px 10px;
-  font-size: 16px;
-  /* Drawer has no hover state — keep actions always visible. */
-  opacity: 1;
-}

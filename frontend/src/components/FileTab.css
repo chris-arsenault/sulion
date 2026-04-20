@@ -181,27 +181,21 @@
 }
 
 .ft__trace-item {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 8px;
-  align-items: start;
-}
-
-.ft__trace-open {
-  background: #14161b;
-  color: #d1d5db;
-  border: 1px solid #2a2f39;
-  border-radius: 4px;
-  padding: 4px 8px;
-  font: inherit;
-  font-size: 11px;
+  display: block;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #1f232b;
+  background: #11141a;
   cursor: pointer;
-  text-transform: lowercase;
 }
 
-.ft__trace-open:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.ft__trace-item:hover {
+  background: #151922;
+  border-color: #2a3340;
+}
+
+.ft__trace-item--disabled {
+  cursor: context-menu;
 }
 
 .ft__trace-body {

@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { ToolCallRenderer } from "./renderers";
 import { appCommands } from "../../../state/AppCommands";
 import { resetRepoStore, useRepoStore } from "../../../state/RepoStore";
+import { ContextMenuHost } from "../../common/ContextMenu";
 
 describe("ToolCallRenderer", () => {
   beforeEach(() => {
@@ -155,29 +156,44 @@ describe("ToolCallRenderer", () => {
     const diffSpy = vi.spyOn(appCommands, "openDiff");
 
     render(
-      <ToolCallRenderer
-        tool={{
-          name: "read",
-          input: { path: "src/lib.rs" },
-          fileTouches: [
-            {
-              repo: "alpha",
-              path: "src/lib.rs",
-              touch_kind: "inspect",
-              is_write: false,
-            },
-          ],
-        }}
-      />,
+      <>
+        <ToolCallRenderer
+          tool={{
+            name: "read",
+            input: { path: "src/lib.rs" },
+            fileTouches: [
+              {
+                repo: "alpha",
+                path: "src/lib.rs",
+                touch_kind: "inspect",
+                is_write: false,
+              },
+            ],
+          }}
+        />
+        <ContextMenuHost />
+      </>,
     );
 
     expect(screen.getByText("alpha:src/lib.rs")).toBeDefined();
     expect(screen.getByText("+12 -3")).toBeDefined();
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "reveal" }));
-    await user.click(screen.getByRole("button", { name: "open" }));
-    await user.click(screen.getByRole("button", { name: /m diff/i }));
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: screen.getByText("alpha:src/lib.rs"),
+    });
+    await user.click(screen.getByRole("menuitem", { name: /reveal in file tree/i }));
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: screen.getByText("alpha:src/lib.rs"),
+    });
+    await user.click(screen.getByRole("menuitem", { name: /open file/i }));
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: screen.getByText("alpha:src/lib.rs"),
+    });
+    await user.click(screen.getByRole("menuitem", { name: /open diff/i }));
 
     expect(revealSpy).toHaveBeenCalledWith({ repo: "alpha", path: "src/lib.rs" });
     expect(openSpy).toHaveBeenCalledWith({ repo: "alpha", path: "src/lib.rs" });
