@@ -3,6 +3,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { SessionEndedPane } from "./SessionEndedPane";
+import { resetSessionStore, useSessionStore } from "../state/SessionStore";
+import { resetTabStore, useTabStore } from "../state/TabStore";
 
 const orphanedSession = {
   id: "11111111-1111-1111-1111-111111111111",
@@ -79,9 +81,13 @@ describe("SessionEndedPane", () => {
   let state: FetchState;
   beforeEach(() => {
     state = { createSessionCalls: [], deletedIds: [] };
+    resetSessionStore();
+    resetTabStore();
     installFetchMock(state);
   });
   afterEach(() => {
+    resetSessionStore();
+    resetTabStore();
     vi.unstubAllGlobals();
   });
 
@@ -104,13 +110,23 @@ describe("SessionEndedPane", () => {
     expect(screen.getByText(/exit/i)).toBeDefined();
   });
 
-  it("shows Resume for orphaned Claude sessions and posts generic resume fields", async () => {
+  it("resumes an orphaned session by rebinding tabs and deleting the old row", async () => {
+    useTabStore.getState().openTab(
+      { kind: "terminal", sessionId: orphanedSession.id },
+      "top",
+    );
+    useTabStore.getState().openTab(
+      { kind: "timeline", sessionId: orphanedSession.id },
+      "bottom",
+    );
+    useSessionStore.getState().selectSession(orphanedSession.id);
     setup(orphanedSession);
     const user = userEvent.setup();
     const resumeBtn = screen.getByRole("button", { name: /resume/i });
     await user.click(resumeBtn);
     await waitFor(() => {
       expect(state.createSessionCalls.length).toBe(1);
+      expect(state.deletedIds).toEqual([orphanedSession.id]);
     });
     expect(state.createSessionCalls[0]).toMatchObject({
       repo: "ahara",
@@ -118,6 +134,16 @@ describe("SessionEndedPane", () => {
       resume_session_uuid: "deadbeef-dead-beef-dead-beefdeadbeef",
       resume_agent: "claude-code",
     });
+    expect(useSessionStore.getState().selectedSessionId).toBe(
+      "99999999-9999-9999-9999-999999999999",
+    );
+    const tabs = Object.values(useTabStore.getState().tabs);
+    expect(
+      tabs.find((tab) => tab.kind === "terminal")?.sessionId,
+    ).toBe("99999999-9999-9999-9999-999999999999");
+    expect(
+      tabs.find((tab) => tab.kind === "timeline")?.sessionId,
+    ).toBe("99999999-9999-9999-9999-999999999999");
   });
 
   it("does not show Resume on dead sessions with no correlated session", () => {

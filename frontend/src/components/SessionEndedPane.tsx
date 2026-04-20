@@ -6,6 +6,7 @@ import { useCallback, useState } from "react";
 
 import type { SessionView } from "../api/types";
 import { useSessions } from "../state/SessionStore";
+import { useTabs } from "../state/TabStore";
 import { Icon } from "../icons";
 import { Tooltip } from "./ui";
 import "./SessionEndedPane.css";
@@ -18,6 +19,8 @@ export function SessionEndedPane({ session }: Props) {
   const createSession = useSessions((store) => store.createSession);
   const deleteSession = useSessions((store) => store.deleteSession);
   const selectSession = useSessions((store) => store.selectSession);
+  const openTab = useTabs((store) => store.openTab);
+  const rebindSessionTabs = useTabs((store) => store.rebindSessionTabs);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const resumeAgent = session.current_session_agent;
@@ -32,13 +35,17 @@ export function SessionEndedPane({ session }: Props) {
     setBusy(true);
     setError(null);
     try {
-      await createSession({
+      const created = await createSession({
         repo: session.repo,
         working_dir: session.working_dir,
         resume_session_uuid: session.current_session_uuid,
         resume_agent: resumeAgent ?? "claude-code",
       });
-      // createSession already selects the new session via the store.
+      rebindSessionTabs(session.id, created.id);
+      openTab({ kind: "terminal", sessionId: created.id }, "top");
+      openTab({ kind: "timeline", sessionId: created.id }, "bottom");
+      selectSession(created.id);
+      await deleteSession(session.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "resume failed");
     } finally {
@@ -47,9 +54,14 @@ export function SessionEndedPane({ session }: Props) {
   }, [
     createSession,
     session.current_session_uuid,
+    session.id,
     session.repo,
     session.working_dir,
     resumeAgent,
+    openTab,
+    rebindSessionTabs,
+    selectSession,
+    deleteSession,
   ]);
 
   const onDelete = useCallback(async () => {

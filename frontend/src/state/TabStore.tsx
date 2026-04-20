@@ -39,6 +39,7 @@ export interface TabStore {
   closeTab: (id: string) => void;
   activateTab: (pane: PaneId, id: string) => void;
   moveTab: (id: string, toPane: PaneId, index?: number) => void;
+  rebindSessionTabs: (fromSessionId: string, toSessionId: string) => void;
 }
 
 interface PersistedTabs {
@@ -112,38 +113,12 @@ export const useTabStore = create<TabStore>()(
 
       closeTab: (id) => {
         const { panes, activeByPane, tabs } = get();
-        const nextPanes: Record<PaneId, string[]> = {
-          top: panes.top.filter((tabId) => tabId !== id),
-          bottom: panes.bottom.filter((tabId) => tabId !== id),
-        };
-        const nextActive: Record<PaneId, string | null> = { ...activeByPane };
-
-        for (const pane of ["top", "bottom"] as PaneId[]) {
-          const oldList = panes[pane];
-          const newList = nextPanes[pane];
-          if (nextActive[pane] === id) {
-            if (newList.length === 0) {
-              nextActive[pane] = null;
-            } else {
-              const oldIdx = oldList.indexOf(id);
-              nextActive[pane] =
-                oldIdx > 0 && newList[oldIdx - 1]
-                  ? newList[oldIdx - 1]!
-                  : newList[newList.length - 1]!;
-            }
-          } else if (nextActive[pane] != null && !newList.includes(nextActive[pane]!)) {
-            nextActive[pane] = newList[newList.length - 1] ?? null;
-          }
-        }
-
-        const nextTabs = { ...tabs };
-        delete nextTabs[id];
         set(
-          withDerived({
-            tabs: nextTabs,
-            panes: nextPanes,
-            activeByPane: nextActive,
-          }),
+          withDerived(removeTabFromState({
+            tabs,
+            panes,
+            activeByPane,
+          }, id)),
         );
       },
 
@@ -180,6 +155,39 @@ export const useTabStore = create<TabStore>()(
             activeByPane: { ...activeByPane, [toPane]: id },
           }),
         );
+      },
+
+      rebindSessionTabs: (fromSessionId, toSessionId) => {
+        if (fromSessionId === toSessionId) return;
+        const { tabs, panes, activeByPane } = get();
+        let nextState: PersistedTabs = {
+          tabs: { ...tabs },
+          panes: { top: [...panes.top], bottom: [...panes.bottom] },
+          activeByPane: { ...activeByPane },
+        };
+        let changed = false;
+
+        for (const id of Object.keys(nextState.tabs)) {
+          const tab = nextState.tabs[id];
+          if (!tab || tab.sessionId !== fromSessionId) continue;
+
+          const rebound: TabData = { ...tab, sessionId: toSessionId };
+          const duplicateId = Object.keys(nextState.tabs).find(
+            (candidateId) =>
+              candidateId !== id &&
+              tabKey(nextState.tabs[candidateId]!) === tabKey(rebound),
+          );
+
+          if (duplicateId) {
+            nextState = removeTabFromState(nextState, id);
+          } else {
+            nextState.tabs[id] = rebound;
+          }
+          changed = true;
+        }
+
+        if (!changed) return;
+        set(withDerived(nextState));
       },
     }),
     {
@@ -256,6 +264,40 @@ export function resetTabStore() {
     }
   }
   useTabStore.setState(initialState());
+}
+
+function removeTabFromState(state: PersistedTabs, id: string): PersistedTabs {
+  const nextPanes: Record<PaneId, string[]> = {
+    top: state.panes.top.filter((tabId) => tabId !== id),
+    bottom: state.panes.bottom.filter((tabId) => tabId !== id),
+  };
+  const nextActive: Record<PaneId, string | null> = { ...state.activeByPane };
+
+  for (const pane of ["top", "bottom"] as PaneId[]) {
+    const oldList = state.panes[pane];
+    const newList = nextPanes[pane];
+    if (nextActive[pane] === id) {
+      if (newList.length === 0) {
+        nextActive[pane] = null;
+      } else {
+        const oldIdx = oldList.indexOf(id);
+        nextActive[pane] =
+          oldIdx > 0 && newList[oldIdx - 1]
+            ? newList[oldIdx - 1]!
+            : newList[newList.length - 1]!;
+      }
+    } else if (nextActive[pane] != null && !newList.includes(nextActive[pane]!)) {
+      nextActive[pane] = newList[newList.length - 1] ?? null;
+    }
+  }
+
+  const nextTabs = { ...state.tabs };
+  delete nextTabs[id];
+  return {
+    tabs: nextTabs,
+    panes: nextPanes,
+    activeByPane: nextActive,
+  };
 }
 
 /** Canonical key that de-duplicates a tab spec. */
