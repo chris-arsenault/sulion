@@ -24,30 +24,27 @@ impl Config {
             std::env::var("SULION_REPOS_ROOT")
                 .unwrap_or_else(|_| dirs_home().join("repos").to_string_lossy().into_owned()),
         );
-        let library_root = PathBuf::from(
-            std::env::var("SULION_LIBRARY_ROOT").unwrap_or_else(|_| {
+        let library_root =
+            PathBuf::from(std::env::var("SULION_LIBRARY_ROOT").unwrap_or_else(|_| {
                 dirs_home()
                     .join(".sulion/library")
                     .to_string_lossy()
                     .into_owned()
-            }),
-        );
-        let claude_projects_dir = PathBuf::from(
-            std::env::var("SULION_CLAUDE_PROJECTS").unwrap_or_else(|_| {
+            }));
+        let claude_projects_dir =
+            PathBuf::from(std::env::var("SULION_CLAUDE_PROJECTS").unwrap_or_else(|_| {
                 dirs_home()
                     .join(".claude/projects")
                     .to_string_lossy()
                     .into_owned()
-            }),
-        );
-        let codex_sessions_dir = PathBuf::from(
-            std::env::var("SULION_CODEX_SESSIONS").unwrap_or_else(|_| {
+            }));
+        let codex_sessions_dir =
+            PathBuf::from(std::env::var("SULION_CODEX_SESSIONS").unwrap_or_else(|_| {
                 dirs_home()
                     .join(".codex/sessions")
                     .to_string_lossy()
                     .into_owned()
-            }),
-        );
+            }));
         let correlate_sock_path = PathBuf::from(
             std::env::var("SULION_CORRELATE_SOCK")
                 .unwrap_or_else(|_| "/run/sulion/correlate.sock".to_string()),

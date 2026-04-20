@@ -211,10 +211,7 @@ async fn pty_id_env_is_propagated_to_shell() {
     // we'll read the file to verify the env var was propagated. Using a
     // file avoids racing the broadcast-channel subscriber against the
     // shell's exit.
-    let tmp = std::env::temp_dir().join(format!(
-        "sulion-envcheck-{}.txt",
-        uuid::Uuid::new_v4()
-    ));
+    let tmp = std::env::temp_dir().join(format!("sulion-envcheck-{}.txt", uuid::Uuid::new_v4()));
     let tmp_str = tmp.to_string_lossy().into_owned();
     let cmd = format!("printf '%s' \"$SULION_PTY_ID\" > {tmp_str}; exit 0");
 
