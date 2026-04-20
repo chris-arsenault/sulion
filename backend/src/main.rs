@@ -8,6 +8,15 @@ async fn main() -> anyhow::Result<()> {
     if argv
         .get(1)
         .and_then(|s| s.to_str())
+        .is_some_and(|s| s == "agent-launcher")
+    {
+        let cfg = sulion::agent::parse_launcher_args(&argv[2..])?;
+        let code = sulion::agent::run_launcher(cfg).await?;
+        std::process::exit(code);
+    }
+    if argv
+        .get(1)
+        .and_then(|s| s.to_str())
         .is_some_and(|s| s == "codex-launcher")
     {
         let cfg = sulion::codex::parse_launcher_args(&argv[2..])?;

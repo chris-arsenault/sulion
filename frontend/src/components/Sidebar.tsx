@@ -454,7 +454,7 @@ function RepoGroup({
   const staleness = stalenessFor(git, latestEventAt);
 
   return (
-    <li className="sidebar__group" ref={anchorRef}>
+    <li className="sidebar__group" ref={anchorRef} data-repo-name={group.name}>
       <div className="sidebar__group-header">
         <button
           type="button"
@@ -601,6 +601,7 @@ function RepoBadge({
     <Tooltip label={tooltip}>
       <span
         className={`sidebar__repo-badge sidebar__repo-badge--${staleness}`}
+        data-staleness={staleness}
       >
         <span className="sidebar__repo-branch">
           <Icon name="git-branch" size={12} />
@@ -942,6 +943,9 @@ function TreeRow({
             (entry.dirty ? " sidebar__tree-row--dirty" : "") +
             (isRevealTarget ? " sidebar__tree-row--revealed" : "")
           }
+          data-repo={repoName}
+          data-path={fullPath}
+          data-kind={entry.kind}
           // eslint-disable-next-line local/no-inline-styles -- depth is per-row; can't be expressed as a finite class set
           style={rowStyle}
           onClick={onClickRow}
@@ -1271,6 +1275,9 @@ function SessionRow({
                 ? "sidebar__session sidebar__session--active"
                 : "sidebar__session"
             }
+            data-session-id={s.id}
+            data-session-name={displayName}
+            data-session-repo={s.repo}
             onClick={selectThis}
             onDoubleClick={startRenaming}
             onContextMenu={onRowContextMenu}

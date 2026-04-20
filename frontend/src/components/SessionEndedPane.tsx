@@ -85,9 +85,9 @@ export function SessionEndedPane({ session }: Props) {
 
   const resumeTitle = (() => {
     if (resumeAgent === "codex") {
-      return "Spawn a new PTY and run `codex resume` against this Codex session";
+      return "Spawn a new PTY and run `sulion-agent --type codex --mode real -- resume` against this Codex session";
     }
-    return "Spawn a new PTY and run `claude --resume` against this Claude session";
+    return "Spawn a new PTY and run `sulion-agent --type claude --mode real -- --dangerously-skip-permissions --resume` against this Claude session";
   })();
 
   const sigil =

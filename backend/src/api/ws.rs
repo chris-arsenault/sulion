@@ -49,10 +49,15 @@ pub async fn attach(
     let Some(session) = state.pty.get(id).await else {
         return (axum::http::StatusCode::NOT_FOUND, "no such session").into_response();
     };
-    ws.on_upgrade(move |socket| handle_socket(socket, session))
+    let ws_test_hooks = state.ws_test_hooks.clone();
+    ws.on_upgrade(move |socket| handle_socket(socket, session, ws_test_hooks))
 }
 
-async fn handle_socket(socket: WebSocket, session: Arc<PtySession>) {
+async fn handle_socket(
+    socket: WebSocket,
+    session: Arc<PtySession>,
+    ws_test_hooks: Arc<crate::WsTestHooks>,
+) {
     let (mut tx, mut rx) = socket.split();
 
     // Snapshot first — gives the client the current TUI state.
@@ -69,28 +74,37 @@ async fn handle_socket(socket: WebSocket, session: Arc<PtySession>) {
     let mut out_rx = session.output.subscribe();
     let input = session.input.clone();
     let resize = session.resize.clone();
+    let mut drop_ws_rx = ws_test_hooks.subscribe(session.id).await;
 
     // Outbound task: broadcast → WS
     let outbound_session_id = session.id;
     let outbound = tokio::spawn(async move {
         loop {
-            match out_rx.recv().await {
-                Ok(bytes) => {
-                    if tx.send(Message::Binary(bytes)).await.is_err() {
-                        break;
+            tokio::select! {
+                msg = out_rx.recv() => {
+                    match msg {
+                        Ok(bytes) => {
+                            if tx.send(Message::Binary(bytes)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(RecvError::Lagged(n)) => {
+                            tracing::warn!(session = %outbound_session_id, lagged = n, "broadcast lagged");
+                            continue;
+                        }
+                        Err(RecvError::Closed) => {
+                            // PTY EOF — tell the client and close cleanly.
+                            let _ = tx
+                                .send(Message::Text(
+                                    serde_json::to_string(&ServerMsg::Dead { exit: None }).unwrap(),
+                                ))
+                                .await;
+                            let _ = tx.send(Message::Close(None)).await;
+                            break;
+                        }
                     }
                 }
-                Err(RecvError::Lagged(n)) => {
-                    tracing::warn!(session = %outbound_session_id, lagged = n, "broadcast lagged");
-                    continue;
-                }
-                Err(RecvError::Closed) => {
-                    // PTY EOF — tell the client and close cleanly.
-                    let _ = tx
-                        .send(Message::Text(
-                            serde_json::to_string(&ServerMsg::Dead { exit: None }).unwrap(),
-                        ))
-                        .await;
+                _ = drop_ws_rx.recv() => {
                     let _ = tx.send(Message::Close(None)).await;
                     break;
                 }

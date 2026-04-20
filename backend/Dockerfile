@@ -63,8 +63,8 @@ RUN npm install -g @anthropic-ai/claude-code @openai/codex
 RUN { \
       echo ''; \
       echo '# sulion: agent shortcuts'; \
-      echo 'alias cl="claude --dangerously-skip-permissions"'; \
-      echo 'alias co="codex --yolo"'; \
+      echo 'alias cl="sulion-agent --type claude --mode real -- --dangerously-skip-permissions"'; \
+      echo 'alias co="sulion-agent --type codex --mode real -- --yolo"'; \
     } >> /etc/bash.bashrc
 
 # 7321 is a deliberately unusual UID/GID to avoid colliding with the
@@ -74,14 +74,16 @@ ARG DEV_UID=7321
 ARG DEV_GID=7321
 RUN groupadd --gid ${DEV_GID} dev \
   && useradd --uid ${DEV_UID} --gid ${DEV_GID} --shell /bin/bash --home-dir /home/dev dev \
+  && mkdir -p /home/dev \
   && mkdir -p /run/sulion /opt/sulion/hooks /opt/sulion/bin \
-  && chown -R dev:dev /run/sulion
+  && chown -R dev:dev /home/dev /run/sulion
 
 COPY dist/sulion /usr/local/bin/sulion
-COPY bin/codex /opt/sulion/bin/codex
+COPY dist/e2e_seed /usr/local/bin/e2e_seed
+COPY bin/sulion-agent /opt/sulion/bin/sulion-agent
 COPY hooks/session-start.sh /opt/sulion/hooks/session-start.sh
 COPY entrypoint.sh /opt/sulion/entrypoint.sh
-RUN chmod +x /opt/sulion/bin/codex /opt/sulion/hooks/session-start.sh /opt/sulion/entrypoint.sh
+RUN chmod +x /usr/local/bin/sulion /usr/local/bin/e2e_seed /opt/sulion/bin/sulion-agent /opt/sulion/hooks/session-start.sh /opt/sulion/entrypoint.sh
 
 USER dev
 WORKDIR /home/dev

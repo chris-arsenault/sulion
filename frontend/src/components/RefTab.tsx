@@ -106,7 +106,7 @@ export function RefTab({ slug }: { slug: string }) {
   ]);
 
   return (
-    <div className="lib-tab">
+    <div className="lib-tab" data-testid="ref-tab">
       <Tooltip label="Right-click for reference actions">
         <div
           className="lib-tab__header"

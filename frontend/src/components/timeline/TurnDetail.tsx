@@ -494,6 +494,7 @@ function ToolPairRow({
         pair.is_pending ? "td__tool--pending" : ""
       }`}
       data-testid="tool-pair-row"
+      data-tool-type={toolType(pair)}
     >
       <div className="td__tool-header">
         <button

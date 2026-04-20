@@ -41,13 +41,13 @@ vt100 = "0.15"
 walkdir = "2"
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 async-stream = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 tokio-tungstenite = "0.24"
 http = "1"
 tempfile = "3"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 syn = { version = "2", features = ["full", "visit"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 

@@ -13,13 +13,15 @@ import { Tooltip } from "./ui";
 import type { FileDiff, DiffLine } from "../workers/diffParser.worker";
 import "./DiffTab.css";
 
+const EMPTY_DIRTY_MAP: Record<string, string> = {};
+
 export function DiffTab({ repo, path }: { repo: string; path?: string }) {
   const [fileDiffs, setFileDiffs] = useState<FileDiff[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const { dirtyMap, refreshRepo } = useRepos(
     useShallow((store) => ({
-      dirtyMap: store.repos[repo]?.git?.dirty_by_path ?? {},
+      dirtyMap: store.repos[repo]?.git?.dirty_by_path ?? EMPTY_DIRTY_MAP,
       refreshRepo: store.refresh,
     })),
   );
@@ -66,7 +68,7 @@ export function DiffTab({ repo, path }: { repo: string; path?: string }) {
   );
 
   return (
-    <div className="dt">
+    <div className="dt" data-testid="diff-tab">
       <div className="dt__header">
         <span className="dt__title">
           {path ? `diff · ${path}` : `${repo} · full diff`}

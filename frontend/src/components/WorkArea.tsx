@@ -498,6 +498,11 @@ function TabHandle({
         aria-selected={active}
         tabIndex={active ? 0 : -1}
         className={active ? "wa__tab-handle wa__tab-handle--active" : "wa__tab-handle"}
+        data-kind={tab.kind}
+        data-session-id={tab.sessionId}
+        data-repo={tab.repo}
+        data-path={tab.path}
+        data-slug={tab.slug}
         draggable
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}

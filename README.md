@@ -6,6 +6,7 @@ Session broker for Claude Code terminal sessions. Persistent PTYs with structure
 
 - Architectural design: [`session-broker-design.md`](session-broker-design.md)
 - Invariants and contributor guide: [`CLAUDE.md`](CLAUDE.md)
+- E2E coverage plan: [`docs/e2e-coverage-plan.md`](docs/e2e-coverage-plan.md)
 
 ## Status
 
@@ -17,6 +18,7 @@ Requires Rust (for the backend), pnpm + Node 24 (for the frontend), and either D
 
 ```bash
 make ci              # full lint + unit tests + backend integration tests
+make e2e             # Playwright suite against real backend + Postgres + seeded ingest data
 make test-rust-integration   # ignored backend integration suite; auto-starts Postgres via Docker if needed
 
 # Backend

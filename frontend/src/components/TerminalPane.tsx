@@ -20,7 +20,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { connectPty, type ConnectionState } from "../api/ws";
 import { uploadRepoFile } from "../api/client";
@@ -46,6 +46,8 @@ const PASTE_AS_FILE_LINES = 200;
 export function TerminalPane({ sessionId }: { sessionId: string }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  const mirrorRef = useRef<HTMLPreElement>(null);
+  const decoderRef = useRef<TextDecoder>(new TextDecoder());
   const [connState, setConnState] = useState<ConnectionState>("connecting");
   const [exitStatus, setExitStatus] = useState<ExitStatus>({ kind: "alive" });
   const [focused, setFocused] = useState(false);
@@ -53,6 +55,17 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
   const repoName = sessions.find((s) => s.id === sessionId)?.repo ?? null;
   const repoRef = useRef<string | null>(repoName);
   repoRef.current = repoName;
+  const exposeTerminalMirror = import.meta.env.VITE_SULION_E2E === "1";
+
+  const appendToMirror = useCallback((text: Uint8Array | string) => {
+    if (!exposeTerminalMirror || !mirrorRef.current) return;
+    const decoded =
+      typeof text === "string" ? text : decoderRef.current.decode(text, { stream: true });
+    if (decoded.length === 0) return;
+    const sanitized = decoded.replace(/\r/g, "");
+    const current = mirrorRef.current.textContent ?? "";
+    mirrorRef.current.textContent = `${current}${sanitized}`.slice(-4000);
+  }, [exposeTerminalMirror]);
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -131,7 +144,10 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
     });
 
     const conn = connectPty(sessionId, {
-      onBytes: (chunk) => term.write(chunk),
+      onBytes: (chunk) => {
+        term.write(chunk);
+        appendToMirror(chunk);
+      },
       onServerMsg: (msg) => {
         if (msg.t === "dead") setExitStatus({ kind: "dead", code: msg.exit ?? null });
       },
@@ -283,11 +299,13 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
       term.dispose();
       termRef.current = null;
     };
-  }, [sessionId]);
+  }, [appendToMirror, sessionId]);
 
   useAppCommand("inject-terminal", ({ sessionId: targetSessionId, text }) => {
     if (targetSessionId !== sessionId) return;
-    termRef.current?.paste(sanitizePaste(text));
+    const sanitized = sanitizePaste(text);
+    termRef.current?.paste(sanitized);
+    appendToMirror(sanitized);
   });
 
   return (
@@ -298,6 +316,14 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
       data-testid="terminal-pane"
     >
       <div ref={hostRef} className="terminal-pane__host" />
+      {exposeTerminalMirror && (
+        <pre
+          ref={mirrorRef}
+          className="terminal-pane__mirror"
+          data-testid="terminal-mirror"
+          aria-hidden
+        />
+      )}
       {connState !== "open" && (
         <div className="terminal-pane__status">
           {connState === "connecting" && "connecting…"}

@@ -70,7 +70,7 @@ export function StatsStrip() {
   const cpuDisplay = `${s.process.cpu_percent.toFixed(0)}%`;
 
   return (
-    <div className="stats-strip">
+    <div className="stats-strip" data-testid="stats-strip">
       <Tooltip label={`uptime ${formatUptime(s.uptime_seconds)}`}>
         <button
           type="button"

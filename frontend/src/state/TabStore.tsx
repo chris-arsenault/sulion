@@ -191,9 +191,17 @@ export const useTabStore = create<TabStore>()(
         activeByPane: state.activeByPane,
       }),
       merge: (persisted, current) => {
-        const parsed = (persisted ?? {}) as Partial<PersistedTabs>;
+        const envelope = (persisted ?? {}) as Partial<PersistedTabs> & {
+          state?: Partial<PersistedTabs>;
+        };
+        const parsed =
+          envelope && typeof envelope === "object" && "state" in envelope
+            ? (envelope.state ?? {})
+            : (envelope as Partial<PersistedTabs>);
         const hydratedTabs: Record<string, TabData> = {};
-        for (const [id, tab] of Object.entries(parsed.tabs ?? {})) {
+        for (const [id, tab] of Object.entries(parsed.tabs ?? {}) as Array<
+          [string, Partial<TabData>]
+        >) {
           if (!tab || typeof tab !== "object") continue;
           hydratedTabs[id] = {
             id: tab.id ?? id,

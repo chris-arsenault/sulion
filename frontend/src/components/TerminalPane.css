@@ -20,6 +20,10 @@
   box-sizing: border-box;
 }
 
+.terminal-pane__mirror {
+  display: none;
+}
+
 /* Match xterm's background to the token canvas — eliminates the hair
  * stripe at the left/right of the canvas at narrow widths. */
 .terminal-pane .xterm,

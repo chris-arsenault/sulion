@@ -1,4 +1,4 @@
-.PHONY: ci lint-rust fmt-rust test-rust test-rust-integration lint-ts typecheck-ts test-ts
+.PHONY: ci lint-rust fmt-rust test-rust test-rust-integration lint-ts typecheck-ts test-ts e2e e2e-install
 
 ci: lint-rust fmt-rust test-rust test-rust-integration lint-ts typecheck-ts test-ts
 
@@ -23,3 +23,9 @@ typecheck-ts:
 
 test-ts:
 	cd frontend && pnpm exec vitest run
+
+e2e:
+	cd frontend && pnpm exec playwright test
+
+e2e-install:
+	cd frontend && pnpm exec playwright install chromium

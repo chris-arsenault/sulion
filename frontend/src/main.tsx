@@ -7,7 +7,11 @@ const rootEl = document.getElementById("root");
 if (!rootEl) throw new Error("root element missing");
 
 createRoot(rootEl).render(
-  <StrictMode>
+  import.meta.env.VITE_SULION_E2E === "1" ? (
     <App />
-  </StrictMode>,
+  ) : (
+    <StrictMode>
+      <App />
+    </StrictMode>
+  ),
 );

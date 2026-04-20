@@ -80,7 +80,7 @@ export function FileTab({ repo, path }: { repo: string; path: string }) {
   const renderKind = chooseRenderKind(data, raw);
 
   return (
-    <div className="ft">
+    <div className="ft" data-testid="file-tab">
       <div className="ft__header">
         <span className="ft__path">{path}</span>
         <span className="ft__meta">

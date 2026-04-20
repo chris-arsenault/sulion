@@ -2,18 +2,45 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::Router;
+use tokio::sync::{broadcast, RwLock};
+use uuid::Uuid;
 
+pub mod agent;
 pub mod api;
 pub mod codex;
 pub mod config;
 pub mod correlate;
 pub mod db;
+pub mod e2e;
 pub mod emulator;
 pub mod git;
 pub mod ingest;
 pub mod library;
 pub mod pty;
 pub mod workspace;
+
+#[derive(Default)]
+pub struct WsTestHooks {
+    sessions: RwLock<std::collections::HashMap<Uuid, broadcast::Sender<()>>>,
+}
+
+impl WsTestHooks {
+    pub async fn subscribe(&self, session_id: Uuid) -> broadcast::Receiver<()> {
+        let mut sessions = self.sessions.write().await;
+        sessions
+            .entry(session_id)
+            .or_insert_with(|| broadcast::channel(8).0)
+            .subscribe()
+    }
+
+    pub async fn drop_live_ws(&self, session_id: Uuid) -> bool {
+        let sessions = self.sessions.read().await;
+        let Some(tx) = sessions.get(&session_id) else {
+            return false;
+        };
+        tx.send(()).is_ok()
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -28,6 +55,8 @@ pub struct AppState {
     pub start_time: Instant,
     /// sysinfo probe; holds its own `System` so CPU% diffs work across calls.
     pub stats_probe: Arc<api::StatsProbe>,
+    /// E2E-only hook that can ask active websocket attachers to close.
+    pub ws_test_hooks: Arc<WsTestHooks>,
 }
 
 impl AppState {
@@ -46,6 +75,7 @@ impl AppState {
             ingester,
             start_time: Instant::now(),
             stats_probe: Arc::new(api::StatsProbe::new()),
+            ws_test_hooks: Arc::new(WsTestHooks::default()),
         })
     }
 }

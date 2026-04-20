@@ -97,7 +97,7 @@ export default [
 
   {
     // Test files: relax rules that don't make sense in tests.
-    files: ["**/*.test.{ts,tsx}", "src/test-setup.{ts,tsx}"],
+    files: ["**/*.test.{ts,tsx}", "e2e/**/*.spec.ts", "src/test-setup.{ts,tsx}"],
     languageOptions: {
       globals: { ...globals.browser, ...globals.node },
     },
@@ -105,6 +105,7 @@ export default [
       "react-refresh/only-export-components": "off",
       "@typescript-eslint/no-explicit-any": "off",
       "sonarjs/no-identical-functions": "off",
+      "local/no-non-vitest-testing": "off",
     },
   },
 

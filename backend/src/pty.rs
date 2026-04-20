@@ -178,6 +178,16 @@ impl PtyManager {
         }
         cmd.cwd(&params.working_dir);
         cmd.env("SULION_PTY_ID", id.to_string());
+        cmd.env(
+            "SULION_CORRELATE_SOCK",
+            std::env::var("SULION_CORRELATE_SOCK")
+                .unwrap_or_else(|_| "/run/sulion/correlate.sock".to_string()),
+        );
+        for key in ["SULION_CLAUDE_PROJECTS", "SULION_CODEX_SESSIONS"] {
+            if let Ok(value) = std::env::var(key) {
+                cmd.env(key, value);
+            }
+        }
         if let Ok(term) = std::env::var("TERM") {
             cmd.env("TERM", term);
         } else {

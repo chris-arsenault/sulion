@@ -16,11 +16,6 @@
 set -euo pipefail
 
 HOME_DIR="${HOME:-/home/dev}"
-REAL_CODEX="$(command -v codex || true)"
-
-if [[ -n "${REAL_CODEX}" ]]; then
-  export SULION_REAL_CODEX="${REAL_CODEX}"
-fi
 export PATH="${HOME_DIR}/.local/bin:/opt/sulion/bin:${PATH}"
 
 mkdir -p \

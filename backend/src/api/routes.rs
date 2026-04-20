@@ -25,6 +25,7 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/sessions/:id",
             delete(delete_session).patch(patch_session),
         )
+        .route("/api/sessions/:id/e2e/drop-ws", post(drop_session_ws))
         .route("/api/sessions/:id/history", get(session_history))
         .route("/api/sessions/:id/timeline", get(session_timeline))
         .route("/api/repos", get(list_repos).post(create_repo))
@@ -182,6 +183,10 @@ struct CreateSessionReq {
     /// Backward-compatible alias for older frontend builds.
     #[serde(default)]
     claude_resume_uuid: Option<Uuid>,
+    /// Test-only scripted fixture. Rejected unless the backend was
+    /// started with `SULION_ENABLE_E2E_FIXTURES=1`.
+    #[serde(default)]
+    e2e_fixture: Option<String>,
 }
 
 async fn create_session(
@@ -209,40 +214,74 @@ async fn create_session(
     // agent-specific resume command and fall back to an interactive
     // shell after. The uuid is `Uuid`-typed so no shell injection is
     // possible.
+    let e2e_fixture = req
+        .e2e_fixture
+        .as_deref()
+        .map(str::trim)
+        .filter(|fixture| !fixture.is_empty());
     let resume_session_uuid = req.resume_session_uuid.or(req.claude_resume_uuid);
     let resume_agent = req
         .resume_agent
         .as_deref()
         .or_else(|| resume_session_uuid.map(|_| "claude-code"));
-    let (shell, args) = match (resume_session_uuid, resume_agent) {
-        (Some(uuid), Some("claude-code")) => (
+    if e2e_fixture.is_some() && resume_session_uuid.is_some() {
+        return Err(ApiError::BadRequest(
+            "e2e_fixture cannot be combined with resume_session_uuid".into(),
+        ));
+    }
+    let (shell, args) = match (e2e_fixture, resume_session_uuid, resume_agent) {
+        (Some(crate::e2e::MOCK_TERMINAL_FIXTURE), None, _) => {
+            if !crate::e2e::fixtures_enabled() {
+                return Err(ApiError::BadRequest(
+                    "e2e fixtures are disabled on this backend".into(),
+                ));
+            }
+            let path = crate::e2e::mock_terminal_script_path(&repos_root);
+            if !path.is_file() {
+                return Err(ApiError::Internal(anyhow::anyhow!(
+                    "mock terminal fixture missing: {}",
+                    path.display()
+                )));
+            }
+            (path, Vec::new())
+        }
+        (Some(fixture), None, _) => {
+            return Err(ApiError::BadRequest(format!(
+                "unknown e2e fixture {fixture}",
+            )));
+        }
+        (Some(_), Some(_), _) => unreachable!("fixture + resume handled above"),
+        (None, Some(uuid), Some("claude-code")) => (
             PathBuf::from("/bin/bash"),
             vec![
                 "-c".to_string(),
-                format!("claude --dangerously-skip-permissions --resume {uuid} ; exec bash"),
+                format!(
+                    "{} agent-launcher --type claude --mode real -- --dangerously-skip-permissions --resume {uuid} ; exec bash",
+                    shell_quote(&crate::agent::binary_path())
+                ),
             ],
         ),
-        (Some(uuid), Some("codex")) => {
-            let codex = crate::codex::wrapper_path();
-            (
-                PathBuf::from("/bin/bash"),
-                vec![
-                    "-c".to_string(),
-                    format!("{} resume {uuid} ; exec bash", codex.display()),
-                ],
-            )
-        }
-        (Some(_), Some(agent)) => {
+        (None, Some(uuid), Some("codex")) => (
+            PathBuf::from("/bin/bash"),
+            vec![
+                "-c".to_string(),
+                format!(
+                    "{} agent-launcher --type codex --mode real -- --yolo resume {uuid} ; exec bash",
+                    shell_quote(&crate::agent::binary_path())
+                ),
+            ],
+        ),
+        (None, Some(_), Some(agent)) => {
             return Err(ApiError::BadRequest(format!(
                 "resume is not implemented for agent {agent}",
             )));
         }
-        (Some(_), None) => {
+        (None, Some(_), None) => {
             return Err(ApiError::BadRequest(
                 "resume_agent is required when resume_session_uuid is set".into(),
             ));
         }
-        (None, _) => (pty::default_shell(), Vec::new()),
+        (None, None, _) => (pty::default_shell(), Vec::new()),
     };
 
     let params = SpawnParams {
@@ -904,6 +943,20 @@ async fn post_repo_upload(
     }
 }
 
+async fn drop_session_ws(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    if !crate::e2e::fixtures_enabled() {
+        return Err(ApiError::NotFound);
+    }
+    if state.ws_test_hooks.drop_live_ws(id).await {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::NotFound)
+    }
+}
+
 #[derive(Deserialize)]
 struct UploadQuery {
     path: Option<String>,
@@ -986,4 +1039,8 @@ async fn delete_library_entry(
 
 fn repos_root(state: &AppState) -> ApiResult<PathBuf> {
     Ok(state.repos_root.clone())
+}
+
+fn shell_quote(path: &std::path::Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
 }
