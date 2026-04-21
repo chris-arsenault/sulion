@@ -45,6 +45,11 @@ impl Config {
                     .to_string_lossy()
                     .into_owned()
             }));
+        // Persist resolved paths back to the process env so pty.rs
+        // forwards them into spawned shells even when the operator
+        // didn't set them explicitly.
+        std::env::set_var("SULION_CLAUDE_PROJECTS", &claude_projects_dir);
+        std::env::set_var("SULION_CODEX_SESSIONS", &codex_sessions_dir);
         let correlate_sock_path = PathBuf::from(
             std::env::var("SULION_CORRELATE_SOCK")
                 .unwrap_or_else(|_| "/run/sulion/correlate.sock".to_string()),
