@@ -7,6 +7,7 @@ import { deleteLibraryEntry, getLibraryEntry } from "../api/client";
 import type { LibraryEntry } from "../api/types";
 import { appCommands } from "../state/AppCommands";
 import { useTabs } from "../state/TabStore";
+import { ConfirmDialog } from "./common/ConfirmDialog";
 import {
   contextMenuTriggerProps,
   useContextMenu,
@@ -19,6 +20,7 @@ import "./LibraryTab.css";
 export function RefTab({ slug }: { slug: string }) {
   const [entry, setEntry] = useState<LibraryEntry | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const { closeTab, tabs } = useTabs(
     useShallow((store) => ({
       closeTab: store.closeTab,
@@ -43,8 +45,8 @@ export function RefTab({ slug }: { slug: string }) {
     };
   }, [slug]);
 
-  const onDelete = async () => {
-    if (!confirm(`Delete reference "${entry?.name ?? slug}"?`)) return;
+  const confirmDelete = async () => {
+    setConfirmingDelete(false);
     try {
       await deleteLibraryEntry("references", slug);
       appCommands.libraryChanged({ kind: "references" });
@@ -57,6 +59,9 @@ export function RefTab({ slug }: { slug: string }) {
       setError(err instanceof Error ? err.message : "delete failed");
     }
   };
+
+  const onDelete = () => setConfirmingDelete(true);
+  const cancelDelete = () => setConfirmingDelete(false);
 
   const onCopy = async () => {
     if (!entry) return;
@@ -125,6 +130,16 @@ export function RefTab({ slug }: { slug: string }) {
       <div className="lib-tab__body">
         <Markdown source={entry.body} />
       </div>
+      {confirmingDelete && (
+        <ConfirmDialog
+          title="Delete reference?"
+          message={`"${entry.name}" will be removed from the library. This can't be undone.`}
+          confirmLabel="Delete"
+          destructive
+          onConfirm={() => void confirmDelete()}
+          onCancel={cancelDelete}
+        />
+      )}
     </div>
   );
 }

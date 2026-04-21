@@ -18,6 +18,7 @@ import { appCommands, useAppCommand } from "../state/AppCommands";
 import { useTabs } from "../state/TabStore";
 import { Icon } from "../icons";
 import { Tooltip } from "./ui";
+import { ConfirmDialog } from "./common/ConfirmDialog";
 import type { MenuItem } from "./common/contextMenuStore";
 import {
   contextMenuHandler,
@@ -31,6 +32,10 @@ export function LibraryPanel() {
   const [referencesOpen, setReferencesOpen] = useState(true);
   const [promptsOpen, setPromptsOpen] = useState(true);
   const [editingPrompt, setEditingPrompt] = useState<PromptDraft | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{
+    kind: LibraryKind;
+    entry: LibraryEntry;
+  } | null>(null);
   const openCtx = useContextMenu((store) => store.open);
   const { openTab, tabs, activeByPane } = useTabs(
     useShallow((store) => ({
@@ -89,10 +94,14 @@ export function LibraryPanel() {
     }
   };
 
-  const deleteEntry = async (kind: LibraryKind, entry: LibraryEntry) => {
-    if (!confirm(`Delete ${kind === "references" ? "reference" : "prompt"} "${entry.name}"?`)) {
-      return;
-    }
+  const requestDelete = (kind: LibraryKind, entry: LibraryEntry) => {
+    setPendingDelete({ kind, entry });
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    const { kind, entry } = pendingDelete;
+    setPendingDelete(null);
     try {
       await deleteLibraryEntry(kind, entry.slug);
       appCommands.libraryChanged({ kind });
@@ -101,6 +110,8 @@ export function LibraryPanel() {
       setError(err instanceof Error ? err.message : "delete failed");
     }
   };
+
+  const cancelDelete = useCallback(() => setPendingDelete(null), []);
 
   const onReferenceContextMenu = (entry: LibraryEntry) =>
     contextMenuHandler(openCtx, () => {
@@ -123,7 +134,7 @@ export function LibraryPanel() {
           id: "delete",
           label: "Delete",
           destructive: true,
-          onSelect: () => void deleteEntry("references", entry),
+          onSelect: () => requestDelete("references", entry),
         },
       ];
       return items;
@@ -157,7 +168,7 @@ export function LibraryPanel() {
           id: "delete",
           label: "Delete",
           destructive: true,
-          onSelect: () => void deleteEntry("prompts", entry),
+          onSelect: () => requestDelete("prompts", entry),
         },
       ];
       return items;
@@ -266,6 +277,21 @@ export function LibraryPanel() {
           </ul>
         )}
       </LibrarySection>
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title={
+            pendingDelete.kind === "references"
+              ? "Delete reference?"
+              : "Delete prompt?"
+          }
+          message={`"${pendingDelete.entry.name}" will be removed from the library. This can't be undone.`}
+          confirmLabel="Delete"
+          destructive
+          onConfirm={() => void confirmDelete()}
+          onCancel={cancelDelete}
+        />
+      )}
     </div>
   );
 }

@@ -36,6 +36,19 @@ import { useSessions } from "../state/SessionStore";
 type ExitStatus =
   | { kind: "alive" }
   | { kind: "dead"; code: number | null };
+
+/** Parked paste waiting on the user to choose inline vs save-as-file.
+ * Kept in component state instead of a synchronous browser confirm()
+ * so the modal is styled, keyboard-accessible, and doesn't steal
+ * focus / block the event loop. */
+interface PendingLargePaste {
+  raw: string;
+  size: number;
+  lines: number;
+  repo: string;
+}
+
+import { ConfirmDialog } from "./common/ConfirmDialog";
 import { copyToClipboard, readClipboard, sanitizePaste } from "./terminal/clipboard";
 import "@xterm/xterm/css/xterm.css";
 import "./TerminalPane.css";
@@ -51,6 +64,8 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
   const [connState, setConnState] = useState<ConnectionState>("connecting");
   const [exitStatus, setExitStatus] = useState<ExitStatus>({ kind: "alive" });
   const [focused, setFocused] = useState(false);
+  const [pendingLargePaste, setPendingLargePaste] =
+    useState<PendingLargePaste | null>(null);
   const sessions = useSessions((store) => store.sessions);
   const repoName = sessions.find((s) => s.id === sessionId)?.repo ?? null;
   const repoRef = useRef<string | null>(repoName);
@@ -210,34 +225,16 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
       const large =
         raw.length > PASTE_AS_FILE_BYTES || lineCount > PASTE_AS_FILE_LINES;
       if (large && repoRef.current) {
-        // Intercept: offer paste-as-file to avoid choking the PTY. The
-        // confirm() is blunt but this is a rare path.
-        const accept = window.confirm(
-          `Clipboard is ${raw.length} bytes / ${lineCount} lines — paste as a file instead?\n\n` +
-            "OK  = save to .sulion-paste/ and inject the path\n" +
-            "Cancel = paste the raw contents inline",
-        );
-        if (accept) {
-          const ts = new Date()
-            .toISOString()
-            .replace(/[:.]/g, "-")
-            .replace("T", "_");
-          const filename = `paste-${ts}.txt`;
-          const blob = new File([raw], filename, { type: "text/plain" });
-          void uploadRepoFile(
-            repoRef.current,
-            ".sulion-paste",
-            blob,
-          )
-            .then((res) => {
-              term.paste(res.path + " ");
-            })
-            .catch(() => {
-              // On failure, fall back to an inline paste.
-              term.paste(sanitizePaste(raw));
-            });
-          return;
-        }
+        // Park the paste; the ConfirmDialog decides inline vs file.
+        // Defers both the upload call and term.paste to the user's
+        // choice — neither happens synchronously on the paste event.
+        setPendingLargePaste({
+          raw,
+          size: raw.length,
+          lines: lineCount,
+          repo: repoRef.current,
+        });
+        return;
       }
       term.paste(sanitizePaste(raw));
     };
@@ -312,6 +309,31 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
     termRef.current?.focus();
   });
 
+  const acceptLargePasteAsFile = useCallback(async () => {
+    const pending = pendingLargePaste;
+    if (!pending) return;
+    setPendingLargePaste(null);
+    const ts = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_");
+    const blob = new File([pending.raw], `paste-${ts}.txt`, {
+      type: "text/plain",
+    });
+    try {
+      const res = await uploadRepoFile(pending.repo, ".sulion-paste", blob);
+      termRef.current?.paste(res.path + " ");
+    } catch {
+      // On upload failure, fall back to the inline path so the user
+      // isn't left with nothing pasted.
+      termRef.current?.paste(sanitizePaste(pending.raw));
+    }
+  }, [pendingLargePaste]);
+
+  const acceptLargePasteInline = useCallback(() => {
+    const pending = pendingLargePaste;
+    if (!pending) return;
+    setPendingLargePaste(null);
+    termRef.current?.paste(sanitizePaste(pending.raw));
+  }, [pendingLargePaste]);
+
   return (
     <div
       className={
@@ -340,6 +362,20 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
           shell exited{exitStatus.code == null ? "" : ` with code ${exitStatus.code}`} —
           session no longer receiving input
         </div>
+      )}
+      {pendingLargePaste && (
+        <ConfirmDialog
+          title="Large paste"
+          message={
+            `Clipboard is ${pendingLargePaste.size} bytes / ${pendingLargePaste.lines} lines. ` +
+            "Save it to .sulion-paste/ and inject the path, or paste the raw contents inline? " +
+            "Inline pastes can overwhelm the PTY on large inputs."
+          }
+          confirmLabel="Save as file"
+          cancelLabel="Paste inline"
+          onConfirm={() => void acceptLargePasteAsFile()}
+          onCancel={acceptLargePasteInline}
+        />
       )}
     </div>
   );
