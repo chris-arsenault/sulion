@@ -724,3 +724,10 @@
 .sidebar__form-actions button[type="submit"]:hover {
   background: var(--accent-hi);
 }
+
+.sidebar__admin {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 8px 8px;
+  border-top: 1px solid var(--hairline);
+}

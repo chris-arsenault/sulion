@@ -169,6 +169,15 @@ export function getStats(): Promise<StatsResponse> {
   return request<StatsResponse>("/api/stats");
 }
 
+export interface ReindexResponse {
+  sessions_cleared: number;
+  offsets_cleared: number;
+}
+
+export function triggerReindex(): Promise<ReindexResponse> {
+  return request<ReindexResponse>("/api/admin/reindex", { method: "POST" });
+}
+
 export function getRepoGit(name: string): Promise<GitStatus> {
   return request<GitStatus>(`/api/repos/${encodeURIComponent(name)}/git`);
 }

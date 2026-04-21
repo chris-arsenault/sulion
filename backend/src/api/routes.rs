@@ -15,7 +15,10 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 
-use super::{future_prompt_routes, library_routes, repo_routes, session_routes, timeline_routes};
+use super::{
+    admin_routes, future_prompt_routes, library_routes, repo_routes, session_routes,
+    timeline_routes,
+};
 use crate::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -85,6 +88,7 @@ pub fn router() -> Router<Arc<AppState>> {
                 .put(library_routes::put_library_entry)
                 .delete(library_routes::delete_library_entry),
         )
+        .route("/api/admin/reindex", post(admin_routes::reindex))
 }
 
 // ─── error type ───────────────────────────────────────────────────────

@@ -77,6 +77,62 @@ describe("ConfirmDialog", () => {
     expect(onConfirm).toHaveBeenCalled();
   });
 
+  it("requireText gates the confirm button behind a typed phrase", async () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ConfirmDialog
+        title="Reindex?"
+        message="This wipes transcripts."
+        confirmLabel="Reindex"
+        requireText="refresh"
+        destructive
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />,
+    );
+
+    const confirmBtn = screen.getByRole("button", { name: "Reindex" });
+    expect(confirmBtn).toHaveProperty("disabled", true);
+
+    // Clicking while disabled does nothing.
+    await user.click(confirmBtn);
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    // Partial match stays disabled.
+    const input = screen.getByLabelText(/type refresh to confirm/i);
+    await user.type(input, "refres");
+    expect(confirmBtn).toHaveProperty("disabled", true);
+
+    // Exact match unlocks.
+    await user.type(input, "h");
+    expect(confirmBtn).toHaveProperty("disabled", false);
+    await user.click(confirmBtn);
+    expect(onConfirm).toHaveBeenCalled();
+  });
+
+  it("requireText blocks Enter-to-confirm until the phrase matches", async () => {
+    const onConfirm = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ConfirmDialog
+        title="Reindex?"
+        message="."
+        requireText="refresh"
+        onConfirm={onConfirm}
+        onCancel={vi.fn()}
+      />,
+    );
+    await user.keyboard("{Enter}");
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    const input = screen.getByLabelText(/type refresh to confirm/i);
+    await user.type(input, "refresh");
+    await user.keyboard("{Enter}");
+    expect(onConfirm).toHaveBeenCalled();
+  });
+
   it("applies destructive styling when destructive=true", () => {
     render(
       <ConfirmDialog

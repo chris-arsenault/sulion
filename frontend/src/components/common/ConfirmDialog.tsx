@@ -4,7 +4,7 @@
 // origins. Rule: no window.confirm / window.alert / window.prompt
 // anywhere in the app.
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import "./ConfirmDialog.css";
@@ -16,6 +16,11 @@ export interface ConfirmDialogProps {
   cancelLabel?: string;
   /** If true, the confirm button is rendered red. Defaults to false. */
   destructive?: boolean;
+  /** Gate the confirm button behind a typed-phrase match. When set,
+   * the dialog shows a text input and Confirm stays disabled until
+   * the input exactly equals this value. Used for destructive,
+   * hard-to-undo actions (the reindex button). */
+  requireText?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -26,10 +31,20 @@ export function ConfirmDialog({
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
   destructive = false,
+  requireText,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [typed, setTyped] = useState("");
+  const gated = requireText != null && requireText.length > 0;
+  const canConfirm = !gated || typed === requireText;
+
+  const handleConfirm = useCallback(() => {
+    if (!canConfirm) return;
+    onConfirm();
+  }, [canConfirm, onConfirm]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -38,15 +53,20 @@ export function ConfirmDialog({
         onCancel();
       } else if (e.key === "Enter") {
         e.preventDefault();
-        onConfirm();
+        handleConfirm();
       }
     };
     window.addEventListener("keydown", onKey);
-    // Focus the confirm button on mount so Enter = confirm works
-    // without an extra click.
-    confirmRef.current?.focus();
+    // When gated, land the caret in the text input so the user can
+    // start typing immediately. Otherwise focus the confirm button
+    // so Enter = confirm works without an extra click.
+    if (gated) {
+      inputRef.current?.focus();
+    } else {
+      confirmRef.current?.focus();
+    }
     return () => window.removeEventListener("keydown", onKey);
-  }, [onConfirm, onCancel]);
+  }, [handleConfirm, onCancel, gated]);
 
   return createPortal(
     <div className="cd__backdrop">
@@ -66,6 +86,23 @@ export function ConfirmDialog({
           {title}
         </h3>
         <p className="cd__message">{message}</p>
+        {gated && (
+          <label className="cd__require">
+            <span className="cd__require-hint">
+              Type <code>{requireText}</code> to confirm
+            </span>
+            <input
+              ref={inputRef}
+              type="text"
+              className="cd__require-input"
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              aria-label={`Type ${requireText} to confirm`}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+        )}
         <div className="cd__actions">
           <button type="button" className="cd__btn" onClick={onCancel}>
             {cancelLabel}
@@ -76,7 +113,8 @@ export function ConfirmDialog({
             className={
               destructive ? "cd__btn cd__btn--destructive" : "cd__btn cd__btn--primary"
             }
-            onClick={onConfirm}
+            onClick={handleConfirm}
+            disabled={!canConfirm}
           >
             {confirmLabel}
           </button>

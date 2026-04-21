@@ -90,3 +90,40 @@
   background: color-mix(in oklab, var(--crit-bg) 70%, var(--crit-mark));
   color: var(--text-hi);
 }
+
+.cd__btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cd__require {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: var(--t-meta);
+  color: var(--text-mid);
+}
+
+.cd__require-hint code {
+  padding: 0 4px;
+  background: var(--canvas-2);
+  color: var(--text-hi);
+  border-radius: var(--r-1);
+  font-family: var(--font-mono);
+}
+
+.cd__require-input {
+  background: var(--canvas-2);
+  color: var(--text-hi);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-1);
+  padding: 5px 8px;
+  font-family: var(--font-mono);
+  font-size: var(--t-ui);
+}
+
+.cd__require-input:focus-visible {
+  outline: var(--ring-w) solid var(--ring);
+  outline-offset: 1px;
+}

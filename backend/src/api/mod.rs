@@ -5,6 +5,7 @@ use serde::Serialize;
 
 use crate::{db, AppState};
 
+mod admin_routes;
 mod future_prompt_routes;
 mod library_routes;
 mod repo_routes;

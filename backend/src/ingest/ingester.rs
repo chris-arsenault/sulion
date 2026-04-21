@@ -904,6 +904,53 @@ async fn insert_blocks(
     Ok(())
 }
 
+/// Admin-triggered reindex: wipe every transcript row the ingester
+/// produces, plus the per-file commit offsets. After this call, the
+/// DB is in the same shape as a fresh boot that has never seen a
+/// JSONL: `pty_sessions`, `repos`, and every non-transcript table
+/// are untouched.
+///
+/// The next ambient ingester tick (driven by the backend's long-
+/// running ingester task on its normal poll cadence) walks every
+/// JSONL from byte 0 and repopulates the tables — same code path as
+/// startup. We deliberately do not synchronously drive a tick here;
+/// "how many events came back" is the ingester's job to report via
+/// `/api/stats`, not the admin endpoint's.
+///
+/// Tables cleared:
+///   - `claude_sessions` — cascades via ON DELETE CASCADE to `events`,
+///     `event_blocks`, `timeline_turns`, `timeline_operations`,
+///     `timeline_references`, `timeline_activity_signals`,
+///     `timeline_search_documents`, `timeline_file_touches`.
+///   - `ingester_state` — per-session commit offsets (no FK, cleared
+///     explicitly).
+///
+/// Tables untouched: `pty_sessions`, `repos`, `tool_category_rules`.
+pub async fn reset_ingest_state(pool: &Pool) -> anyhow::Result<ResetStats> {
+    let mut tx = pool.begin().await?;
+    let sessions_cleared: i64 = sqlx::query_scalar(
+        "WITH d AS (DELETE FROM claude_sessions RETURNING 1) SELECT COUNT(*) FROM d",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    let offsets_cleared: i64 = sqlx::query_scalar(
+        "WITH d AS (DELETE FROM ingester_state RETURNING 1) SELECT COUNT(*) FROM d",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(ResetStats {
+        sessions_cleared: sessions_cleared.max(0) as u64,
+        offsets_cleared: offsets_cleared.max(0) as u64,
+    })
+}
+
+#[derive(Debug, Default, Clone, Copy, serde::Serialize)]
+pub struct ResetStats {
+    pub sessions_cleared: u64,
+    pub offsets_cleared: u64,
+}
+
 /// One-shot backfill on startup: walk every event that hasn't been
 /// decomposed into blocks yet and synthesise them from `payload`. Keeps
 /// the frontend's "read from blocks only" invariant true even for rows

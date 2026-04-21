@@ -1,0 +1,29 @@
+.reindex {
+  display: flex;
+  align-items: center;
+}
+
+.reindex__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--lane-xs);
+  padding: 0 var(--pad-sm-x);
+  background: transparent;
+  color: var(--text-mid);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-1);
+  font-size: var(--t-meta);
+  cursor: pointer;
+  transition: background var(--dur-0) var(--ease), color var(--dur-0) var(--ease);
+}
+
+.reindex__btn:hover:not(:disabled) {
+  background: var(--canvas-2);
+  color: var(--text-hi);
+}
+
+.reindex__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

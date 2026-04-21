@@ -38,6 +38,7 @@ import {
 } from "./common/contextMenuStore";
 import { ConfirmDialog } from "./common/ConfirmDialog";
 import { LibraryPanel } from "./LibraryPanel";
+import { ReindexButton } from "./ReindexButton";
 import { StatsStrip } from "./StatsStrip";
 import "./Sidebar.css";
 import "./LibrarySection.css";
@@ -283,6 +284,9 @@ export function Sidebar() {
       )}
       <LibraryPanel />
       <StatsStrip />
+      <div className="sidebar__admin">
+        <ReindexButton />
+      </div>
     </div>
   );
 }
