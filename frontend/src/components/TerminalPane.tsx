@@ -306,6 +306,10 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
     const sanitized = sanitizePaste(text);
     termRef.current?.paste(sanitized);
     appendToMirror(sanitized);
+    // Injected text is almost always the preamble to a user continuing
+    // to type — library snippets, queued future prompts, etc. Land the
+    // caret in the terminal so the next keystroke goes there.
+    termRef.current?.focus();
   });
 
   return (

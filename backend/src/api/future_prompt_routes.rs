@@ -106,7 +106,7 @@ pub(super) async fn delete_future_prompt(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn future_prompts_root(state: &AppState) -> PathBuf {
+pub(super) fn future_prompts_root(state: &AppState) -> PathBuf {
     state
         .library_root
         .parent()

@@ -1,6 +1,7 @@
 import {
   type MouseEvent,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -33,6 +34,12 @@ interface Props {
   turn: Turn;
   showThinking: boolean;
   onOpenSubagent?: (pair: ToolPair) => void;
+  /** Optional tool-call id to focus inside this turn. When set and
+   * matched, that row renders expanded (others collapsed) and carries
+   * a persistent outline; `focusKey` identifies the focus request so a
+   * re-click on the same pair can re-trigger. */
+  focusPairId?: string | null;
+  focusKey?: string | null;
 }
 
 interface ThinkingAnchor {
@@ -46,7 +53,13 @@ interface HoverAnchor {
   pinned: boolean;
 }
 
-export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
+export function TurnDetail({
+  turn,
+  showThinking,
+  onOpenSubagent,
+  focusPairId = null,
+  focusKey = null,
+}: Props) {
   const pairById = useMemo(
     () => new Map(turn.tool_pairs.map((pair) => [pair.id, pair] as const)),
     [turn.tool_pairs],
@@ -255,6 +268,8 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
           if (chunk.kind === "tool") {
             const pair = pairById.get(chunk.pair_id);
             if (!pair) return null;
+            const isFocused =
+              focusPairId != null && pair.id === focusPairId;
             return (
               <ToolPairRow
                 key={`t-${pair.id || idx}`}
@@ -262,6 +277,8 @@ export function TurnDetail({ turn, showThinking, onOpenSubagent }: Props) {
                 onOpenSubagent={onOpenSubagent}
                 onEnter={openHover}
                 onLeave={scheduleDismiss}
+                isFocused={isFocused}
+                focusToken={focusKey}
               />
             );
           }
@@ -463,16 +480,40 @@ function ToolPairRow({
   onOpenSubagent,
   onEnter,
   onLeave,
+  isFocused,
+  focusToken,
 }: {
   pair: ToolPair;
   onOpenSubagent?: (pair: ToolPair) => void;
   onEnter: (el: HTMLElement, pair: ToolPair) => void;
   onLeave: () => void;
+  isFocused: boolean;
+  focusToken: string | null;
 }) {
   const lowSignal = !pair.is_error && !pair.is_pending;
-  const [expanded, setExpanded] = useState(!lowSignal);
+  // Seeded from the incoming focus: if this row is the focused one it
+  // starts expanded, if the focus is on a sibling it starts collapsed
+  // (user can still toggle). Falls back to the error/pending heuristic
+  // when there's no focus request.
+  const [expanded, setExpanded] = useState(
+    focusToken != null ? isFocused : !lowSignal,
+  );
   const rowRef = useRef<HTMLDivElement>(null);
   const enterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const appliedFocusTokenRef = useRef<string | null>(null);
+
+  // A new focus request rebases the pair's expansion + scrolls the
+  // focused row into view. Sibling rows also re-rebase on the same
+  // token, which collapses them.
+  useEffect(() => {
+    if (focusToken == null) return;
+    if (appliedFocusTokenRef.current === focusToken) return;
+    appliedFocusTokenRef.current = focusToken;
+    setExpanded(isFocused);
+    if (isFocused && rowRef.current) {
+      rowRef.current.scrollIntoView({ block: "center", behavior: "auto" });
+    }
+  }, [focusToken, isFocused]);
 
   const handleEnter = useCallback(() => {
     if (enterTimer.current) clearTimeout(enterTimer.current);
@@ -519,9 +560,11 @@ function ToolPairRow({
       ref={rowRef}
       className={`td__tool ${pair.is_error ? "td__tool--error" : ""} ${
         pair.is_pending ? "td__tool--pending" : ""
-      }`}
+      } ${isFocused ? "td__tool--focused" : ""}`}
       data-testid="tool-pair-row"
       data-tool-type={toolType(pair)}
+      data-pair-id={pair.id}
+      data-focused={isFocused ? "true" : undefined}
     >
       <div className="td__tool-header">
         <button

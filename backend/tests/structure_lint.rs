@@ -11,10 +11,7 @@ const DEFAULT_MAX_FILE_LINES: usize = 900;
 const DEFAULT_MAX_FUNCTION_LINES: usize = 140;
 const DEFAULT_MAX_IMPL_LINES: usize = 400;
 
-const FILE_LIMIT_OVERRIDES: &[(&str, usize)] = &[
-    ("src/ingest/ingester.rs", 1200),
-    ("src/api/routes.rs", 1000),
-];
+const FILE_LIMIT_OVERRIDES: &[(&str, usize)] = &[("src/ingest/ingester.rs", 1200)];
 
 #[test]
 fn rust_source_stays_within_structural_limits() {

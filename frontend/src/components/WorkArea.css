@@ -120,6 +120,14 @@
   min-width: 0;
 }
 
+.wa__tab-sticky {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--warn-mark);
+  flex-shrink: 0;
+}
+
 .wa__tab-close {
   display: inline-flex;
   align-items: center;

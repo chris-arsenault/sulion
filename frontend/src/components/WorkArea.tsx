@@ -400,20 +400,24 @@ function TabHandle({
   // Derive the label live from session / repo state so renames reflect
   // without touching every open tab's persisted title.
   const sessions = useSessions((store) => store.sessions);
-  const { closeTab, moveTab } = useTabs(
+  const { closeTab, moveTab, setPaneSticky, paneSticky } = useTabs(
     useShallow((store) => ({
       closeTab: store.closeTab,
       moveTab: store.moveTab,
+      setPaneSticky: store.setPaneSticky,
+      paneSticky: store.sticky[paneId],
     })),
   );
   const openCtx = useContextMenu((store) => store.open);
   const label = useMemo(() => liveLabel(tab, sessions), [tab, sessions]);
 
+  const pairLinkable = tab.kind === "terminal" || tab.kind === "timeline";
+
   const buildMenuItems = useCallback((): MenuItem[] => {
     const otherPane: PaneId = paneId === "top" ? "bottom" : "top";
     const others = paneTabIds.filter((id) => id !== tab.id);
     const toRight = paneTabIds.slice(index + 1);
-    return [
+    const items: MenuItem[] = [
       { kind: "item", id: "close", label: "Close", onSelect: closeThis },
       {
         kind: "item",
@@ -437,7 +441,30 @@ function TabHandle({
         onSelect: () => moveTab(tab.id, otherPane),
       },
     ];
-  }, [paneId, paneTabIds, tab.id, index, closeThis, closeTab, moveTab]);
+    if (pairLinkable) {
+      items.push({ kind: "separator" });
+      items.push({
+        kind: "item",
+        id: "pane-sticky",
+        label: paneSticky
+          ? `Release ${paneId} pane (allow paired switches)`
+          : `Keep ${paneId} pane sticky (no paired switches)`,
+        onSelect: () => setPaneSticky(paneId, !paneSticky),
+      });
+    }
+    return items;
+  }, [
+    paneId,
+    paneTabIds,
+    tab.id,
+    index,
+    closeThis,
+    closeTab,
+    moveTab,
+    pairLinkable,
+    paneSticky,
+    setPaneSticky,
+  ]);
   const onContextMenu = useMemo(
     () => contextMenuHandler(openCtx, buildMenuItems),
     [openCtx, buildMenuItems],
@@ -521,6 +548,14 @@ function TabHandle({
           <Icon name={tabIcon(tab)} size={12} />
         </span>
         <span className="wa__tab-label">{label}</span>
+        {active && pairLinkable && paneSticky && (
+          <span
+            className="wa__tab-sticky"
+            aria-label={`${paneId} pane sticky — paired switches disabled`}
+          >
+            <Icon name="pin" size={12} />
+          </span>
+        )}
         <Tooltip label="Close this view (PTY keeps running; delete from the sidebar to stop the session)">
           <button
             type="button"
@@ -604,6 +639,7 @@ function TabContent({ tab }: { tab: TabData }) {
             sessionId={tab.sessionId}
             repo={tab.repo}
             focusTurnId={tab.focusTurnId}
+            focusPairId={tab.focusPairId}
             focusKey={tab.focusKey}
           />
         );

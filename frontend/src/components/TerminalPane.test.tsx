@@ -24,6 +24,7 @@ const mockTerm = {
     keyHandler = h;
   }),
   paste: vi.fn((text: string) => pasted.push(text)),
+  focus: vi.fn(),
   getSelection: vi.fn(() => currentSelection),
   clearSelection: vi.fn(() => {
     cleared.push(Date.now());
@@ -180,6 +181,7 @@ describe("TerminalPane", () => {
     appCommands.injectTerminal({ sessionId: "abc", text: "hello\u200Bworld\r\nend" });
 
     expect(mockTerm.paste).toHaveBeenCalledWith("helloworld\nend");
+    expect(mockTerm.focus).toHaveBeenCalled();
   });
 
   it("right-click with selection copies and cancels context menu", async () => {

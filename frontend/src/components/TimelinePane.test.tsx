@@ -146,6 +146,69 @@ describe("TimelinePane", () => {
     expect(screen.getByText(/3 events/)).toBeDefined();
   });
 
+  it("keeps the user's manual turn selection across poll refreshes", async () => {
+    const makeTurn = (
+      id: number,
+      preview: string,
+      assistantText: string,
+    ) => ({
+      id,
+      preview,
+      user_prompt_text: preview,
+      start_timestamp: "2025-01-01T00:00:00Z",
+      end_timestamp: "2025-01-01T00:00:02Z",
+      duration_ms: 2000,
+      event_count: 2,
+      operation_count: 0,
+      tool_pairs: [],
+      thinking_count: 0,
+      has_errors: false,
+      markdown: `**Prompt**\n\n> ${preview}`,
+      chunks: [
+        {
+          kind: "assistant",
+          items: [{ kind: "text", text: assistantText }],
+          thinking: [],
+        },
+      ],
+      turn_key: `00000000-0000-0000-0000-000000000001:${id}`,
+      session_uuid: "00000000-0000-0000-0000-000000000001",
+    });
+
+    stubFetch(
+      () =>
+        new Response(
+          timelineBody({
+            turns: [
+              makeTurn(1, "hello", "hi there"),
+              makeTurn(2, "goodbye", "later content"),
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    render(<TimelinePaneRaw sessionId="abc" focusTurnId={1} focusKey="k1" />);
+
+    // focusKey effect applies after the first poll response, selecting turn 1.
+    await waitFor(() => expect(screen.getByText("hi there")).toBeDefined());
+
+    // User clicks turn 2 — inspector swaps to its content.
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /goodbye/ }));
+    await waitFor(() =>
+      expect(screen.getByText("later content")).toBeDefined(),
+    );
+
+    // Let at least one poll cycle complete so `turns` gets a fresh array
+    // identity. Under the original bug this re-ran the focus effect and
+    // snapped the selection back to turn 1.
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+
+    expect(screen.getByText("later content")).toBeDefined();
+    expect(screen.queryByText("hi there")).toBeNull();
+  });
+
   it("fetches the repo timeline endpoint in repo mode", async () => {
     const urls: string[] = [];
     stubFetch((url) => {

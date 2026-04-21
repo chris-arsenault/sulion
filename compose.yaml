@@ -12,6 +12,7 @@ services:
       SULION_LISTEN: "0.0.0.0:8080"
       SULION_REPOS_ROOT: "/home/dev/repos"
       SULION_CLAUDE_PROJECTS: "/home/dev/.claude/projects"
+      SULION_CODEX_SESSIONS: "/home/dev/.codex/sessions"
       SULION_CORRELATE_SOCK: "/run/sulion/correlate.sock"
       HOME: "/home/dev"
     volumes:

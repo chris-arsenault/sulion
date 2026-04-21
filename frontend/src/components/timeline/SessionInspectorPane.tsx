@@ -19,6 +19,11 @@ interface Props {
    * when false, render as an inline pane. */
   asOverlay: boolean;
   onClose?: () => void;
+  /** Optional: id of the tool call to focus within the selected turn.
+   * TurnDetail expands that tool, collapses siblings, and marks it. */
+  focusPairId?: string | null;
+  /** Changes on every focus request so rebases can fire. */
+  focusKey?: string | null;
 }
 
 export function SessionInspectorPane({
@@ -27,6 +32,8 @@ export function SessionInspectorPane({
   onOpenSubagent,
   asOverlay,
   onClose,
+  focusPairId,
+  focusKey,
 }: Props) {
   useEffect(() => {
     if (!asOverlay) return;
@@ -42,6 +49,8 @@ export function SessionInspectorPane({
       turn={turn}
       showThinking={showThinking}
       onOpenSubagent={onOpenSubagent}
+      focusPairId={focusPairId ?? null}
+      focusKey={focusKey ?? null}
     />
   ) : (
     <div className="sip__empty">

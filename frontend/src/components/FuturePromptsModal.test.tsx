@@ -45,6 +45,7 @@ describe("FuturePromptsModal", () => {
           label: "main",
           pinned: false,
           color: null,
+          future_prompts_pending_count: 0,
         },
       ],
       repos: [],
@@ -210,5 +211,71 @@ describe("FuturePromptsModal", () => {
     await injected;
     await sendGone;
     unsubscribe();
+  });
+
+  it("closes the modal after a successful send so the terminal takes focus", async () => {
+    seedSession();
+    const onClose = vi.fn();
+
+    const fetchMock = vi.fn(async (input: RequestInfo, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.url;
+      const method = init?.method ?? "GET";
+      if (url === "/api/sessions" && method === "GET") {
+        return new Response(JSON.stringify({ sessions: useSessionStore.getState().sessions }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === "/api/repos" && method === "GET") {
+        return new Response(JSON.stringify({ repos: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === `/api/sessions/${SESSION_ID}/future-prompts` && method === "GET") {
+        return new Response(JSON.stringify({
+          session_uuid: SESSION_UUID,
+          session_agent: "codex",
+          prompts: [
+            {
+              id: "fp-close",
+              state: "pending",
+              created_at: "2026-04-20T01:00:00Z",
+              updated_at: "2026-04-20T01:00:00Z",
+              text: "hand off to terminal",
+            },
+          ],
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === `/api/sessions/${SESSION_ID}/future-prompts/fp-close` && method === "PATCH") {
+        return new Response(JSON.stringify({
+          id: "fp-close",
+          state: "sent",
+          created_at: "2026-04-20T01:00:00Z",
+          updated_at: "2026-04-20T01:05:00Z",
+          text: "hand off to terminal",
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <FuturePromptsModal open sessionId={SESSION_ID} onClose={onClose} />,
+    );
+
+    const user = userEvent.setup();
+    await waitFor(() =>
+      expect(screen.getByText("hand off to terminal")).toBeDefined(),
+    );
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 });

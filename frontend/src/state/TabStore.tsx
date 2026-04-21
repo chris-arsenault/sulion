@@ -26,6 +26,11 @@ export interface TabData {
   slug?: string;
   /** Timeline focus target. Ignored for other tab kinds. */
   focusTurnId?: number;
+  /** Optional: a specific tool call within the focused turn. The
+   * timeline pane expands that tool, collapses its siblings, and
+   * gives it a persistent outline. Null-safe: falls back to turn-level
+   * focus when absent. */
+  focusPairId?: string;
   /** Changes on every focus request so repeated jumps still fire. */
   focusKey?: string;
 }
@@ -34,18 +39,24 @@ export interface TabStore {
   tabs: Record<string, TabData>;
   panes: Record<PaneId, string[]>;
   activeByPane: Record<PaneId, string | null>;
+  /** When a pane is sticky, activations in the other pane do not
+   * propagate a paired session-swap into it. Toggled by the tab
+   * context menu. */
+  sticky: Record<PaneId, boolean>;
   hasAnyTab: boolean;
   openTab: (spec: Omit<TabData, "id">, pane?: PaneId) => string;
   closeTab: (id: string) => void;
   activateTab: (pane: PaneId, id: string) => void;
   moveTab: (id: string, toPane: PaneId, index?: number) => void;
   rebindSessionTabs: (fromSessionId: string, toSessionId: string) => void;
+  setPaneSticky: (pane: PaneId, value: boolean) => void;
 }
 
 interface PersistedTabs {
   tabs: Record<string, TabData>;
   panes: Record<PaneId, string[]>;
   activeByPane: Record<PaneId, string | null>;
+  sticky: Record<PaneId, boolean>;
 }
 
 function initialState(): PersistedTabs & Pick<TabStore, "hasAnyTab"> {
@@ -53,6 +64,7 @@ function initialState(): PersistedTabs & Pick<TabStore, "hasAnyTab"> {
     tabs: {},
     panes: { top: [], bottom: [] },
     activeByPane: { top: null, bottom: null },
+    sticky: { top: false, bottom: false },
     hasAnyTab: false,
   };
 }
@@ -64,6 +76,15 @@ function withDerived(
     ...state,
     hasAnyTab: state.panes.top.length > 0 || state.panes.bottom.length > 0,
   };
+}
+
+/** Tab kinds that pair-link across panes. Activating a terminal in
+ * one pane should swing the other pane to the matching timeline for
+ * that session, and vice versa. File/diff/ref tabs don't participate. */
+function pairedKindOf(kind: TabKind | undefined): TabKind | null {
+  if (kind === "terminal") return "timeline";
+  if (kind === "timeline") return "terminal";
+  return null;
 }
 
 export const useTabStore = create<TabStore>()(
@@ -89,6 +110,7 @@ export const useTabStore = create<TabStore>()(
                       [existingId]: {
                         ...state.tabs[existingId],
                         focusTurnId: spec.focusTurnId,
+                        focusPairId: spec.focusPairId,
                         focusKey: spec.focusKey,
                       } as TabData,
                     }
@@ -106,29 +128,55 @@ export const useTabStore = create<TabStore>()(
             tabs: { ...state.tabs, [id]: data },
             panes: { ...state.panes, [pane]: [...state.panes[pane], id] },
             activeByPane: { ...state.activeByPane, [pane]: id },
+            sticky: state.sticky,
           }),
         );
         return id;
       },
 
       closeTab: (id) => {
-        const { panes, activeByPane, tabs } = get();
+        const { panes, activeByPane, tabs, sticky } = get();
         set(
           withDerived(removeTabFromState({
             tabs,
             panes,
             activeByPane,
+            sticky,
           }, id)),
         );
       },
 
       activateTab: (pane, id) =>
-        set((state) => ({
-          activeByPane: { ...state.activeByPane, [pane]: id },
-        })),
+        set((state) => {
+          const nextActive = { ...state.activeByPane, [pane]: id };
+          // Pair-link: activating a terminal (or timeline) for a
+          // session in one pane should swing the other pane to the
+          // same session's paired view — unless the other pane is
+          // sticky, in which case it's explicitly pinned.
+          const activated = state.tabs[id];
+          const other: PaneId = pane === "top" ? "bottom" : "top";
+          const paired = pairedKindOf(activated?.kind);
+          if (
+            activated?.sessionId &&
+            paired &&
+            !state.sticky[other]
+          ) {
+            const pairedId = state.panes[other].find((candidateId) => {
+              const candidate = state.tabs[candidateId];
+              return (
+                candidate?.kind === paired &&
+                candidate.sessionId === activated.sessionId
+              );
+            });
+            if (pairedId && pairedId !== state.activeByPane[other]) {
+              nextActive[other] = pairedId;
+            }
+          }
+          return { activeByPane: nextActive };
+        }),
 
       moveTab: (id, toPane, index) => {
-        const { panes, activeByPane, tabs } = get();
+        const { panes, activeByPane, tabs, sticky } = get();
         const currentPane =
           (["top", "bottom"] as PaneId[]).find((candidate) =>
             panes[candidate].includes(id),
@@ -153,17 +201,24 @@ export const useTabStore = create<TabStore>()(
             tabs,
             panes: nextPanes,
             activeByPane: { ...activeByPane, [toPane]: id },
+            sticky,
           }),
         );
       },
 
+      setPaneSticky: (pane, value) =>
+        set((state) => ({
+          sticky: { ...state.sticky, [pane]: value },
+        })),
+
       rebindSessionTabs: (fromSessionId, toSessionId) => {
         if (fromSessionId === toSessionId) return;
-        const { tabs, panes, activeByPane } = get();
+        const { tabs, panes, activeByPane, sticky } = get();
         let nextState: PersistedTabs = {
           tabs: { ...tabs },
           panes: { top: [...panes.top], bottom: [...panes.bottom] },
           activeByPane: { ...activeByPane },
+          sticky,
         };
         let changed = false;
 
@@ -197,6 +252,7 @@ export const useTabStore = create<TabStore>()(
         tabs: state.tabs,
         panes: state.panes,
         activeByPane: state.activeByPane,
+        sticky: state.sticky,
       }),
       merge: (persisted, current) => {
         const envelope = (persisted ?? {}) as Partial<PersistedTabs> & {
@@ -219,6 +275,7 @@ export const useTabStore = create<TabStore>()(
             path: tab.path,
             slug: tab.slug,
             focusTurnId: tab.focusTurnId,
+            focusPairId: tab.focusPairId,
             focusKey: tab.focusKey,
           } as TabData;
         }
@@ -235,6 +292,11 @@ export const useTabStore = create<TabStore>()(
           return ids[ids.length - 1]!;
         };
 
+        const hydratedSticky: Record<PaneId, boolean> = {
+          top: Boolean(parsed.sticky?.top),
+          bottom: Boolean(parsed.sticky?.bottom),
+        };
+
         return {
           ...current,
           ...withDerived({
@@ -244,6 +306,7 @@ export const useTabStore = create<TabStore>()(
               top: pickActive("top"),
               bottom: pickActive("bottom"),
             },
+            sticky: hydratedSticky,
           }),
         };
       },
@@ -297,6 +360,7 @@ function removeTabFromState(state: PersistedTabs, id: string): PersistedTabs {
     tabs: nextTabs,
     panes: nextPanes,
     activeByPane: nextActive,
+    sticky: state.sticky,
   };
 }
 

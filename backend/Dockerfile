@@ -38,6 +38,30 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
   && apt-get update && apt-get install -y --no-install-recommends nodejs \
   && rm -rf /var/lib/apt/lists/*
 
+# pnpm via corepack (bundled with Node 20). The frontend Makefile
+# targets invoke `pnpm exec …` directly, so pnpm has to be on PATH
+# inside every PTY.
+RUN corepack enable \
+  && corepack prepare pnpm@9 --activate
+
+# Rust stable toolchain — backend Makefile targets (`cargo check/test/
+# clippy/fmt`) assume cargo is on PATH, and PTY sessions doing backend
+# work inherit this image. Installed system-wide under /usr/local so
+# every user sees it; minimal profile + clippy + rustfmt covers the
+# `make lint-rust / test-rust` surface.
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+      pkg-config \
+      libssl-dev \
+  && rm -rf /var/lib/apt/lists/* \
+  && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+       | sh -s -- -y --default-toolchain stable --profile minimal \
+         --component clippy --component rustfmt \
+  && chmod -R a+rX /usr/local/rustup /usr/local/cargo
+
 # GitHub CLI from the official apt source — not in Debian's main repos.
 RUN mkdir -p -m 755 /etc/apt/keyrings \
   && wget -nv -O- https://cli.github.com/packages/githubcli-archive-keyring.gpg \
