@@ -57,7 +57,7 @@ services:
       # reads this path on the host, so it must be absolute. Copy
       # `backend/seccomp.json` from the repo to this path during
       # bootstrap (see docs/deploy.md).
-      - seccomp: unconfined
+      - "seccomp:unconfined"
 
   frontend:
     image: ghcr.io/chris-arsenault/sulion/frontend:${IMAGE_TAG}
