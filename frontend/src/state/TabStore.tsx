@@ -50,6 +50,11 @@ export interface TabStore {
   moveTab: (id: string, toPane: PaneId, index?: number) => void;
   rebindSessionTabs: (fromSessionId: string, toSessionId: string) => void;
   setPaneSticky: (pane: PaneId, value: boolean) => void;
+  /** Strip `focusTurnId` / `focusPairId` / `focusKey` from a timeline
+   * tab. Called when the user manually picks a turn, so subsequent
+   * polls (or tab revisits) don't snap the selection back to the old
+   * focus target. */
+  clearTimelineFocus: (id: string) => void;
 }
 
 interface PersistedTabs {
@@ -210,6 +215,27 @@ export const useTabStore = create<TabStore>()(
         set((state) => ({
           sticky: { ...state.sticky, [pane]: value },
         })),
+
+      clearTimelineFocus: (id) =>
+        set((state) => {
+          const tab = state.tabs[id];
+          if (
+            !tab
+            || tab.kind !== "timeline"
+            || (tab.focusTurnId == null
+              && tab.focusPairId == null
+              && tab.focusKey == null)
+          ) {
+            return state;
+          }
+          const stripped: TabData = { ...tab };
+          delete stripped.focusTurnId;
+          delete stripped.focusPairId;
+          delete stripped.focusKey;
+          return {
+            tabs: { ...state.tabs, [id]: stripped },
+          };
+        }),
 
       rebindSessionTabs: (fromSessionId, toSessionId) => {
         if (fromSessionId === toSessionId) return;

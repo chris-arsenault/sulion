@@ -75,3 +75,51 @@ describe("TabStore pair-linked activation", () => {
     expect(useTabStore.getState().activeByPane.bottom).toBe(timeA);
   });
 });
+
+describe("TabStore clearTimelineFocus", () => {
+  beforeEach(() => {
+    resetTabStore();
+  });
+
+  afterEach(() => {
+    resetTabStore();
+  });
+
+  it("strips focus fields from a timeline tab", () => {
+    const id = useTabStore.getState().openTab(
+      {
+        kind: "timeline",
+        sessionId: "session-a",
+        focusTurnId: 42,
+        focusPairId: "tool_xyz",
+        focusKey: "k1",
+      },
+      "bottom",
+    );
+
+    useTabStore.getState().clearTimelineFocus(id);
+
+    const tab = useTabStore.getState().tabs[id]!;
+    expect(tab.focusTurnId).toBeUndefined();
+    expect(tab.focusPairId).toBeUndefined();
+    expect(tab.focusKey).toBeUndefined();
+  });
+
+  it("is a no-op for tabs with no focus set", () => {
+    const id = useTabStore
+      .getState()
+      .openTab({ kind: "timeline", sessionId: "session-a" }, "bottom");
+    const before = useTabStore.getState().tabs[id];
+    useTabStore.getState().clearTimelineFocus(id);
+    expect(useTabStore.getState().tabs[id]).toBe(before);
+  });
+
+  it("is a no-op for non-timeline tabs", () => {
+    const id = useTabStore
+      .getState()
+      .openTab({ kind: "file", repo: "alpha", path: "src/lib.rs" }, "top");
+    const before = useTabStore.getState().tabs[id];
+    useTabStore.getState().clearTimelineFocus(id);
+    expect(useTabStore.getState().tabs[id]).toBe(before);
+  });
+});

@@ -636,6 +636,7 @@ function TabContent({ tab }: { tab: TabData }) {
       case "timeline":
         return (
           <TimelinePane
+            tabId={tab.id}
             sessionId={tab.sessionId}
             repo={tab.repo}
             focusTurnId={tab.focusTurnId}

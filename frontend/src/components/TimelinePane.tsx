@@ -20,6 +20,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { getRepoTimeline, getTimeline } from "../api/client";
 import type { TimelineQuery, TimelineResponse, TimelineSubagent } from "../api/types";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useTabs } from "../state/TabStore";
 import { FilterChips } from "./timeline/FilterChips";
 import { useTimelineFilters } from "./timeline/filters";
 import { type ToolPair, type Turn } from "./timeline/grouping";
@@ -36,12 +37,14 @@ const MIN_INSPECTOR_FRACTION = 0.28;
 const MAX_INSPECTOR_FRACTION = 0.78;
 
 export function TimelinePane({
+  tabId,
   sessionId,
   repo,
   focusTurnId,
   focusPairId,
   focusKey,
 }: {
+  tabId?: string;
   sessionId?: string;
   repo?: string;
   focusTurnId?: number;
@@ -178,6 +181,19 @@ export function TimelinePane({
   }, []);
   const closeSubagent = useCallback(() => setSubagent(null), []);
 
+  // A manual click in the turn list is the user overriding whatever
+  // focus the tab was opened with. Strip the focus fields from the
+  // tab so later polls (or tab revisits) don't re-apply them — and
+  // so the persistent focus outline on a tool row goes away.
+  const clearTimelineFocus = useTabs((store) => store.clearTimelineFocus);
+  const handleTurnSelect = useCallback(
+    (key: string) => {
+      setSelectedTurnKey(key);
+      if (tabId) clearTimelineFocus(tabId);
+    },
+    [tabId, clearTimelineFocus],
+  );
+
   const onDividerMouseDown = useCallback(
     (e: ReactMouseEvent<HTMLDivElement>) => {
       e.preventDefault();
@@ -264,7 +280,7 @@ export function TimelinePane({
               turns={turns}
               selectedTurnKey={selectedTurnKey}
               showThinking={filters.showThinking}
-              onSelect={setSelectedTurnKey}
+              onSelect={handleTurnSelect}
               virtuosoRef={virtuoso}
             />
           </div>
@@ -289,7 +305,7 @@ export function TimelinePane({
               turns={turns}
               selectedTurnKey={selectedTurnKey}
               showThinking={filters.showThinking}
-              onSelect={setSelectedTurnKey}
+              onSelect={handleTurnSelect}
               virtuosoRef={virtuoso}
             />
           </div>
