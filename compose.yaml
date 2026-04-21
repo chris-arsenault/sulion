@@ -21,12 +21,20 @@ services:
       # boot; TrueNAS operator only needs to create the dataset and
       # chown it to 7321:7321.
       - /mnt/apps/apps/sulion:/home/dev
-      # Rootless-podman image/container store on its own dataset so
-      # it's monitorable and clearable without touching user state.
-      # Nested under the primary bind is fine — compose honours deeper
-      # binds as overlays. Dataset must exist on the host and be
-      # chowned to 7321:7321 (see docs/deploy.md).
-      - /mnt/apps/apps/sulion-containers:/home/dev/.local/share/containers
+      # Repos on a nested dataset so the tree can be shared via
+      # NFS/SMB and snapshotted independently of home. Docker binds
+      # plain (not rbind), so a child ZFS dataset under the primary
+      # bind isn't visible through /home/dev — needs its own explicit
+      # mount. Works as a plain directory too before the dataset is
+      # created, so ordering of the bootstrap vs deploy doesn't matter.
+      - /mnt/apps/apps/sulion/repos:/home/dev/repos
+      # Rootless-podman image/container store on its own nested
+      # dataset so it's monitorable (`du -sh`) and clearable
+      # (`podman system reset`) without touching user state. ZFS
+      # snapshots don't recurse into child datasets by default, so
+      # nesting doesn't bloat parent snapshots. Dataset must exist
+      # on the host and be chowned to 7321:7321 (see docs/deploy.md).
+      - /mnt/apps/apps/sulion/containers:/home/dev/.local/share/containers
       - sulion_run:/run/sulion
     devices:
       # Rootless podman's overlay driver uses fuse-overlayfs, which
@@ -39,6 +47,17 @@ services:
       # process to let newuidmap/newgidmap do the setuid mapping.
       - SETUID
       - SETGID
+    security_opt:
+      # Docker's default seccomp profile blocks the clone3 / unshare
+      # syscalls podman needs for its nested user namespaces. Rather
+      # than dropping all seccomp, we point at podman's upstream
+      # profile — permissive enough for nested rootless but still
+      # blocks historically-dangerous syscalls (reboot, kexec_load,
+      # perf_event_open, various keyring/mount variants). The daemon
+      # reads this path on the host, so it must be absolute. Copy
+      # `backend/seccomp.json` from the repo to this path during
+      # bootstrap (see docs/deploy.md).
+      - seccomp=/mnt/apps/apps/sulion/seccomp.json
 
   frontend:
     image: ghcr.io/chris-arsenault/sulion/frontend:${IMAGE_TAG}

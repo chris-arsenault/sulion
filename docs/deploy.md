@@ -13,19 +13,38 @@ Nothing to redo per-environment.
 
 ## One-time TrueNAS bootstrap
 
-Two datasets, both chowned to the container's `dev` user:
+Three datasets, each chowned to the container's `dev` user:
 
 ```bash
 zfs create apps/apps/sulion
 chown 7321:7321 /mnt/apps/apps/sulion
 
-zfs create apps/apps/sulion-containers
-chown 7321:7321 /mnt/apps/apps/sulion-containers
+zfs create apps/apps/sulion/repos
+chown 7321:7321 /mnt/apps/apps/sulion/repos
+
+zfs create apps/apps/sulion/containers
+chown 7321:7321 /mnt/apps/apps/sulion/containers
 ```
 
-The first is the dev user's home. The second is podman's rootless image/container store — split off so it can be monitored (`du -sh`) and cleared (`podman system reset` or a straight `rm -rf`) without touching user state like credentials, repos, or claude sessions.
+Why three:
+
+- `apps/apps/sulion` is the dev user's home. Credentials, shell history, claude sessions, etc.
+- `apps/apps/sulion/repos` holds the working trees. On its own dataset so you can expose it via NFS/SMB, snapshot it on a different cadence, and mount it from other machines without carrying home-dir state.
+- `apps/apps/sulion/containers` is podman's rootless image/container store. Split off so it can be monitored (`du -sh`) and cleared (`podman system reset` or a straight `rm -rf`) without touching home or repos.
+
+ZFS snapshots don't recurse into child datasets by default, so the nested layout keeps parent-level snapshots light — pass `-r` to `zfs snapshot` when you explicitly want everything.
 
 UID/GID **7321** is deliberately off the 1000-series consumer range. Pinned in `backend/Dockerfile` via the `DEV_UID` / `DEV_GID` build args; change both together or not at all.
+
+`compose.yaml` bind-mounts each dataset explicitly — Docker's plain bind doesn't follow nested ZFS datasets under the parent, so every dataset needs its own entry. This also means you can add a `zfs create apps/apps/sulion/<something>` later and the compose file keeps working until you're ready to wire it in.
+
+Copy the podman seccomp profile into place alongside the datasets:
+
+```bash
+cp backend/seccomp.json /mnt/apps/apps/sulion/seccomp.json
+```
+
+`compose.yaml` points `security_opt: seccomp=` at this absolute host path — relative paths aren't resolved against the compose file for seccomp, the daemon reads directly from its own filesystem. No chown needed: the daemon runs as root on the host and just needs read access. The dev user inside the container never touches this file. Re-copy when the repo's `seccomp.json` changes.
 
 That's the whole bootstrap. `backend/entrypoint.sh` self-provisions `~/.claude/`, `~/.ssh/`, `~/.local/bin/`, `~/.local/share/containers/`, `~/.config/gh/`, `~/repos/` on first boot and pre-writes `.claude/settings.json` wiring the `SessionStart` hook.
 
