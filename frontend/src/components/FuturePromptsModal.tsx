@@ -134,13 +134,17 @@ export function FuturePromptsModal({
           sortPrompts(prev.map((item) => (item.id === updated.id ? updated : item))),
         );
         setError(null);
+        // Hand the caret off to the terminal: close the modal so the
+        // focus that `inject-terminal` placed on the xterm input isn't
+        // fighting the overlay's focus trap.
+        onClose();
       } catch (err) {
         setError(err instanceof Error ? err.message : "future prompt send failed");
       } finally {
         setBusyId(null);
       }
     },
-    [sessionId, session?.state],
+    [sessionId, session?.state, onClose],
   );
 
   const removePrompt = useCallback(
