@@ -68,12 +68,15 @@ export function Layout() {
 
   useAppCommand("open-file", ({ repo, path }) => {
     openTabRef.current({ kind: "file", repo, path });
+    setDrawerOpen(false);
   });
   useAppCommand("open-diff", ({ repo, path }) => {
     openTabRef.current({ kind: "diff", repo, path });
+    setDrawerOpen(false);
   });
   useAppCommand("open-future-prompts", ({ sessionId }) => {
     setFuturePromptsSessionId(sessionId);
+    setDrawerOpen(false);
   });
   useAppCommand("close-drawer", () => {
     setDrawerOpen(false);

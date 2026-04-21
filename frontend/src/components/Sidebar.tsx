@@ -464,13 +464,19 @@ function RepoGroup({
           kind: "item" as const,
           id: "open-repo-timeline",
           label: "Open repo timeline",
-          onSelect: () => openTab({ kind: "timeline", repo: group.name }, "bottom"),
+          onSelect: () => {
+            openTab({ kind: "timeline", repo: group.name }, "bottom");
+            appCommands.closeDrawer();
+          },
         },
         {
           kind: "item" as const,
           id: "open-repo-diff",
           label: "Open repo diff",
-          onSelect: () => openTab({ kind: "diff", repo: group.name }),
+          onSelect: () => {
+            openTab({ kind: "diff", repo: group.name });
+            appCommands.closeDrawer();
+          },
         },
       ]),
     [openCtx, openTab, group.name],
@@ -1114,13 +1120,19 @@ function buildSessionMenuItems({
       kind: "item",
       id: "open-terminal",
       label: "Open terminal",
-      onSelect: () => openTab({ kind: "terminal", sessionId: session.id }, "top"),
+      onSelect: () => {
+        openTab({ kind: "terminal", sessionId: session.id }, "top");
+        appCommands.closeDrawer();
+      },
     },
     {
       kind: "item",
       id: "open-timeline",
       label: "Open timeline",
-      onSelect: () => openTab({ kind: "timeline", sessionId: session.id }, "bottom"),
+      onSelect: () => {
+        openTab({ kind: "timeline", sessionId: session.id }, "bottom");
+        appCommands.closeDrawer();
+      },
     },
     {
       kind: "item",
@@ -1132,7 +1144,10 @@ function buildSessionMenuItems({
       kind: "item",
       id: "open-repo-diff",
       label: "Open repo diff",
-      onSelect: () => openTab({ kind: "diff", repo: session.repo }),
+      onSelect: () => {
+        openTab({ kind: "diff", repo: session.repo });
+        appCommands.closeDrawer();
+      },
     },
     { kind: "separator" },
     { kind: "item", id: "rename", label: "Rename", onSelect: onRename },
