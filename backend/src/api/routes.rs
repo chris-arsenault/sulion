@@ -15,9 +15,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 
-use super::{
-    future_prompt_routes, library_routes, repo_routes, session_routes, timeline_routes,
-};
+use super::{future_prompt_routes, library_routes, repo_routes, session_routes, timeline_routes};
 use crate::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
