@@ -49,15 +49,15 @@ services:
       - SETGID
     security_opt:
       # Docker's default seccomp profile blocks the clone3 / unshare
-      # syscalls podman needs for its nested user namespaces. Rather
-      # than dropping all seccomp, we point at podman's upstream
-      # profile — permissive enough for nested rootless but still
-      # blocks historically-dangerous syscalls (reboot, kexec_load,
-      # perf_event_open, various keyring/mount variants). The daemon
-      # reads this path on the host, so it must be absolute. Copy
-      # `backend/seccomp.json` from the repo to this path during
-      # bootstrap (see docs/deploy.md).
+      # syscalls podman needs for its nested user namespaces.
       - "seccomp:unconfined"
+      # Docker's default AppArmor profile (`docker-default`) denies
+      # writes to /proc/<pid>/uid_map, which is exactly what
+      # newuidmap needs to set up the nested user namespace. Without
+      # this, you get `Operation not permitted` at container start
+      # even with seccomp off and caps correct. AppArmor and seccomp
+      # are independent LSMs — both have to allow the syscall.
+      - "apparmor:unconfined"
 
   frontend:
     image: ghcr.io/chris-arsenault/sulion/frontend:${IMAGE_TAG}
