@@ -60,7 +60,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
        | sh -s -- -y --default-toolchain stable --profile minimal \
          --component clippy --component rustfmt \
-  && chmod -R a+rX /usr/local/rustup /usr/local/cargo
+  # a+rwX so non-root PTY users can populate the registry / target
+  # caches under /usr/local/cargo. The installer writes everything
+  # root-owned; matching the official rust image's "shared toolchain"
+  # convention. Without this, `make ci` inside a dev PTY fails on
+  # the first crate fetch with "Permission denied".
+  && chmod -R a+rwX /usr/local/rustup /usr/local/cargo
 
 # GitHub CLI from the official apt source — not in Debian's main repos.
 RUN mkdir -p -m 755 /etc/apt/keyrings \
