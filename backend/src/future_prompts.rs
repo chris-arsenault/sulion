@@ -122,6 +122,35 @@ pub async fn list(root: &Path, session_uuid: Uuid) -> anyhow::Result<Vec<FutureP
     Ok(entries)
 }
 
+/// Cheap companion to `list` — returns only how many entries are in
+/// the `pending` state. Used by `/api/sessions` to power the sidebar
+/// badge without materialising every prompt body.
+pub async fn count_pending(root: &Path, session_uuid: Uuid) -> anyhow::Result<usize> {
+    let dir = session_dir(root, session_uuid);
+    if !dir.exists() {
+        return Ok(0);
+    }
+
+    let mut rd = tokio::fs::read_dir(&dir).await?;
+    let mut count = 0usize;
+    while let Some(entry) = rd.next_entry().await? {
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if !file_name.ends_with(".md") {
+            continue;
+        }
+        let id = file_name.trim_end_matches(".md").to_string();
+        let full = entry.path();
+        match read_file(&full, &id).await {
+            Ok(parsed) if parsed.state == FuturePromptState::Pending => count += 1,
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(%err, path = %full.display(), "future prompt read failed")
+            }
+        }
+    }
+    Ok(count)
+}
+
 pub async fn create(
     root: &Path,
     session_uuid: Uuid,
@@ -282,6 +311,60 @@ fn escape_quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn count_pending_ignores_sent_and_missing_dirs() {
+        let root = tempfile::tempdir().unwrap();
+        let session_uuid = Uuid::new_v4();
+
+        assert_eq!(
+            count_pending(root.path(), session_uuid).await.unwrap(),
+            0,
+            "missing dir is zero, not an error"
+        );
+
+        let first = create(
+            root.path(),
+            session_uuid,
+            CreateInput {
+                text: "first".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let _second = create(
+            root.path(),
+            session_uuid,
+            CreateInput {
+                text: "second".into(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            count_pending(root.path(), session_uuid).await.unwrap(),
+            2,
+            "both newly created prompts are pending"
+        );
+
+        update(
+            root.path(),
+            session_uuid,
+            &first.id,
+            UpdateInput {
+                text: None,
+                state: Some(FuturePromptState::Sent),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            count_pending(root.path(), session_uuid).await.unwrap(),
+            1,
+            "sent entries drop out of the pending count"
+        );
+    }
 
     #[tokio::test]
     async fn create_list_update_delete_round_trip() {

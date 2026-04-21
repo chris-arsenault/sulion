@@ -20,6 +20,7 @@ const orphanedSession = {
   label: null,
   pinned: false,
   color: null,
+  future_prompts_pending_count: 0,
 };
 
 const deadSession = {

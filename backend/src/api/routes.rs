@@ -135,6 +135,10 @@ struct SessionView {
     pinned: bool,
     /// Palette-constrained colour tag name.
     color: Option<String>,
+    /// Number of `pending` entries in the session's future-prompts
+    /// directory — powers the sidebar badge. Always 0 for sessions
+    /// without a correlated transcript session_uuid.
+    future_prompts_pending_count: u32,
 }
 
 /// Allowed palette names for session colour tags. The backend rejects
@@ -166,6 +170,7 @@ impl From<PtyMetadata> for SessionView {
             label: m.label,
             pinned: m.pinned,
             color: m.color,
+            future_prompts_pending_count: 0,
         }
     }
 }
@@ -179,9 +184,30 @@ async fn list_sessions(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Json<ListSessionsResponse>> {
     let metas = state.pty.list().await?;
-    Ok(Json(ListSessionsResponse {
-        sessions: metas.into_iter().map(SessionView::from).collect(),
-    }))
+    let mut sessions: Vec<SessionView> = metas.into_iter().map(SessionView::from).collect();
+
+    // Fan out future-prompt counts over the filesystem. Sessions
+    // without a correlated transcript session_uuid can't have entries
+    // anyway, so their count stays 0 without a filesystem probe.
+    let root = future_prompt_routes::future_prompts_root(&state);
+    let count_futures = sessions.iter().map(|s| {
+        let root = root.clone();
+        let uuid = s.current_session_uuid;
+        async move {
+            match uuid {
+                Some(u) => crate::future_prompts::count_pending(&root, u)
+                    .await
+                    .unwrap_or(0),
+                None => 0,
+            }
+        }
+    });
+    let counts = futures::future::join_all(count_futures).await;
+    for (sv, c) in sessions.iter_mut().zip(counts) {
+        sv.future_prompts_pending_count = u32::try_from(c).unwrap_or(u32::MAX);
+    }
+
+    Ok(Json(ListSessionsResponse { sessions }))
 }
 
 #[derive(Deserialize)]

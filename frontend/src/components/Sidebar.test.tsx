@@ -203,6 +203,45 @@ describe("Sidebar", () => {
     });
   });
 
+  it("shows the future-prompts badge when the session has queued pending entries", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.sessions.push({
+      id: "44444444-4444-4444-4444-444444444444",
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
+      state: "live",
+      created_at: new Date().toISOString(),
+      ended_at: null,
+      exit_code: null,
+      current_session_uuid: "99999999-9999-9999-9999-999999999999",
+      current_session_agent: "claude-code",
+      future_prompts_pending_count: 3,
+    });
+    state.sessions.push({
+      id: "55555555-5555-5555-5555-555555555555",
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
+      state: "live",
+      created_at: new Date().toISOString(),
+      ended_at: null,
+      exit_code: null,
+      current_session_uuid: null,
+      current_session_agent: null,
+      future_prompts_pending_count: 0,
+    });
+    setup();
+
+    const badge = await waitFor(() =>
+      screen.getByLabelText("3 queued future prompts"),
+    );
+    expect(badge.textContent).toContain("3");
+    // The second session has 0 queued prompts, so no second badge.
+    expect(screen.getAllByTestId("session-future-prompts-badge")).toHaveLength(
+      1,
+    );
+  });
+
   it("new-session inline form creates a session via the API", async () => {
     const state = installFetchMock();
     state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });

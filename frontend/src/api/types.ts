@@ -23,6 +23,10 @@ export interface SessionView {
   pinned: boolean;
   /** Palette-constrained colour tag name. */
   color: SessionColor | null;
+  /** Count of queued `pending` future prompts for the session's
+   * currently correlated transcript session. Drives the sidebar
+   * future-prompts badge. 0 when there's no correlated session. */
+  future_prompts_pending_count: number;
 }
 
 export type SessionColor =

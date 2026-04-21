@@ -45,6 +45,7 @@ describe("FuturePromptsModal", () => {
           label: "main",
           pinned: false,
           color: null,
+          future_prompts_pending_count: 0,
         },
       ],
       repos: [],

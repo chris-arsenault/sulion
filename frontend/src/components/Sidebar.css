@@ -622,6 +622,20 @@
   animation: sulion-pulse 2s ease-in-out infinite;
 }
 
+.sidebar__future-prompts {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  padding: 0 5px;
+  height: 16px;
+  border-radius: var(--r-1);
+  color: var(--atn-fg);
+  background: var(--atn-bg);
+  font-size: var(--t-meta);
+  line-height: 1;
+}
+
 .sidebar__pin-indicator {
   display: inline-flex;
   align-items: center;

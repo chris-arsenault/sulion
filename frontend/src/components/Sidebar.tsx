@@ -1337,6 +1337,16 @@ function SessionRow({
                 )}
               </span>
             </span>
+            {s.future_prompts_pending_count > 0 && (
+              <span
+                className="sidebar__future-prompts"
+                data-testid="session-future-prompts-badge"
+                aria-label={`${s.future_prompts_pending_count} queued future prompt${s.future_prompts_pending_count === 1 ? "" : "s"}`}
+              >
+                <Icon name="list-checks" size={12} />
+                <span className="tabular">{s.future_prompts_pending_count}</span>
+              </span>
+            )}
             {unread && !selected && (
               <span
                 className="sidebar__unread"
