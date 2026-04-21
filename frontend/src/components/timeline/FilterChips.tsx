@@ -23,6 +23,12 @@ const THINKING_LABEL = (
   </>
 );
 
+const FOLLOW_LATEST_LABEL = (
+  <>
+    <Icon name="activity" size={12} /> follow latest
+  </>
+);
+
 interface Props {
   filters: TimelineFilters;
   toggleSpeaker: (s: "user" | "assistant" | "tool_result") => void;
@@ -32,6 +38,7 @@ interface Props {
   setShowBookkeeping: (v: boolean) => void;
   setShowSidechain: (v: boolean) => void;
   setFilePath: (v: string) => void;
+  setFollowLatest: (v: boolean) => void;
   reset: () => void;
 }
 
@@ -44,6 +51,7 @@ export function FilterChips({
   setShowBookkeeping,
   setShowSidechain,
   setFilePath,
+  setFollowLatest,
   reset,
 }: Props) {
   const hasAnythingHidden =
@@ -70,6 +78,10 @@ export function FilterChips({
   const toggleSidechain = useCallback(
     () => setShowSidechain(!filters.showSidechain),
     [filters.showSidechain, setShowSidechain],
+  );
+  const toggleFollowLatest = useCallback(
+    () => setFollowLatest(!filters.followLatest),
+    [filters.followLatest, setFollowLatest],
   );
   const onFilePathChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => setFilePath(e.target.value),
@@ -113,6 +125,12 @@ export function FilterChips({
       </div>
 
       <div className="fc__group">
+        <IncludeChip
+          active={filters.followLatest}
+          onClick={toggleFollowLatest}
+          label={FOLLOW_LATEST_LABEL}
+          ariaLabel="follow latest turn"
+        />
         <IncludeChip
           active={filters.errorsOnly}
           onClick={toggleErrorsOnly}
@@ -245,10 +263,12 @@ function IncludeChip({
   active,
   onClick,
   label,
+  ariaLabel,
 }: {
   active: boolean;
   onClick: () => void;
-  label: string;
+  label: React.ReactNode;
+  ariaLabel?: string;
 }) {
   const cls = [
     "fc__chip",
@@ -263,6 +283,7 @@ function IncludeChip({
       className={cls}
       onClick={onClick}
       aria-pressed={active}
+      aria-label={ariaLabel}
     >
       {label}
     </button>

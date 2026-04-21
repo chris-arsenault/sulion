@@ -16,6 +16,15 @@ describe("timeline filters", () => {
     expect(result.current.filters.hiddenOperationCategories.size).toBe(0);
     expect(result.current.filters.errorsOnly).toBe(false);
     expect(result.current.filters.showThinking).toBe(true);
+    expect(result.current.filters.followLatest).toBe(false);
+  });
+
+  it("persists the follow-latest toggle across reloads", () => {
+    const { result, rerender } = renderHook(() => useTimelineFilters());
+    act(() => result.current.setFollowLatest(true));
+    rerender();
+    const { result: second } = renderHook(() => useTimelineFilters());
+    expect(second.current.filters.followLatest).toBe(true);
   });
 
   it("toggles speaker and operation-category visibility", () => {

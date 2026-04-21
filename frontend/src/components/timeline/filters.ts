@@ -37,6 +37,10 @@ export interface TimelineFilters {
   /** Include-only filter: substring match against tool_use input paths.
    * Empty = no constraint. */
   filePath: string;
+  /** When true, the timeline auto-selects the latest turn as new polls
+   * arrive — tail-follow behaviour. Clicking a turn in the list turns
+   * this off so the user's selection isn't clobbered. */
+  followLatest: boolean;
 }
 
 export const DEFAULT_FILTERS: TimelineFilters = {
@@ -47,6 +51,7 @@ export const DEFAULT_FILTERS: TimelineFilters = {
   showBookkeeping: false,
   showSidechain: false,
   filePath: "",
+  followLatest: false,
 };
 
 // v3 because v2 stored raw tool-name hide state. The app now stores
@@ -64,6 +69,7 @@ interface SerializedFilters {
   showBookkeeping: boolean;
   showSidechain: boolean;
   filePath: string;
+  followLatest: boolean;
 }
 
 function serialize(f: TimelineFilters): SerializedFilters {
@@ -75,6 +81,7 @@ function serialize(f: TimelineFilters): SerializedFilters {
     showBookkeeping: f.showBookkeeping,
     showSidechain: f.showSidechain,
     filePath: f.filePath,
+    followLatest: f.followLatest,
   };
 }
 
@@ -87,6 +94,7 @@ function deserialize(raw: unknown): TimelineFilters {
     showBookkeeping: DEFAULT_FILTERS.showBookkeeping,
     showSidechain: DEFAULT_FILTERS.showSidechain,
     filePath: DEFAULT_FILTERS.filePath,
+    followLatest: DEFAULT_FILTERS.followLatest,
   };
   if (!raw || typeof raw !== "object") return out;
   const r = raw as Partial<SerializedFilters>;
@@ -109,6 +117,7 @@ function deserialize(raw: unknown): TimelineFilters {
   if (typeof r.showBookkeeping === "boolean") out.showBookkeeping = r.showBookkeeping;
   if (typeof r.showSidechain === "boolean") out.showSidechain = r.showSidechain;
   if (typeof r.filePath === "string") out.filePath = r.filePath;
+  if (typeof r.followLatest === "boolean") out.followLatest = r.followLatest;
   return out;
 }
 
@@ -123,6 +132,7 @@ export function useTimelineFilters(): {
   setShowBookkeeping: (v: boolean) => void;
   setShowSidechain: (v: boolean) => void;
   setFilePath: (v: string) => void;
+  setFollowLatest: (v: boolean) => void;
   reset: () => void;
 } {
   const [filters, setFilters] = useState<TimelineFilters>(() => {
@@ -170,6 +180,7 @@ export function useTimelineFilters(): {
     setShowBookkeeping: (v) => setFilters((p) => ({ ...p, showBookkeeping: v })),
     setShowSidechain: (v) => setFilters((p) => ({ ...p, showSidechain: v })),
     setFilePath: (v) => setFilters((p) => ({ ...p, filePath: v })),
+    setFollowLatest: (v) => setFilters((p) => ({ ...p, followLatest: v })),
     reset: () => setFilters(cloneDefault()),
   };
 }
@@ -183,6 +194,7 @@ function cloneDefault(): TimelineFilters {
     showBookkeeping: DEFAULT_FILTERS.showBookkeeping,
     showSidechain: DEFAULT_FILTERS.showSidechain,
     filePath: DEFAULT_FILTERS.filePath,
+    followLatest: DEFAULT_FILTERS.followLatest,
   };
 }
 

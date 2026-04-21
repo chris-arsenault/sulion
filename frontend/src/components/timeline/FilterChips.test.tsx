@@ -79,6 +79,16 @@ describe("FilterChips — exclusion UI", () => {
     expect(chip.className).toContain("include-active");
   });
 
+  it("follow-latest is an include chip that toggles follow state", async () => {
+    const user = userEvent.setup();
+    render(<Host />);
+    const chip = screen.getByRole("button", { name: /follow latest turn/i });
+    expect(chip.getAttribute(ARIA_PRESSED)).toBe("false");
+    await user.click(chip);
+    expect(chip.getAttribute(ARIA_PRESSED)).toBe("true");
+    expect(chip.className).toContain("include-active");
+  });
+
   it("default state: thinking visible, bookkeeping hidden, sidechain hidden", () => {
     expect(DEFAULT_FILTERS.showThinking).toBe(true);
     expect(DEFAULT_FILTERS.showBookkeeping).toBe(false);

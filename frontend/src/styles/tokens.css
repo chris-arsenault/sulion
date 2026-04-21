@@ -163,6 +163,39 @@ button {
   outline-offset: var(--ring-off);
 }
 
+/* Scrollbars — match the telemetry canvas instead of the pale OS default.
+   Firefox reads scrollbar-width / scrollbar-color; Chromium + Safari read
+   the ::-webkit-scrollbar rules below. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--hairline) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--hairline);
+  border-radius: var(--r-1);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--canvas-3);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* Tabular numerals wherever numbers are displayed as data. */
 .tabular,
 [data-tabular] {

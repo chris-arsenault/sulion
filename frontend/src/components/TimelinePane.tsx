@@ -184,15 +184,36 @@ export function TimelinePane({
   // A manual click in the turn list is the user overriding whatever
   // focus the tab was opened with. Strip the focus fields from the
   // tab so later polls (or tab revisits) don't re-apply them — and
-  // so the persistent focus outline on a tool row goes away.
+  // so the persistent focus outline on a tool row goes away. Also
+  // drops follow-latest mode, since the user picking a specific turn
+  // contradicts "keep snapping to the newest one".
   const clearTimelineFocus = useTabs((store) => store.clearTimelineFocus);
+  const { setFollowLatest } = filterHook;
   const handleTurnSelect = useCallback(
     (key: string) => {
       setSelectedTurnKey(key);
       if (tabId) clearTimelineFocus(tabId);
+      if (filters.followLatest) setFollowLatest(false);
     },
-    [tabId, clearTimelineFocus],
+    [tabId, clearTimelineFocus, filters.followLatest, setFollowLatest],
   );
+
+  // Follow-latest: while the filter is on, keep the selection pinned
+  // to the most recently arrived turn across polls. Turn identity is
+  // stable, so we only restart the selection when the last-turn key
+  // actually changes — avoids fighting unrelated re-renders.
+  useEffect(() => {
+    if (!filters.followLatest) return;
+    const last = turns[turns.length - 1];
+    if (!last) return;
+    const lastKey = turnIdentity(last);
+    setSelectedTurnKey((prev) => (prev === lastKey ? prev : lastKey));
+    virtuoso.current?.scrollToIndex({
+      index: turns.length - 1,
+      align: "end",
+      behavior: "auto",
+    });
+  }, [filters.followLatest, turns]);
 
   const onDividerMouseDown = useCallback(
     (e: ReactMouseEvent<HTMLDivElement>) => {

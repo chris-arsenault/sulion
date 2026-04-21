@@ -822,11 +822,9 @@ fn update_codex_context(ctx: &mut CodexSessionContext, value: &Value, session_uu
             ctx.current_turn_id =
                 codex_string_at_path(payload, &["turn_id"]).map(ToString::to_string);
         }
-        "event_msg" => {
-            if payload.get("type").and_then(|v| v.as_str()) == Some("task_started") {
-                ctx.current_turn_id =
-                    codex_string_at_path(payload, &["turn_id"]).map(ToString::to_string);
-            }
+        "event_msg" if payload.get("type").and_then(|v| v.as_str()) == Some("task_started") => {
+            ctx.current_turn_id =
+                codex_string_at_path(payload, &["turn_id"]).map(ToString::to_string);
         }
         _ => {}
     }
