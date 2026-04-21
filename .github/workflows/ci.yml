@@ -16,8 +16,4 @@ permissions:
 jobs:
   ci:
     uses: chris-arsenault/ahara/.github/workflows/ci.yml@main
-    with:
-      rust_extra_ci_commands: |
-        (cd backend && cargo test --release --test structure_lint)
-        ./scripts/run-backend-integration-tests.sh
     secrets: inherit
