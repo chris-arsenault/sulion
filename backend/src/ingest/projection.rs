@@ -36,6 +36,10 @@ pub struct RepoFileTraceTouch {
     pub turn_timestamp: DateTime<Utc>,
     pub operation_type: Option<String>,
     pub operation_category: Option<String>,
+    /// Stable id of the tool call that did the touch, when the touch
+    /// was attached to one. Lets the client jump the user straight to
+    /// the specific tool row inside the turn, not just the turn head.
+    pub pair_id: Option<String>,
     pub touch_kind: String,
     pub is_write: bool,
 }
@@ -743,6 +747,7 @@ pub async fn load_repo_file_trace(
         turn_timestamp: DateTime<Utc>,
         operation_type: Option<String>,
         operation_category: Option<String>,
+        pair_id: Option<String>,
         touch_kind: String,
         is_write: bool,
     }
@@ -758,6 +763,7 @@ pub async fn load_repo_file_trace(
                 tt.start_timestamp AS turn_timestamp, \
                 op.operation_type AS operation_type, \
                 op.operation_category AS operation_category, \
+                op.pair_id AS pair_id, \
                 tf.touch_kind, \
                 tf.is_write \
            FROM timeline_file_touches tf \
@@ -791,6 +797,7 @@ pub async fn load_repo_file_trace(
             turn_timestamp: row.turn_timestamp,
             operation_type: row.operation_type,
             operation_category: row.operation_category,
+            pair_id: row.pair_id,
             touch_kind: row.touch_kind,
             is_write: row.is_write,
         })

@@ -26,6 +26,11 @@ export interface TabData {
   slug?: string;
   /** Timeline focus target. Ignored for other tab kinds. */
   focusTurnId?: number;
+  /** Optional: a specific tool call within the focused turn. The
+   * timeline pane expands that tool, collapses its siblings, and
+   * gives it a persistent outline. Null-safe: falls back to turn-level
+   * focus when absent. */
+  focusPairId?: string;
   /** Changes on every focus request so repeated jumps still fire. */
   focusKey?: string;
 }
@@ -89,6 +94,7 @@ export const useTabStore = create<TabStore>()(
                       [existingId]: {
                         ...state.tabs[existingId],
                         focusTurnId: spec.focusTurnId,
+                        focusPairId: spec.focusPairId,
                         focusKey: spec.focusKey,
                       } as TabData,
                     }
@@ -219,6 +225,7 @@ export const useTabStore = create<TabStore>()(
             path: tab.path,
             slug: tab.slug,
             focusTurnId: tab.focusTurnId,
+            focusPairId: tab.focusPairId,
             focusKey: tab.focusKey,
           } as TabData;
         }

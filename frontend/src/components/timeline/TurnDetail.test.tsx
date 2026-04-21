@@ -224,4 +224,47 @@ describe("TurnDetail", () => {
     expect(seen).toContainEqual({ type: "library-changed", kind: "references" });
     unsubscribe();
   });
+
+  it("marks the focused tool, expands it, and collapses its siblings", () => {
+    const focused = makePair({
+      id: "tool_focus",
+      name: "edit",
+      input: { path: "src/lib.rs" },
+      result: { content: "ok", is_error: false },
+    });
+    const sibling = makePair({
+      id: "tool_other",
+      name: "read",
+      input: { path: "README.md" },
+      result: { content: "…", is_error: false },
+    });
+    renderWithContextMenu(
+      <TurnDetail
+        turn={makeTurn({
+          tool_pairs: [focused, sibling],
+          operation_count: 2,
+          chunks: [toolChunk("tool_focus"), toolChunk("tool_other")],
+        })}
+        showThinking={true}
+        focusPairId="tool_focus"
+        focusKey="focus-1"
+      />,
+    );
+
+    const rows = screen.getAllByTestId("tool-pair-row");
+    const focusedRow = rows.find(
+      (el) => el.getAttribute("data-pair-id") === "tool_focus",
+    );
+    const siblingRow = rows.find(
+      (el) => el.getAttribute("data-pair-id") === "tool_other",
+    );
+
+    expect(focusedRow?.className).toContain("td__tool--focused");
+    expect(focusedRow?.getAttribute("data-focused")).toBe("true");
+    expect(siblingRow?.className ?? "").not.toContain("td__tool--focused");
+
+    // Expanded rows render a `.td__tool-body`; collapsed rows do not.
+    expect(focusedRow?.querySelector(".td__tool-body")).not.toBeNull();
+    expect(siblingRow?.querySelector(".td__tool-body")).toBeNull();
+  });
 });

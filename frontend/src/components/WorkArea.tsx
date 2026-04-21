@@ -604,6 +604,7 @@ function TabContent({ tab }: { tab: TabData }) {
             sessionId={tab.sessionId}
             repo={tab.repo}
             focusTurnId={tab.focusTurnId}
+            focusPairId={tab.focusPairId}
             focusKey={tab.focusKey}
           />
         );

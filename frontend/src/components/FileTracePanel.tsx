@@ -42,6 +42,7 @@ export function FileTracePanel({ repo, path }: { repo: string; path: string }) {
           kind: "timeline",
           sessionId: touch.pty_session_id,
           focusTurnId: touch.turn_id,
+          focusPairId: touch.pair_id ?? undefined,
           focusKey: crypto.randomUUID(),
         },
         "bottom",

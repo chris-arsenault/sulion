@@ -314,6 +314,10 @@ export interface FileTraceTouch {
   turn_timestamp: string;
   operation_type: string | null;
   operation_category: OperationCategory | null;
+  /** Tool-call id this touch belongs to. Null when the touch has no
+   * specific tool (e.g. plain user-prompt turns). Lets the client jump
+   * to the exact tool row inside the turn. */
+  pair_id: string | null;
   touch_kind: string;
   is_write: boolean;
 }

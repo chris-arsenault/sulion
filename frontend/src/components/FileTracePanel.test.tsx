@@ -37,6 +37,7 @@ describe("FileTracePanel", () => {
                   turn_timestamp: "2026-04-19T00:00:00Z",
                   operation_type: "edit",
                   operation_category: "create_content",
+                  pair_id: "tool_use_abc",
                   touch_kind: "write",
                   is_write: true,
                 },
@@ -76,6 +77,7 @@ describe("FileTracePanel", () => {
     const timelineTab = Object.values(tabs).find((tab) => tab.kind === "timeline");
     expect(timelineTab?.sessionId).toBe("11111111-1111-1111-1111-111111111111");
     expect(timelineTab?.focusTurnId).toBe(42);
+    expect(timelineTab?.focusPairId).toBe("tool_use_abc");
     expect(typeof timelineTab?.focusKey).toBe("string");
   });
 

@@ -678,6 +678,10 @@ struct FileTraceTouchResponse {
     turn_timestamp: chrono::DateTime<chrono::Utc>,
     operation_type: Option<String>,
     operation_category: Option<String>,
+    /// Stable id of the tool call this touch belongs to. Null for
+    /// touches that aren't attached to a specific tool (e.g. bare
+    /// user-prompt turns); callers fall back to turn-level focus.
+    pair_id: Option<String>,
     touch_kind: String,
     is_write: bool,
 }
@@ -761,6 +765,7 @@ async fn get_repo_file_trace(
                 turn_timestamp: touch.turn_timestamp,
                 operation_type: touch.operation_type,
                 operation_category: touch.operation_category,
+                pair_id: touch.pair_id,
                 touch_kind: touch.touch_kind,
                 is_write: touch.is_write,
             })

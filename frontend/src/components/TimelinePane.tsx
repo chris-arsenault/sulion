@@ -39,11 +39,13 @@ export function TimelinePane({
   sessionId,
   repo,
   focusTurnId,
+  focusPairId,
   focusKey,
 }: {
   sessionId?: string;
   repo?: string;
   focusTurnId?: number;
+  focusPairId?: string;
   focusKey?: string;
 }) {
   const [timeline, setTimeline] = useState<TimelineResponse | null>(null);
@@ -272,6 +274,8 @@ export function TimelinePane({
             onOpenSubagent={handleSubagent}
             asOverlay
             onClose={clearSelectedTurn}
+            focusPairId={focusPairId ?? null}
+            focusKey={focusKey ?? null}
           />
         </>
       ) : (
@@ -306,6 +310,8 @@ export function TimelinePane({
             showThinking={filters.showThinking}
             onOpenSubagent={handleSubagent}
             asOverlay={false}
+            focusPairId={focusPairId ?? null}
+            focusKey={focusKey ?? null}
           />
         </div>
       )}
