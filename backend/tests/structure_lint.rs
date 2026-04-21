@@ -13,7 +13,6 @@ const DEFAULT_MAX_IMPL_LINES: usize = 400;
 
 const FILE_LIMIT_OVERRIDES: &[(&str, usize)] = &[
     ("src/ingest/ingester.rs", 1200),
-    ("src/api/routes.rs", 1000),
 ];
 
 #[test]
