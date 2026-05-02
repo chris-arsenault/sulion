@@ -83,8 +83,9 @@ PTY. Ask the user to enable the needed Sulion secret for the terminal.
 
 ## Python
 
-Python 3.11 is available as `python3`. The image leaves Rocky's system Python
-untouched for `dnf` and shadows PTY shells through `/usr/local/bin/python3`.
+Python 3.12 is available as `python3`. The image leaves Rocky's system Python
+under `/usr/bin` intact for `dnf` and shadows PTY shells through
+`/usr/local/bin/python3`.
 
 Preferred project workflow:
 

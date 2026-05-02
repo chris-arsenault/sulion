@@ -1,8 +1,9 @@
 # Runtime base. Must be glibc-based so binaries built on GitHub's
-# ubuntu-latest run without musl rebuilds. Rocky 9 also carries a
+# ubuntu-latest run without musl rebuilds. Rocky 10 carries glibc
+# 2.39, matching current Ubuntu-built artifacts, while keeping the
 # shadow-utils/newuidmap stack that supports Sulion's nested rootless
 # Podman use case without granting SYS_ADMIN to the outer container.
-FROM rockylinux:9
+FROM rockylinux/rockylinux:10
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -11,30 +12,28 @@ ARG DUCKDB_VERSION=1.5.2
 # Base shell + dev workbench tools. The PTYs that the backend forks
 # inherit this image's filesystem, so every tool the user needs in
 # their Claude sessions has to be available here.
-# Rocky base images already include `curl-minimal`, which provides the
-# HTTPS fetch behavior this Dockerfile needs. Installing full `curl`
-# conflicts with that package, so do not request it here.
 RUN dnf install -y --setopt=install_weak_deps=False dnf-plugins-core epel-release \
   && dnf config-manager --set-enabled crb \
   && dnf install -y --setopt=install_weak_deps=False \
     ca-certificates \
+    curl \
     wget \
     bash \
     sudo \
     git \
     git-lfs \
-    awscli \
+    awscli2 \
     openssh-clients \
-    tini \
+    dumb-init \
     vim-enhanced \
     nano \
     less \
     jq \
     ripgrep \
     fd-find \
-    python3.11 \
-    python3.11-pip \
-    python3.11-devel \
+    python3 \
+    python3-pip \
+    python3-devel \
     gnupg2 \
     postgresql \
     procps-ng \
@@ -48,8 +47,8 @@ RUN dnf install -y --setopt=install_weak_deps=False dnf-plugins-core epel-releas
     socat \
   && dnf clean all \
   && rm -rf /var/cache/dnf \
-  && ln -sf /usr/bin/python3.11 /usr/local/bin/python3 \
-  && ln -sf /usr/bin/python3.11 /usr/local/bin/python
+  && ln -sf /usr/bin/python3.12 /usr/local/bin/python3 \
+  && ln -sf /usr/bin/python3.12 /usr/local/bin/python
 
 # Python helpers used from PTYs. Keep these system-installed so agents
 # can import them immediately from the default shell without creating a
@@ -264,4 +263,4 @@ USER dev
 WORKDIR /home/dev
 
 EXPOSE 8080
-ENTRYPOINT ["/usr/bin/tini", "--", "/opt/sulion/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/dumb-init", "--", "/opt/sulion/entrypoint.sh"]
