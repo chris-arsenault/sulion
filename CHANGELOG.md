@@ -10,6 +10,9 @@ All notable user-visible changes to Sulion are recorded here.
 - Translated the backend image package setup from `apt` to `dnf`, with EPEL/CRB enabled and Rocky package names for Podman, build tools, GitHub CLI, PostgreSQL client tooling, and shell utilities.
 - Kept the existing PTY tool surface on the Rocky image, including Rust, .NET 8, .NET 10.0.100, Terraform, DuckDB CLI/Python binding, Node/pnpm, Python helpers, `uv`, `awscli2`, `git-lfs`, and the `docker` to Podman shim.
 - Changed PTY `python3` to a Python 3.12 shim under `/usr/local/bin` while leaving Rocky's system Python path intact for `dnf`.
+- Changed backend startup so the API listener binds after migrations and orphan reconciliation, while derived transcript repair runs only when `ingest_projection_versions` is behind.
+- Changed transcript repair to preserve source `events` rows and rebuild derived canonical/timeline tables from existing Postgres payloads instead of deleting data and relying on JSONL replay.
+- Fixed canonical-block repair so it skips already-populated events instead of reprocessing historical Codex events on every backend restart.
 
 ## v1.0.0 - 2026-05-02
 

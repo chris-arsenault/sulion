@@ -1,8 +1,7 @@
-// Destructive admin action: wipe every transcript row and per-file
-// ingest offset, then kick the ingester to replay every JSONL from
-// scratch. Gated behind a typed-phrase confirm so it can't fire on
-// an accidental click — the user has to type "refresh" before the
-// dialog's confirm button unlocks.
+// Admin action: rebuild derived transcript rows from the database copy
+// of ingested events. Gated behind a typed-phrase confirm so it can't
+// fire on an accidental click — the user has to type "refresh" before
+// the dialog's confirm button unlocks.
 
 import { useCallback, useState } from "react";
 
@@ -44,7 +43,7 @@ export function ReindexButton() {
 
   return (
     <div className="reindex">
-      <Tooltip label="Clear ingest state and re-read every JSONL transcript from disk">
+      <Tooltip label="Rebuild transcript projections from stored event payloads">
         <button
           type="button"
           className="reindex__btn"
@@ -61,9 +60,9 @@ export function ReindexButton() {
         <ConfirmDialog
           title="Reindex transcripts?"
           message={
-            "This wipes every transcript row in the database and re-reads every JSONL " +
-            "file from scratch. Terminal associations and saved library entries are preserved. " +
-            "The timeline will be empty for a few seconds while the ingester replays."
+            "This rebuilds canonical blocks and timeline projections from stored event payloads. " +
+            "Source transcript rows, ingest offsets, terminal associations, and saved library entries are preserved. " +
+            "The timeline may be incomplete while the rebuild runs."
           }
           requireText="refresh"
           confirmLabel="Reindex"
@@ -99,13 +98,10 @@ export function ReindexButton() {
 }
 
 function formatDoneMessage(stats: ReindexResponse): string {
-  // The ingester runs on its own poll loop; the re-read happens in the
-  // background after this returns. /api/app-state is where you watch the
-  // running totals if you want to see counts climb back up.
   return (
-    `Cleared ${stats.sessions_cleared} transcript ${sessions(stats.sessions_cleared)} ` +
-    `and ${stats.offsets_cleared} ingest ${offsets(stats.offsets_cleared)}. ` +
-    `The ingester will replay every JSONL from scratch on its next tick.`
+    `Rebuilt ${stats.sessions_rebuilt} transcript ${sessions(stats.sessions_rebuilt)} ` +
+    `from ${stats.events_preserved} preserved event ${events(stats.events_preserved)}. ` +
+    `Canonical rows rebuilt: ${stats.canonical_events_rebuilt}; timeline sessions rebuilt: ${stats.timeline_sessions_rebuilt}.`
   );
 }
 
@@ -113,6 +109,6 @@ function sessions(n: number): string {
   return n === 1 ? "session" : "sessions";
 }
 
-function offsets(n: number): string {
-  return n === 1 ? "offset" : "offsets";
+function events(n: number): string {
+  return n === 1 ? "row" : "rows";
 }

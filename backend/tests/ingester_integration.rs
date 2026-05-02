@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use sulion::db;
-use sulion::ingest::{reset_ingest_state, Ingester, IngesterConfig};
+use sulion::ingest::{rebuild_ingest_derivatives, Ingester, IngesterConfig};
 use uuid::Uuid;
 
 const CODEX_RICH_LINEAGE_PARENT: &str = include_str!("fixtures/codex-rich-lineage-parent.jsonl");
@@ -670,10 +670,12 @@ async fn reindex_preserves_correlated_terminal_association() {
     Ingester::new().tick(&pool, &fx.config()).await.unwrap();
     assert_eq!(event_count(&pool, fx.session_uuid).await, 1);
 
-    let stats = reset_ingest_state(&pool).await.unwrap();
-    assert_eq!(stats.sessions_cleared, 1);
-    assert_eq!(stats.offsets_cleared, 1);
-    assert_eq!(event_count(&pool, fx.session_uuid).await, 0);
+    let stats = rebuild_ingest_derivatives(&pool).await.unwrap();
+    assert_eq!(stats.sessions_rebuilt, 1);
+    assert_eq!(stats.events_preserved, 1);
+    assert_eq!(stats.canonical_events_rebuilt, 1);
+    assert_eq!(stats.timeline_sessions_rebuilt, 1);
+    assert_eq!(event_count(&pool, fx.session_uuid).await, 1);
 
     let reset_row: (Option<Uuid>, Option<String>, Option<Uuid>) = sqlx::query_as(
         "SELECT pty_session_id, project_hash, parent_session_uuid \
@@ -685,7 +687,7 @@ async fn reindex_preserves_correlated_terminal_association() {
     .await
     .unwrap();
     assert_eq!(reset_row.0, Some(pty_id));
-    assert!(reset_row.1.is_none());
+    assert_eq!(reset_row.1.as_deref(), Some(fx.project_hash.as_str()));
     assert!(reset_row.2.is_none());
 
     Ingester::new().tick(&pool, &fx.config()).await.unwrap();

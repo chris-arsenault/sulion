@@ -16,7 +16,7 @@ Claude and Codex write into the same canonical event model, share `ingester_stat
 ## Why not split today
 
 - Deploy stays one Rust service, one frontend service.
-- Startup ordering stays linear: migrations → one-shot backfills → ingester boot → API boot.
+- Startup opens the API after database migrations and orphan reconciliation. Derived transcript repair is gated by `ingest_projection_versions`; when a parser/projection version is behind, Sulion repairs missing canonical/timeline fields from existing Postgres `events.payload` rows before starting the ingester. It does not replay JSONL on ordinary startup.
 - No evidence transcript polling is saturating CPU or memory.
 - The `api/` vs `ingest/` code split already removed the ambiguity that triggered #48.
 

@@ -55,8 +55,10 @@ describe("ReindexButton", () => {
       calls.push({ url, method: init?.method });
       if (url === "/api/admin/reindex") {
         return jsonResponse({
-          sessions_cleared: 3,
-          offsets_cleared: 3,
+          sessions_rebuilt: 3,
+          events_preserved: 42,
+          canonical_events_rebuilt: 42,
+          timeline_sessions_rebuilt: 3,
         });
       }
       return new Response("", { status: 404 });
@@ -77,10 +79,10 @@ describe("ReindexButton", () => {
       expect(screen.getByText("Reindex complete")).toBeDefined();
     });
     expect(
-      screen.getByText(/Cleared 3 transcript sessions and 3 ingest offsets/),
+      screen.getByText(/Rebuilt 3 transcript sessions from 42 preserved event rows/),
     ).toBeDefined();
     expect(
-      screen.getByText(/ingester will replay every JSONL from scratch/i),
+      screen.getByText(/Canonical rows rebuilt: 42; timeline sessions rebuilt: 3/i),
     ).toBeDefined();
   });
 

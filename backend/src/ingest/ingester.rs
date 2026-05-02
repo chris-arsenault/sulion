@@ -925,57 +925,83 @@ async fn insert_blocks(
 /// One-shot backfill on startup: walk every event that hasn't been
 /// decomposed into blocks yet and synthesise them from `payload`. Keeps
 /// the frontend's "read from blocks only" invariant true even for rows
-/// that pre-date this migration. Cheap because the corpus is small.
+/// that pre-date this migration. This must stay partial: startup callers
+/// gate it by derived-data version and it should only repair rows with
+/// missing structured fields or known legacy block shapes.
 pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<usize> {
     let codex_sessions: Vec<(Uuid,)> = sqlx::query_as(
         "SELECT DISTINCT session_uuid \
-         FROM events \
-         WHERE agent = 'codex'",
+         FROM events e \
+         WHERE e.agent = 'codex' AND ( \
+             e.speaker IS NULL OR \
+             e.content_kind IS NULL OR \
+             (e.content_kind IS DISTINCT FROM 'none' AND NOT EXISTS ( \
+                 SELECT 1 FROM event_blocks b \
+                  WHERE b.session_uuid = e.session_uuid \
+                    AND b.byte_offset = e.byte_offset \
+             )) \
+         )",
     )
     .fetch_all(pool)
     .await?;
     let mut count = 0usize;
     for (session_uuid,) in codex_sessions {
-        let rows: Vec<(Uuid, i64, String, serde_json::Value)> = sqlx::query_as(
-            "SELECT session_uuid, byte_offset, agent, payload \
-             FROM events \
-             WHERE session_uuid = $1 \
+        let rows: Vec<(Uuid, i64, String, serde_json::Value, bool)> = sqlx::query_as(
+            "SELECT e.session_uuid, e.byte_offset, e.agent, e.payload, \
+                    ( \
+                        e.speaker IS NULL OR \
+                        e.content_kind IS NULL OR \
+                        (e.content_kind IS DISTINCT FROM 'none' AND NOT EXISTS ( \
+                            SELECT 1 FROM event_blocks b \
+                             WHERE b.session_uuid = e.session_uuid \
+                               AND b.byte_offset = e.byte_offset \
+                        )) \
+                    ) AS needs_backfill \
+             FROM events e \
+             WHERE e.session_uuid = $1 \
              ORDER BY byte_offset",
         )
         .bind(session_uuid)
         .fetch_all(pool)
         .await?;
         let mut ctx = CodexSessionContext::new(session_uuid);
-        for (row_session_uuid, byte_offset, agent, payload) in rows {
-            let parsed =
-                parse_canonical_event(&agent, &payload, row_session_uuid, byte_offset, Some(&ctx));
-            let mut tx = pool.begin().await?;
-            sqlx::query(
-                "UPDATE events SET speaker = $3, content_kind = $4, \
-                        event_uuid = $5, parent_event_uuid = $6, related_tool_use_id = $7, \
-                        is_sidechain = $8, is_meta = $9, subtype = $10, search_text = $11 \
-                 WHERE session_uuid = $1 AND byte_offset = $2",
-            )
-            .bind(row_session_uuid)
-            .bind(byte_offset)
-            .bind(parsed.speaker.as_str())
-            .bind(parsed.content_kind.as_str())
-            .bind(parsed.event_uuid.as_deref())
-            .bind(parsed.parent_event_uuid.as_deref())
-            .bind(parsed.related_tool_use_id.as_deref())
-            .bind(parsed.is_sidechain)
-            .bind(parsed.is_meta)
-            .bind(parsed.subtype.as_deref())
-            .bind(parsed.search_text())
-            .execute(&mut *tx)
-            .await?;
-            insert_blocks(&mut tx, row_session_uuid, byte_offset, &parsed.blocks).await?;
-            tx.commit().await?;
-            if let Some(parent) = detect_codex_parent_session(&payload, row_session_uuid) {
-                set_parent_session(pool, row_session_uuid, parent).await?;
+        for (row_session_uuid, byte_offset, agent, payload, needs_backfill) in rows {
+            if needs_backfill {
+                let parsed = parse_canonical_event(
+                    &agent,
+                    &payload,
+                    row_session_uuid,
+                    byte_offset,
+                    Some(&ctx),
+                );
+                let mut tx = pool.begin().await?;
+                sqlx::query(
+                    "UPDATE events SET speaker = $3, content_kind = $4, \
+                            event_uuid = $5, parent_event_uuid = $6, related_tool_use_id = $7, \
+                            is_sidechain = $8, is_meta = $9, subtype = $10, search_text = $11 \
+                     WHERE session_uuid = $1 AND byte_offset = $2",
+                )
+                .bind(row_session_uuid)
+                .bind(byte_offset)
+                .bind(parsed.speaker.as_str())
+                .bind(parsed.content_kind.as_str())
+                .bind(parsed.event_uuid.as_deref())
+                .bind(parsed.parent_event_uuid.as_deref())
+                .bind(parsed.related_tool_use_id.as_deref())
+                .bind(parsed.is_sidechain)
+                .bind(parsed.is_meta)
+                .bind(parsed.subtype.as_deref())
+                .bind(parsed.search_text())
+                .execute(&mut *tx)
+                .await?;
+                insert_blocks(&mut tx, row_session_uuid, byte_offset, &parsed.blocks).await?;
+                tx.commit().await?;
+                if let Some(parent) = detect_codex_parent_session(&payload, row_session_uuid) {
+                    set_parent_session(pool, row_session_uuid, parent).await?;
+                }
+                count += 1;
             }
             update_codex_context(&mut ctx, &payload, row_session_uuid);
-            count += 1;
         }
     }
 
@@ -983,10 +1009,8 @@ pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<usize> {
         "SELECT e.session_uuid, e.byte_offset, e.agent, e.payload \
          FROM events e \
          WHERE e.agent <> 'codex' AND ( \
-             e.search_text = '' OR \
              e.speaker IS NULL OR \
              e.content_kind IS NULL OR \
-             e.event_uuid IS NULL OR \
              EXISTS ( \
                  SELECT 1 FROM event_blocks b \
                   WHERE b.session_uuid = e.session_uuid \
@@ -1005,10 +1029,11 @@ pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<usize> {
                     AND NOT (b.tool_input ? 'file_edits') \
              ) OR \
              NOT EXISTS ( \
-             SELECT 1 FROM event_blocks b \
-              WHERE b.session_uuid = e.session_uuid \
-                AND b.byte_offset = e.byte_offset \
-         ))",
+                 SELECT 1 FROM event_blocks b \
+                  WHERE b.session_uuid = e.session_uuid \
+                    AND b.byte_offset = e.byte_offset \
+             ) AND e.content_kind IS DISTINCT FROM 'none' \
+         )",
     )
     .fetch_all(pool)
     .await?;

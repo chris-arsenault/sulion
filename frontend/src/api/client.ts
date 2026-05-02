@@ -242,8 +242,10 @@ export function createRepo(body: CreateRepoRequest): Promise<RepoView> {
 }
 
 export interface ReindexResponse {
-  sessions_cleared: number;
-  offsets_cleared: number;
+  sessions_rebuilt: number;
+  events_preserved: number;
+  canonical_events_rebuilt: number;
+  timeline_sessions_rebuilt: number;
 }
 
 export function triggerReindex(): Promise<ReindexResponse> {

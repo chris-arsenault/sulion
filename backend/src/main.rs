@@ -67,37 +67,16 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!(count = orphaned, "reconciled orphaned PTY sessions");
     }
 
-    // One-shot backfill: synthesize canonical event_blocks for any
-    // events ingested before the canonical-block migration. No-op once
-    // complete. Cheap — corpus is small and the SELECT anti-joins are
-    // indexed.
-    match sulion::ingest::backfill_canonical_blocks(&pool).await {
-        Ok(0) => {}
-        Ok(n) => tracing::info!(count = n, "backfilled canonical event blocks"),
-        Err(err) => tracing::warn!(%err, "canonical block backfill failed"),
-    }
-
-    match sulion::ingest::backfill_timeline_projection(&pool).await {
-        Ok(0) => {}
-        Ok(n) => tracing::info!(sessions = n, "backfilled app timeline projection"),
-        Err(err) => tracing::warn!(%err, "timeline projection backfill failed"),
-    }
-
-    // Background ingester — the sole reader of the JSONL transcripts.
-    // We hold an Arc so the app-state sampler can read its runtime
-    // totals without a second process observing them.
     let ingester = std::sync::Arc::new(Ingester::new());
-    let ingester_pool = pool.clone();
     let ingester_cfg = IngesterConfig::new(cfg.claude_projects_dir.clone())
         .with_codex_sessions_dir(cfg.codex_sessions_dir.clone());
-    let ingester_supervisor = ingester.clone();
-    tokio::spawn(async move {
-        run_ingester_supervisor(ingester_supervisor, ingester_pool, ingester_cfg).await;
-    });
-    tracing::info!(
-        claude_projects = %cfg.claude_projects_dir.display(),
-        codex_sessions = %cfg.codex_sessions_dir.display(),
-        "ingester started",
+
+    let state = AppState::new_with_auth(
+        pool.clone(),
+        cfg.repos_root.clone(),
+        cfg.library_root.clone(),
+        ingester.clone(),
+        auth,
     );
 
     // SessionStart-hook correlation socket.
@@ -109,27 +88,55 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let state = AppState::new_with_auth(
-        pool,
-        cfg.repos_root.clone(),
-        cfg.library_root.clone(),
-        ingester,
-        auth,
-    );
-    if let Err(err) = state.repo_state.sync_repos_once().await {
-        tracing::warn!(%err, "initial repo state sync failed");
-    }
-    if let Err(err) = state.repo_state.reconcile_due_once(4).await {
-        tracing::warn!(%err, "initial repo state reconcile failed");
-    }
-    if let Err(err) = sulion::api::sample_stats_once(&state).await {
-        tracing::warn!(%err, "initial stats sample failed");
-    }
-    tokio::spawn(state.repo_state.clone().run());
+    let maintenance_pool = pool.clone();
+    let maintenance_ingester = ingester.clone();
+    tokio::spawn(async move {
+        run_startup_maintenance(maintenance_ingester, maintenance_pool, ingester_cfg).await;
+    });
+
+    tokio::spawn(run_repo_state_manager(state.repo_state.clone()));
     tokio::spawn(sulion::api::run_stats_sampler(state.clone()));
+
     let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
+    tracing::info!(listen = %cfg.listen, "api listener bound");
     axum::serve(listener, app(state)).await?;
     Ok(())
+}
+
+async fn run_startup_maintenance(
+    ingester: std::sync::Arc<Ingester>,
+    pool: db::Pool,
+    cfg: IngesterConfig,
+) {
+    match sulion::ingest::run_required_startup_maintenance(&pool).await {
+        Ok(stats) => {
+            tracing::info!(
+                canonical_events_backfilled = stats.canonical_events_backfilled,
+                timeline_sessions_backfilled = stats.timeline_sessions_backfilled,
+                "startup transcript maintenance complete",
+            );
+        }
+        Err(err) => {
+            tracing::warn!(%err, "startup transcript maintenance failed");
+        }
+    }
+
+    tracing::info!(
+        claude_projects = %cfg.claude_projects_dir.display(),
+        codex_sessions = ?cfg.codex_sessions_dir,
+        "ingester starting after startup maintenance",
+    );
+    run_ingester_supervisor(ingester, pool, cfg).await;
+}
+
+async fn run_repo_state_manager(repo_state: std::sync::Arc<sulion::repo_state::RepoStateManager>) {
+    if let Err(err) = repo_state.sync_repos_once().await {
+        tracing::warn!(%err, "initial repo state sync failed");
+    }
+    if let Err(err) = repo_state.reconcile_due_once(4).await {
+        tracing::warn!(%err, "initial repo state reconcile failed");
+    }
+    repo_state.run().await;
 }
 
 async fn run_ingester_supervisor(
