@@ -11,11 +11,13 @@ ARG DUCKDB_VERSION=1.5.2
 # Base shell + dev workbench tools. The PTYs that the backend forks
 # inherit this image's filesystem, so every tool the user needs in
 # their Claude sessions has to be available here.
+# Rocky base images already include `curl-minimal`, which provides the
+# HTTPS fetch behavior this Dockerfile needs. Installing full `curl`
+# conflicts with that package, so do not request it here.
 RUN dnf install -y --setopt=install_weak_deps=False dnf-plugins-core epel-release \
   && dnf config-manager --set-enabled crb \
   && dnf install -y --setopt=install_weak_deps=False \
     ca-certificates \
-    curl \
     wget \
     bash \
     sudo \
