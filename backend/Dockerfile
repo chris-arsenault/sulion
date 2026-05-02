@@ -1,16 +1,19 @@
-# Runtime base. Must have GLIBC >= 2.39 so binaries built on GitHub's
-# ubuntu-latest (24.04 → glibc 2.39) load correctly. Bookworm ships
-# glibc 2.36 and was rejected at container start with
-#   version `GLIBC_2.39' not found.
-# Trixie (Debian 13, glibc 2.41) is the current stable and works.
-FROM debian:trixie-slim
+# Runtime base. Must be glibc-based so binaries built on GitHub's
+# ubuntu-latest run without musl rebuilds. Rocky 9 also carries a
+# shadow-utils/newuidmap stack that supports Sulion's nested rootless
+# Podman use case without granting SYS_ADMIN to the outer container.
+FROM rockylinux:9
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ARG DUCKDB_VERSION=1.5.2
 
 # Base shell + dev workbench tools. The PTYs that the backend forks
 # inherit this image's filesystem, so every tool the user needs in
 # their Claude sessions has to be available here.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN dnf install -y --setopt=install_weak_deps=False dnf-plugins-core epel-release \
+  && dnf config-manager --set-enabled crb \
+  && dnf install -y --setopt=install_weak_deps=False \
     ca-certificates \
     curl \
     wget \
@@ -19,27 +22,39 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     git-lfs \
     awscli \
-    openssh-client \
+    openssh-clients \
     tini \
-    vim \
+    vim-enhanced \
     nano \
     less \
     jq \
     ripgrep \
     fd-find \
-    python3 \
-    python3-pip \
-    python3-dev \
-    ca-certificates \
-    gnupg \
-    postgresql-client \
+    python3.11 \
+    python3.11-pip \
+    python3.11-devel \
+    gnupg2 \
+    postgresql \
+    procps-ng \
+    findutils \
+    which \
+    tar \
+    gzip \
+    xz \
+    unzip \
+    libgomp \
     socat \
-  && rm -rf /var/lib/apt/lists/*
+  && dnf clean all \
+  && rm -rf /var/cache/dnf \
+  && ln -sf /usr/bin/python3.11 /usr/local/bin/python3 \
+  && ln -sf /usr/bin/python3.11 /usr/local/bin/python
 
 # Python helpers used from PTYs. Keep these system-installed so agents
 # can import them immediately from the default shell without creating a
 # virtualenv first.
-RUN python3 -m pip install --break-system-packages --no-cache-dir \
+RUN /usr/local/bin/python3 -m pip install --no-cache-dir \
+  --upgrade pip setuptools wheel \
+  && /usr/local/bin/python3 -m pip install --no-cache-dir \
   click \
   "duckdb==${DUCKDB_VERSION}" \
   Pillow \
@@ -52,15 +67,18 @@ RUN curl -LsSf https://astral.sh/uv/install.sh \
     | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh \
   && chmod 0755 /usr/local/bin/uv /usr/local/bin/uvx
 
-# Debian ships fd as fdfind to avoid a name collision; expose the
-# expected `fd` binary too.
-RUN ln -s /usr/bin/fdfind /usr/local/bin/fd
+# Some distros expose fd as fdfind to avoid a name collision; expose
+# the expected `fd` binary too when needed.
+RUN if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; then \
+      ln -s /usr/bin/fdfind /usr/local/bin/fd; \
+    fi
 
-# Node 20 LTS — Debian's packaged `nodejs` lags behind and breaks a lot
-# of modern npm installs (including `@anthropic-ai/claude-code`).
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-  && apt-get update && apt-get install -y --no-install-recommends nodejs \
-  && rm -rf /var/lib/apt/lists/*
+# Node 20 LTS from NodeSource; distro Node channels lag behind modern
+# npm tooling used by the agent CLIs.
+RUN curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - \
+  && dnf install -y --setopt=install_weak_deps=False nodejs \
+  && dnf clean all \
+  && rm -rf /var/cache/dnf
 
 # pnpm via corepack (bundled with Node 20). The frontend Makefile
 # targets invoke `pnpm exec …` directly, so pnpm has to be on PATH
@@ -82,11 +100,12 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     RUSTUP_TOOLCHAIN=stable-x86_64-unknown-linux-gnu \
     PATH=/usr/local/cargo/bin:$PATH
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential \
-      pkg-config \
-      libssl-dev \
-  && rm -rf /var/lib/apt/lists/* \
+RUN dnf groupinstall -y "Development Tools" \
+  && dnf install -y --setopt=install_weak_deps=False \
+      openssl-devel \
+      pkgconf-pkg-config \
+  && dnf clean all \
+  && rm -rf /var/cache/dnf \
   && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
        | sh -s -- -y --default-toolchain stable --profile minimal \
   && rustup toolchain install stable-x86_64-unknown-linux-gnu --profile minimal \
@@ -106,18 +125,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # .NET SDKs for C# builds in PTYs. Some repos in the shared workspace
 # still target .NET 8 while others pin .NET 10 via global.json and
-# test projects. Trixie doesn't package dotnet-sdk in main and
-# Microsoft's apt channel lags behind Debian releases, so the
-# sanctioned route is dotnet-install.sh, which drops self-contained
-# SDKs under /usr/share/dotnet. A /usr/bin/dotnet symlink keeps it on
-# PATH for every user. Opt out of Microsoft's telemetry by default for
-# a dev image.
+# test projects. Use dotnet-install.sh so both SDKs are present
+# side-by-side independent of distro package channels. A /usr/bin/dotnet
+# symlink keeps it on PATH for every user. Opt out of Microsoft's
+# telemetry by default for a dev image.
 ENV DOTNET_ROOT=/usr/share/dotnet \
     DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_NOLOGO=1
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      libicu-dev \
-  && rm -rf /var/lib/apt/lists/* \
+RUN dnf install -y --setopt=install_weak_deps=False \
+      libicu-devel \
+  && dnf clean all \
+  && rm -rf /var/cache/dnf \
   && curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
   && chmod +x /tmp/dotnet-install.sh \
   && /tmp/dotnet-install.sh --channel 8.0 --install-dir "${DOTNET_ROOT}" \
@@ -130,12 +148,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # login shells already include /usr/local/bin on PATH, so install the
 # standalone binary there rather than depending on distro packaging.
 ARG TERRAFORM_VERSION=1.12.2
-RUN apt-get update && apt-get install -y --no-install-recommends unzip \
-  && rm -rf /var/lib/apt/lists/* \
-  && arch="$(dpkg --print-architecture)" \
+RUN arch="$(uname -m)" \
   && case "${arch}" in \
-       amd64) tf_arch=amd64 ;; \
-       arm64) tf_arch=arm64 ;; \
+       x86_64) tf_arch=amd64 ;; \
+       aarch64) tf_arch=arm64 ;; \
        *) echo "unsupported terraform arch: ${arch}" >&2; exit 1 ;; \
      esac \
   && curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${tf_arch}.zip" \
@@ -147,10 +163,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends unzip \
 # DuckDB for local data inspection from PTYs. Install both the Python
 # binding above and the standalone CLI here so `python3 -c 'import
 # duckdb'` and `duckdb <db>` work without a project virtualenv.
-RUN arch="$(dpkg --print-architecture)" \
+RUN arch="$(uname -m)" \
   && case "${arch}" in \
-       amd64) duckdb_arch=amd64 ;; \
-       arm64) duckdb_arch=arm64 ;; \
+       x86_64) duckdb_arch=amd64 ;; \
+       aarch64) duckdb_arch=arm64 ;; \
        *) echo "unsupported duckdb arch: ${arch}" >&2; exit 1 ;; \
      esac \
   && mkdir -p /tmp/duckdb \
@@ -171,13 +187,15 @@ RUN arch="$(dpkg --print-architecture)" \
 # The /etc/containers/storage.conf pin forces overlay+fuse-overlayfs;
 # without it, podman falls back to vfs on first run and you get slow
 # pulls that eat the dataset.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN dnf install -y --setopt=install_weak_deps=False \
       podman \
       crun \
       fuse-overlayfs \
-      uidmap \
+      shadow-utils \
       slirp4netns \
-  && rm -rf /var/lib/apt/lists/* \
+      util-linux-core \
+  && dnf clean all \
+  && rm -rf /var/cache/dnf \
   && echo "dev:100000:65536" >> /etc/subuid \
   && echo "dev:100000:65536" >> /etc/subgid \
   && mkdir -p /etc/containers \
@@ -195,16 +213,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN printf '#!/bin/sh\nexec podman "$@"\n' > /usr/local/bin/docker \
   && chmod +x /usr/local/bin/docker
 
-# GitHub CLI from the official apt source — not in Debian's main repos.
-RUN mkdir -p -m 755 /etc/apt/keyrings \
-  && wget -nv -O- https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-       | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
-  && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
-  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-       > /etc/apt/sources.list.d/github-cli.list \
-  && apt-get update \
-  && apt-get install -y --no-install-recommends gh \
-  && rm -rf /var/lib/apt/lists/*
+# GitHub CLI from the official RPM repo.
+RUN dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo \
+  && dnf install -y --setopt=install_weak_deps=False gh \
+  && dnf clean all \
+  && rm -rf /var/cache/dnf
 
 # Agent CLIs pre-installed system-wide so a fresh PTY can
 # `claude login` / `codex login` without any bootstrap. Users who
@@ -212,17 +225,17 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
 # is set to ~/.local in the entrypoint, so user installs shadow these).
 RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
-# sulion-managed shell aliases. Goes in /etc/bash.bashrc which
-# Debian sources for interactive non-login shells — which is what a
-# PTY gets. User can still override in their own ~/.bashrc (runs
-# AFTER /etc/bash.bashrc). Keep this list tight; aliases are a
+# sulion-managed shell aliases. Rocky/RHEL sources /etc/bashrc for
+# interactive non-login shells — which is what a PTY gets. User can
+# still override in their own ~/.bashrc (runs AFTER /etc/bashrc).
+# Keep this list tight; aliases are a
 # product surface, not a dumping ground.
 RUN { \
       echo ''; \
       echo '# sulion: agent shortcuts'; \
       echo 'alias cl="sulion-agent --type claude --mode real -- --dangerously-skip-permissions"'; \
       echo 'alias co="sulion-agent --type codex --mode real -- --yolo"'; \
-    } >> /etc/bash.bashrc
+    } >> /etc/bashrc
 
 # 7321 is a deliberately unusual UID/GID to avoid colliding with the
 # ~1000 range that most consumer apps claim. Must match the ownership

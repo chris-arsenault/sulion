@@ -2,6 +2,15 @@
 
 All notable user-visible changes to Sulion are recorded here.
 
+## Unreleased
+
+### Runtime container and toolchain
+
+- Rebased the backend/PTY image from Debian Trixie to Rocky Linux 9 to keep a glibc runtime while using Rocky's `shadow-utils`/`newuidmap` behavior for nested rootless Podman without `SYS_ADMIN`.
+- Translated the backend image package setup from `apt` to `dnf`, with EPEL/CRB enabled and Rocky package names for Podman, build tools, GitHub CLI, PostgreSQL client tooling, and shell utilities.
+- Kept the existing PTY tool surface on the Rocky image, including Rust, .NET 8, .NET 10.0.100, Terraform, DuckDB CLI/Python binding, Node/pnpm, Python helpers, `uv`, `awscli`, `git-lfs`, and the `docker` to Podman shim.
+- Changed PTY `python3` to a Python 3.11 shim under `/usr/local/bin` while leaving Rocky's system Python untouched for `dnf`.
+
 ## v1.0.0 - 2026-05-02
 
 ### Security and secrets
