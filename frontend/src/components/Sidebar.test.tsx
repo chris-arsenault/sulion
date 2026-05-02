@@ -31,20 +31,28 @@ type Endpoint = "/api/sessions" | "/api/repos" | string;
 interface MockState {
   sessions: Array<Record<string, unknown>>;
   repos: Array<Record<string, unknown>>;
+  secrets: Array<Record<string, unknown>>;
+  grantsBySession: Record<string, Array<Record<string, unknown>>>;
   createSessionCalls: Array<unknown>;
   createRepoCalls: Array<unknown>;
   deletedIds: string[];
   patches: Array<{ id: string; body: unknown }>;
+  unlocks: Array<unknown>;
+  revokes: Array<unknown>;
 }
 
 function installFetchMock(): MockState {
   const state: MockState = {
     sessions: [],
     repos: [],
+    secrets: [],
+    grantsBySession: {},
     createSessionCalls: [],
     createRepoCalls: [],
     deletedIds: [],
     patches: [],
+    unlocks: [],
+    revokes: [],
   };
 
   vi.stubGlobal(
@@ -143,6 +151,38 @@ function installFetchMock(): MockState {
       if ((url === "/api/library/references" || url === "/api/library/prompts") && method === "GET") {
         return jsonResp([]);
       }
+      if (url === "/broker/v1/secrets" && method === "GET") {
+        return jsonResp(state.secrets);
+      }
+      if (url.startsWith("/broker/v1/grants?") && method === "GET") {
+        const qs = new URLSearchParams(url.split("?")[1]);
+        return jsonResp(state.grantsBySession[qs.get("pty_session_id") ?? ""] ?? []);
+      }
+      if (url === "/broker/v1/grants" && method === "POST") {
+        const body = JSON.parse(init!.body as string);
+        state.unlocks.push(body);
+        const grant = {
+          secret_id: body.secret_id,
+          tool: body.tool,
+          granted_by_sub: "user",
+          granted_by_username: null,
+          expires_at: new Date(Date.now() + body.ttl_seconds * 1000).toISOString(),
+        };
+        const current = state.grantsBySession[body.pty_session_id] ?? [];
+        state.grantsBySession[body.pty_session_id] = [...current, grant];
+        return new Response(null, { status: 201 });
+      }
+      if (url === "/broker/v1/grants" && method === "DELETE") {
+        const body = JSON.parse(init!.body as string);
+        state.revokes.push(body);
+        state.grantsBySession[body.pty_session_id] = (
+          state.grantsBySession[body.pty_session_id] ?? []
+        ).filter(
+          (grant) =>
+            grant.secret_id !== body.secret_id || grant.tool !== body.tool,
+        );
+        return new Response(null, { status: 204 });
+      }
       return new Response("", { status: 404 });
     }),
   );
@@ -176,6 +216,15 @@ describe("Sidebar", () => {
       keys: "[MouseRight]",
       target: screen.getByText(text),
     });
+  }
+
+  async function hoverMenuItem(
+    user: ReturnType<typeof userEvent.setup>,
+    name: string | RegExp,
+  ) {
+    const item = await screen.findByRole("menuitem", { name });
+    await user.hover(item);
+    return item;
   }
 
   it("renders repo groups and their sessions", async () => {
@@ -424,6 +473,65 @@ describe("Sidebar", () => {
       sessionId: "77777777-7777-7777-7777-777777777777",
     });
     unsubscribe();
+  });
+
+  it("enables and revokes a secret grant from the session context menu", async () => {
+    const sessionId = "88888888-8888-8888-8888-888888888888";
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.secrets.push({
+      id: "claude-api",
+      description: "Claude",
+      scope: "global",
+      repo: null,
+      env_keys: ["ANTHROPIC_API_KEY"],
+      updated_at: "2026-04-24T00:00:00Z",
+    });
+    state.sessions.push({
+      id: sessionId,
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
+      state: "live",
+      created_at: new Date().toISOString(),
+      ended_at: null,
+      exit_code: null,
+      current_session_uuid: null,
+      current_session_agent: null,
+      last_event_at: null,
+      label: "secret-session",
+      pinned: false,
+      color: null,
+    });
+    setup();
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText("secret-session")).toBeDefined());
+    await openSessionContextMenu(user, /secret-session/);
+    await hoverMenuItem(user, "Secrets");
+    await hoverMenuItem(user, "Enable secret");
+    await hoverMenuItem(user, "claude-api");
+    await hoverMenuItem(user, "with-cred");
+    await user.click(await screen.findByRole("menuitem", { name: "10m" }));
+
+    await waitFor(() => expect(state.unlocks).toHaveLength(1));
+    expect(state.unlocks[0]).toEqual({
+      pty_session_id: sessionId,
+      secret_id: "claude-api",
+      tool: "with-cred",
+      ttl_seconds: 600,
+    });
+
+    await openSessionContextMenu(user, /secret-session/);
+    await hoverMenuItem(user, "Secrets");
+    await hoverMenuItem(user, "Active secrets");
+    await user.click(await screen.findByRole("menuitem", { name: /claude-api · with-cred/ }));
+
+    await waitFor(() => expect(state.revokes).toHaveLength(1));
+    expect(state.revokes[0]).toEqual({
+      pty_session_id: sessionId,
+      secret_id: "claude-api",
+      tool: "with-cred",
+    });
   });
 
   it("renames a session through the menu", async () => {

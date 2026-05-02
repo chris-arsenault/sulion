@@ -45,6 +45,10 @@ pub fn router() -> Router<Arc<AppState>> {
             get(timeline_routes::session_timeline),
         )
         .route(
+            "/api/sessions/:id/timeline/turns/:turn_id",
+            get(timeline_routes::session_timeline_turn),
+        )
+        .route(
             "/api/sessions/:id/future-prompts",
             get(future_prompt_routes::list_future_prompts)
                 .put(future_prompt_routes::create_future_prompt),
@@ -61,6 +65,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/repos/:name/timeline",
             get(timeline_routes::repo_timeline),
+        )
+        .route(
+            "/api/repos/:name/timeline/turns/:session_uuid/:turn_id",
+            get(timeline_routes::repo_timeline_turn),
         )
         .route("/api/repos/:name/git", get(repo_routes::get_repo_git))
         .route("/api/repos/:name/git/diff", get(repo_routes::get_repo_diff))

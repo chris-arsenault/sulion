@@ -6,13 +6,14 @@
 // Mobile mode (viewport <768px) collapses to a single-pane strip
 // showing every open tab mixed together, no divider.
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import type { SessionView } from "../api/types";
+import type { SecretGrantMetadata, SessionView } from "../api/types";
 import type { PaneId, TabData } from "../state/TabStore";
 import { useTabs } from "../state/TabStore";
 import { useSessions } from "../state/SessionStore";
+import { useSecretStore } from "../state/SecretStore";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { Icon, type IconName } from "../icons";
 import { Tooltip } from "./ui";
@@ -21,6 +22,7 @@ import {
   contextMenuHandler,
   useContextMenu,
 } from "./common/contextMenuStore";
+import { buildSecretContextMenu } from "./common/secretContextMenu";
 import { TerminalPane } from "./TerminalPane";
 import { TimelinePane } from "./TimelinePane";
 import { SessionEndedPane } from "./SessionEndedPane";
@@ -31,6 +33,7 @@ import { SecretsTab } from "./SecretsTab";
 import "./WorkArea.css";
 
 const TAB_DRAG_MIME = "application/x-sulion-tab";
+const EMPTY_SECRET_GRANTS: SecretGrantMetadata[] = [];
 
 export function WorkArea() {
   const { panes, activeByPane, tabs } = useTabs(
@@ -410,10 +413,64 @@ function TabHandle({
       paneSticky: store.sticky[paneId],
     })),
   );
+  const {
+    secrets,
+    grants,
+    refreshSecrets,
+    refreshGrants,
+    enableGrant,
+    revokeGrant,
+  } = useSecretStore(
+    useShallow((store) => ({
+      secrets: store.secrets,
+      grants: tab.sessionId
+        ? (store.grantsBySession[tab.sessionId] ?? EMPTY_SECRET_GRANTS)
+        : EMPTY_SECRET_GRANTS,
+      refreshSecrets: store.refreshSecrets,
+      refreshGrants: store.refreshGrants,
+      enableGrant: store.enableGrant,
+      revokeGrant: store.revokeGrant,
+    })),
+  );
   const openCtx = useContextMenu((store) => store.open);
   const label = useMemo(() => liveLabel(tab, sessions), [tab, sessions]);
 
   const pairLinkable = tab.kind === "terminal" || tab.kind === "timeline";
+  useEffect(() => {
+    if (tab.kind !== "terminal" || !tab.sessionId) return;
+    void refreshSecrets().catch(() => undefined);
+    void refreshGrants(tab.sessionId).catch(() => undefined);
+  }, [refreshGrants, refreshSecrets, tab.kind, tab.sessionId]);
+
+  const openSecrets = useCallback(() => {
+    if (!tab.sessionId) return;
+    openTab({ kind: "secrets", sessionId: tab.sessionId }, paneId);
+  }, [openTab, paneId, tab.sessionId]);
+  const enableSecret = useCallback(
+    (secretId: string, tool: "with-cred" | "aws", ttlSeconds: number) => {
+      if (!tab.sessionId) return;
+      void enableGrant(tab.sessionId, secretId, tool, ttlSeconds).catch(() => undefined);
+    },
+    [enableGrant, tab.sessionId],
+  );
+  const revokeSecret = useCallback(
+    (secretId: string, tool: "with-cred" | "aws") => {
+      if (!tab.sessionId) return;
+      void revokeGrant(tab.sessionId, secretId, tool).catch(() => undefined);
+    },
+    [revokeGrant, tab.sessionId],
+  );
+  const secretMenu = useMemo(
+    () =>
+      buildSecretContextMenu({
+        secrets,
+        grants,
+        onEnable: enableSecret,
+        onRevoke: revokeSecret,
+        onOpenManager: openSecrets,
+      }),
+    [enableSecret, grants, openSecrets, revokeSecret, secrets],
+  );
 
   const buildMenuItems = useCallback((): MenuItem[] => {
     const otherPane: PaneId = paneId === "top" ? "bottom" : "top";
@@ -456,12 +513,7 @@ function TabHandle({
     }
     if (tab.kind === "terminal" && tab.sessionId) {
       items.push({ kind: "separator" });
-      items.push({
-        kind: "item",
-        id: "enable-secrets",
-        label: "Enable secrets…",
-        onSelect: () => void openTab({ kind: "secrets", sessionId: tab.sessionId }, paneId),
-      });
+      items.push(secretMenu);
     }
     return items;
   }, [
@@ -472,9 +524,9 @@ function TabHandle({
     closeThis,
     closeTab,
     moveTab,
-    openTab,
     pairLinkable,
     paneSticky,
+    secretMenu,
     setPaneSticky,
     tab.kind,
     tab.sessionId,
@@ -669,7 +721,7 @@ function TabContent({ tab }: { tab: TabData }) {
       case "ref":
         return <RefTab slug={tab.slug!} />;
       case "secrets":
-        return <SecretsTab sessionId={tab.sessionId ?? null} />;
+        return <SecretsTab />;
     }
   }, [tab]);
 }

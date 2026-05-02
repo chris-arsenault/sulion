@@ -10,7 +10,7 @@ module "cognito" {
   cognito = module.ctx.cognito
 }
 
-resource "random_password" "secret_broker_use_token" {
+resource "random_password" "secret_broker_registration_token" {
   length           = 48
   special          = false
   override_special = ""
@@ -28,8 +28,8 @@ resource "aws_ssm_parameter" "auth_trigger_client" {
   value = module.cognito.client_id
 }
 
-resource "aws_ssm_parameter" "secret_broker_use_token" {
-  name  = "${local.ssm_prefix}/sulion/secret-broker-use-token"
+resource "aws_ssm_parameter" "secret_broker_registration_token" {
+  name  = "${local.ssm_prefix}/sulion/secret-broker-registration-token"
   type  = "SecureString"
-  value = random_password.secret_broker_use_token.result
+  value = random_password.secret_broker_registration_token.result
 }

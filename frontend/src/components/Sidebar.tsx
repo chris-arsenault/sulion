@@ -18,6 +18,7 @@ import type {
   GitCommit,
   GitStatus,
   RepoView,
+  SecretGrantMetadata,
   SessionColor,
   SessionView,
 } from "../api/types";
@@ -26,6 +27,7 @@ import { ApiError, stageRepoPath, uploadRepoFile } from "../api/client";
 import { appCommands, useAppCommand } from "../state/AppCommands";
 import { useSessions } from "../state/SessionStore";
 import { dirtyAncestors, stalenessFor, useRepos } from "../state/RepoStore";
+import { useSecretStore } from "../state/SecretStore";
 import type { TabStore } from "../state/TabStore";
 import { useTabs } from "../state/TabStore";
 import { Icon } from "../icons";
@@ -36,12 +38,15 @@ import {
   contextMenuTriggerProps,
   useContextMenu,
 } from "./common/contextMenuStore";
+import { buildSecretContextMenu } from "./common/secretContextMenu";
 import { ConfirmDialog } from "./common/ConfirmDialog";
 import { LibraryPanel } from "./LibraryPanel";
 import { ReindexButton } from "./ReindexButton";
 import { StatsStrip } from "./StatsStrip";
 import "./Sidebar.css";
 import "./LibrarySection.css";
+
+const EMPTY_SECRET_GRANTS: SecretGrantMetadata[] = [];
 
 export function Sidebar() {
   const {
@@ -1133,14 +1138,14 @@ function buildSessionMenuItems({
   session,
   openTab,
   onRename,
-  onOpenSecrets,
+  secretMenu,
   onUpdate,
   onDelete,
 }: {
   session: SessionView;
   openTab: TabStore["openTab"];
   onRename: () => void;
-  onOpenSecrets: () => void;
+  secretMenu: MenuItem;
   onUpdate: (patch: {
     label?: string | null;
     pinned?: boolean;
@@ -1173,12 +1178,7 @@ function buildSessionMenuItems({
       label: "Future prompts",
       onSelect: () => appCommands.openFuturePrompts({ sessionId: session.id }),
     },
-    {
-      kind: "item",
-      id: "enable-secrets",
-      label: "Enable secrets",
-      onSelect: onOpenSecrets,
-    },
+    secretMenu,
     {
       kind: "item",
       id: "open-repo-diff",
@@ -1253,6 +1253,23 @@ function SessionRow({
   const [renaming, setRenaming] = useState(false);
   const openTab = useTabs((store) => store.openTab);
   const openCtx = useContextMenu((store) => store.open);
+  const {
+    secrets,
+    grants,
+    refreshSecrets,
+    refreshGrants,
+    enableGrant,
+    revokeGrant,
+  } = useSecretStore(
+    useShallow((store) => ({
+      secrets: store.secrets,
+      grants: store.grantsBySession[s.id] ?? EMPTY_SECRET_GRANTS,
+      refreshSecrets: store.refreshSecrets,
+      refreshGrants: store.refreshGrants,
+      enableGrant: store.enableGrant,
+      revokeGrant: store.revokeGrant,
+    })),
+  );
 
   const selectThis = useCallback(() => onSelect(s.id), [onSelect, s.id]);
   const deleteThis = useCallback(() => onDelete(s.id), [onDelete, s.id]);
@@ -1266,6 +1283,33 @@ function SessionRow({
     openTab({ kind: "secrets", sessionId: s.id }, "top");
     appCommands.closeDrawer();
   }, [openTab, s.id]);
+  useEffect(() => {
+    void refreshSecrets().catch(() => undefined);
+    void refreshGrants(s.id).catch(() => undefined);
+  }, [refreshSecrets, refreshGrants, s.id]);
+  const enableSecret = useCallback(
+    (secretId: string, tool: "with-cred" | "aws", ttlSeconds: number) => {
+      void enableGrant(s.id, secretId, tool, ttlSeconds).catch(() => undefined);
+    },
+    [enableGrant, s.id],
+  );
+  const revokeSecret = useCallback(
+    (secretId: string, tool: "with-cred" | "aws") => {
+      void revokeGrant(s.id, secretId, tool).catch(() => undefined);
+    },
+    [revokeGrant, s.id],
+  );
+  const secretMenu = useMemo(
+    () =>
+      buildSecretContextMenu({
+        secrets,
+        grants,
+        onEnable: enableSecret,
+        onRevoke: revokeSecret,
+        onOpenManager: openSecrets,
+      }),
+    [enableSecret, grants, openSecrets, revokeSecret, secrets],
+  );
 
   const menuItems = useMemo(
     () =>
@@ -1273,11 +1317,11 @@ function SessionRow({
         session: s,
         openTab,
         onRename: startRenaming,
-        onOpenSecrets: openSecrets,
+        secretMenu,
         onUpdate: updateThis,
         onDelete: deleteThis,
       }),
-    [s, openTab, startRenaming, openSecrets, updateThis, deleteThis],
+    [s, openTab, startRenaming, secretMenu, updateThis, deleteThis],
   );
   const buildMenuItems = useCallback(() => menuItems, [menuItems]);
   const { onContextMenu: onRowContextMenu, onKeyDown: onRowContextMenuKey } =

@@ -105,16 +105,16 @@ working-tree changes. Each file hunk has its own **stage** button.
 
 The **Secrets** tab is Sulion's credential-management surface. Secrets
 are stored as env bundles such as `ANTHROPIC_API_KEY=...` or AWS
-credential sets, then granted to a PTY with a TTL for one of two
-execution paths:
+credential sets. Grants are made from a terminal/session context menu
+with a TTL for one of two execution paths:
 
 - `with-cred`
 - `aws`
 
-The tab supports secret metadata, explicit key/value pairs, grant and
-revoke actions, and conflict warnings when multiple `with-cred` bundles
-would define the same env key. You can open it from the rail or from the
-session/terminal context menu in the sidebar.
+The tab supports secret metadata and explicit key/value pairs. Once a
+secret is saved, the UI shows only env key names; blank values on update
+keep the existing value. Right-click a session or terminal tab and use
+**Secrets** to enable a bundle or revoke an active grant.
 
 ## Context menus
 

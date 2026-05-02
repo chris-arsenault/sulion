@@ -77,6 +77,55 @@ pub struct TimelineResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineSummaryResponse {
+    pub session_uuid: Option<Uuid>,
+    pub session_agent: Option<String>,
+    pub total_event_count: i64,
+    pub turns: Vec<TimelineTurnSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineTurnSummary {
+    pub id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_key: Option<String>,
+    pub preview: String,
+    pub start_timestamp: DateTime<Utc>,
+    pub end_timestamp: DateTime<Utc>,
+    pub duration_ms: i64,
+    pub event_count: usize,
+    pub operation_count: usize,
+    pub operation_badges: Vec<TimelineOperationBadge>,
+    pub thinking_count: usize,
+    pub has_errors: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pty_session_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_uuid: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_state: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineOperationBadge {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation_type: Option<String>,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineTurnDetailResponse {
+    pub session_uuid: Uuid,
+    pub session_agent: Option<String>,
+    pub turn: TimelineTurn,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineTurn {
     pub id: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

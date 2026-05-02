@@ -57,6 +57,10 @@ export function getCurrentSession(): Promise<CognitoUserSession | null> {
 }
 
 export async function getAccessToken(): Promise<string | null> {
+  if (import.meta.env.VITE_SULION_E2E === "1") {
+    const token = import.meta.env.VITE_SULION_E2E_ACCESS_TOKEN;
+    if (typeof token === "string" && token.length > 0) return token;
+  }
   const session = await getCurrentSession();
   return session?.getAccessToken().getJwtToken() ?? null;
 }

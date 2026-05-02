@@ -62,7 +62,7 @@ export function ReindexButton() {
           title="Reindex transcripts?"
           message={
             "This wipes every transcript row in the database and re-reads every JSONL " +
-            "file from scratch. No terminal sessions or saved library entries are touched. " +
+            "file from scratch. Terminal associations and saved library entries are preserved. " +
             "The timeline will be empty for a few seconds while the ingester replays."
           }
           requireText="refresh"

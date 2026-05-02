@@ -18,53 +18,18 @@ if [ "$1" != "--" ]; then
 fi
 shift
 
-if [ -z "${SULION_PTY_ID:-}" ]; then
-  echo "with-cred: SULION_PTY_ID is not set; not running inside a managed PTY" >&2
-  exit 65
-fi
-
 if [ "$#" -eq 0 ]; then
   echo "with-cred: missing command" >&2
   exit 64
 fi
 
-BROKER_URL="${SULION_SECRET_BROKER_URL:-http://sulion-broker:8081}"
-BROKER_USE_TOKEN="${SULION_SECRET_BROKER_USE_TOKEN:-}"
-TOOL_NAME="with-cred"
-if [ -z "${BROKER_USE_TOKEN}" ]; then
-  echo "with-cred: SULION_SECRET_BROKER_USE_TOKEN is not set" >&2
-  exit 65
+if [ -n "${SECRET_ID}" ]; then
+  exec /usr/local/bin/sulion credential-helper \
+    --tool with-cred \
+    --secret "${SECRET_ID}" \
+    -- "$@"
 fi
-PAYLOAD="$(jq -cn \
-  --arg pty "${SULION_PTY_ID}" \
-  --arg tool "${TOOL_NAME}" \
-  --arg secret "${SECRET_ID}" \
-  '{
-     pty_session_id: $pty,
-     tool: $tool
-   } + (if $secret == "" then {} else {secret_id: $secret} end)')"
 
-RESPONSE="$(curl -fsS \
-  -H "Authorization: Bearer ${BROKER_USE_TOKEN}" \
-  -H 'content-type: application/json' \
-  -X POST \
-  -d "${PAYLOAD}" \
-  "${BROKER_URL}/v1/use")" || {
-    if [ -n "${SECRET_ID}" ]; then
-      echo "with-cred: broker denied access to ${SECRET_ID} for ${TOOL_NAME}" >&2
-    else
-      echo "with-cred: broker denied access to currently unlocked creds for ${TOOL_NAME}" >&2
-    fi
-    exit 66
-  }
-
-ENV_SNIPPET="$(printf '%s' "${RESPONSE}" \
-  | jq -r '.env | to_entries[] | "export \(.key)=\(.value|@sh)"')"
-
-TMP_ENV="$(mktemp)"
-trap 'rm -f "${TMP_ENV}"' EXIT INT TERM
-printf '%s\n' "${ENV_SNIPPET}" > "${TMP_ENV}"
-# shellcheck disable=SC1090
-. "${TMP_ENV}"
-
-exec "$@"
+exec /usr/local/bin/sulion credential-helper \
+  --tool with-cred \
+  -- "$@"

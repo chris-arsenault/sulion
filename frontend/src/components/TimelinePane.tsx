@@ -18,8 +18,17 @@ import {
 } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 
-import { getRepoTimeline, getTimeline } from "../api/client";
-import type { TimelineQuery, TimelineResponse, TimelineSubagent } from "../api/types";
+import {
+  getRepoTimeline,
+  getRepoTimelineTurn,
+  getTimeline,
+  getTimelineTurn,
+} from "../api/client";
+import type {
+  TimelineQuery,
+  TimelineSubagent,
+  TimelineSummaryResponse,
+} from "../api/types";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import {
   clampTimelineFontScale,
@@ -32,7 +41,7 @@ import {
 import { useTabs } from "../state/TabStore";
 import { FilterChips } from "./timeline/FilterChips";
 import { useTimelineFilters } from "./timeline/filters";
-import { type ToolPair, type Turn } from "./timeline/grouping";
+import { type ToolPair, type Turn, type TurnSummary } from "./timeline/grouping";
 import { SessionInspectorPane } from "./timeline/SessionInspectorPane";
 import { SubagentModal } from "./timeline/SubagentModal";
 import { TurnRow } from "./timeline/TurnRow";
@@ -44,6 +53,11 @@ const INSPECTOR_WIDTH_KEY = "sulion.timeline.inspector.width.v1";
 const DEFAULT_INSPECTOR_FRACTION = 0.55;
 const MIN_INSPECTOR_FRACTION = 0.28;
 const MAX_INSPECTOR_FRACTION = 0.78;
+
+interface CachedTurnDetail {
+  fingerprint: string;
+  turn: Turn;
+}
 
 export function TimelinePane({
   tabId,
@@ -60,10 +74,14 @@ export function TimelinePane({
   focusPairId?: string;
   focusKey?: string;
 }) {
-  const [timeline, setTimeline] = useState<TimelineResponse | null>(null);
+  const [timeline, setTimeline] = useState<TimelineSummaryResponse | null>(null);
+  const [detailCache, setDetailCache] = useState<Map<string, CachedTurnDetail>>(
+    () => new Map(),
+  );
   const [currentSessionUuid, setCurrentSessionUuid] = useState<string | null>(null);
   const [currentSessionAgent, setCurrentSessionAgent] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
   const virtuoso = useRef<VirtuosoHandle | null>(null);
   const [subagent, setSubagent] = useState<TimelineSubagent | null>(null);
   const [selectedTurnKey, setSelectedTurnKey] = useState<string | null>(null);
@@ -116,10 +134,17 @@ export function TimelinePane({
     setCurrentSessionUuid(null);
     setCurrentSessionAgent(null);
     setLoadError(null);
+    setDetailError(null);
+    setDetailCache(new Map());
     setSubagent(null);
     setSelectedTurnKey(null);
     appliedFocusKeyRef.current = null;
   }, [sessionId, repo]);
+
+  useEffect(() => {
+    setDetailCache(new Map());
+    setDetailError(null);
+  }, [queryKey]);
 
   useEffect(() => {
     if (!sessionId && !repo) return;
@@ -154,7 +179,7 @@ export function TimelinePane({
     };
   }, [sessionId, repo, query, queryKey]);
 
-  const turns = useMemo<Turn[]>(
+  const turns = useMemo<TurnSummary[]>(
     () => timeline?.turns ?? [],
     [timeline],
   );
@@ -178,13 +203,76 @@ export function TimelinePane({
     });
   }, [focusKey, focusTurnId, turns]);
 
-  const selectedTurn = useMemo<Turn | null>(
+  const selectedSummary = useMemo<TurnSummary | null>(
     () =>
       selectedTurnKey == null
         ? null
         : turns.find((t) => turnIdentity(t) === selectedTurnKey) ?? null,
     [selectedTurnKey, turns],
   );
+  const selectedTurn = useMemo<Turn | null>(
+    () =>
+      selectedTurnKey == null || selectedSummary == null
+        ? null
+        : detailCache.get(selectedTurnKey)?.turn ?? null,
+    [detailCache, selectedSummary, selectedTurnKey],
+  );
+  const selectedFingerprint = selectedSummary
+    ? turnSummaryFingerprint(selectedSummary)
+    : null;
+  const detailPending =
+    selectedSummary != null && selectedTurn == null && !detailError;
+
+  useEffect(() => {
+    if (!selectedSummary || !selectedTurnKey) return;
+    if (selectedFingerprint == null) return;
+    if (detailCache.get(selectedTurnKey)?.fingerprint === selectedFingerprint) return;
+    if (!sessionId && (!repo || !selectedSummary.session_uuid)) return;
+
+    let cancelled = false;
+    const fetchDetail = async () => {
+      try {
+        const resp = sessionId
+          ? await getTimelineTurn(sessionId, selectedSummary.id, query)
+          : await getRepoTimelineTurn(
+              repo!,
+              selectedSummary.session_uuid!,
+              selectedSummary.id,
+              query,
+            );
+        if (cancelled) return;
+        setDetailCache((prev) => {
+          if (prev.get(selectedTurnKey)?.fingerprint === selectedFingerprint) {
+            return prev;
+          }
+          const next = new Map(prev);
+          next.set(selectedTurnKey, {
+            fingerprint: selectedFingerprint,
+            turn: resp.turn,
+          });
+          return next;
+        });
+        setDetailError(null);
+      } catch (err) {
+        if (!cancelled) {
+          setDetailError(err instanceof Error ? err.message : "turn fetch failed");
+        }
+      }
+    };
+
+    void fetchDetail();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    detailCache,
+    query,
+    repo,
+    selectedFingerprint,
+    selectedSummary,
+    selectedTurnKey,
+    sessionId,
+  ]);
 
   const handleSubagent = useCallback((pair: ToolPair) => {
     if (pair.subagent) setSubagent(pair.subagent);
@@ -317,8 +405,8 @@ export function TimelinePane({
         <span className="timeline-pane__count tabular">
           {turns.length} turn{turns.length === 1 ? "" : "s"} · {timeline?.total_event_count ?? 0} events
         </span>
-        {loadError && (
-          <Tooltip label={loadError}>
+        {(loadError || detailError) && (
+          <Tooltip label={loadError ?? detailError ?? ""}>
             <span className="timeline-pane__error">error</span>
           </Tooltip>
         )}
@@ -376,6 +464,7 @@ export function TimelinePane({
           </div>
           <SessionInspectorPane
             turn={selectedTurn}
+            loading={detailPending}
             showThinking={filters.showThinking}
             onOpenSubagent={handleSubagent}
             asOverlay
@@ -413,6 +502,7 @@ export function TimelinePane({
           />
           <SessionInspectorPane
             turn={selectedTurn}
+            loading={detailPending}
             showThinking={filters.showThinking}
             onOpenSubagent={handleSubagent}
             asOverlay={false}
@@ -432,12 +522,23 @@ export function TimelinePane({
   );
 }
 
-function turnKey(_i: number, t: Turn): string {
+function turnKey(_i: number, t: TurnSummary): string {
   return turnIdentity(t);
 }
 
-function turnIdentity(turn: Turn): string {
+function turnIdentity(turn: Turn | TurnSummary): string {
   return turn.turn_key ?? `${turn.id}`;
+}
+
+function turnSummaryFingerprint(turn: TurnSummary): string {
+  return [
+    turn.end_timestamp,
+    turn.duration_ms,
+    turn.event_count,
+    turn.operation_count,
+    turn.thinking_count,
+    turn.has_errors,
+  ].join(":");
 }
 
 function TurnList({
@@ -447,14 +548,14 @@ function TurnList({
   onSelect,
   virtuosoRef,
 }: {
-  turns: Turn[];
+  turns: TurnSummary[];
   selectedTurnKey: string | null;
   showThinking: boolean;
   onSelect: (key: string) => void;
   virtuosoRef: MutableRefObject<VirtuosoHandle | null>;
 }) {
   const renderItem = useCallback(
-    (_i: number, t: Turn) => (
+    (_i: number, t: TurnSummary) => (
       <TurnRow
         turn={t}
         selected={selectedTurnKey === turnIdentity(t)}

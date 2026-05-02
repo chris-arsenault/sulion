@@ -5,6 +5,8 @@
 # Trixie (Debian 13, glibc 2.41) is the current stable and works.
 FROM debian:trixie-slim
 
+ARG DUCKDB_VERSION=1.5.2
+
 # Base shell + dev workbench tools. The PTYs that the backend forks
 # inherit this image's filesystem, so every tool the user needs in
 # their Claude sessions has to be available here.
@@ -13,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     bash \
+    sudo \
     git \
     git-lfs \
     awscli \
@@ -26,18 +29,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fd-find \
     python3 \
     python3-pip \
+    python3-dev \
     ca-certificates \
     gnupg \
     postgresql-client \
     socat \
   && rm -rf /var/lib/apt/lists/*
 
-# Python imaging helpers used from PTYs. Keep these system-installed so
-# agents can import them immediately from the default shell without
-# creating a virtualenv first.
+# Python helpers used from PTYs. Keep these system-installed so agents
+# can import them immediately from the default shell without creating a
+# virtualenv first.
 RUN python3 -m pip install --break-system-packages --no-cache-dir \
-    Pillow \
-    rembg
+  click \
+  "duckdb==${DUCKDB_VERSION}" \
+  Pillow \
+  "rembg[cpu]"
+
+# uv is the preferred Python project/environment tool in PTYs. Install
+# the standalone binary globally rather than relying on pyenv or a
+# repo-local bootstrap.
+RUN curl -LsSf https://astral.sh/uv/install.sh \
+    | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh \
+  && chmod 0755 /usr/local/bin/uv /usr/local/bin/uvx
 
 # Debian ships fd as fdfind to avoid a name collision; expose the
 # expected `fd` binary too.
@@ -131,6 +144,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends unzip \
   && rm -f /tmp/terraform.zip \
   && chmod 0755 /usr/local/bin/terraform
 
+# DuckDB for local data inspection from PTYs. Install both the Python
+# binding above and the standalone CLI here so `python3 -c 'import
+# duckdb'` and `duckdb <db>` work without a project virtualenv.
+RUN arch="$(dpkg --print-architecture)" \
+  && case "${arch}" in \
+       amd64) duckdb_arch=amd64 ;; \
+       arm64) duckdb_arch=arm64 ;; \
+       *) echo "unsupported duckdb arch: ${arch}" >&2; exit 1 ;; \
+     esac \
+  && mkdir -p /tmp/duckdb \
+  && curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-${duckdb_arch}.zip" \
+       -o /tmp/duckdb.zip \
+  && unzip -q /tmp/duckdb.zip -d /tmp/duckdb \
+  && install -m 0755 /tmp/duckdb/duckdb /usr/local/bin/duckdb \
+  && rm -rf /tmp/duckdb /tmp/duckdb.zip
+
 # Rootless podman for running containers inside a PTY without a
 # daemon and without touching a host docker socket. Requires:
 #   - fuse-overlayfs for the overlay storage driver (default `vfs` is
@@ -203,13 +232,16 @@ ARG DEV_GID=7321
 RUN groupadd --gid ${DEV_GID} dev \
   && useradd --uid ${DEV_UID} --gid ${DEV_GID} --shell /bin/bash --home-dir /home/dev dev \
   && mkdir -p /home/dev \
-  && mkdir -p /run/sulion /opt/sulion/hooks /opt/sulion/bin \
+  && mkdir -p /run/sulion /opt/sulion/hooks /opt/sulion/bin /opt/sulion/docs \
+  && echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev \
+  && chmod 0440 /etc/sudoers.d/dev \
   && chown -R dev:dev /home/dev /run/sulion
 
 COPY dist/sulion /usr/local/bin/sulion
 COPY bin/sulion-agent /opt/sulion/bin/sulion-agent
 COPY bin/aws /opt/sulion/bin/aws
 COPY bin/with-cred /opt/sulion/bin/with-cred
+COPY docs/toolset.md /opt/sulion/docs/toolset.md
 COPY hooks/session-start.sh /opt/sulion/hooks/session-start.sh
 COPY entrypoint.sh /opt/sulion/entrypoint.sh
 RUN chmod +x /usr/local/bin/sulion /opt/sulion/bin/sulion-agent /opt/sulion/bin/aws /opt/sulion/bin/with-cred /opt/sulion/hooks/session-start.sh /opt/sulion/entrypoint.sh

@@ -1,19 +1,22 @@
 import { useCallback, useMemo } from "react";
 
-import type { ToolPair, Turn } from "./grouping";
+import type { TurnSummary } from "./grouping";
 import { Icon } from "../../icons";
 import { Tooltip } from "../ui";
 import "./TurnRow.css";
 
 interface Props {
-  turn: Turn;
+  turn: TurnSummary;
   selected: boolean;
   showThinking: boolean;
   onSelect: (key: string) => void;
 }
 
 export function TurnRow({ turn, selected, showThinking, onSelect }: Props) {
-  const badges = useMemo(() => toolBadges(turn.tool_pairs), [turn.tool_pairs]);
+  const badges = useMemo(
+    () => toolBadges(turn.operation_badges ?? []),
+    [turn.operation_badges],
+  );
   const sessionBadge = useMemo(() => sessionMeta(turn), [turn]);
   const turnKey = turn.turn_key ?? `${turn.id}`;
   const onClick = useCallback(() => onSelect(turnKey), [onSelect, turnKey]);
@@ -93,20 +96,18 @@ interface Badge {
   title: string;
 }
 
-function toolBadges(pairs: ToolPair[]): Badge[] {
-  if (pairs.length === 0) return [];
-  const counts = new Map<string, number>();
-  for (const pair of pairs) {
-    const name = pair.operation_type ?? pair.name;
-    counts.set(name, (counts.get(name) ?? 0) + 1);
-  }
-  return Array.from(counts.entries())
-    .sort((a, b) => b[1] - a[1])
-    .map(([name, count]) => ({
+function toolBadges(
+  badges: TurnSummary["operation_badges"],
+): Badge[] {
+  return badges.map((badge) => {
+    const name = badge.operation_type ?? badge.name;
+    const count = badge.count;
+    return {
       label: count === 1 ? name : `${name}×${count}`,
       variant: name.toLowerCase(),
       title: `${count} ${name} call${count === 1 ? "" : "s"}`,
-    }));
+    };
+  });
 }
 
 function formatDuration(ms: number): string {
@@ -128,7 +129,7 @@ function formatTime(iso: string): string {
   });
 }
 
-function sessionMeta(turn: Turn): { label: string; title: string } | null {
+function sessionMeta(turn: TurnSummary): { label: string; title: string } | null {
   const sessionUuid = turn.session_uuid?.trim();
   if (!sessionUuid) return null;
   const label =

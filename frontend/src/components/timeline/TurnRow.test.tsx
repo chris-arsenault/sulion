@@ -3,15 +3,21 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { TurnRow } from "./TurnRow";
-import { makePair, makeTurn } from "./test-helpers";
+import { makeTurn } from "./test-helpers";
+import type { TurnSummary } from "./grouping";
 
 const noop = () => {};
+const makeSummary = (overrides: Partial<TurnSummary> = {}): TurnSummary => ({
+  ...makeTurn(),
+  operation_badges: [],
+  ...overrides,
+});
 
 describe("TurnRow", () => {
   it("renders the backend-projected preview", () => {
     render(
       <TurnRow
-        turn={makeTurn({ preview: "do the thing" })}
+        turn={makeSummary({ preview: "do the thing" })}
         selected={false}
         showThinking={true}
         onSelect={noop}
@@ -25,7 +31,7 @@ describe("TurnRow", () => {
     const user = userEvent.setup();
     render(
       <TurnRow
-        turn={makeTurn()}
+        turn={makeSummary()}
         selected={false}
         showThinking={true}
         onSelect={onSelect}
@@ -38,11 +44,10 @@ describe("TurnRow", () => {
   it("shows tool badges with counts per tool type", () => {
     render(
       <TurnRow
-        turn={makeTurn({
-          tool_pairs: [
-            makePair({ id: "a", name: "edit", category: "create_content" }),
-            makePair({ id: "b", name: "edit", category: "create_content" }),
-            makePair({ id: "c", name: "bash", category: "utility" }),
+        turn={makeSummary({
+          operation_badges: [
+            { name: "edit", operation_type: null, count: 2 },
+            { name: "bash", operation_type: null, count: 1 },
           ],
         })}
         selected={false}
@@ -57,7 +62,7 @@ describe("TurnRow", () => {
   it("shows thinking and error badges from projected metrics", () => {
     render(
       <TurnRow
-        turn={makeTurn({ thinking_count: 3, has_errors: true })}
+        turn={makeSummary({ thinking_count: 3, has_errors: true })}
         selected={false}
         showThinking={true}
         onSelect={noop}

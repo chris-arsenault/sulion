@@ -5,7 +5,9 @@
 import type {
   TimelineToolPair,
   TimelineTurn,
+  TimelineTurnSummary,
 } from "../../api/types";
 
 export type ToolPair = TimelineToolPair;
 export type Turn = TimelineTurn;
+export type TurnSummary = TimelineTurnSummary;

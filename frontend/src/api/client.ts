@@ -27,7 +27,8 @@ import type {
   SecretTool,
   StatsResponse,
   TimelineQuery,
-  TimelineResponse,
+  TimelineSummaryResponse,
+  TimelineTurnDetailResponse,
   UpdateSessionRequest,
   UpdateFuturePromptInput,
 } from "./types";
@@ -83,10 +84,11 @@ async function brokerRequest<T>(url: string, init?: RequestInit): Promise<T> {
   if (!resp.ok) {
     throw new ApiError(resp.status, await parseErrorBody(resp));
   }
-  if (resp.status === 204) {
+  const text = await resp.text();
+  if (!text.trim()) {
     return undefined as T;
   }
-  return (await resp.json()) as T;
+  return JSON.parse(text) as T;
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -151,7 +153,7 @@ export function getHistory(
 export function getTimeline(
   sessionId: string,
   query: TimelineQuery = {},
-): Promise<TimelineResponse> {
+): Promise<TimelineSummaryResponse> {
   const params = new URLSearchParams();
   if (query.session) params.set("session", query.session);
   if (query.hidden_speakers?.length) {
@@ -166,16 +168,58 @@ export function getTimeline(
   if (query.file_path) params.set("file_path", query.file_path);
   const qs = params.toString();
   const suffix = qs ? `?${qs}` : "";
-  return request<TimelineResponse>(
+  return request<TimelineSummaryResponse>(
     `/api/sessions/${sessionId}/timeline${suffix}`,
+  );
+}
+
+export function getTimelineTurn(
+  sessionId: string,
+  turnId: number,
+  query: TimelineQuery = {},
+): Promise<TimelineTurnDetailResponse> {
+  const params = new URLSearchParams();
+  if (query.session) params.set("session", query.session);
+  appendTimelineFilterParams(params, query);
+  const qs = params.toString();
+  const suffix = qs ? `?${qs}` : "";
+  return request<TimelineTurnDetailResponse>(
+    `/api/sessions/${sessionId}/timeline/turns/${turnId}${suffix}`,
   );
 }
 
 export function getRepoTimeline(
   repo: string,
   query: TimelineQuery = {},
-): Promise<TimelineResponse> {
+): Promise<TimelineSummaryResponse> {
   const params = new URLSearchParams();
+  appendTimelineFilterParams(params, query);
+  const qs = params.toString();
+  const suffix = qs ? `?${qs}` : "";
+  return request<TimelineSummaryResponse>(
+    `/api/repos/${encodeURIComponent(repo)}/timeline${suffix}`,
+  );
+}
+
+export function getRepoTimelineTurn(
+  repo: string,
+  sessionUuid: string,
+  turnId: number,
+  query: TimelineQuery = {},
+): Promise<TimelineTurnDetailResponse> {
+  const params = new URLSearchParams();
+  appendTimelineFilterParams(params, query);
+  const qs = params.toString();
+  const suffix = qs ? `?${qs}` : "";
+  return request<TimelineTurnDetailResponse>(
+    `/api/repos/${encodeURIComponent(repo)}/timeline/turns/${sessionUuid}/${turnId}${suffix}`,
+  );
+}
+
+function appendTimelineFilterParams(
+  params: URLSearchParams,
+  query: TimelineQuery,
+) {
   if (query.hidden_speakers?.length) {
     params.set("hide_speakers", query.hidden_speakers.join(","));
   }
@@ -186,11 +230,6 @@ export function getRepoTimeline(
   if (query.show_bookkeeping) params.set("show_bookkeeping", "true");
   if (query.show_sidechain) params.set("show_sidechain", "true");
   if (query.file_path) params.set("file_path", query.file_path);
-  const qs = params.toString();
-  const suffix = qs ? `?${qs}` : "";
-  return request<TimelineResponse>(
-    `/api/repos/${encodeURIComponent(repo)}/timeline${suffix}`,
-  );
 }
 
 export function listRepos(): Promise<ListReposResponse> {

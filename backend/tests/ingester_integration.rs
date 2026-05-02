@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use sulion::db;
-use sulion::ingest::{Ingester, IngesterConfig};
+use sulion::ingest::{reset_ingest_state, Ingester, IngesterConfig};
 use uuid::Uuid;
 
 const CODEX_RICH_LINEAGE_PARENT: &str = include_str!("fixtures/codex-rich-lineage-parent.jsonl");
@@ -380,6 +380,143 @@ async fn claude_edit_tool_result_payload_is_persisted_canonically() {
 }
 
 #[tokio::test]
+async fn append_rebuilds_only_the_affected_projection_suffix() {
+    let pool = fresh_pool().await;
+    let fx = Fixture::new();
+    fx.append(
+        r#"{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"first prompt"}}"#,
+    );
+    fx.append("\n");
+    fx.append(
+        r#"{"type":"assistant","timestamp":"2025-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"first answer"}]}}"#,
+    );
+    fx.append("\n");
+    fx.append(
+        r#"{"type":"user","timestamp":"2025-01-01T00:00:02Z","message":{"role":"user","content":"second prompt"}}"#,
+    );
+    fx.append("\n");
+    fx.append(
+        r#"{"type":"assistant","timestamp":"2025-01-01T00:00:03Z","message":{"role":"assistant","content":[{"type":"text","text":"second answer"}]}}"#,
+    );
+    fx.append("\n");
+
+    let ingester = Ingester::new();
+    ingester.tick(&pool, &fx.config()).await.unwrap();
+
+    let turns: Vec<(i64, i32, String, i32)> = sqlx::query_as(
+        "SELECT turn_id, turn_ord, preview, event_count \
+           FROM timeline_turns \
+          WHERE session_uuid = $1 \
+          ORDER BY turn_ord ASC",
+    )
+    .bind(fx.session_uuid)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[0].2, "first prompt");
+    assert_eq!(turns[1].2, "second prompt");
+
+    sqlx::query(
+        "UPDATE timeline_turns \
+            SET preview = 'sentinel-first-turn-was-not-rebuilt' \
+          WHERE session_uuid = $1 AND turn_id = $2",
+    )
+    .bind(fx.session_uuid)
+    .bind(turns[0].0)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    fx.append(
+        r#"{"type":"assistant","timestamp":"2025-01-01T00:00:04Z","message":{"role":"assistant","content":[{"type":"text","text":"second follow-up"}]}}"#,
+    );
+    fx.append("\n");
+    ingester.tick(&pool, &fx.config()).await.unwrap();
+
+    let updated: Vec<(i64, i32, String, i32)> = sqlx::query_as(
+        "SELECT turn_id, turn_ord, preview, event_count \
+           FROM timeline_turns \
+          WHERE session_uuid = $1 \
+          ORDER BY turn_ord ASC",
+    )
+    .bind(fx.session_uuid)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(updated.len(), 2);
+    assert_eq!(updated[0].0, turns[0].0);
+    assert_eq!(updated[0].1, 0);
+    assert_eq!(updated[0].2, "sentinel-first-turn-was-not-rebuilt");
+    assert_eq!(updated[1].0, turns[1].0);
+    assert_eq!(updated[1].1, 1);
+    assert_eq!(updated[1].2, "second prompt");
+    assert_eq!(updated[1].3, 3);
+}
+
+#[tokio::test]
+async fn clean_files_are_filtered_before_session_upsert() {
+    let pool = fresh_pool().await;
+    let root = tempfile::tempdir().expect("tempdir");
+    let project_hash = "mock-project-hash".to_string();
+    std::fs::create_dir_all(root.path().join(&project_hash)).unwrap();
+    let clean_session = Uuid::new_v4();
+    let dirty_session = Uuid::new_v4();
+    let clean_path = root
+        .path()
+        .join(&project_hash)
+        .join(format!("{clean_session}.jsonl"));
+    let dirty_path = root
+        .path()
+        .join(&project_hash)
+        .join(format!("{dirty_session}.jsonl"));
+    std::fs::write(
+        &clean_path,
+        r#"{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"clean"}}"#,
+    )
+    .unwrap();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&clean_path)
+        .unwrap()
+        .write_all(b"\n")
+        .unwrap();
+
+    let ingester = Ingester::new();
+    let cfg = IngesterConfig::new(root.path().to_path_buf());
+    ingester.tick(&pool, &cfg).await.unwrap();
+    assert_eq!(event_count(&pool, clean_session).await, 1);
+
+    sqlx::query("UPDATE claude_sessions SET agent = 'sentinel-agent' WHERE session_uuid = $1")
+        .bind(clean_session)
+        .execute(&pool)
+        .await
+        .unwrap();
+    std::fs::write(
+        &dirty_path,
+        r#"{"type":"user","timestamp":"2025-01-01T00:00:01Z","message":{"role":"user","content":"dirty"}}"#,
+    )
+    .unwrap();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&dirty_path)
+        .unwrap()
+        .write_all(b"\n")
+        .unwrap();
+
+    ingester.tick(&pool, &cfg).await.unwrap();
+
+    let (agent,): (String,) =
+        sqlx::query_as("SELECT agent FROM claude_sessions WHERE session_uuid = $1")
+            .bind(clean_session)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(agent, "sentinel-agent");
+    assert_eq!(event_count(&pool, dirty_session).await, 1);
+}
+
+#[tokio::test]
 async fn partial_trailing_line_is_not_committed() {
     let pool = fresh_pool().await;
     let fx = Fixture::new();
@@ -502,6 +639,97 @@ async fn claude_sessions_row_is_created_with_project_hash() {
             .await
             .unwrap();
     assert_eq!(row.unwrap().0, fx.project_hash);
+}
+
+#[tokio::test]
+async fn reindex_preserves_correlated_terminal_association() {
+    let pool = fresh_pool().await;
+    let fx = Fixture::new();
+    let pty_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pty_sessions (id, repo, working_dir, state) \
+         VALUES ($1, 'repo-a', '/tmp/repo-a', 'live')",
+    )
+    .bind(pty_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sulion::correlate::apply(
+        &pool,
+        &sulion::correlate::CorrelateMsg {
+            pty_id,
+            session_uuid: fx.session_uuid,
+            agent: "claude-code".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    fx.append(r#"{"type":"user","timestamp":"2025-01-01T00:00:00Z"}"#);
+    fx.append("\n");
+
+    Ingester::new().tick(&pool, &fx.config()).await.unwrap();
+    assert_eq!(event_count(&pool, fx.session_uuid).await, 1);
+
+    let stats = reset_ingest_state(&pool).await.unwrap();
+    assert_eq!(stats.sessions_cleared, 1);
+    assert_eq!(stats.offsets_cleared, 1);
+    assert_eq!(event_count(&pool, fx.session_uuid).await, 0);
+
+    let reset_row: (Option<Uuid>, Option<String>, Option<Uuid>) = sqlx::query_as(
+        "SELECT pty_session_id, project_hash, parent_session_uuid \
+           FROM claude_sessions \
+          WHERE session_uuid = $1",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(reset_row.0, Some(pty_id));
+    assert!(reset_row.1.is_none());
+    assert!(reset_row.2.is_none());
+
+    Ingester::new().tick(&pool, &fx.config()).await.unwrap();
+    let replayed_row: (Option<Uuid>, Option<String>) = sqlx::query_as(
+        "SELECT pty_session_id, project_hash \
+           FROM claude_sessions \
+          WHERE session_uuid = $1",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(event_count(&pool, fx.session_uuid).await, 1);
+    assert_eq!(replayed_row.0, Some(pty_id));
+    assert_eq!(replayed_row.1.as_deref(), Some(fx.project_hash.as_str()));
+}
+
+#[tokio::test]
+async fn ingest_restores_current_pty_link_when_session_row_was_lost() {
+    let pool = fresh_pool().await;
+    let fx = Fixture::new();
+    let pty_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pty_sessions \
+         (id, repo, working_dir, state, current_claude_session_uuid, current_session_uuid, current_session_agent) \
+         VALUES ($1, 'repo-a', '/tmp/repo-a', 'live', $2, $2, 'claude-code')",
+    )
+    .bind(pty_id)
+    .bind(fx.session_uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+    fx.append(r#"{"type":"user","timestamp":"2025-01-01T00:00:00Z"}"#);
+    fx.append("\n");
+
+    Ingester::new().tick(&pool, &fx.config()).await.unwrap();
+
+    let (linked_pty,): (Option<Uuid>,) =
+        sqlx::query_as("SELECT pty_session_id FROM claude_sessions WHERE session_uuid = $1")
+            .bind(fx.session_uuid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(linked_pty, Some(pty_id));
 }
 
 #[tokio::test]

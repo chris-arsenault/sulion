@@ -2,4 +2,7 @@
 set -eu
 
 SECRET_ID="${SULION_AWS_SECRET_ID:-aws-default}"
-exec /opt/sulion/bin/with-cred "${SECRET_ID}" -- /usr/bin/aws "$@"
+exec /usr/local/bin/sulion credential-helper \
+  --tool aws \
+  --secret "${SECRET_ID}" \
+  -- /usr/bin/aws "$@"

@@ -13,6 +13,7 @@ import "./SessionInspectorPane.css";
 
 interface Props {
   turn: Turn | null;
+  loading?: boolean;
   showThinking: boolean;
   onOpenSubagent?: (pair: ToolPair) => void;
   /** When true, render as a full-screen overlay modal with a backdrop;
@@ -28,6 +29,7 @@ interface Props {
 
 export function SessionInspectorPane({
   turn,
+  loading = false,
   showThinking,
   onOpenSubagent,
   asOverlay,
@@ -52,6 +54,10 @@ export function SessionInspectorPane({
       focusPairId={focusPairId ?? null}
       focusKey={focusKey ?? null}
     />
+  ) : loading ? (
+    <div className="sip__empty">
+      <p>Loading turn detail...</p>
+    </div>
   ) : (
     <div className="sip__empty">
       <p>Select a turn from the timeline to see its detail here.</p>
@@ -61,7 +67,7 @@ export function SessionInspectorPane({
   if (asOverlay) {
     // Only render the modal when a turn is selected. On narrow viewports
     // we use selection presence as the "is modal open" signal.
-    if (!turn) return null;
+    if (!turn && !loading) return null;
     return createPortal(
       <div
         className="sip__overlay-backdrop"

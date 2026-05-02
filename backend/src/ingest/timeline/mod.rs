@@ -26,7 +26,9 @@ pub use project::project_timeline;
 pub use types::{
     ProjectionFilters, ResolvedSession, SessionEventFilter, SessionLookup, SpeakerFacet,
     StoredEvent, TimelineAssistantItem, TimelineChunk, TimelineFileTouch, TimelineGenericDetails,
-    TimelineResponse, TimelineSubagent, TimelineToolPair, TimelineToolResult, TimelineTurn,
+    TimelineOperationBadge, TimelineResponse, TimelineSubagent, TimelineSummaryResponse,
+    TimelineToolPair, TimelineToolResult, TimelineTurn, TimelineTurnDetailResponse,
+    TimelineTurnSummary,
 };
 
 pub(crate) use types::BOOKKEEPING_KINDS;

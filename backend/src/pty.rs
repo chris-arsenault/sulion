@@ -162,6 +162,7 @@ impl PtyManager {
     /// reader / writer / supervisor tasks.
     pub async fn spawn(self: &Arc<Self>, params: SpawnParams) -> anyhow::Result<PtyMetadata> {
         let id = Uuid::new_v4();
+        let secret_broker_key_path = crate::secret_pty::prepare_pty_credential(id).await?;
         let pty_system = portable_pty::native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -177,23 +178,7 @@ impl PtyManager {
             cmd.arg(arg);
         }
         cmd.cwd(&params.working_dir);
-        cmd.env("SULION_PTY_ID", id.to_string());
-        cmd.env(
-            "SULION_CORRELATE_SOCK",
-            std::env::var("SULION_CORRELATE_SOCK")
-                .unwrap_or_else(|_| "/run/sulion/correlate.sock".to_string()),
-        );
-        for key in [
-            "SULION_CLAUDE_PROJECTS",
-            "SULION_CODEX_SESSIONS",
-            "SULION_SECRET_BROKER_URL",
-            "SULION_SECRET_BROKER_USE_TOKEN",
-            "SULION_AWS_SECRET_ID",
-        ] {
-            if let Ok(value) = std::env::var(key) {
-                cmd.env(key, value);
-            }
-        }
+        configure_pty_environment(&mut cmd, id, &params.shell, secret_broker_key_path.as_ref());
         if let Ok(term) = std::env::var("TERM") {
             cmd.env("TERM", term);
         } else {
@@ -377,6 +362,7 @@ impl PtyManager {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        crate::secret_pty::revoke_pty_credential(id).await;
         Ok(())
     }
 
@@ -394,6 +380,75 @@ impl PtyManager {
         {
             tracing::error!(%id, %err, "mark_dead failed");
         }
+        crate::secret_pty::revoke_pty_credential(id).await;
+    }
+}
+
+fn configure_pty_environment(
+    cmd: &mut CommandBuilder,
+    id: Uuid,
+    shell: &Path,
+    secret_broker_key_path: Option<&PathBuf>,
+) {
+    cmd.env_clear();
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/dev".to_string());
+    let user = std::env::var("USER").unwrap_or_else(|_| "dev".to_string());
+    cmd.env("HOME", &home);
+    cmd.env("USER", &user);
+    cmd.env("LOGNAME", &user);
+    cmd.env("SHELL", shell.as_os_str());
+    cmd.env("PATH", default_pty_path(&home));
+
+    for key in [
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TZ",
+        "COLORTERM",
+        "RUSTUP_HOME",
+        "CARGO_HOME",
+        "RUSTUP_TOOLCHAIN",
+        "DOTNET_ROOT",
+        "DOTNET_CLI_TELEMETRY_OPTOUT",
+        "DOTNET_NOLOGO",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+    ] {
+        forward_env(cmd, key);
+    }
+
+    cmd.env("SULION_PTY_ID", id.to_string());
+    cmd.env(
+        "SULION_CORRELATE_SOCK",
+        std::env::var("SULION_CORRELATE_SOCK")
+            .unwrap_or_else(|_| "/run/sulion/correlate.sock".to_string()),
+    );
+    for key in [
+        "SULION_CLAUDE_PROJECTS",
+        "SULION_CODEX_SESSIONS",
+        "SULION_SECRET_BROKER_URL",
+        "SULION_AWS_SECRET_ID",
+    ] {
+        forward_env(cmd, key);
+    }
+    if let Some(path) = secret_broker_key_path {
+        cmd.env(
+            "SULION_SECRET_BROKER_KEY_PATH",
+            path.to_string_lossy().as_ref(),
+        );
+    }
+}
+
+fn default_pty_path(home: &str) -> String {
+    let base = std::env::var("PATH")
+        .unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin".into());
+    format!("{home}/.local/bin:/opt/sulion/bin:{base}")
+}
+
+fn forward_env(cmd: &mut CommandBuilder, key: &str) {
+    if let Ok(value) = std::env::var(key) {
+        cmd.env(key, value);
     }
 }
 

@@ -194,6 +194,12 @@ export interface TimelineQuery {
   file_path?: string;
 }
 
+export interface TimelineOperationBadge {
+  name: string;
+  operation_type?: string | null;
+  count: number;
+}
+
 export interface TimelineToolResult {
   content?: string | null;
   payload?: unknown | null;
@@ -272,11 +278,36 @@ export interface TimelineTurn {
   session_state?: SessionState | null;
 }
 
-export interface TimelineResponse {
+export interface TimelineTurnSummary {
+  id: number;
+  turn_key?: string | null;
+  preview: string;
+  start_timestamp: string;
+  end_timestamp: string;
+  duration_ms: number;
+  event_count: number;
+  operation_count: number;
+  operation_badges: TimelineOperationBadge[];
+  thinking_count: number;
+  has_errors: boolean;
+  pty_session_id?: string | null;
+  session_uuid?: string | null;
+  session_agent?: string | null;
+  session_label?: string | null;
+  session_state?: SessionState | null;
+}
+
+export interface TimelineSummaryResponse {
   session_uuid: string | null;
   session_agent: string | null;
   total_event_count: number;
-  turns: TimelineTurn[];
+  turns: TimelineTurnSummary[];
+}
+
+export interface TimelineTurnDetailResponse {
+  session_uuid: string;
+  session_agent: string | null;
+  turn: TimelineTurn;
 }
 
 export interface GitCommit {

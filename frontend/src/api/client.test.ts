@@ -6,9 +6,13 @@ import {
   deleteSession,
   getHistory,
   getRepoFileTrace,
+  getRepoTimelineTurn,
   getTimeline,
+  getTimelineTurn,
+  unlockSecretGrant,
   listRepos,
   listSessions,
+  upsertSecret,
 } from "./client";
 
 function stubFetch(
@@ -113,6 +117,43 @@ describe("api client", () => {
     expect(resp.turns).toEqual([]);
   });
 
+  it("getTimelineTurn hits the selected-turn detail endpoint", async () => {
+    stubFetch(async (url) => {
+      expect(url).toBe(
+        "/api/sessions/s/timeline/turns/7?hide_speakers=assistant",
+      );
+      return jsonResponse({
+        session_uuid: "session-1",
+        session_agent: "claude-code",
+        turn: { id: 7 },
+      });
+    });
+    const resp = await getTimelineTurn("s", 7, {
+      hidden_speakers: ["assistant"],
+    });
+    expect(resp.turn.id).toBe(7);
+  });
+
+  it("getRepoTimelineTurn includes repo and transcript session in the URL", async () => {
+    stubFetch(async (url) => {
+      expect(url).toBe(
+        "/api/repos/r/timeline/turns/00000000-0000-0000-0000-000000000001/7?show_sidechain=true",
+      );
+      return jsonResponse({
+        session_uuid: "00000000-0000-0000-0000-000000000001",
+        session_agent: "codex",
+        turn: { id: 7 },
+      });
+    });
+    const resp = await getRepoTimelineTurn(
+      "r",
+      "00000000-0000-0000-0000-000000000001",
+      7,
+      { show_sidechain: true },
+    );
+    expect(resp.session_agent).toBe("codex");
+  });
+
   it("listRepos hits /api/repos", async () => {
     stubFetch(async (url) => {
       expect(url).toBe("/api/repos");
@@ -161,6 +202,52 @@ describe("api client", () => {
         expect(err.message).toBe("boom");
       }
     }
+  });
+
+  it("resolves broker writes that return 201 with an empty body", async () => {
+    stubFetch(async (url, init) => {
+      expect(url).toBe("/broker/v1/secrets/claude-api");
+      expect(init?.method).toBe("PUT");
+      expect(JSON.parse(init?.body as string)).toEqual({
+        description: "Claude",
+        scope: "global",
+        repo: null,
+        env: { ANTHROPIC_API_KEY: "sxxx" },
+      });
+      return new Response(null, { status: 201 });
+    });
+
+    await expect(
+      upsertSecret("claude-api", {
+        description: "Claude",
+        scope: "global",
+        repo: null,
+        env: { ANTHROPIC_API_KEY: "sxxx" },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("posts grant unlock requests to the broker", async () => {
+    stubFetch(async (url, init) => {
+      expect(url).toBe("/broker/v1/grants");
+      expect(init?.method).toBe("POST");
+      expect(JSON.parse(init?.body as string)).toEqual({
+        pty_session_id: "pty-1",
+        secret_id: "claude-api",
+        tool: "with-cred",
+        ttl_seconds: 600,
+      });
+      return new Response(null, { status: 201 });
+    });
+
+    await expect(
+      unlockSecretGrant({
+        pty_session_id: "pty-1",
+        secret_id: "claude-api",
+        tool: "with-cred",
+        ttl_seconds: 600,
+      }),
+    ).resolves.toBeUndefined();
   });
 });
 

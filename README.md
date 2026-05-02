@@ -24,7 +24,7 @@ Session broker for Claude Code and Codex terminal sessions. Persistent PTYs with
 - [E2E coverage plan](docs/e2e-coverage-plan.md) — real-stack Playwright suite
 - [Deploy](docs/deploy.md) — TrueNAS / Komodo first-run and ongoing
 - [Backlog](docs/backlog.md) — active candidates and speculative bets
-- [Changelog](docs/changelog.md) — user-visible feature history
+- [Changelog](CHANGELOG.md) — user-visible feature history
 
 ## Quickstart
 

@@ -11,6 +11,7 @@ pub mod auth;
 pub mod codex;
 pub mod config;
 pub mod correlate;
+pub mod credential_helper;
 pub mod db;
 pub mod e2e;
 pub mod emulator;
@@ -20,6 +21,8 @@ pub mod ingest;
 pub mod library;
 pub mod pty;
 pub mod secret_broker;
+pub mod secret_protocol;
+pub mod secret_pty;
 pub mod workspace;
 
 #[derive(Default)]

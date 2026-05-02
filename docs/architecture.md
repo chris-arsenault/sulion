@@ -78,7 +78,7 @@ The **terminal pane** is the one React-opaque island: imperatively mounted `xter
 
 The **timeline pane** uses `react-virtuoso` — overnight sessions produce thousands of events; a non-virtualized list is unusable.
 
-The **secrets tab** is the credential-management surface. It manages env-bundle secrets and PTY-scoped grants with TTL, but the actual unlock and storage boundary lives in the broker. See [`secrets.md`](secrets.md).
+The **secrets tab** is the env-bundle setup surface. PTY-scoped grants with TTL live in terminal/session context menus, and the actual unlock and storage boundary lives in the broker. See [`secrets.md`](secrets.md).
 
 ## Backend surface
 
@@ -107,7 +107,7 @@ It does not run PTYs, ingest transcripts, or serve the main application API.
 
 ## Deployment shape
 
-Docker Compose, orchestrated by Komodo, on TrueNAS. Three images (`backend`, `broker`, `frontend`), shared TrueNAS Postgres at `192.168.66.3:5432`, and one bind-mounted dataset at `/mnt/apps/apps/sulion` used by the backend and broker for runtime state. Full setup in [`deploy.md`](deploy.md).
+Docker Compose, orchestrated by Komodo, on TrueNAS. Three images (`backend`, `broker`, `frontend`), shared TrueNAS Postgres at `192.168.66.3:5432`, backend state under `/mnt/apps/apps/sulion`, and broker key material under `/mnt/apps/apps/sulion-broker`. Full setup in [`deploy.md`](deploy.md).
 
 ## Historical reasoning
 

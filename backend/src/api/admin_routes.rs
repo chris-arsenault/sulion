@@ -18,8 +18,9 @@ use crate::AppState;
 /// can honestly snapshot.
 #[derive(Serialize)]
 pub(super) struct ReindexResponse {
-    /// claude_sessions rows deleted. Cascades wiped every dependent
-    /// row (events, event_blocks, timeline_* projections).
+    /// Distinct transcript sessions whose ingested rows/projections
+    /// were cleared. Correlated claude_sessions rows are preserved so
+    /// terminal/repo associations survive replay.
     sessions_cleared: u64,
     /// ingester_state rows deleted (per-session file commit offsets).
     /// After this, the ingester re-reads every JSONL from byte 0.

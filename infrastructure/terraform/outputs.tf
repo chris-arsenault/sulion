@@ -10,6 +10,6 @@ output "cognito_user_pool_id" {
   value = module.ctx.cognito.user_pool_id
 }
 
-output "secret_broker_use_token_ssm_path" {
-  value = aws_ssm_parameter.secret_broker_use_token.name
+output "secret_broker_registration_token_ssm_path" {
+  value = aws_ssm_parameter.secret_broker_registration_token.name
 }

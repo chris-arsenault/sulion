@@ -25,6 +25,14 @@ async fn main() -> anyhow::Result<()> {
         let code = sulion::codex::run_launcher(cfg).await?;
         std::process::exit(code);
     }
+    if argv
+        .get(1)
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s == "credential-helper")
+    {
+        let code = sulion::credential_helper::run(&argv[2..]).await?;
+        std::process::exit(code);
+    }
 
     tracing_subscriber::fmt()
         .json()

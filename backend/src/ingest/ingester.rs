@@ -24,9 +24,10 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use uuid::Uuid;
-use walkdir::WalkDir;
 
 use crate::db::Pool;
+
+use super::file_scan::{dirty_transcript_files, DirtyTranscriptFile};
 
 /// Heartbeat interval for the "I'm alive, here's what I've done" log.
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(60);
@@ -54,13 +55,13 @@ impl IngesterConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TranscriptSource {
+pub(super) enum TranscriptSource {
     ClaudeCode,
     Codex,
 }
 
 impl TranscriptSource {
-    fn agent_id(self) -> &'static str {
+    pub(super) fn agent_id(self) -> &'static str {
         match self {
             TranscriptSource::ClaudeCode => "claude-code",
             TranscriptSource::Codex => "codex",
@@ -215,18 +216,20 @@ impl Ingester {
         if !root.exists() {
             return;
         }
-        for entry in WalkDir::new(root)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(Result::ok)
-        {
-            if !entry.file_type().is_file() {
-                continue;
+        let dirty_files = match dirty_transcript_files(pool, root, source).await {
+            Ok(files) => files,
+            Err(err) => {
+                tracing::warn!(
+                    agent = source.agent_id(),
+                    root = %root.display(),
+                    %err,
+                    "ingest root scan failed",
+                );
+                return;
             }
-            if entry.path().extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                continue;
-            }
-            match process_file(pool, entry.path(), source).await {
+        };
+        for file in dirty_files {
+            match process_file(pool, &file, source).await {
                 Ok(file_result) => {
                     summary.events_inserted += file_result.events_inserted;
                     summary.parse_errors += file_result.parse_errors;
@@ -239,7 +242,7 @@ impl Ingester {
                     if file_result.events_inserted > 0 {
                         tracing::info!(
                             agent = source.agent_id(),
-                            path = %entry.path().display(),
+                            path = %file.path.display(),
                             inserted = file_result.events_inserted,
                             parse_errors = file_result.parse_errors,
                             committed_offset = file_result.committed_offset,
@@ -250,7 +253,7 @@ impl Ingester {
                 Err(err) => {
                     tracing::warn!(
                         agent = source.agent_id(),
-                        path = %entry.path().display(),
+                        path = %file.path.display(),
                         %err,
                         "ingest file failed",
                     );
@@ -297,65 +300,44 @@ impl CodexSessionContext {
 
 async fn process_file(
     pool: &Pool,
-    path: &Path,
+    file: &DirtyTranscriptFile,
     source: TranscriptSource,
 ) -> anyhow::Result<FileResult> {
     let mut result = FileResult::default();
-    let Some(session_uuid) = parse_session_uuid(path, source) else {
-        tracing::debug!(
-            agent = source.agent_id(),
-            path = %path.display(),
-            "skipping: filename does not encode a supported session uuid",
-        );
-        return Ok(result);
-    };
-    let project_hash = parse_project_hash(path, source);
-
     upsert_agent_session(
         pool,
-        session_uuid,
+        file.session_uuid,
         source.agent_id(),
-        project_hash.as_deref(),
+        file.project_hash.as_deref(),
     )
     .await?;
 
-    let committed = get_offset(pool, session_uuid).await?;
-    let file_len = match std::fs::metadata(path) {
-        Ok(md) => md.len() as i64,
-        Err(err) => {
-            tracing::warn!(path = %path.display(), %err, "stat failed");
-            return Ok(result);
-        }
-    };
-
-    result.committed_offset = committed;
-
-    if file_len == committed {
-        return Ok(result);
-    }
-    if file_len < committed {
+    result.committed_offset = file.committed_offset;
+    if file.file_len < file.committed_offset {
         // File truncated or replaced — reset and try again on next tick.
         tracing::warn!(
-            path = %path.display(),
-            file_len, committed,
+            path = %file.path.display(),
+            file_len = file.file_len,
+            committed = file.committed_offset,
             "file shorter than committed offset; resetting",
         );
-        set_offset(pool, session_uuid, path, 0).await?;
+        set_offset(pool, file.session_uuid, &file.path, 0).await?;
         result.committed_offset = 0;
         return Ok(result);
     }
 
-    let mut file = std::fs::File::open(path)?;
-    file.seek(SeekFrom::Start(committed as u64))?;
-    let mut buf = Vec::with_capacity((file_len - committed) as usize);
-    file.read_to_end(&mut buf)?;
+    let mut transcript = std::fs::File::open(&file.path)?;
+    transcript.seek(SeekFrom::Start(file.committed_offset as u64))?;
+    let mut buf = Vec::with_capacity((file.file_len - file.committed_offset) as usize);
+    transcript.read_to_end(&mut buf)?;
 
     // Walk the buffer. For each newline-terminated line, insert an event
     // and advance `next_committed` past the newline.
     let mut line_start: usize = 0;
-    let mut next_committed = committed;
+    let mut next_committed = file.committed_offset;
+    let mut first_inserted_offset: Option<i64> = None;
     let mut codex_ctx = match source {
-        TranscriptSource::Codex => Some(load_codex_context(pool, session_uuid).await?),
+        TranscriptSource::Codex => Some(load_codex_context(pool, file.session_uuid).await?),
         TranscriptSource::ClaudeCode => None,
     };
 
@@ -364,10 +346,10 @@ async fn process_file(
             continue;
         }
         let line = &buf[line_start..i];
-        let byte_offset = committed + line_start as i64;
+        let byte_offset = file.committed_offset + line_start as i64;
         match insert_event(
             pool,
-            session_uuid,
+            file.session_uuid,
             source,
             byte_offset,
             line,
@@ -377,6 +359,7 @@ async fn process_file(
         {
             Ok(inserted) => {
                 if inserted {
+                    first_inserted_offset.get_or_insert(byte_offset);
                     result.events_inserted += 1;
                 }
             }
@@ -388,52 +371,72 @@ async fn process_file(
             }
         }
         line_start = i + 1;
-        next_committed = committed + line_start as i64;
+        next_committed = file.committed_offset + line_start as i64;
     }
 
     // Any tail after the last newline is a partial line. Left in the
     // file; will be re-read on the next tick once it's newline-terminated.
 
-    if next_committed != committed {
-        set_offset(pool, session_uuid, path, next_committed).await?;
+    if next_committed != file.committed_offset {
+        set_offset(pool, file.session_uuid, &file.path, next_committed).await?;
         result.committed_offset = next_committed;
     }
-    if result.events_inserted > 0 {
-        if let Err(err) = super::projection::rebuild_session_projection(pool, session_uuid).await {
-            tracing::warn!(
-                %err,
-                session = %session_uuid,
-                agent = source.agent_id(),
-                "timeline projection rebuild failed",
-            );
-        }
-        if source == TranscriptSource::Codex {
-            match codex_parent_session_chain(pool, session_uuid).await {
-                Ok(ancestors) => {
-                    for ancestor in ancestors {
-                        if let Err(err) =
-                            super::projection::rebuild_session_projection(pool, ancestor).await
-                        {
-                            tracing::warn!(
-                                %err,
-                                session = %session_uuid,
-                                ancestor = %ancestor,
-                                "ancestor timeline projection rebuild failed",
-                            );
-                        }
-                    }
-                }
-                Err(err) => {
+    if let Some(first_inserted_offset) = first_inserted_offset {
+        rebuild_projections_after_insert(pool, file.session_uuid, source, first_inserted_offset)
+            .await;
+    }
+    Ok(result)
+}
+
+async fn rebuild_projections_after_insert(
+    pool: &Pool,
+    session_uuid: Uuid,
+    source: TranscriptSource,
+    first_inserted_offset: i64,
+) {
+    if let Err(err) = super::projection::rebuild_session_projection_after_insert(
+        pool,
+        session_uuid,
+        first_inserted_offset,
+    )
+    .await
+    {
+        tracing::warn!(
+            %err,
+            session = %session_uuid,
+            agent = source.agent_id(),
+            "timeline projection rebuild failed",
+        );
+    }
+    if source == TranscriptSource::Codex {
+        rebuild_codex_ancestor_projections(pool, session_uuid).await;
+    }
+}
+
+async fn rebuild_codex_ancestor_projections(pool: &Pool, session_uuid: Uuid) {
+    match codex_parent_session_chain(pool, session_uuid).await {
+        Ok(ancestors) => {
+            for ancestor in ancestors {
+                if let Err(err) =
+                    super::projection::rebuild_session_projection(pool, ancestor).await
+                {
                     tracing::warn!(
                         %err,
                         session = %session_uuid,
-                        "codex ancestor projection lookup failed",
+                        ancestor = %ancestor,
+                        "ancestor timeline projection rebuild failed",
                     );
                 }
             }
         }
+        Err(err) => {
+            tracing::warn!(
+                %err,
+                session = %session_uuid,
+                "codex ancestor projection lookup failed",
+            );
+        }
     }
-    Ok(result)
 }
 
 enum InsertError {
@@ -441,7 +444,7 @@ enum InsertError {
     Db(sqlx::Error),
 }
 
-fn parse_session_uuid(path: &Path, source: TranscriptSource) -> Option<Uuid> {
+pub(super) fn parse_session_uuid(path: &Path, source: TranscriptSource) -> Option<Uuid> {
     match source {
         TranscriptSource::ClaudeCode => parse_claude_session_uuid(path),
         TranscriptSource::Codex => parse_codex_session_uuid(path),
@@ -460,7 +463,7 @@ pub fn parse_codex_session_uuid(path: &Path) -> Option<Uuid> {
     Uuid::parse_str(raw).ok()
 }
 
-fn parse_project_hash(path: &Path, source: TranscriptSource) -> Option<String> {
+pub(super) fn parse_project_hash(path: &Path, source: TranscriptSource) -> Option<String> {
     match source {
         TranscriptSource::ClaudeCode => path
             .parent()
@@ -478,11 +481,17 @@ async fn upsert_agent_session(
     project_hash: Option<&str>,
 ) -> anyhow::Result<()> {
     sqlx::query(
-        "INSERT INTO claude_sessions (session_uuid, agent, project_hash) \
-         VALUES ($1, $2, $3) \
+        "INSERT INTO claude_sessions (session_uuid, agent, project_hash, pty_session_id) \
+         VALUES ( \
+           $1, \
+           $2, \
+           $3, \
+           (SELECT id FROM pty_sessions WHERE current_session_uuid = $1 LIMIT 1) \
+         ) \
          ON CONFLICT (session_uuid) DO UPDATE SET \
            agent = EXCLUDED.agent, \
-           project_hash = COALESCE(claude_sessions.project_hash, EXCLUDED.project_hash)",
+           project_hash = COALESCE(EXCLUDED.project_hash, claude_sessions.project_hash), \
+           pty_session_id = COALESCE(claude_sessions.pty_session_id, EXCLUDED.pty_session_id)",
     )
     .bind(session_uuid)
     .bind(agent)
@@ -490,16 +499,6 @@ async fn upsert_agent_session(
     .execute(pool)
     .await?;
     Ok(())
-}
-
-async fn get_offset(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<i64> {
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT last_committed_byte_offset FROM ingester_state WHERE session_uuid = $1",
-    )
-    .bind(session_uuid)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.map(|(o,)| o).unwrap_or(0))
 }
 
 async fn set_offset(
@@ -923,53 +922,6 @@ async fn insert_blocks(
     Ok(())
 }
 
-/// Admin-triggered reindex: wipe every transcript row the ingester
-/// produces, plus the per-file commit offsets. After this call, the
-/// DB is in the same shape as a fresh boot that has never seen a
-/// JSONL: `pty_sessions`, `repos`, and every non-transcript table
-/// are untouched.
-///
-/// The next ambient ingester tick (driven by the backend's long-
-/// running ingester task on its normal poll cadence) walks every
-/// JSONL from byte 0 and repopulates the tables — same code path as
-/// startup. We deliberately do not synchronously drive a tick here;
-/// "how many events came back" is the ingester's job to report via
-/// `/api/stats`, not the admin endpoint's.
-///
-/// Tables cleared:
-///   - `claude_sessions` — cascades via ON DELETE CASCADE to `events`,
-///     `event_blocks`, `timeline_turns`, `timeline_operations`,
-///     `timeline_references`, `timeline_activity_signals`,
-///     `timeline_search_documents`, `timeline_file_touches`.
-///   - `ingester_state` — per-session commit offsets (no FK, cleared
-///     explicitly).
-///
-/// Tables untouched: `pty_sessions`, `repos`, `tool_category_rules`.
-pub async fn reset_ingest_state(pool: &Pool) -> anyhow::Result<ResetStats> {
-    let mut tx = pool.begin().await?;
-    let sessions_cleared: i64 = sqlx::query_scalar(
-        "WITH d AS (DELETE FROM claude_sessions RETURNING 1) SELECT COUNT(*) FROM d",
-    )
-    .fetch_one(&mut *tx)
-    .await?;
-    let offsets_cleared: i64 = sqlx::query_scalar(
-        "WITH d AS (DELETE FROM ingester_state RETURNING 1) SELECT COUNT(*) FROM d",
-    )
-    .fetch_one(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    Ok(ResetStats {
-        sessions_cleared: sessions_cleared.max(0) as u64,
-        offsets_cleared: offsets_cleared.max(0) as u64,
-    })
-}
-
-#[derive(Debug, Default, Clone, Copy, serde::Serialize)]
-pub struct ResetStats {
-    pub sessions_cleared: u64,
-    pub offsets_cleared: u64,
-}
-
 /// One-shot backfill on startup: walk every event that hasn't been
 /// decomposed into blocks yet and synthesise them from `payload`. Keeps
 /// the frontend's "read from blocks only" invariant true even for rows
@@ -1170,7 +1122,6 @@ mod tests {
             Some(uuid)
         );
     }
-
     #[test]
     fn parse_session_uuid_none_for_non_uuid_stem() {
         let path = PathBuf::from("/tmp/abc/not-a-uuid.jsonl");
@@ -1179,7 +1130,6 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn parse_project_hash_is_parent_dir() {
         let path = PathBuf::from("/tmp/my-project-hash/xxx.jsonl");
@@ -1188,7 +1138,6 @@ mod tests {
             Some("my-project-hash".into())
         );
     }
-
     #[test]
     fn parse_codex_session_uuid_from_rollout_filename() {
         let uuid = Uuid::new_v4();
