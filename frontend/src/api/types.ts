@@ -17,6 +17,8 @@ export interface SessionView {
    * Null when no events have been ingested yet. Drives the sidebar
    * unread-dot indicator. */
   last_event_at: string | null;
+  /** Backend-maintained revision for this transcript's projected timeline. */
+  timeline_revision?: number;
   /** User-facing label; overrides the uuid prefix in the sidebar. */
   label: string | null;
   /** Pinned sessions float to the top of their repo group. */
@@ -56,10 +58,6 @@ export interface UpdateSessionRequest {
   color?: SessionColor | null;
 }
 
-export interface ListSessionsResponse {
-  sessions: SessionView[];
-}
-
 export interface CreateSessionRequest {
   repo: string;
   working_dir?: string;
@@ -74,10 +72,16 @@ export interface CreateSessionRequest {
 export interface RepoView {
   name: string;
   path: string;
+  exists?: boolean;
+  timeline_revision?: number;
+  git?: RepoGitSummary | null;
 }
 
-export interface ListReposResponse {
+export interface AppStateResponse {
+  generated_at: string;
+  sessions: SessionView[];
   repos: RepoView[];
+  stats: StatsResponse;
 }
 
 export type SecretTool = "with-cred" | "aws";
@@ -328,6 +332,24 @@ export interface GitStatus {
   diff_stats_by_path: Record<string, DiffStat>;
 }
 
+export interface RepoGitSummary {
+  revision: number;
+  branch: string | null;
+  uncommitted_count: number;
+  untracked_count: number;
+  last_commit: GitCommit | null;
+  recent_commits: GitCommit[];
+  refreshing: boolean;
+  status_error: string | null;
+}
+
+export interface RepoDirtyPathsResponse {
+  repo: string;
+  git_revision: number;
+  dirty_by_path: Record<string, string>;
+  diff_stats_by_path: Record<string, DiffStat>;
+}
+
 export interface DiffStat {
   additions: number;
   deletions: number;
@@ -399,6 +421,11 @@ export interface StatsResponse {
   };
   db: {
     database_size_bytes: number;
+  };
+  ingest: {
+    last_tick_started_at_unix: number | null;
+    last_progress_at_unix: number | null;
+    stalled_seconds: number | null;
   };
   inventory: {
     event_rows: number;

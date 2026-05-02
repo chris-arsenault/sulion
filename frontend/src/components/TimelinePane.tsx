@@ -1,6 +1,7 @@
-// Polls the backend's timeline projection and renders a compact turn
-// list on the left and the selected turn's detail on the right. On
-// narrow viewports the detail view becomes an overlay modal instead of
+// Renders backend-projected timeline summaries and selected turn detail.
+// The unified app-state poll carries timeline revision markers; this
+// pane fetches summaries only when its active resource revision changes.
+// On narrow viewports the detail view becomes an overlay modal instead of
 // a side pane.
 //
 // The inspector's TurnDetail is reused by the SubagentModal so drill-in
@@ -38,6 +39,7 @@ import {
   TIMELINE_FONT_SCALE_STEP,
   useTimelineFontScale,
 } from "../state/paneTextScale";
+import { useSessions } from "../state/SessionStore";
 import { useTabs } from "../state/TabStore";
 import { FilterChips } from "./timeline/FilterChips";
 import { useTimelineFilters } from "./timeline/filters";
@@ -48,7 +50,6 @@ import { TurnRow } from "./timeline/TurnRow";
 import { Tooltip } from "./ui";
 import "./TimelinePane.css";
 
-const POLL_MS = 1500;
 const INSPECTOR_WIDTH_KEY = "sulion.timeline.inspector.width.v1";
 const DEFAULT_INSPECTOR_FRACTION = 0.55;
 const MIN_INSPECTOR_FRACTION = 0.28;
@@ -63,6 +64,7 @@ export function TimelinePane({
   tabId,
   sessionId,
   repo,
+  active = true,
   focusTurnId,
   focusPairId,
   focusKey,
@@ -70,6 +72,7 @@ export function TimelinePane({
   tabId?: string;
   sessionId?: string;
   repo?: string;
+  active?: boolean;
   focusTurnId?: number;
   focusPairId?: string;
   focusKey?: string;
@@ -86,11 +89,21 @@ export function TimelinePane({
   const [subagent, setSubagent] = useState<TimelineSubagent | null>(null);
   const [selectedTurnKey, setSelectedTurnKey] = useState<string | null>(null);
   const appliedFocusKeyRef = useRef<string | null>(null);
+  const loadedSummaryKeyRef = useRef<string | null>(null);
 
   const filterHook = useTimelineFilters();
   const { filters } = filterHook;
   const narrow = useMediaQuery("(max-width: 999px)");
   const [timelineFontScale, setTimelineFontScale] = useTimelineFontScale();
+  const resourceRevision = useSessions((store) => {
+    if (sessionId) {
+      return store.sessions.find((session) => session.id === sessionId)?.timeline_revision ?? 0;
+    }
+    if (repo) {
+      return store.repos.find((candidate) => candidate.name === repo)?.timeline_revision ?? 0;
+    }
+    return 0;
+  });
 
   const [inspectorFraction, setInspectorFraction] = useState<number>(() => {
     if (typeof window === "undefined") return DEFAULT_INSPECTOR_FRACTION;
@@ -139,6 +152,7 @@ export function TimelinePane({
     setSubagent(null);
     setSelectedTurnKey(null);
     appliedFocusKeyRef.current = null;
+    loadedSummaryKeyRef.current = null;
   }, [sessionId, repo]);
 
   useEffect(() => {
@@ -147,17 +161,18 @@ export function TimelinePane({
   }, [queryKey]);
 
   useEffect(() => {
-    if (!sessionId && !repo) return;
+    if (!active || (!sessionId && !repo)) return;
+    const summaryKey = `${sessionId ?? ""}:${repo ?? ""}:${resourceRevision}:${queryKey}`;
+    if (loadedSummaryKeyRef.current === summaryKey) return;
     let cancelled = false;
-    let inFlight = false;
-    const tick = async () => {
-      if (cancelled || inFlight) return;
-      inFlight = true;
+    const load = async () => {
+      if (cancelled) return;
       try {
         const resp = sessionId
           ? await getTimeline(sessionId, query)
           : await getRepoTimeline(repo!, query);
         if (cancelled) return;
+        loadedSummaryKeyRef.current = summaryKey;
         setCurrentSessionUuid(resp.session_uuid);
         setCurrentSessionAgent(resp.session_agent);
         setTimeline(resp);
@@ -166,18 +181,14 @@ export function TimelinePane({
         if (!cancelled) {
           setLoadError(err instanceof Error ? err.message : "timeline fetch failed");
         }
-      } finally {
-        inFlight = false;
       }
     };
 
-    void tick();
-    const timer = setInterval(() => void tick(), POLL_MS);
+    void load();
     return () => {
       cancelled = true;
-      clearInterval(timer);
     };
-  }, [sessionId, repo, query, queryKey]);
+  }, [active, sessionId, repo, resourceRevision, query, queryKey]);
 
   const turns = useMemo<TurnSummary[]>(
     () => timeline?.turns ?? [],
@@ -185,10 +196,9 @@ export function TimelinePane({
   );
 
   // Apply a focus request exactly once per focusKey. `turns` stays in
-  // deps so we retry across polls if the target turn hasn't been
-  // ingested yet, but the ref guard prevents later polls — whose new
-  // `turns` array identity would otherwise re-fire the effect — from
-  // stomping on a selection the user has since moved.
+  // deps so we retry across revision updates if the target turn hasn't been
+  // ingested yet, but the ref guard prevents later summary refreshes
+  // from stomping on a selection the user has since moved.
   useEffect(() => {
     if (focusTurnId == null || !focusKey) return;
     if (appliedFocusKeyRef.current === focusKey) return;
@@ -224,7 +234,7 @@ export function TimelinePane({
     selectedSummary != null && selectedTurn == null && !detailError;
 
   useEffect(() => {
-    if (!selectedSummary || !selectedTurnKey) return;
+    if (!active || !selectedSummary || !selectedTurnKey) return;
     if (selectedFingerprint == null) return;
     if (detailCache.get(selectedTurnKey)?.fingerprint === selectedFingerprint) return;
     if (!sessionId && (!repo || !selectedSummary.session_uuid)) return;
@@ -266,6 +276,7 @@ export function TimelinePane({
     };
   }, [
     detailCache,
+    active,
     query,
     repo,
     selectedFingerprint,
@@ -297,7 +308,7 @@ export function TimelinePane({
   );
 
   // Follow-latest: while the filter is on, keep the selection pinned
-  // to the most recently arrived turn across polls. Turn identity is
+  // to the most recently arrived turn across summary refreshes. Turn identity is
   // stable, so we only restart the selection when the last-turn key
   // actually changes — avoids fighting unrelated re-renders.
   useEffect(() => {

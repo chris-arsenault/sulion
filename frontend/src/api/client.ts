@@ -2,6 +2,7 @@
 import { getAccessToken } from "../auth/cognito";
 
 import type {
+  AppStateResponse,
   CreateRepoRequest,
   CreateSessionRequest,
   CreateFuturePromptInput,
@@ -11,13 +12,11 @@ import type {
   FileResponse,
   FuturePromptEntry,
   FuturePromptListResponse,
-  GitStatus,
   HistoryQuery,
   HistoryResponse,
   LibraryEntry,
   LibraryKind,
-  ListReposResponse,
-  ListSessionsResponse,
+  RepoDirtyPathsResponse,
   RepoView,
   SaveLibraryInput,
   SessionView,
@@ -25,7 +24,6 @@ import type {
   SecretGrantMetadata,
   SecretMetadata,
   SecretTool,
-  StatsResponse,
   TimelineQuery,
   TimelineSummaryResponse,
   TimelineTurnDetailResponse,
@@ -99,11 +97,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   if (resp.status === 204) {
     return undefined as T;
   }
-  return (await resp.json()) as T;
+  const text = await resp.text();
+  if (!text.trim()) {
+    return undefined as T;
+  }
+  return JSON.parse(text) as T;
 }
 
-export function listSessions(): Promise<ListSessionsResponse> {
-  return request<ListSessionsResponse>("/api/sessions");
+export function getAppState(): Promise<AppStateResponse> {
+  return request<AppStateResponse>("/api/app-state");
 }
 
 export function createSession(body: CreateSessionRequest): Promise<SessionView> {
@@ -232,19 +234,11 @@ function appendTimelineFilterParams(
   if (query.file_path) params.set("file_path", query.file_path);
 }
 
-export function listRepos(): Promise<ListReposResponse> {
-  return request<ListReposResponse>("/api/repos");
-}
-
 export function createRepo(body: CreateRepoRequest): Promise<RepoView> {
   return request<RepoView>("/api/repos", {
     method: "POST",
     body: JSON.stringify(body),
   });
-}
-
-export function getStats(): Promise<StatsResponse> {
-  return request<StatsResponse>("/api/stats");
 }
 
 export interface ReindexResponse {
@@ -305,8 +299,16 @@ export function revokeSecretGrant(body: {
   });
 }
 
-export function getRepoGit(name: string): Promise<GitStatus> {
-  return request<GitStatus>(`/api/repos/${encodeURIComponent(name)}/git`);
+export function getRepoDirtyPaths(name: string): Promise<RepoDirtyPathsResponse> {
+  return request<RepoDirtyPathsResponse>(
+    `/api/repos/${encodeURIComponent(name)}/dirty-paths`,
+  );
+}
+
+export function refreshRepoState(name: string): Promise<void> {
+  return request<void>(`/api/repos/${encodeURIComponent(name)}/refresh`, {
+    method: "POST",
+  });
 }
 
 export function getRepoFiles(

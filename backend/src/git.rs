@@ -9,9 +9,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Commit {
     pub sha: String,
     pub subject: String,

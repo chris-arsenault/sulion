@@ -21,13 +21,15 @@ fn test_db_url() -> Option<String> {
 async fn fresh_pool() -> db::Pool {
     let url = test_db_url().expect("SULION_TEST_DB");
     let pool = db::connect(&url).await.expect("connect");
+    db::run_migrations(&pool).await.expect("migrate");
     sqlx::query(
-        "TRUNCATE events, ingester_state, claude_sessions, pty_sessions, repos RESTART IDENTITY CASCADE",
+        "TRUNCATE events, ingester_state, claude_sessions, pty_sessions, repos, \
+         repo_runtime_state, repo_dirty_paths, timeline_session_state, \
+         future_prompt_session_state RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
     .await
-    .ok();
-    db::run_migrations(&pool).await.expect("migrate");
+    .expect("truncate test tables");
     pool
 }
 
@@ -77,6 +79,25 @@ impl Harness {
 }
 
 #[tokio::test]
+async fn legacy_ambient_poll_contracts_are_removed() {
+    let h = Harness::new().await;
+    for (path, expected) in [
+        ("/api/sessions", reqwest::StatusCode::METHOD_NOT_ALLOWED),
+        ("/api/repos", reqwest::StatusCode::METHOD_NOT_ALLOWED),
+        ("/api/stats", reqwest::StatusCode::NOT_FOUND),
+        ("/api/repos/r/git", reqwest::StatusCode::NOT_FOUND),
+    ] {
+        let resp = h
+            .client
+            .get(format!("{}{}", h.base, path))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), expected, "{path}");
+    }
+}
+
+#[tokio::test]
 async fn sessions_crud_roundtrip() {
     let h = Harness::new().await;
     // Create a repo dir so working_dir is valid.
@@ -97,10 +118,10 @@ async fn sessions_crud_roundtrip() {
     assert_eq!(created["state"], "live");
     assert_eq!(created["repo"], repo_name);
 
-    // GET /api/sessions
+    // GET /api/app-state is the ambient session/repo/status contract.
     let list: serde_json::Value = h
         .client
-        .get(format!("{}/api/sessions", h.base))
+        .get(format!("{}/api/app-state", h.base))
         .send()
         .await
         .unwrap()
@@ -122,7 +143,7 @@ async fn sessions_crud_roundtrip() {
     // Listing should omit deleted sessions.
     let list: serde_json::Value = h
         .client
-        .get(format!("{}/api/sessions", h.base))
+        .get(format!("{}/api/app-state", h.base))
         .send()
         .await
         .unwrap()
@@ -491,6 +512,11 @@ async fn timeline_returns_projected_turns() {
     sulion::ingest::rebuild_session_projection(&h.state.pool, session_uuid)
         .await
         .unwrap();
+    h.state
+        .repo_state
+        .upsert_repo("r", &h.repos_root().join("r"))
+        .await
+        .unwrap();
 
     sqlx::query(
         "UPDATE timeline_turns \
@@ -783,15 +809,16 @@ async fn file_trace_returns_related_turns() {
 }
 
 #[tokio::test]
-async fn repos_list_reflects_directory_scan() {
+async fn app_state_repos_reflect_materialized_directory_scan() {
     let h = Harness::new().await;
     std::fs::create_dir_all(h.repos_root().join("aaa")).unwrap();
     std::fs::create_dir_all(h.repos_root().join("bbb")).unwrap();
     std::fs::create_dir_all(h.repos_root().join(".hidden")).unwrap();
+    h.state.repo_state.sync_repos_once().await.unwrap();
 
     let body: serde_json::Value = h
         .client
-        .get(format!("{}/api/repos", h.base))
+        .get(format!("{}/api/app-state", h.base))
         .send()
         .await
         .unwrap()

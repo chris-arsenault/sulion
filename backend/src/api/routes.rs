@@ -24,10 +24,7 @@ use crate::AppState;
 pub fn router() -> Router<Arc<AppState>> {
     use axum::routing::{delete, get, post};
     Router::new()
-        .route(
-            "/api/sessions",
-            get(session_routes::list_sessions).post(session_routes::create_session),
-        )
+        .route("/api/sessions", post(session_routes::create_session))
         .route(
             "/api/sessions/:id",
             delete(session_routes::delete_session).patch(session_routes::patch_session),
@@ -58,10 +55,7 @@ pub fn router() -> Router<Arc<AppState>> {
             delete(future_prompt_routes::delete_future_prompt)
                 .patch(future_prompt_routes::update_future_prompt),
         )
-        .route(
-            "/api/repos",
-            get(repo_routes::list_repos).post(repo_routes::create_repo),
-        )
+        .route("/api/repos", post(repo_routes::create_repo))
         .route(
             "/api/repos/:name/timeline",
             get(timeline_routes::repo_timeline),
@@ -70,8 +64,15 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/repos/:name/timeline/turns/:session_uuid/:turn_id",
             get(timeline_routes::repo_timeline_turn),
         )
-        .route("/api/repos/:name/git", get(repo_routes::get_repo_git))
         .route("/api/repos/:name/git/diff", get(repo_routes::get_repo_diff))
+        .route(
+            "/api/repos/:name/refresh",
+            post(repo_routes::post_repo_refresh),
+        )
+        .route(
+            "/api/repos/:name/dirty-paths",
+            get(repo_routes::get_repo_dirty_paths),
+        )
         .route(
             "/api/repos/:name/git/stage",
             post(repo_routes::post_repo_stage),

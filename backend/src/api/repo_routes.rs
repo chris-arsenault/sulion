@@ -1,4 +1,4 @@
-//! `/api/repos*` handlers — listing, creation, git, files, diff,
+//! `/api/repos*` handlers — creation, cached dirty state, files, diff,
 //! staging, upload, and file-trace. Timeline for repos lives in
 //! `timeline_routes.rs` — keep this module to filesystem + git ops.
 
@@ -11,47 +11,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::routes::{repo_path, repos_root, ApiError, ApiResult};
-use crate::{git, ingest, workspace, AppState};
+use crate::{git, ingest, repo_state, workspace, AppState};
 
 #[derive(Serialize)]
 pub(super) struct RepoView {
     name: String,
     path: String,
-}
-
-#[derive(Serialize)]
-pub(super) struct ListReposResponse {
-    repos: Vec<RepoView>,
-}
-
-pub(super) async fn list_repos(
-    State(state): State<Arc<AppState>>,
-) -> ApiResult<Json<ListReposResponse>> {
-    let root = repos_root(&state)?;
-    let mut repos = Vec::new();
-    if !root.exists() {
-        return Ok(Json(ListReposResponse { repos }));
-    }
-    let mut entries = tokio::fs::read_dir(&root).await?;
-    while let Some(entry) = entries.next_entry().await? {
-        let meta = match entry.metadata().await {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        if !meta.is_dir() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
-            continue;
-        }
-        repos.push(RepoView {
-            name: name.clone(),
-            path: entry.path().to_string_lossy().into_owned(),
-        });
-    }
-    repos.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(Json(ListReposResponse { repos }))
 }
 
 #[derive(Deserialize)]
@@ -110,6 +75,12 @@ pub(super) async fn create_repo(
         }
     }
 
+    state
+        .repo_state
+        .upsert_repo(&name, &dest)
+        .await
+        .map_err(ApiError::Internal)?;
+
     Ok((
         StatusCode::CREATED,
         Json(RepoView {
@@ -119,15 +90,28 @@ pub(super) async fn create_repo(
     ))
 }
 
-pub(super) async fn get_repo_git(
+pub(super) async fn post_repo_refresh(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
-) -> ApiResult<Json<git::GitStatus>> {
-    let path = repo_path(&state, &name)?;
-    let status = git::read_status(path)
+) -> ApiResult<StatusCode> {
+    let _ = repo_path(&state, &name)?;
+    state
+        .repo_state
+        .request_refresh(&name)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
-    Ok(Json(status))
+        .map_err(ApiError::Internal)?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+pub(super) async fn get_repo_dirty_paths(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<repo_state::RepoDirtyPaths>> {
+    let _ = repo_path(&state, &name)?;
+    let dirty = repo_state::load_dirty_paths(&state.pool, &name)
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(dirty))
 }
 
 #[derive(Deserialize)]
@@ -144,15 +128,20 @@ pub(super) async fn get_repo_files(
     let path = repo_path(&state, &name)?;
     let rel = q.path.unwrap_or_default();
     let only_tracked = !q.all.unwrap_or(false);
-    // Pull the dirty map so the listing carries sigils without a round
-    // trip. Cheap — already the status endpoint's payload.
-    let status = git::read_status(path.clone()).await.unwrap_or_default();
+    let dirty = repo_state::load_dirty_paths(&state.pool, &name)
+        .await
+        .unwrap_or_else(|_| repo_state::RepoDirtyPaths {
+            repo: name.clone(),
+            git_revision: 0,
+            dirty_by_path: Default::default(),
+            diff_stats_by_path: Default::default(),
+        });
     let listing = workspace::list_dir(
         path,
         rel,
         only_tracked,
-        status.dirty_by_path,
-        status.diff_stats_by_path,
+        dirty.dirty_by_path,
+        dirty.diff_stats_by_path,
     )
     .await
     .map_err(|e| ApiError::BadRequest(e.to_string()))?;
@@ -250,16 +239,16 @@ pub(super) async fn get_repo_file_trace(
     let root = repo_path(&state, &name)?;
     let (_, rel) = workspace::resolve_in_repo(&root, &q.path)
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    let status = git::read_status(root)
+    let dirty = repo_state::load_dirty_paths(&state.pool, &name)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
+        .map_err(ApiError::Internal)?;
     let touches = ingest::load_repo_file_trace(&state.pool, &name, &rel)
         .await
         .map_err(ApiError::Internal)?;
     Ok(Json(FileTraceResponse {
         path: rel.clone(),
-        dirty: status.dirty_by_path.get(&rel).cloned(),
-        current_diff: status.diff_stats_by_path.get(&rel).cloned(),
+        dirty: dirty.dirty_by_path.get(&rel).cloned(),
+        current_diff: dirty.diff_stats_by_path.get(&rel).cloned(),
         touches: touches
             .into_iter()
             .map(|touch| FileTraceTouchResponse {
@@ -341,6 +330,11 @@ pub(super) async fn post_repo_stage(
     git::stage_path(path, req.path, req.stage)
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    state
+        .repo_state
+        .request_refresh(&name)
+        .await
+        .map_err(ApiError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -408,6 +402,11 @@ pub(super) async fn post_repo_upload(
         let written = workspace::write_file(root.clone(), rel.clone(), buf)
             .await
             .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        state
+            .repo_state
+            .request_refresh(&name)
+            .await
+            .map_err(ApiError::Internal)?;
         if first_written.is_none() {
             first_written = Some((written.to_string_lossy().into_owned(), size));
         }

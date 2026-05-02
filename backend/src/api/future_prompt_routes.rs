@@ -55,6 +55,7 @@ pub(super) async fn create_future_prompt(
     let entry = future_prompts::create(&future_prompts_root(&state), resolved.session_uuid, input)
         .await
         .map_err(ApiError::Internal)?;
+    refresh_future_prompt_count(&state, resolved.session_uuid).await?;
     Ok((StatusCode::CREATED, Json(entry)))
 }
 
@@ -80,6 +81,7 @@ pub(super) async fn update_future_prompt(
     let Some(entry) = entry else {
         return Err(ApiError::NotFound);
     };
+    refresh_future_prompt_count(&state, resolved.session_uuid).await?;
     Ok(Json(entry))
 }
 
@@ -103,6 +105,7 @@ pub(super) async fn delete_future_prompt(
     if !removed {
         return Err(ApiError::NotFound);
     }
+    refresh_future_prompt_count(&state, resolved.session_uuid).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -124,4 +127,25 @@ async fn resolve_future_prompt_session(
         timeline::SessionLookup::NoSession => Ok(None),
         timeline::SessionLookup::MissingPty => Err(ApiError::NotFound),
     }
+}
+
+async fn refresh_future_prompt_count(state: &AppState, session_uuid: Uuid) -> ApiResult<()> {
+    let pending = future_prompts::count_pending(&future_prompts_root(state), session_uuid)
+        .await
+        .map_err(ApiError::Internal)?;
+    sqlx::query(
+        "INSERT INTO future_prompt_session_state \
+             (session_uuid, revision, pending_count, reconciled_at) \
+         VALUES ($1, 1, $2, NOW()) \
+         ON CONFLICT (session_uuid) DO UPDATE SET \
+             revision = future_prompt_session_state.revision + 1, \
+             pending_count = EXCLUDED.pending_count, \
+             reconciled_at = NOW()",
+    )
+    .bind(session_uuid)
+    .bind(i32::try_from(pending).unwrap_or(i32::MAX))
+    .execute(&state.pool)
+    .await
+    .map_err(ApiError::Db)?;
+    Ok(())
 }

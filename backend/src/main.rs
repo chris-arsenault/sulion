@@ -84,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Background ingester — the sole reader of the JSONL transcripts.
-    // We hold an Arc so the `/api/stats` handler can read its runtime
+    // We hold an Arc so the app-state sampler can read its runtime
     // totals without a second process observing them.
     let ingester = std::sync::Arc::new(Ingester::new());
     let ingester_pool = pool.clone();
@@ -116,6 +116,17 @@ async fn main() -> anyhow::Result<()> {
         ingester,
         auth,
     );
+    if let Err(err) = state.repo_state.sync_repos_once().await {
+        tracing::warn!(%err, "initial repo state sync failed");
+    }
+    if let Err(err) = state.repo_state.reconcile_due_once(4).await {
+        tracing::warn!(%err, "initial repo state reconcile failed");
+    }
+    if let Err(err) = sulion::api::sample_stats_once(&state).await {
+        tracing::warn!(%err, "initial stats sample failed");
+    }
+    tokio::spawn(state.repo_state.clone().run());
+    tokio::spawn(sulion::api::run_stats_sampler(state.clone()));
     let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
     axum::serve(listener, app(state)).await?;
     Ok(())

@@ -20,6 +20,7 @@ pub mod git;
 pub mod ingest;
 pub mod library;
 pub mod pty;
+pub mod repo_state;
 pub mod secret_broker;
 pub mod secret_protocol;
 pub mod secret_pty;
@@ -54,13 +55,15 @@ pub struct AppState {
     pub pty: Arc<pty::PtyManager>,
     pub repos_root: std::path::PathBuf,
     pub library_root: std::path::PathBuf,
-    /// Shared with the background ingester task so the `/api/stats`
-    /// handler can read its runtime totals.
+    pub repo_state: Arc<repo_state::RepoStateManager>,
+    /// Shared with the background ingester task so the app-state sampler
+    /// can read its runtime totals.
     pub ingester: Arc<ingest::Ingester>,
     /// Timestamp the app was constructed. Surfaced as `uptime_seconds`.
     pub start_time: Instant,
     /// sysinfo probe; holds its own `System` so CPU% diffs work across calls.
     pub stats_probe: Arc<api::StatsProbe>,
+    pub stats_cache: Arc<api::StatsCache>,
     /// E2E-only hook that can ask active websocket attachers to close.
     pub ws_test_hooks: Arc<WsTestHooks>,
     /// Optional JWT auth validator. Production wiring enables this;
@@ -86,14 +89,17 @@ impl AppState {
         auth: Option<Arc<auth::AuthState>>,
     ) -> Arc<Self> {
         let pty = pty::PtyManager::new(pool.clone());
+        let repo_state = repo_state::RepoStateManager::new(pool.clone(), repos_root.clone());
         Arc::new(Self {
             pool,
             pty,
             repos_root,
             library_root,
+            repo_state,
             ingester,
             start_time: Instant::now(),
             stats_probe: Arc::new(api::StatsProbe::new()),
+            stats_cache: Arc::new(api::StatsCache::new()),
             ws_test_hooks: Arc::new(WsTestHooks::default()),
             auth,
         })

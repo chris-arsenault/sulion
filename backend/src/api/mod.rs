@@ -6,6 +6,7 @@ use serde::Serialize;
 use crate::{db, AppState};
 
 mod admin_routes;
+mod app_state_routes;
 mod future_prompt_routes;
 mod library_routes;
 mod repo_routes;
@@ -16,11 +17,11 @@ mod timeline_routes;
 mod ws;
 
 pub use routes::ApiError;
-pub use stats::StatsProbe;
+pub use stats::{run_stats_sampler, sample_stats_once, StatsCache, StatsProbe};
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     let protected = Router::new()
-        .route("/api/stats", get(stats::stats_handler))
+        .route("/api/app-state", get(app_state_routes::app_state))
         .route("/ws/sessions/:id", get(ws::attach))
         .merge(routes::router())
         .route_layer(middleware::from_fn_with_state(

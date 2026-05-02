@@ -1,15 +1,11 @@
-import { useEffect } from "react";
 import { create } from "zustand";
 
-import { getRepoFiles, getRepoGit } from "../api/client";
-import type { DirListing, GitStatus } from "../api/types";
-
-const POLL_EXPANDED_MS = 5_000;
-const POLL_COLLAPSED_MS = 60_000;
+import { getRepoDirtyPaths, getRepoFiles, refreshRepoState } from "../api/client";
+import type { DirListing, GitStatus, RepoGitSummary } from "../api/types";
 
 export interface RepoState {
   git: GitStatus | null;
-  gitLastFetched: number;
+  dirtyLoadedRevision: number | null;
   gitError: string | null;
   /** path -> listing. Missing key = not loaded. Null value = loading. */
   tree: Record<string, DirListing | null>;
@@ -25,22 +21,20 @@ export interface RepoState {
 
 export interface RepoStore {
   repos: Record<string, RepoState>;
-  expandedRepos: Set<string>;
-  setExpanded: (repo: string, expanded: boolean) => void;
+  loadDirty: (repo: string, summary: RepoGitSummary | null | undefined) => void;
   toggleDir: (repo: string, path: string, currentlyExpanded: boolean) => void;
   expandPath: (repo: string, path: string) => void;
   refresh: (repo: string) => void;
   hardRefresh: (repo: string) => void;
   setShowAll: (repo: string, value: boolean) => void;
   loadDir: (repo: string, path: string, opts?: { force?: boolean }) => void;
-  pollOne: (repo: string) => Promise<void>;
   refreshVisibleDirs: (repo: string, opts?: { clear?: boolean }) => void;
 }
 
 function createRepoState(): RepoState {
   return {
     git: null,
-    gitLastFetched: 0,
+    dirtyLoadedRevision: null,
     gitError: null,
     tree: {},
     treeEpoch: 0,
@@ -50,64 +44,71 @@ function createRepoState(): RepoState {
   };
 }
 
-function initialState(): Pick<RepoStore, "repos" | "expandedRepos"> {
+function initialState(): Pick<RepoStore, "repos"> {
   return {
     repos: {},
-    expandedRepos: new Set(),
   };
 }
-
-const knownRepoNames = new Set<string>();
 
 export const useRepoStore = create<RepoStore>()((set, get) => ({
   ...initialState(),
 
-  async pollOne(name) {
-    knownRepoNames.add(name);
-    const previous = get().repos[name]?.git ?? null;
-    try {
-      const git = await getRepoGit(name);
+  loadDirty(repo, summary) {
+    if (!summary) {
       set((state) => ({
         repos: {
           ...state.repos,
-          [name]: {
-            ...(state.repos[name] ?? createRepoState()),
-            git,
-            gitLastFetched: Date.now(),
+          [repo]: {
+            ...(state.repos[repo] ?? createRepoState()),
+            git: null,
+            dirtyLoadedRevision: null,
             gitError: null,
           },
         },
       }));
-      if (treeRelevantGitChanged(previous, git)) {
-        get().refreshVisibleDirs(name);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "unknown";
-      set((state) => ({
-        repos: {
-          ...state.repos,
-          [name]: {
-            ...(state.repos[name] ?? createRepoState()),
-            gitError: msg,
-          },
-        },
-      }));
+      return;
     }
-  },
-
-  setExpanded(repo, expanded) {
-    knownRepoNames.add(repo);
+    const current = get().repos[repo];
+    if (current?.dirtyLoadedRevision === summary.revision) return;
     set((state) => ({
       repos: {
         ...state.repos,
-        [repo]: state.repos[repo] ?? createRepoState(),
+        [repo]: {
+          ...(state.repos[repo] ?? createRepoState()),
+          git: gitFromSummary(summary),
+          gitError: null,
+        },
       },
-      expandedRepos: mutateSet(state.expandedRepos, (next) => {
-        if (expanded) next.add(repo);
-        else next.delete(repo);
-      }),
     }));
-    if (expanded) void get().pollOne(repo);
+    void (async () => {
+      try {
+        const dirty = await getRepoDirtyPaths(repo);
+        if (dirty.git_revision !== summary.revision) return;
+        set((state) => ({
+          repos: {
+            ...state.repos,
+            [repo]: {
+              ...(state.repos[repo] ?? createRepoState()),
+              git: gitFromSummary(summary, dirty.dirty_by_path, dirty.diff_stats_by_path),
+              dirtyLoadedRevision: summary.revision,
+              gitError: null,
+            },
+          },
+        }));
+        get().refreshVisibleDirs(repo);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "unknown";
+        set((state) => ({
+          repos: {
+            ...state.repos,
+            [repo]: {
+              ...(state.repos[repo] ?? createRepoState()),
+              gitError: msg,
+            },
+          },
+        }));
+      }
+    })();
   },
 
   toggleDir(repo, path, currentlyExpanded) {
@@ -156,12 +157,12 @@ export const useRepoStore = create<RepoStore>()((set, get) => ({
 
   refresh(repo) {
     get().refreshVisibleDirs(repo);
-    void get().pollOne(repo);
+    void refreshRepoState(repo).catch(() => {});
   },
 
   hardRefresh(repo) {
     get().refreshVisibleDirs(repo, { clear: true });
-    void get().pollOne(repo);
+    void refreshRepoState(repo).catch(() => {});
   },
 
   setShowAll(repo, value) {
@@ -184,7 +185,6 @@ export const useRepoStore = create<RepoStore>()((set, get) => ({
   },
 
   loadDir(repo, path, opts) {
-    knownRepoNames.add(repo);
     set((state) => ({
       repos: {
         ...state.repos,
@@ -237,7 +237,6 @@ export const useRepoStore = create<RepoStore>()((set, get) => ({
   },
 
   refreshVisibleDirs(repo, opts) {
-    knownRepoNames.add(repo);
     const current = get().repos[repo] ?? createRepoState();
     const paths = visibleDirPaths(current);
     if (opts?.clear) {
@@ -258,59 +257,12 @@ export const useRepoStore = create<RepoStore>()((set, get) => ({
   },
 }));
 
-let consumerCount = 0;
-let pollTimer: ReturnType<typeof setInterval> | null = null;
-
-function startRepoStore() {
-  if (typeof window === "undefined") return;
-  consumerCount += 1;
-  if (consumerCount > 1) return;
-
-  pollTimer = window.setInterval(() => {
-    if (typeof document !== "undefined" && document.hidden) return;
-    const { repos, expandedRepos, pollOne } = useRepoStore.getState();
-    const now = Date.now();
-    for (const name of knownRepoNames) {
-      const repoState = repos[name];
-      const age = now - (repoState?.gitLastFetched ?? 0);
-      const cadence = expandedRepos.has(name) ? POLL_EXPANDED_MS : POLL_COLLAPSED_MS;
-      if (age >= cadence) void pollOne(name);
-    }
-  }, 1_000);
-}
-
-function stopRepoStore() {
-  consumerCount = Math.max(0, consumerCount - 1);
-  if (consumerCount > 0) return;
-
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-}
-
 export function useRepos<T>(selector: (state: RepoStore) => T): T {
-  useEffect(() => {
-    startRepoStore();
-    return stopRepoStore;
-  }, []);
   return useRepoStore(selector);
 }
 
 export function resetRepoStore() {
-  consumerCount = 0;
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-  knownRepoNames.clear();
   useRepoStore.setState(initialState());
-}
-
-function mutateSet<T>(input: Set<T>, update: (next: Set<T>) => void): Set<T> {
-  const next = new Set(input);
-  update(next);
-  return next;
 }
 
 function ancestorDirs(path: string): string[] {
@@ -329,48 +281,20 @@ function visibleDirPaths(state: RepoState): string[] {
   return [...paths].sort((a, b) => a.localeCompare(b));
 }
 
-function treeRelevantGitChanged(
-  previous: GitStatus | null,
-  next: GitStatus,
-): boolean {
-  if (!previous) return true;
-  if (previous.branch !== next.branch) return true;
-  if (previous.uncommitted_count !== next.uncommitted_count) return true;
-  if (previous.untracked_count !== next.untracked_count) return true;
-  if (!shallowRecordEqual(previous.dirty_by_path, next.dirty_by_path)) return true;
-  if (!shallowDiffStatsEqual(previous.diff_stats_by_path, next.diff_stats_by_path)) {
-    return true;
-  }
-  return false;
-}
-
-function shallowRecordEqual(
-  left: Record<string, string>,
-  right: Record<string, string>,
-): boolean {
-  const leftKeys = Object.keys(left);
-  const rightKeys = Object.keys(right);
-  if (leftKeys.length !== rightKeys.length) return false;
-  for (const key of leftKeys) {
-    if (left[key] !== right[key]) return false;
-  }
-  return true;
-}
-
-function shallowDiffStatsEqual(
-  left: GitStatus["diff_stats_by_path"],
-  right: GitStatus["diff_stats_by_path"],
-): boolean {
-  const leftKeys = Object.keys(left);
-  const rightKeys = Object.keys(right);
-  if (leftKeys.length !== rightKeys.length) return false;
-  for (const key of leftKeys) {
-    const l = left[key];
-    const r = right[key];
-    if (!r) return false;
-    if (l.additions !== r.additions || l.deletions !== r.deletions) return false;
-  }
-  return true;
+function gitFromSummary(
+  summary: RepoGitSummary,
+  dirty_by_path: GitStatus["dirty_by_path"] = {},
+  diff_stats_by_path: GitStatus["diff_stats_by_path"] = {},
+): GitStatus {
+  return {
+    branch: summary.branch,
+    uncommitted_count: summary.uncommitted_count,
+    untracked_count: summary.untracked_count,
+    last_commit: summary.last_commit,
+    recent_commits: summary.recent_commits,
+    dirty_by_path,
+    diff_stats_by_path,
+  };
 }
 
 /** Walk `dirty_by_path` and return the set of ancestor directories
@@ -391,7 +315,7 @@ export function dirtyAncestors(dirtyByPath: Record<string, string>): Set<string>
 
 /** Staleness classification for a repo's header badge. */
 export function stalenessFor(
-  git: GitStatus | null,
+  git: Pick<GitStatus, "last_commit" | "uncommitted_count"> | null,
   latestEventAt: number | null,
 ): "green" | "amber" | "red" {
   if (!git || git.uncommitted_count === 0) return "green";

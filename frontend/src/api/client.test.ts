@@ -4,14 +4,15 @@ import {
   createRepo,
   createSession,
   deleteSession,
+  getAppState,
   getHistory,
+  getRepoDirtyPaths,
   getRepoFileTrace,
   getRepoTimelineTurn,
   getTimeline,
   getTimelineTurn,
+  refreshRepoState,
   unlockSecretGrant,
-  listRepos,
-  listSessions,
   upsertSecret,
 } from "./client";
 
@@ -38,13 +39,19 @@ describe("api client", () => {
     vi.unstubAllGlobals();
   });
 
-  it("listSessions GETs /api/sessions and parses the response", async () => {
+  it("getAppState GETs /api/app-state and parses the unified state", async () => {
     stubFetch(async (url) => {
-      expect(url).toBe("/api/sessions");
-      return jsonResponse({ sessions: [] });
+      expect(url).toBe("/api/app-state");
+      return jsonResponse({
+        generated_at: "2026-01-01T00:00:00Z",
+        sessions: [],
+        repos: [],
+        stats: { uptime_seconds: 1, process: {}, pty: {}, db: {}, inventory: {} },
+      });
     });
-    const resp = await listSessions();
+    const resp = await getAppState();
     expect(resp.sessions).toEqual([]);
+    expect(resp.repos).toEqual([]);
   });
 
   it("createSession POSTs JSON body and parses the SessionView", async () => {
@@ -154,14 +161,6 @@ describe("api client", () => {
     expect(resp.session_agent).toBe("codex");
   });
 
-  it("listRepos hits /api/repos", async () => {
-    stubFetch(async (url) => {
-      expect(url).toBe("/api/repos");
-      return jsonResponse({ repos: [] });
-    });
-    await listRepos();
-  });
-
   it("createRepo POSTs body", async () => {
     stubFetch(async (url, init) => {
       expect(url).toBe("/api/repos");
@@ -170,6 +169,29 @@ describe("api client", () => {
     });
     const r = await createRepo({ name: "x" });
     expect(r.name).toBe("x");
+  });
+
+  it("fetches cached repo dirty paths from the detail endpoint", async () => {
+    stubFetch(async (url) => {
+      expect(url).toBe("/api/repos/r/dirty-paths");
+      return jsonResponse({
+        repo: "r",
+        git_revision: 4,
+        dirty_by_path: { "src/lib.rs": " M" },
+        diff_stats_by_path: { "src/lib.rs": { additions: 1, deletions: 2 } },
+      });
+    });
+    const dirty = await getRepoDirtyPaths("r");
+    expect(dirty.git_revision).toBe(4);
+  });
+
+  it("requests repo refresh without reading git inline", async () => {
+    stubFetch(async (url, init) => {
+      expect(url).toBe("/api/repos/r/refresh");
+      expect(init?.method).toBe("POST");
+      return new Response(null, { status: 202 });
+    });
+    await expect(refreshRepoState("r")).resolves.toBeUndefined();
   });
 
   it("getRepoFileTrace hits the file-trace endpoint", async () => {
@@ -193,9 +215,9 @@ describe("api client", () => {
         headers: { "Content-Type": "application/json" },
       }),
     );
-    await expect(listSessions()).rejects.toBeInstanceOf(ApiError);
+    await expect(getAppState()).rejects.toBeInstanceOf(ApiError);
     try {
-      await listSessions();
+      await getAppState();
     } catch (err) {
       if (err instanceof ApiError) {
         expect(err.status).toBe(400);
@@ -257,7 +279,7 @@ describe("ApiError", () => {
   it("falls back to statusText when body is not JSON", async () => {
     stubFetch(async () => new Response("plain body", { status: 500 }));
     try {
-      await listSessions();
+      await getAppState();
     } catch (err) {
       if (err instanceof ApiError) {
         expect(err.status).toBe(500);

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { App } from "./App";
+import { appStatePayload, jsonResponse } from "./test/appState";
 
 vi.mock("./components/LibraryPanel", () => ({
   LibraryPanel: () => null,
@@ -25,30 +26,10 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (input: RequestInfo) => {
       const url = typeof input === "string" ? input : input.url;
-      let body: unknown = { repos: [] };
-      if (url.includes("/api/sessions")) body = { sessions: [] };
-      else if (url.includes("/api/stats")) {
-        body = {
-          uptime_seconds: 1,
-          process: { memory_rss_bytes: 0, cpu_percent: 0, memory_limit_bytes: null },
-          pty: { live_sessions: 0, live_agent_sessions: 0 },
-          db: {
-            database_size_bytes: 0,
-          },
-          inventory: {
-            event_rows: 0,
-            agent_sessions: 0,
-            pty_sessions: 0,
-            tracked_files: 0,
-            events_inserted_since_boot: 0,
-            parse_errors_since_boot: 0,
-          },
-        };
+      if (url === "/api/app-state") {
+        return jsonResponse(appStatePayload());
       }
-      return new Response(JSON.stringify(body), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response("", { status: 404 });
     }),
   );
 });

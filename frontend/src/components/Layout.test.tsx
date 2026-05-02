@@ -21,6 +21,7 @@ vi.mock("./ui", async () => {
 import { ContextMenuHost } from "./common/ContextMenu";
 import { Layout } from "./Layout";
 import { appCommands } from "../state/AppCommands";
+import { appStatePayload, jsonResponse } from "../test/appState";
 
 const mockState = {
   repos: [] as Array<Record<string, unknown>>,
@@ -77,35 +78,15 @@ beforeEach(() => {
         typeof input === "string" ? input : (input as Request).url,
         "http://localhost",
       );
-      const json = (body: unknown, status = 200) =>
-        new Response(JSON.stringify(body), {
-          status,
-          headers: { "Content-Type": "application/json" },
-        });
+      const json = jsonResponse;
 
-      if (url.pathname === "/api/sessions") {
-        return json({ sessions: mockState.sessions });
-      }
-      if (url.pathname === "/api/repos") {
-        return json({ repos: mockState.repos });
-      }
-      if (url.pathname === "/api/stats") {
-        return json({
-          uptime_seconds: 1,
-          process: { memory_rss_bytes: 0, cpu_percent: 0, memory_limit_bytes: null },
-          pty: { live_sessions: 0, live_agent_sessions: 0 },
-          db: {
-            database_size_bytes: 0,
-          },
-          inventory: {
-            event_rows: 0,
-            agent_sessions: 0,
-            pty_sessions: 0,
-            tracked_files: 0,
-            events_inserted_since_boot: 0,
-            parse_errors_since_boot: 0,
-          },
-        });
+      if (url.pathname === "/api/app-state") {
+        return json(
+          appStatePayload({
+            sessions: mockState.sessions,
+            repos: mockState.repos,
+          }),
+        );
       }
 
       if (url.pathname === "/api/library/references" || url.pathname === "/api/library/prompts") {
@@ -117,19 +98,6 @@ beforeEach(() => {
         const repo = decodeURIComponent(diffMatch[1]!);
         const path = url.searchParams.get("path") ?? "";
         return json({ diff: mockState.diffs[`${repo}:${path}`] ?? "" });
-      }
-
-      const gitMatch = url.pathname.match(/^\/api\/repos\/([^/]+)\/git$/);
-      if (gitMatch) {
-        return json({
-          branch: "main",
-          uncommitted_count: 1,
-          untracked_count: 0,
-          last_commit: null,
-          recent_commits: [],
-          dirty_by_path: { "src/app.ts": " M" },
-          diff_stats_by_path: { "src/app.ts": { additions: 4, deletions: 1 } },
-        });
       }
 
       const filesMatch = url.pathname.match(/^\/api\/repos\/([^/]+)\/files$/);

@@ -22,11 +22,10 @@ import { Sidebar } from "./Sidebar";
 import { ContextMenuHost } from "./common/ContextMenu";
 import { resetTabStore, useTabStore } from "../state/TabStore";
 import { appCommands, subscribeToAppCommands } from "../state/AppCommands";
+import { appStatePayload, jsonResponse } from "../test/appState";
 
 const REPO_ALPHA = "alpha";
 const REPO_ALPHA_PATH = "/tmp/alpha";
-
-type Endpoint = "/api/sessions" | "/api/repos" | string;
 
 interface MockState {
   sessions: Array<Record<string, unknown>>;
@@ -58,17 +57,14 @@ function installFetchMock(): MockState {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo, init?: RequestInit) => {
-      const url: Endpoint =
-        typeof input === "string" ? input : (input as Request).url;
+      const url = typeof input === "string" ? input : (input as Request).url;
       const method = init?.method ?? "GET";
-      const jsonResp = (body: unknown, status = 200) =>
-        new Response(JSON.stringify(body), {
-          status,
-          headers: { "Content-Type": "application/json" },
-        });
+      const jsonResp = jsonResponse;
 
-      if (url === "/api/sessions" && method === "GET") {
-        return jsonResp({ sessions: state.sessions });
+      if (url === "/api/app-state" && method === "GET") {
+        return jsonResp(
+          appStatePayload({ sessions: state.sessions, repos: state.repos }),
+        );
       }
       if (url === "/api/sessions" && method === "POST") {
         const body = JSON.parse(init!.body as string);
@@ -104,9 +100,6 @@ function installFetchMock(): MockState {
         );
         return new Response(null, { status: 204 });
       }
-      if (url === "/api/repos" && method === "GET") {
-        return jsonResp({ repos: state.repos });
-      }
       if (url === "/api/repos" && method === "POST") {
         const body = JSON.parse(init!.body as string);
         state.createRepoCalls.push(body);
@@ -114,39 +107,8 @@ function installFetchMock(): MockState {
         state.repos.push(r);
         return jsonResp(r, 201);
       }
-      // New in ticket 1: repo git + files endpoints. Return empty
-      // shapes so the nav renders without errors.
-      if (url.match(/^\/api\/repos\/[^/]+\/git$/) && method === "GET") {
-        return jsonResp({
-          branch: "main",
-          uncommitted_count: 0,
-          untracked_count: 0,
-          last_commit: null,
-          recent_commits: [],
-          dirty_by_path: {},
-          diff_stats_by_path: {},
-        });
-      }
       if (url.match(/^\/api\/repos\/[^/]+\/files/) && method === "GET") {
         return jsonResp({ path: "", entries: [] });
-      }
-      if (url === "/api/stats" && method === "GET") {
-        return jsonResp({
-          uptime_seconds: 1,
-          process: { memory_rss_bytes: 0, cpu_percent: 0, memory_limit_bytes: null },
-          pty: { live_sessions: 0, live_agent_sessions: 0 },
-          db: {
-            database_size_bytes: 0,
-          },
-          inventory: {
-            event_rows: 0,
-            agent_sessions: 0,
-            pty_sessions: 0,
-            tracked_files: 0,
-            events_inserted_since_boot: 0,
-            parse_errors_since_boot: 0,
-          },
-        });
       }
       if ((url === "/api/library/references" || url === "/api/library/prompts") && method === "GET") {
         return jsonResp([]);
@@ -688,47 +650,17 @@ describe("Sidebar", () => {
       vi.fn(async (input: RequestInfo, init?: RequestInit) => {
         const url = typeof input === "string" ? input : (input as Request).url;
         const method = init?.method ?? "GET";
-        const jsonResp = (body: unknown, status = 200) =>
-          new Response(JSON.stringify(body), {
-            status,
-            headers: { "Content-Type": "application/json" },
-          });
+        const jsonResp = jsonResponse;
 
-        if (url === "/api/sessions" && method === "GET") {
-          return jsonResp({ sessions: [] });
-        }
-        if (url === "/api/repos" && method === "GET") {
-          return jsonResp({ repos: [{ name: REPO_ALPHA, path: REPO_ALPHA_PATH }] });
-        }
-        if (url === "/api/stats" && method === "GET") {
-          return jsonResp({
-            uptime_seconds: 1,
-            process: { memory_rss_bytes: 0, cpu_percent: 0, memory_limit_bytes: null },
-            pty: { live_sessions: 0, live_agent_sessions: 0 },
-            db: { database_size_bytes: 0 },
-            inventory: {
-              event_rows: 0,
-              agent_sessions: 0,
-              pty_sessions: 0,
-              tracked_files: 0,
-              events_inserted_since_boot: 0,
-              parse_errors_since_boot: 0,
-            },
-          });
+        if (url === "/api/app-state" && method === "GET") {
+          return jsonResp(
+            appStatePayload({
+              repos: [{ name: REPO_ALPHA, path: REPO_ALPHA_PATH }],
+            }),
+          );
         }
         if ((url === "/api/library/references" || url === "/api/library/prompts") && method === "GET") {
           return jsonResp([]);
-        }
-        if (url === "/api/repos/alpha/git" && method === "GET") {
-          return jsonResp({
-            branch: "main",
-            uncommitted_count: 0,
-            untracked_count: 0,
-            last_commit: null,
-            recent_commits: [],
-            dirty_by_path: {},
-            diff_stats_by_path: {},
-          });
         }
         if (url === "/api/repos/alpha/files" && method === "GET") {
           filesCalls += 1;
@@ -746,6 +678,9 @@ describe("Sidebar", () => {
               },
             ],
           });
+        }
+        if (url === "/api/repos/alpha/refresh" && method === "POST") {
+          return new Response(null, { status: 202 });
         }
         return new Response("", { status: 404 });
       }),

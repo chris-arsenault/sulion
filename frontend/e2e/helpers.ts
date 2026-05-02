@@ -191,7 +191,7 @@ export async function expectTerminalNotToContain(page: Page, text: string) {
 }
 
 export async function restoreSeededSessionMetadata(request: APIRequestContext) {
-  const sessions = await listSessions(request);
+  const sessions = await listAppStateSessions(request);
   for (const session of sessions) {
     if (session.current_session_agent === "claude-code") {
       await patchSession(request, session.id, {
@@ -254,8 +254,8 @@ export async function readRepoFile(
   return (await response.json()) as FileResponse;
 }
 
-async function listSessions(request: APIRequestContext) {
-  const response = await request.get("/api/sessions");
+async function listAppStateSessions(request: APIRequestContext) {
+  const response = await request.get("/api/app-state");
   expect(response.ok()).toBeTruthy();
   const body = (await response.json()) as { sessions: SessionView[] };
   return body.sessions;

@@ -20,6 +20,7 @@ pub async fn rebuild_session_projection(pool: &Pool, session_uuid: Uuid) -> anyh
     let mut tx = pool.begin().await.context("begin projection tx")?;
     clear_session_projection(&mut tx, session_uuid).await?;
     insert_projection_rows(&mut tx, session_uuid, &projected).await?;
+    refresh_timeline_session_state(&mut tx, session_uuid).await?;
     tx.commit().await.context("commit projection tx")?;
     Ok(projected.len())
 }
@@ -57,6 +58,7 @@ pub async fn rebuild_session_projection_after_insert(
         .context("begin incremental projection tx")?;
     clear_session_projection_from(&mut tx, session_uuid, anchor.turn_id).await?;
     insert_projection_rows(&mut tx, session_uuid, &projected).await?;
+    refresh_timeline_session_state(&mut tx, session_uuid).await?;
     tx.commit()
         .await
         .context("commit incremental projection tx")?;
@@ -172,6 +174,32 @@ async fn insert_projection_rows(
     for turn in projected {
         insert_projected_turn(tx, session_uuid, turn).await?;
     }
+    Ok(())
+}
+
+async fn refresh_timeline_session_state(
+    tx: &mut Transaction<'_, Postgres>,
+    session_uuid: Uuid,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO timeline_session_state \
+             (session_uuid, revision, total_event_count, turn_count, latest_turn_id, latest_event_at, updated_at) \
+         SELECT $1, 1, COALESCE(SUM(event_count), 0)::BIGINT, COUNT(turn_id)::BIGINT, \
+                MAX(turn_id), MAX(end_timestamp), NOW() \
+           FROM timeline_turns \
+          WHERE session_uuid = $1 \
+         ON CONFLICT (session_uuid) DO UPDATE SET \
+             revision = timeline_session_state.revision + 1, \
+             total_event_count = EXCLUDED.total_event_count, \
+             turn_count = EXCLUDED.turn_count, \
+             latest_turn_id = EXCLUDED.latest_turn_id, \
+             latest_event_at = EXCLUDED.latest_event_at, \
+             updated_at = NOW()",
+    )
+    .bind(session_uuid)
+    .execute(&mut **tx)
+    .await
+    .context("refresh timeline session state")?;
     Ok(())
 }
 

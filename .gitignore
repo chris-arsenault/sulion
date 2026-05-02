@@ -5,6 +5,7 @@ coverage/
 docs/screenshots/raw/
 frontend/test-results/
 frontend/playwright-report/
+.sulion-paste/
 .env
 .env.local
 *.log

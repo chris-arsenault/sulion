@@ -68,6 +68,7 @@ vi.mock("../api/ws", () => ({
 
 import { appCommands } from "../state/AppCommands";
 import { TerminalPane } from "./TerminalPane";
+import { appStatePayload, jsonResponse } from "../test/appState";
 
 describe("TerminalPane", () => {
   beforeEach(() => {
@@ -88,13 +89,8 @@ describe("TerminalPane", () => {
       "fetch",
       vi.fn(async (input: RequestInfo) => {
         const url = typeof input === "string" ? input : (input as Request).url;
-        const body = url.includes("/api/sessions")
-          ? { sessions: [] }
-          : { repos: [] };
-        return new Response(JSON.stringify(body), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        if (url === "/api/app-state") return jsonResponse(appStatePayload());
+        return new Response("", { status: 404 });
       }),
     );
   });

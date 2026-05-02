@@ -2,6 +2,32 @@ import { expect, test } from "@playwright/test";
 
 import { gotoApp, openSession } from "./helpers";
 
+test("uses unified app-state for ambient status without legacy poll endpoints", async ({
+  page,
+}) => {
+  const appStateRequests: string[] = [];
+  const legacyPollRequests: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/app-state") {
+      appStateRequests.push(url.pathname);
+    }
+    if (
+      (url.pathname === "/api/sessions" && request.method() === "GET") ||
+      (url.pathname === "/api/repos" && request.method() === "GET") ||
+      url.pathname === "/api/stats" ||
+      /^\/api\/repos\/[^/]+\/git$/.test(url.pathname)
+    ) {
+      legacyPollRequests.push(`${request.method()} ${url.pathname}`);
+    }
+  });
+
+  await gotoApp(page);
+  await expect.poll(() => appStateRequests.length).toBeGreaterThan(0);
+  await page.waitForTimeout(2500);
+  expect(legacyPollRequests).toEqual([]);
+});
+
 test("covers codex lineage drill-down and stats visibility", async ({ page }) => {
   await gotoApp(page);
 

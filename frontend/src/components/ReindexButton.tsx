@@ -100,7 +100,7 @@ export function ReindexButton() {
 
 function formatDoneMessage(stats: ReindexResponse): string {
   // The ingester runs on its own poll loop; the re-read happens in the
-  // background after this returns. /api/stats is where you watch the
+  // background after this returns. /api/app-state is where you watch the
   // running totals if you want to see counts climb back up.
   return (
     `Cleared ${stats.sessions_cleared} transcript ${sessions(stats.sessions_cleared)} ` +

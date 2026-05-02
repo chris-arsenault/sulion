@@ -1,65 +1,39 @@
-// Compact resource panel pinned to the bottom of the sidebar. Polls
-// /api/stats every 10s. The compact row is deliberately "current
+// Compact resource panel pinned to the bottom of the sidebar. The
+// unified app-state poll feeds this; the strip does not own a timer.
+// The compact row is deliberately "current
 // pressure" only; the expanded view separates current load from
 // lifetime inventory so cumulative counts do not masquerade as live
 // pressure. No history, no alerting; this exists to answer "is this
 // deploy sized correctly?" at a glance (ticket #27).
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 
-import { getStats } from "../api/client";
-import type { StatsResponse } from "../api/types";
 import { Icon } from "../icons";
+import { useSessions } from "../state/SessionStore";
 import { Tooltip } from "./ui";
 import "./StatsStrip.css";
 
-const POLL_MS = 10_000;
-
 export function StatsStrip() {
-  const [stats, setStats] = useState<StatsResponse | null>(null);
-  const [error, setError] = useState(false);
+  const { stats, lastError } = useSessions(
+    useShallow((store) => ({
+      stats: store.stats,
+      lastError: store.lastError,
+    })),
+  );
   const [expanded, setExpanded] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const s = await getStats();
-        if (!cancelled) {
-          setStats(s);
-          setError(false);
-        }
-      } catch {
-        if (!cancelled) setError(true);
-      }
-    };
-    void load();
-    const timer = setInterval(load, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, []);
 
   const toggleExpanded = useCallback(() => setExpanded((v) => !v), []);
 
-  if (!stats && !error) {
+  if (!stats) {
     return (
       <div className="stats-strip stats-strip--loading" aria-live="polite">
-        <span>stats…</span>
+        <span>{lastError ? "stats unavailable" : "stats…"}</span>
       </div>
     );
   }
 
-  if (error && !stats) {
-    return (
-      <div className="stats-strip stats-strip--err" role="status">
-        <span>stats unavailable</span>
-      </div>
-    );
-  }
-
-  const s = stats!;
+  const s = stats;
   const memUsedMb = s.process.memory_rss_bytes / (1024 * 1024);
   const memLimitMb = s.process.memory_limit_bytes
     ? s.process.memory_limit_bytes / (1024 * 1024)

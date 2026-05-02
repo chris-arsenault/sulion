@@ -6,15 +6,15 @@ import {
   createRepo as apiCreateRepo,
   createSession as apiCreateSession,
   deleteSession as apiDeleteSession,
+  getAppState,
   updateSession as apiUpdateSession,
-  listRepos,
-  listSessions,
 } from "../api/client";
 import type {
   CreateRepoRequest,
   CreateSessionRequest,
   RepoView,
   SessionView,
+  StatsResponse,
   UpdateSessionRequest,
 } from "../api/types";
 import {
@@ -26,12 +26,12 @@ import {
   type LastViewedMap,
 } from "./useLastViewed";
 
-const POLL_SESSIONS_MS = 3_000;
-const POLL_REPOS_MS = 10_000;
+const POLL_APP_STATE_MS = 3_000;
 
 export interface SessionStore {
   sessions: SessionView[];
   repos: RepoView[];
+  stats: StatsResponse | null;
   selectedSessionId: string | null;
   lastError: string | null;
   sessionsLoaded: boolean;
@@ -43,17 +43,23 @@ export interface SessionStore {
   createRepo: (req: CreateRepoRequest) => Promise<RepoView>;
   refresh: () => Promise<void>;
   isUnread: (sessionId: string, lastEventAt: string | null) => boolean;
-  loadSessions: () => Promise<void>;
-  loadRepos: () => Promise<void>;
+  loadAppState: () => Promise<void>;
 }
 
 function initialState(): Pick<
   SessionStore,
-  "sessions" | "repos" | "selectedSessionId" | "lastError" | "sessionsLoaded" | "lastViewed"
+  | "sessions"
+  | "repos"
+  | "stats"
+  | "selectedSessionId"
+  | "lastError"
+  | "sessionsLoaded"
+  | "lastViewed"
 > {
   return {
     sessions: [],
     repos: [],
+    stats: null,
     selectedSessionId: readSessionIdFromUrl(),
     lastError: null,
     sessionsLoaded: false,
@@ -64,32 +70,35 @@ function initialState(): Pick<
 export const useSessionStore = create<SessionStore>()((set, get) => ({
   ...initialState(),
 
-  async loadSessions() {
+  async loadAppState() {
     try {
-      const data = await listSessions();
+      const data = await getAppState();
+      const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+      const repos = Array.isArray(data.repos) ? data.repos : [];
+      const stats = data.stats ?? null;
       set((state) => {
-        const sameSessions = sameFlatRecordArray(state.sessions, data.sessions);
-        if (sameSessions && state.sessionsLoaded) return state;
+        const sameSessions = sameFlatRecordArray(state.sessions, sessions);
+        const sameRepos = sameJson(state.repos, repos);
+        const sameStats = sameJson(state.stats, stats);
+        if (
+          sameSessions &&
+          sameRepos &&
+          sameStats &&
+          state.sessionsLoaded &&
+          state.lastError == null
+        ) {
+          return state;
+        }
         return {
-          sessions: sameSessions ? state.sessions : data.sessions,
+          sessions: sameSessions ? state.sessions : sessions,
+          repos: sameRepos ? state.repos : repos,
+          stats: sameStats ? state.stats : stats,
+          lastError: null,
           sessionsLoaded: true,
         };
       });
     } catch (err) {
-      console.error("listSessions failed", err);
-      if (err instanceof ApiError) set({ lastError: err.message });
-    }
-  },
-
-  async loadRepos() {
-    try {
-      const data = await listRepos();
-      set((state) => {
-        if (sameFlatRecordArray(state.repos, data.repos)) return state;
-        return { repos: data.repos };
-      });
-    } catch (err) {
-      console.error("listRepos failed", err);
+      console.error("getAppState failed", err);
       if (err instanceof ApiError) set({ lastError: err.message });
     }
   },
@@ -160,7 +169,7 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
   },
 
   async refresh() {
-    await Promise.all([get().loadSessions(), get().loadRepos()]);
+    await get().loadAppState();
   },
 
   isUnread(sessionId, lastEventAt) {
@@ -169,8 +178,7 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
 }));
 
 let consumerCount = 0;
-let sessionsTimer: ReturnType<typeof setInterval> | null = null;
-let reposTimer: ReturnType<typeof setInterval> | null = null;
+let appStateTimer: ReturnType<typeof setInterval> | null = null;
 let popstateAttached = false;
 
 function syncSelectedSessionFromUrl() {
@@ -182,15 +190,10 @@ function startSessionStore() {
   consumerCount += 1;
   if (consumerCount > 1) return;
 
-  void useSessionStore.getState().loadSessions();
-  void useSessionStore.getState().loadRepos();
-  sessionsTimer = window.setInterval(
-    () => void useSessionStore.getState().loadSessions(),
-    POLL_SESSIONS_MS,
-  );
-  reposTimer = window.setInterval(
-    () => void useSessionStore.getState().loadRepos(),
-    POLL_REPOS_MS,
+  void useSessionStore.getState().loadAppState();
+  appStateTimer = window.setInterval(
+    () => void useSessionStore.getState().loadAppState(),
+    POLL_APP_STATE_MS,
   );
   if (!popstateAttached) {
     window.addEventListener("popstate", syncSelectedSessionFromUrl);
@@ -203,13 +206,9 @@ function stopSessionStore() {
   consumerCount = Math.max(0, consumerCount - 1);
   if (consumerCount > 0) return;
 
-  if (sessionsTimer) {
-    clearInterval(sessionsTimer);
-    sessionsTimer = null;
-  }
-  if (reposTimer) {
-    clearInterval(reposTimer);
-    reposTimer = null;
+  if (appStateTimer) {
+    clearInterval(appStateTimer);
+    appStateTimer = null;
   }
   if (popstateAttached) {
     window.removeEventListener("popstate", syncSelectedSessionFromUrl);
@@ -227,13 +226,9 @@ export function useSessions<T>(selector: (state: SessionStore) => T): T {
 
 export function resetSessionStore() {
   consumerCount = 0;
-  if (sessionsTimer) {
-    clearInterval(sessionsTimer);
-    sessionsTimer = null;
-  }
-  if (reposTimer) {
-    clearInterval(reposTimer);
-    reposTimer = null;
+  if (appStateTimer) {
+    clearInterval(appStateTimer);
+    appStateTimer = null;
   }
   if (typeof window !== "undefined" && popstateAttached) {
     window.removeEventListener("popstate", syncSelectedSessionFromUrl);
@@ -282,4 +277,8 @@ function sameFlatRecord<T extends object>(a: T, b: T): boolean {
     if (left[key] !== right[key]) return false;
   }
   return true;
+}
+
+function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }

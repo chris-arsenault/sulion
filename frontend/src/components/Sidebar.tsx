@@ -16,7 +16,7 @@ import { useShallow } from "zustand/react/shallow";
 import type {
   DirEntryView,
   GitCommit,
-  GitStatus,
+  RepoGitSummary,
   RepoView,
   SecretGrantMetadata,
   SessionColor,
@@ -299,17 +299,31 @@ export function Sidebar() {
 interface RepoGroupData {
   name: string;
   exists: boolean;
+  git: RepoGitSummary | null;
+  timelineRevision: number;
   sessions: SessionView[];
 }
 
 function groupByRepo(sessions: SessionView[], repos: RepoView[]): RepoGroupData[] {
   const byName = new Map<string, RepoGroupData>();
   for (const r of repos) {
-    byName.set(r.name, { name: r.name, exists: true, sessions: [] });
+    byName.set(r.name, {
+      name: r.name,
+      exists: r.exists ?? true,
+      git: r.git ?? null,
+      timelineRevision: r.timeline_revision ?? 0,
+      sessions: [],
+    });
   }
   for (const s of sessions) {
     if (!byName.has(s.repo)) {
-      byName.set(s.repo, { name: s.repo, exists: false, sessions: [] });
+      byName.set(s.repo, {
+        name: s.repo,
+        exists: false,
+        git: null,
+        timelineRevision: 0,
+        sessions: [],
+      });
     }
     byName.get(s.repo)!.sessions.push(s);
   }
@@ -430,22 +444,12 @@ function RepoGroup({
     () => setSubOpen((p) => ({ ...p, gitSection: !p.gitSection })),
     [],
   );
-  const { setExpanded, repoState } = useRepos(
-    useShallow((store) => ({
-      setExpanded: store.setExpanded,
-      repoState: store.repos[group.name],
-    })),
-  );
-  const git = repoState?.git ?? null;
+  const git = group.git;
   const [subOpen, setSubOpen] = useState({
     sessions: true,
     files: false,
     gitSection: true,
   });
-
-  useEffect(() => {
-    setExpanded(group.name, expanded);
-  }, [group.name, expanded, setExpanded]);
 
   // Reveal requests (agent file-touches, "Reveal in file tree" menu,
   // etc.) should respect the Files subsection's current toggle: if
@@ -562,6 +566,7 @@ function RepoGroup({
             {subOpen.files && (
               <FileTree
                 repoName={group.name}
+                gitSummary={git}
                 onError={onError}
                 revealRequest={revealRequest}
               />
@@ -629,7 +634,7 @@ function RepoBadge({
   git,
   staleness,
 }: {
-  git: GitStatus;
+  git: RepoGitSummary;
   staleness: "green" | "amber" | "red";
 }) {
   const age = git.last_commit ? relativeAge(git.last_commit.committed_at) : "—";
@@ -662,20 +667,23 @@ function RepoBadge({
 
 function FileTree({
   repoName,
+  gitSummary,
   onError,
   revealRequest,
 }: {
   repoName: string;
+  gitSummary: RepoGitSummary | null;
   onError: (message: string | null) => void;
   revealRequest: { repo: string; path: string; nonce: number } | null;
 }) {
-  const { state, loadDir, hardRefresh, setShowAll, expandPath } = useRepos(
+  const { state, loadDir, hardRefresh, setShowAll, expandPath, loadDirty } = useRepos(
     useShallow((store) => ({
       state: store.repos[repoName],
       loadDir: store.loadDir,
       hardRefresh: store.hardRefresh,
       setShowAll: store.setShowAll,
       expandPath: store.expandPath,
+      loadDirty: store.loadDirty,
     })),
   );
 
@@ -689,6 +697,10 @@ function FileTree({
     if (!revealRequest) return;
     expandPath(repoName, revealRequest.path);
   }, [expandPath, repoName, revealRequest]);
+
+  useEffect(() => {
+    loadDirty(repoName, gitSummary);
+  }, [gitSummary, loadDirty, repoName]);
 
   const dirtyExpand = useMemo(
     () => dirtyAncestors(state?.git?.dirty_by_path ?? {}),
@@ -1082,7 +1094,7 @@ function TreeRow({
 
 // ─── Git panel ──────────────────────────────────────────────────────
 
-function GitPanel({ git }: { git: GitStatus | null }) {
+function GitPanel({ git }: { git: RepoGitSummary | null }) {
   if (!git) {
     return <div className="sidebar__muted">no git info yet</div>;
   }

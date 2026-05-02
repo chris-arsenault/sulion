@@ -20,6 +20,9 @@ vi.mock("react-virtuoso", () => ({
 
 import { TimelinePane as TimelinePaneRaw } from "./TimelinePane";
 import { ContextMenuHost } from "./common/ContextMenu";
+import type { RepoView, SessionView } from "../api/types";
+import { useSessionStore } from "../state/SessionStore";
+import { appStatePayload, jsonResponse } from "../test/appState";
 
 const TimelinePane = (props: { sessionId?: string; repo?: string }) => (
   <>
@@ -28,22 +31,48 @@ const TimelinePane = (props: { sessionId?: string; repo?: string }) => (
   </>
 );
 
+function sessionView(timelineRevision = 0): SessionView {
+  return {
+    id: "abc",
+    repo: "alpha",
+    working_dir: "/tmp/alpha",
+    state: "live",
+    created_at: "2026-05-02T00:00:00Z",
+    ended_at: null,
+    exit_code: null,
+    current_session_uuid: "00000000-0000-0000-0000-000000000001",
+    current_session_agent: "claude-code",
+    last_event_at: null,
+    timeline_revision: timelineRevision,
+    label: null,
+    pinned: false,
+    color: null,
+    future_prompts_pending_count: 0,
+  };
+}
+
+function repoView(timelineRevision = 0): RepoView {
+  return {
+    name: "alpha",
+    path: "/tmp/alpha",
+    exists: true,
+    timeline_revision: timelineRevision,
+    git: null,
+  };
+}
+
 function stubFetch(handler: (url: string, init?: RequestInit) => Response) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.url;
-      if (url === "/api/sessions") {
-        return new Response(JSON.stringify({ sessions: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      if (url === "/api/repos") {
-        return new Response(JSON.stringify({ repos: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+      if (url === "/api/app-state") {
+        return jsonResponse(
+          appStatePayload({
+            sessions: [sessionView()],
+            repos: [repoView()],
+          }),
+        );
       }
       return handler(url, init);
     }),
@@ -141,7 +170,7 @@ describe("TimelinePane", () => {
     });
   });
 
-  it("polls the timeline endpoint rather than history", async () => {
+  it("fetches the timeline endpoint rather than history", async () => {
     const urls: string[] = [];
     stubFetch((url) => {
       urls.push(url);
@@ -154,6 +183,7 @@ describe("TimelinePane", () => {
     render(<TimelinePane sessionId="abc" />);
     await waitFor(() => expect(screen.getByText(/hello/)).toBeDefined());
     expect(urls[0]).toMatch(/\/api\/sessions\/abc\/timeline/);
+    expect(urls.some((url) => url.includes("/history"))).toBe(false);
   });
 
   it("surfaces projected event counts in the header", async () => {
@@ -201,16 +231,22 @@ describe("TimelinePane", () => {
       makeTurn(2, "goodbye", "later content"),
     ];
 
-    stubFetch((url) =>
-      new Response(
-        url.includes("/timeline/turns/")
-          ? timelineDetailBody(
-              turns.find((turn) => url.includes(`/turns/${turn.id}`)) ?? turns[0]!,
-            )
-          : timelineBody({ turns }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
-    );
+    let summaryCalls = 0;
+    stubFetch((url) => {
+      if (url.includes("/timeline/turns/")) {
+        return new Response(
+          timelineDetailBody(
+            turns.find((turn) => url.includes(`/turns/${turn.id}`)) ?? turns[0]!,
+          ),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      summaryCalls += 1;
+      return new Response(timelineBody({ turns }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
 
     render(<TimelinePaneRaw sessionId="abc" focusTurnId={1} focusKey="k1" />);
 
@@ -224,12 +260,13 @@ describe("TimelinePane", () => {
       expect(screen.getByText("later content")).toBeDefined(),
     );
 
-    // Let at least one poll cycle complete so `turns` gets a fresh array
-    // identity. Under the original bug this re-ran the focus effect and
-    // snapped the selection back to turn 1.
+    // A revision bump gives the pane a fresh summary array. The focus
+    // effect must not re-apply the original focus after the user
+    // manually selected another turn.
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 1800));
+      useSessionStore.setState({ sessions: [sessionView(1)] });
     });
+    await waitFor(() => expect(summaryCalls).toBeGreaterThan(1));
 
     expect(screen.getByText("later content")).toBeDefined();
     expect(screen.queryByText("hi there")).toBeNull();
@@ -275,7 +312,7 @@ describe("TimelinePane", () => {
     await waitFor(() => expect(screen.getByText("detail 1")).toBeDefined());
 
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 1800));
+      useSessionStore.setState({ sessions: [sessionView(1)] });
     });
 
     await waitFor(() => expect(screen.getByText("detail 2")).toBeDefined());

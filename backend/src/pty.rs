@@ -153,7 +153,7 @@ impl PtyManager {
     }
 
     /// Count of currently-tracked PTY sessions (live + any still in the
-    /// map that haven't been reaped). Drives the `/api/stats` surface.
+    /// map that haven't been reaped). Drives the app-state stats surface.
     pub async fn live_count(&self) -> usize {
         self.sessions.read().await.len()
     }

@@ -12,7 +12,7 @@ use crate::db::Pool;
 /// JSONL from byte 0 and repopulates the tables — same code path as
 /// startup. We deliberately do not synchronously drive a tick here;
 /// "how many events came back" is the ingester's job to report via
-/// `/api/stats`, not the admin endpoint's.
+/// `/api/app-state`, not the admin endpoint's.
 ///
 /// Tables cleared:
 ///   - `events` — cascades via ON DELETE CASCADE to `event_blocks`.

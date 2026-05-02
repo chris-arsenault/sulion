@@ -123,7 +123,7 @@ pub async fn list(root: &Path, session_uuid: Uuid) -> anyhow::Result<Vec<FutureP
 }
 
 /// Cheap companion to `list` — returns only how many entries are in
-/// the `pending` state. Used by `/api/sessions` to power the sidebar
+/// the `pending` state. Used by `/api/app-state` to power the sidebar
 /// badge without materialising every prompt body.
 pub async fn count_pending(root: &Path, session_uuid: Uuid) -> anyhow::Result<usize> {
     let dir = session_dir(root, session_uuid);

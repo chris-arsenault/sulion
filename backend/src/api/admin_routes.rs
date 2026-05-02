@@ -14,7 +14,7 @@ use crate::AppState;
 /// Response for `POST /api/admin/reindex`. Only reports facts that
 /// are true at the moment the DB transaction commits. How many
 /// events the ingester subsequently replays from JSONL is a running
-/// total visible through `/api/stats` — not something this endpoint
+/// total visible through `/api/app-state` — not something this endpoint
 /// can honestly snapshot.
 #[derive(Serialize)]
 pub(super) struct ReindexResponse {

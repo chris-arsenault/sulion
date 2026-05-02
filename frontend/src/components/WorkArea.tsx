@@ -267,7 +267,7 @@ function Pane({
               }
               aria-hidden={!visible}
             >
-              <TabContent tab={tab} />
+              <TabContent tab={tab} active={visible} />
             </div>
           );
         })}
@@ -698,7 +698,7 @@ function tabTitle(tab: TabData, label: string): string {
   return bits.join(" · ");
 }
 
-function TabContent({ tab }: { tab: TabData }) {
+function TabContent({ tab, active }: { tab: TabData; active: boolean }) {
   return useMemo(() => {
     switch (tab.kind) {
       case "terminal":
@@ -709,6 +709,7 @@ function TabContent({ tab }: { tab: TabData }) {
             tabId={tab.id}
             sessionId={tab.sessionId}
             repo={tab.repo}
+            active={active}
             focusTurnId={tab.focusTurnId}
             focusPairId={tab.focusPairId}
             focusKey={tab.focusKey}
@@ -723,7 +724,7 @@ function TabContent({ tab }: { tab: TabData }) {
       case "secrets":
         return <SecretsTab />;
     }
-  }, [tab]);
+  }, [active, tab]);
 }
 
 function TerminalOrEndedPane({ sessionId }: { sessionId: string }) {

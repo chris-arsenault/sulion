@@ -6,6 +6,7 @@ import type { SessionView } from "../api/types";
 import { SessionEndedPane } from "./SessionEndedPane";
 import { resetSessionStore, useSessionStore } from "../state/SessionStore";
 import { resetTabStore, useTabStore } from "../state/TabStore";
+import { appStatePayload, jsonResponse } from "../test/appState";
 
 const orphanedSession: SessionView = {
   id: "11111111-1111-1111-1111-111111111111",
@@ -45,14 +46,11 @@ function installFetchMock(state: FetchState) {
     vi.fn(async (input: RequestInfo, init?: RequestInit) => {
       const url = typeof input === "string" ? input : (input as Request).url;
       const method = init?.method ?? "GET";
-      const json = (body: unknown, status = 200) =>
-        new Response(JSON.stringify(body), {
-          status,
-          headers: { "Content-Type": "application/json" },
-        });
+      const json = jsonResponse;
 
-      if (url === "/api/sessions" && method === "GET") return json({ sessions: [] });
-      if (url === "/api/repos" && method === "GET") return json({ repos: [] });
+      if (url === "/api/app-state" && method === "GET") {
+        return json(appStatePayload());
+      }
       if (url === "/api/sessions" && method === "POST") {
         state.createSessionCalls.push(JSON.parse(init!.body as string));
         return json(

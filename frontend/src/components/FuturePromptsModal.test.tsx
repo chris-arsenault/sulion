@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { FuturePromptsModal } from "./FuturePromptsModal";
 import { resetSessionStore, useSessionStore } from "../state/SessionStore";
 import { subscribeToAppCommands } from "../state/AppCommands";
+import { appStatePayload, jsonResponse } from "../test/appState";
 
 const SESSION_ID = "11111111-1111-1111-1111-111111111111";
 const SESSION_UUID = "22222222-2222-2222-2222-222222222222";
@@ -61,17 +62,10 @@ describe("FuturePromptsModal", () => {
     const fetchMock = vi.fn(async (input: RequestInfo, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.url;
       const method = init?.method ?? "GET";
-      if (url === "/api/sessions" && method === "GET") {
-        return new Response(JSON.stringify({ sessions: useSessionStore.getState().sessions }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      if (url === "/api/repos" && method === "GET") {
-        return new Response(JSON.stringify({ repos: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+      if (url === "/api/app-state" && method === "GET") {
+        return jsonResponse(
+          appStatePayload({ sessions: useSessionStore.getState().sessions }),
+        );
       }
       if (url === `/api/sessions/${SESSION_ID}/future-prompts` && method === "GET") {
         return new Response(JSON.stringify({
@@ -136,17 +130,10 @@ describe("FuturePromptsModal", () => {
     const fetchMock = vi.fn(async (input: RequestInfo, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.url;
       const method = init?.method ?? "GET";
-      if (url === "/api/sessions" && method === "GET") {
-        return new Response(JSON.stringify({ sessions: useSessionStore.getState().sessions }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      if (url === "/api/repos" && method === "GET") {
-        return new Response(JSON.stringify({ repos: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+      if (url === "/api/app-state" && method === "GET") {
+        return jsonResponse(
+          appStatePayload({ sessions: useSessionStore.getState().sessions }),
+        );
       }
       if (url === `/api/sessions/${SESSION_ID}/future-prompts` && method === "GET") {
         return new Response(JSON.stringify({
@@ -220,17 +207,10 @@ describe("FuturePromptsModal", () => {
     const fetchMock = vi.fn(async (input: RequestInfo, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.url;
       const method = init?.method ?? "GET";
-      if (url === "/api/sessions" && method === "GET") {
-        return new Response(JSON.stringify({ sessions: useSessionStore.getState().sessions }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      if (url === "/api/repos" && method === "GET") {
-        return new Response(JSON.stringify({ repos: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+      if (url === "/api/app-state" && method === "GET") {
+        return jsonResponse(
+          appStatePayload({ sessions: useSessionStore.getState().sessions }),
+        );
       }
       if (url === `/api/sessions/${SESSION_ID}/future-prompts` && method === "GET") {
         return new Response(JSON.stringify({

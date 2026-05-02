@@ -9,22 +9,8 @@ describe("RepoStore", () => {
 
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo) => {
+      vi.fn(async (input: RequestInfo, init?: RequestInit) => {
         const url = typeof input === "string" ? input : input.url;
-        if (url === "/api/repos/alpha/git") {
-          return new Response(
-            JSON.stringify({
-              branch: "main",
-              uncommitted_count: 0,
-              untracked_count: 0,
-              last_commit: null,
-              recent_commits: [],
-              dirty_by_path: {},
-              diff_stats_by_path: {},
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
         if (url === "/api/repos/alpha/files") {
           filesCalls += 1;
           const name = filesCalls === 1 ? "first.txt" : "second.txt";
@@ -44,6 +30,9 @@ describe("RepoStore", () => {
             }),
             { status: 200, headers: { "Content-Type": "application/json" } },
           );
+        }
+        if (url === "/api/repos/alpha/refresh" && init?.method === "POST") {
+          return new Response(null, { status: 202 });
         }
         return new Response("", { status: 404 });
       }),
@@ -70,22 +59,8 @@ describe("RepoStore", () => {
 
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo) => {
+      vi.fn(async (input: RequestInfo, init?: RequestInit) => {
         const url = typeof input === "string" ? input : input.url;
-        if (url === "/api/repos/alpha/git") {
-          return new Response(
-            JSON.stringify({
-              branch: "main",
-              uncommitted_count: 0,
-              untracked_count: 0,
-              last_commit: null,
-              recent_commits: [],
-              dirty_by_path: {},
-              diff_stats_by_path: {},
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
         if (url === "/api/repos/alpha/files") {
           filesCalls += 1;
           if (filesCalls === 1) {
@@ -109,6 +84,9 @@ describe("RepoStore", () => {
             }),
             { status: 200, headers: { "Content-Type": "application/json" } },
           );
+        }
+        if (url === "/api/repos/alpha/refresh" && init?.method === "POST") {
+          return new Response(null, { status: 202 });
         }
         return new Response("", { status: 404 });
       }),

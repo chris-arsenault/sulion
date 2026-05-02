@@ -1,6 +1,5 @@
-//! `/api/sessions*` handlers — listing, spawning, updating, and
-//! history reads. Extracted from `routes.rs` to keep the router shell
-//! thin; the route wiring itself still lives in `routes::router()`.
+//! `/api/sessions*` handlers — spawning, updating, deleting, and history
+//! reads. Ambient session listing is owned by `/api/app-state`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,7 +10,6 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::future_prompt_routes;
 use super::routes::{repos_root, ApiError, ApiResult};
 use crate::ingest::{canonical, timeline};
 use crate::pty::{self, PtyMetadata, SpawnParams};
@@ -76,41 +74,6 @@ impl From<PtyMetadata> for SessionView {
             future_prompts_pending_count: 0,
         }
     }
-}
-
-#[derive(Serialize)]
-pub(super) struct ListSessionsResponse {
-    sessions: Vec<SessionView>,
-}
-
-pub(super) async fn list_sessions(
-    State(state): State<Arc<AppState>>,
-) -> ApiResult<Json<ListSessionsResponse>> {
-    let metas = state.pty.list().await?;
-    let mut sessions: Vec<SessionView> = metas.into_iter().map(SessionView::from).collect();
-
-    // Fan out future-prompt counts over the filesystem. Sessions
-    // without a correlated transcript session_uuid can't have entries
-    // anyway, so their count stays 0 without a filesystem probe.
-    let root = future_prompt_routes::future_prompts_root(&state);
-    let count_futures = sessions.iter().map(|s| {
-        let root = root.clone();
-        let uuid = s.current_session_uuid;
-        async move {
-            match uuid {
-                Some(u) => crate::future_prompts::count_pending(&root, u)
-                    .await
-                    .unwrap_or(0),
-                None => 0,
-            }
-        }
-    });
-    let counts = futures::future::join_all(count_futures).await;
-    for (sv, c) in sessions.iter_mut().zip(counts) {
-        sv.future_prompts_pending_count = u32::try_from(c).unwrap_or(u32::MAX);
-    }
-
-    Ok(Json(ListSessionsResponse { sessions }))
 }
 
 #[derive(Deserialize)]

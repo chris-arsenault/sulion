@@ -261,7 +261,7 @@ describe("ToolCallRenderer", () => {
             dirty_by_path: { [LIB_RS_PATH]: " M" },
             diff_stats_by_path: { [LIB_RS_PATH]: { additions: 12, deletions: 3 } },
           },
-          gitLastFetched: Date.now(),
+          dirtyLoadedRevision: 1,
           gitError: null,
           tree: {},
           treeEpoch: 0,
@@ -270,14 +270,13 @@ describe("ToolCallRenderer", () => {
           showAll: false,
         },
       },
-      expandedRepos: new Set(),
-      setExpanded: vi.fn(),
+      loadDirty: vi.fn(),
       toggleDir: vi.fn(),
       expandPath: vi.fn(),
       refresh: vi.fn(),
       setShowAll: vi.fn(),
       loadDir: vi.fn(),
-      pollOne: vi.fn(),
+      refreshVisibleDirs: vi.fn(),
     });
     const revealSpy = vi.spyOn(appCommands, "revealFile");
     const openSpy = vi.spyOn(appCommands, "openFile");

@@ -3,39 +3,13 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { StatsStrip } from "./StatsStrip";
+import { appStatePayload, jsonResponse, statsPayload } from "../test/appState";
 
-function statsPayload(overrides: Record<string, unknown> = {}) {
-  return {
-    uptime_seconds: 3_700, // ~1h 1m
-    process: {
-      memory_rss_bytes: 120 * 1024 * 1024,
-      cpu_percent: 4.2,
-      memory_limit_bytes: 500 * 1024 * 1024,
-    },
-    pty: { live_sessions: 3, live_agent_sessions: 2 },
-    db: {
-      database_size_bytes: 50 * 1024 * 1024,
-    },
-    inventory: {
-      event_rows: 1234,
-      agent_sessions: 7,
-      pty_sessions: 5,
-      tracked_files: 7,
-      events_inserted_since_boot: 250,
-      parse_errors_since_boot: 0,
-    },
-    ...overrides,
-  };
-}
-
-function installStatsFetch(payload: unknown) {
+function installStatsFetch(payload: ReturnType<typeof statsPayload>) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async () =>
-      new Response(JSON.stringify(payload), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+      jsonResponse(appStatePayload({ stats: payload })),
     ),
   );
 }
@@ -43,10 +17,12 @@ function installStatsFetch(payload: unknown) {
 describe("StatsStrip", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(console, "error").mockImplementation(() => {});
   });
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("renders the compact live-load summary after the first poll", async () => {
