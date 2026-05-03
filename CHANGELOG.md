@@ -2,7 +2,7 @@
 
 All notable user-visible changes to Sulion are recorded here.
 
-## Unreleased
+## v1.1.0 - 2026-05-03
 
 ### Workspace isolation and agent flow
 
@@ -33,6 +33,7 @@ All notable user-visible changes to Sulion are recorded here.
 - Changed backend startup so the API listener binds after migrations and orphan reconciliation, while derived transcript repair runs only when `ingest_projection_versions` is behind.
 - Changed transcript repair to preserve source `events` rows and rebuild derived canonical/timeline tables from existing Postgres payloads instead of deleting data and relying on JSONL replay.
 - Fixed canonical-block repair so it skips already-populated events instead of reprocessing historical Codex events on every backend restart.
+- Fixed a backend boot crash on deployed databases by restoring the original checksum for the already-applied canonical-block migration.
 
 ### Deployment and documentation
 

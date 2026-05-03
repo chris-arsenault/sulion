@@ -4,8 +4,7 @@
 -- reaching into an agent-specific shape.
 --
 -- Ingester parses each event into a list of canonical blocks on
--- insert. Historical repair is gated by ingest_projection_versions,
--- not run as unconditional startup work.
+-- insert. A small backfill pass at startup covers pre-existing rows.
 
 ALTER TABLE events
     ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude-code',
