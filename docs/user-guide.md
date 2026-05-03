@@ -28,8 +28,11 @@ command palette entry, the rail also exposes the **Secrets** manager tab.
 
 Right-click a session for rename / pin / colour / open-timeline /
 delete actions, including the shortcut to manage secrets for that PTY.
-Right-click a repo for repo-level actions (new session, open repo
-timeline, repo diff). Double-click a session name to rename in place.
+New agent sessions can run in an isolated Sulion Git worktree by
+default, while explicit main-worktree sessions stay bound to the
+canonical checkout. Right-click a repo for repo-level actions (new
+session, open repo timeline, repo diff). Double-click a session name to
+rename in place.
 
 ## Command palette
 
@@ -49,10 +52,10 @@ transcript.
 
 ![Overview](screenshots/01-workspace.png)
 
-Tabs support file, diff, and reference kinds alongside terminal and
-timeline, plus the Secrets manager tab. Drag a tab header onto the other
-pane's drop zone to split the work area; the layout persists across
-reloads.
+Tabs support file, diff, monitor, and reference kinds alongside terminal
+and timeline, plus the Secrets manager tab. Drag a tab header onto the
+other pane's drop zone to split the work area; the layout persists
+across reloads.
 
 ## Timeline — turns, filters, detail
 
@@ -63,6 +66,17 @@ bookkeeping traffic; the **FILE** input narrows the timeline to turns
 that touched a given path.
 
 ![Timeline turn](screenshots/03-timeline-turn.png)
+
+When you are mostly reading the structured timeline, the prompt bar can
+send text into the running Claude/Codex terminal without expanding the
+full terminal pane.
+
+## Monitor — active-session output
+
+The **Monitor** tab shows the latest assistant output from active
+sessions in one mixed view. It follows the same timeline-derived data
+model as session timelines, but presents one card per active session so
+you can scan several agents without jumping between tabs.
 
 ## Thinking fly-out
 
@@ -150,5 +164,5 @@ without losing your place in the parent turn.
 ---
 
 For the features referenced here, see
-[`changelog.md`](changelog.md) for the shipped-feature history and
+[`CHANGELOG.md`](../CHANGELOG.md) for the shipped-feature history and
 [`backlog.md`](backlog.md) for what's still on the roadmap.

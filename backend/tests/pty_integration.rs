@@ -22,7 +22,8 @@ async fn fresh_pool() -> db::Pool {
     // test harness when sharing a DB, but --test-threads=1 is what the
     // runner uses below.
     sqlx::query(
-        "TRUNCATE events, ingester_state, claude_sessions, pty_sessions, repos RESTART IDENTITY CASCADE",
+        "TRUNCATE events, ingester_state, claude_sessions, pty_sessions, repos, \
+         workspaces, workspace_dirty_paths RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
     .await

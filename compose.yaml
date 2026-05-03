@@ -11,6 +11,7 @@ services:
       SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@192.168.66.3:5432/sulion"
       SULION_LISTEN: "0.0.0.0:8080"
       SULION_REPOS_ROOT: "/home/dev/repos"
+      SULION_WORKSPACES_ROOT: "/home/dev/workspaces"
       SULION_CLAUDE_PROJECTS: "/home/dev/.claude/projects"
       SULION_CODEX_SESSIONS: "/home/dev/.codex/sessions"
       SULION_CORRELATE_SOCK: "/run/sulion/correlate.sock"
@@ -19,6 +20,7 @@ services:
       SULION_SECRET_BROKER_URL: "http://sulion-broker:8081"
       SULION_SECRET_BROKER_REGISTRATION_TOKEN: "${SULION_SECRET_BROKER_REGISTRATION_TOKEN}"
       SULION_AWS_SECRET_ID: "aws-default"
+      SULION_RUNNER_URL: "http://sulion-runner:8082"
       HOME: "/home/dev"
     volumes:
       # Primary bind: the dataset root *is* the dev user's home.
@@ -33,36 +35,8 @@ services:
       # mount. Works as a plain directory too before the dataset is
       # created, so ordering of the bootstrap vs deploy doesn't matter.
       - /mnt/apps/apps/sulion/repos:/home/dev/repos
-      # Rootless-podman image/container store on its own nested
-      # dataset so it's monitorable (`du -sh`) and clearable
-      # (`podman system reset`) without touching user state. ZFS
-      # snapshots don't recurse into child datasets by default, so
-      # nesting doesn't bloat parent snapshots. Dataset must exist
-      # on the host and be chowned to 7321:7321 (see docs/deploy.md).
-      - /mnt/apps/apps/sulion/containers:/home/dev/.local/share/containers
+      - /mnt/apps/apps/sulion/workspaces:/home/dev/workspaces
       - sulion_run:/run/sulion
-    devices:
-      # Rootless podman's overlay driver uses fuse-overlayfs, which
-      # needs /dev/fuse exposed. Without it podman silently falls back
-      # to the vfs driver (slow, duplicates every layer).
-      - /dev/fuse
-    cap_add:
-      # rootless podman uses user namespaces from *inside* the
-      # container; the kernel needs these caps present on the outer
-      # process to let newuidmap/newgidmap do the setuid mapping.
-      - SETUID
-      - SETGID
-    security_opt:
-      # Docker's default seccomp profile blocks the clone3 / unshare
-      # syscalls podman needs for its nested user namespaces.
-      - "seccomp:unconfined"
-      # Docker's default AppArmor profile (`docker-default`) denies
-      # writes to /proc/<pid>/uid_map, which is exactly what
-      # newuidmap needs to set up the nested user namespace. Without
-      # this, you get `Operation not permitted` at container start
-      # even with seccomp off and caps correct. AppArmor and seccomp
-      # are independent LSMs — both have to allow the syscall.
-      - "apparmor:unconfined"
 
   broker:
     image: ghcr.io/chris-arsenault/sulion/broker:${IMAGE_TAG}
@@ -77,6 +51,26 @@ services:
       SULION_SECRET_BROKER_REGISTRATION_TOKEN: "${SULION_SECRET_BROKER_REGISTRATION_TOKEN}"
     volumes:
       - /mnt/apps/apps/sulion-broker:/var/lib/sulion-broker:ro
+
+  runner:
+    image: ghcr.io/chris-arsenault/sulion/runner:${IMAGE_TAG}
+    container_name: sulion-runner
+    restart: unless-stopped
+    environment:
+      SULION_RUNNER_LISTEN: "0.0.0.0:8082"
+      SULION_RUNNER_ALLOWED_ROOTS: "/home/dev/repos,/home/dev/workspaces"
+      SULION_RUNNER_DEFAULT_MEMORY: "2g"
+      SULION_RUNNER_DEFAULT_CPUS: "2"
+      SULION_RUNNER_DEFAULT_PIDS: "512"
+    volumes:
+      # The runner reads the same workspace paths as backend so
+      # `docker build .` uses Docker's normal local context handling.
+      # The Docker socket is the runner's privileged boundary; backend
+      # and PTYs never receive it.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /mnt/apps/apps/sulion:/home/dev:ro
+      - /mnt/apps/apps/sulion/repos:/home/dev/repos:ro
+      - /mnt/apps/apps/sulion/workspaces:/home/dev/workspaces:ro
 
   frontend:
     image: ghcr.io/chris-arsenault/sulion/frontend:${IMAGE_TAG}

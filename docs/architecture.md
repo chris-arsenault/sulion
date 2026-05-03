@@ -6,7 +6,8 @@ Pointers into the code are the source of truth. This doc exists to orient a read
 
 ## Shape
 
-One Rust backend, one React frontend, one Rust secret broker, two Postgres databases, one bind-mounted dataset on the host.
+One Rust backend, one React frontend, one Rust secret broker, one Rust Docker
+runner, two Postgres databases, and several explicitly mounted TrueNAS datasets.
 
 ```
 PTY shell ──► xterm.js               (live: WebSocket bytes, no scrollback)
@@ -27,6 +28,11 @@ Two layers.
 **PTY session** — a long-lived shell process on the server. Created per repo, survives client disconnect, dies only on explicit delete, shell exit, or server reboot. Has a backend-generated UUID.
 
 **Agent session** — a single `claude` or `codex` invocation inside a PTY session, identified by the agent's own session UUID, backing exactly one JSONL file. A PTY session may hold zero, one, or many agent sessions sequentially.
+
+**Workspace** — the filesystem checkout bound to a PTY session. A workspace is
+either the canonical repo checkout (`main`) or a Sulion-created Git worktree on
+an isolated branch. PTYs run with their cwd inside the workspace and receive
+`SULION_WORKSPACE_*` metadata so agents can tell where they are.
 
 The UI's primary object is the PTY session. The timeline defaults to the current agent session within that PTY, and the repo timeline (#56) merges every correlated agent session in a repo into one chronological feed.
 
@@ -69,7 +75,7 @@ Code boundary:
 Three surfaces, one work area.
 
 - **Rail + sidebar** — repos and their PTY sessions, drag-resizable and pinnable. See `frontend/src/components/Sidebar.tsx`.
-- **Work area** — tab-strip over two horizontal panes. Each tab is its own subtree keyed by `(session_id, view_kind)`. Terminal, timeline, file, diff, reference, and secrets-management tabs all live here.
+- **Work area** — tab-strip over two horizontal panes. Each tab is its own subtree keyed by `(session_id, view_kind)`. Terminal, timeline, monitor, file, diff, reference, and secrets-management tabs all live here.
 - **Mobile** — single-pane with drawer below 768px.
 
 State management rules live in [`state-management.md`](state-management.md). Visual framework is in [`design.md`](design.md).
@@ -84,14 +90,19 @@ The **secrets tab** is the env-bundle setup surface. PTY-scoped grants with TTL 
 
 REST management (`GET/POST/DELETE` on sessions, repos, timeline, library, git, stats) plus WebSocket attach for live PTY streaming and event push. See `backend/src/api/routes.rs` for the authoritative route table.
 
+Repo-scoped filesystem/git routes target the canonical checkout. Workspace-scoped
+routes under `/api/workspaces/:id/*` target the session-bound checkout/worktree.
+
 WebSocket attach sends a snapshot rendered from the shadow `vt100` emulator on connect, then live-streams bytes. Inbound: keystrokes and `TIOCSWINSZ` resize. Multi-viewer is mirrored; inbound is last-writer-wins (single-user LAN tool).
 
 The backend also launches PTYs with Sulion-managed wrapper tools on `PATH`:
 
+- `cl` / `co` for correlated Claude/Codex startup
 - `with-cred` for general env-bundle injection
 - `aws` as a wrapper over the real AWS CLI
+- `docker` as a constrained runner client
 
-Those are the only supported secret-consumption paths. The backend does not own the broker master key and does not expose any alternate secret-injection mechanism.
+`with-cred` and `aws` are the only supported secret-consumption paths. The backend does not own the broker master key and does not expose any alternate secret-injection mechanism.
 
 ## Broker surface
 
@@ -105,9 +116,23 @@ Its responsibilities are intentionally narrow:
 
 It does not run PTYs, ingest transcripts, or serve the main application API.
 
+## Container Runner
+
+The runner is a separate Rust service and container. It is the only Sulion
+container with the host Docker socket mounted. PTYs see a `docker` wrapper that
+sends the current working directory, PTY id, and argv to the runner. The runner
+executes the Docker CLI from the same mounted workspace path after applying
+Sulion policy: supported subcommands only, Sulion labels on created containers,
+resource defaults, no privileged mode, no host namespaces, no extra caps, no
+devices, no bind mounts, and no interactive `-it` sessions.
+
+The runner is intentionally a command broker, not a Docker API proxy. A runner
+compromise is equivalent to host Docker socket compromise; an agent compromise
+is bounded by runner policy.
+
 ## Deployment shape
 
-Docker Compose, orchestrated by Komodo, on TrueNAS. Three images (`backend`, `broker`, `frontend`), shared TrueNAS Postgres at `192.168.66.3:5432`, backend state under `/mnt/apps/apps/sulion`, and broker key material under `/mnt/apps/apps/sulion-broker`. Full setup in [`deploy.md`](deploy.md).
+Docker Compose, orchestrated by Komodo, on TrueNAS. Four images (`backend`, `broker`, `runner`, `frontend`), shared TrueNAS Postgres at `192.168.66.3:5432`, backend state under `/mnt/apps/apps/sulion`, canonical repos under `/mnt/apps/apps/sulion/repos`, isolated worktrees under `/mnt/apps/apps/sulion/workspaces`, and broker key material under `/mnt/apps/apps/sulion-broker`. Full setup in [`deploy.md`](deploy.md).
 
 ## Historical reasoning
 

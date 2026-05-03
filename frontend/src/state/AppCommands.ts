@@ -3,8 +3,8 @@ import { useEffect, useRef } from "react";
 import type { LibraryKind } from "../api/types";
 
 export type AppCommand =
-  | { type: "open-file"; repo: string; path: string }
-  | { type: "open-diff"; repo: string; path?: string }
+  | { type: "open-file"; repo: string; path: string; workspaceId?: string }
+  | { type: "open-diff"; repo: string; path?: string; workspaceId?: string }
   | { type: "open-future-prompts"; sessionId: string }
   | { type: "reveal-file"; repo: string; path: string }
   | { type: "reveal-repo"; repo: string }

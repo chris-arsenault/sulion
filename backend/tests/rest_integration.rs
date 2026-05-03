@@ -25,7 +25,7 @@ async fn fresh_pool() -> db::Pool {
     sqlx::query(
         "TRUNCATE events, ingester_state, claude_sessions, pty_sessions, repos, \
          repo_runtime_state, repo_dirty_paths, timeline_session_state, \
-         future_prompt_session_state RESTART IDENTITY CASCADE",
+         future_prompt_session_state, workspaces, workspace_dirty_paths RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
     .await
@@ -47,6 +47,7 @@ impl Harness {
         let state = AppState::new(
             pool,
             tmp_repos.path().to_path_buf(),
+            tmp_repos.path().join(".workspaces"),
             tmp_repos.path().join(".library"),
             std::sync::Arc::new(sulion::ingest::Ingester::new()),
         );

@@ -1,9 +1,7 @@
 # Runtime base. Must be glibc-based so binaries built on GitHub's
 # ubuntu-latest run without musl rebuilds. Rocky 10 carries glibc
-# 2.39, matching current Ubuntu-built artifacts, while keeping the
-# shadow-utils/newuidmap stack that supports Sulion's nested rootless
-# Podman use case without granting SYS_ADMIN to the outer container.
-FROM rockylinux/rockylinux:10
+# 2.39, matching current Ubuntu-built artifacts.
+FROM docker.io/rockylinux/rockylinux:10
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -177,43 +175,6 @@ RUN arch="$(uname -m)" \
   && install -m 0755 /tmp/duckdb/duckdb /usr/local/bin/duckdb \
   && rm -rf /tmp/duckdb /tmp/duckdb.zip
 
-# Rootless podman for running containers inside a PTY without a
-# daemon and without touching a host docker socket. Requires:
-#   - fuse-overlayfs for the overlay storage driver (default `vfs` is
-#     slow and duplicates layers).
-#   - uidmap (newuidmap/newgidmap) + a subuid/subgid range for `dev`
-#     so user-namespace mapping works.
-#   - slirp4netns for the rootless network stack.
-#   - crun as the OCI runtime; smaller/faster than runc for this use.
-# The /etc/containers/storage.conf pin forces overlay+fuse-overlayfs;
-# without it, podman falls back to vfs on first run and you get slow
-# pulls that eat the dataset.
-RUN dnf install -y --setopt=install_weak_deps=False \
-      podman \
-      crun \
-      fuse-overlayfs \
-      shadow-utils \
-      slirp4netns \
-      util-linux-core \
-  && dnf clean all \
-  && rm -rf /var/cache/dnf \
-  && echo "dev:100000:65536" >> /etc/subuid \
-  && echo "dev:100000:65536" >> /etc/subgid \
-  && mkdir -p /etc/containers \
-  && printf '%s\n' \
-      '[storage]' \
-      'driver = "overlay"' \
-      '[storage.options.overlay]' \
-      'mount_program = "/usr/bin/fuse-overlayfs"' \
-      > /etc/containers/storage.conf
-
-# Docker-compatible CLI shim: scripts and Makefile targets that call
-# `docker …` land on podman transparently. A wrapper script (rather
-# than a bash alias) so it also works in non-interactive shells like
-# `make` subshells.
-RUN printf '#!/bin/sh\nexec podman "$@"\n' > /usr/local/bin/docker \
-  && chmod +x /usr/local/bin/docker
-
 # GitHub CLI from the official RPM repo.
 RUN dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo \
   && dnf install -y --setopt=install_weak_deps=False gh \
@@ -225,18 +186,6 @@ RUN dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.rep
 # want a different version override locally via `npm i -g …` (prefix
 # is set to ~/.local in the entrypoint, so user installs shadow these).
 RUN npm install -g @anthropic-ai/claude-code @openai/codex
-
-# sulion-managed shell aliases. Rocky/RHEL sources /etc/bashrc for
-# interactive non-login shells — which is what a PTY gets. User can
-# still override in their own ~/.bashrc (runs AFTER /etc/bashrc).
-# Keep this list tight; aliases are a
-# product surface, not a dumping ground.
-RUN { \
-      echo ''; \
-      echo '# sulion: agent shortcuts'; \
-      echo 'alias cl="sulion-agent --type claude --mode real -- --dangerously-skip-permissions"'; \
-      echo 'alias co="sulion-agent --type codex --mode real -- --yolo"'; \
-    } >> /etc/bashrc
 
 # 7321 is a deliberately unusual UID/GID to avoid colliding with the
 # ~1000 range that most consumer apps claim. Must match the ownership
@@ -253,12 +202,15 @@ RUN groupadd --gid ${DEV_GID} dev \
 
 COPY dist/sulion /usr/local/bin/sulion
 COPY bin/sulion-agent /opt/sulion/bin/sulion-agent
+COPY bin/cl /opt/sulion/bin/cl
+COPY bin/co /opt/sulion/bin/co
+COPY bin/docker /opt/sulion/bin/docker
 COPY bin/aws /opt/sulion/bin/aws
 COPY bin/with-cred /opt/sulion/bin/with-cred
 COPY docs/toolset.md /opt/sulion/docs/toolset.md
 COPY hooks/session-start.sh /opt/sulion/hooks/session-start.sh
 COPY entrypoint.sh /opt/sulion/entrypoint.sh
-RUN chmod +x /usr/local/bin/sulion /opt/sulion/bin/sulion-agent /opt/sulion/bin/aws /opt/sulion/bin/with-cred /opt/sulion/hooks/session-start.sh /opt/sulion/entrypoint.sh
+RUN chmod +x /usr/local/bin/sulion /opt/sulion/bin/sulion-agent /opt/sulion/bin/cl /opt/sulion/bin/co /opt/sulion/bin/docker /opt/sulion/bin/aws /opt/sulion/bin/with-cred /opt/sulion/hooks/session-start.sh /opt/sulion/entrypoint.sh
 USER dev
 WORKDIR /home/dev
 

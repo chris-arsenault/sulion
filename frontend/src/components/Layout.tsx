@@ -66,12 +66,12 @@ export function Layout() {
   const openTabRef = useRef(openTab);
   openTabRef.current = openTab;
 
-  useAppCommand("open-file", ({ repo, path }) => {
-    openTabRef.current({ kind: "file", repo, path });
+  useAppCommand("open-file", ({ repo, path, workspaceId }) => {
+    openTabRef.current({ kind: "file", repo, path, workspaceId });
     setDrawerOpen(false);
   });
-  useAppCommand("open-diff", ({ repo, path }) => {
-    openTabRef.current({ kind: "diff", repo, path });
+  useAppCommand("open-diff", ({ repo, path, workspaceId }) => {
+    openTabRef.current({ kind: "diff", repo, path, workspaceId });
     setDrawerOpen(false);
   });
   useAppCommand("open-future-prompts", ({ sessionId }) => {
@@ -97,6 +97,10 @@ export function Layout() {
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   const openSecrets = useCallback(() => {
     openTabRef.current({ kind: "secrets" }, "top");
+    setDrawerOpen(false);
+  }, []);
+  const openMonitor = useCallback(() => {
+    openTabRef.current({ kind: "monitor" }, "top");
     setDrawerOpen(false);
   }, []);
   const closePalette = useCallback(() => setPaletteOpen(false), []);
@@ -160,6 +164,7 @@ export function Layout() {
       <Rail
         pinned={pinned}
         onTogglePinned={togglePinned}
+        onOpenMonitor={openMonitor}
         onOpenSecrets={openSecrets}
         onOpenPalette={openPalette}
       />
@@ -292,6 +297,13 @@ function usePaletteCommands({
   return useMemo<PaletteCommand[]>(() => {
     const out: PaletteCommand[] = [];
     out.push({
+      id: "view.monitor",
+      label: "Open monitor",
+      icon: "activity",
+      group: "view",
+      run: () => openTab({ kind: "monitor" }, "top"),
+    });
+    out.push({
       id: "sidebar.toggle-pin",
       label: "Toggle sidebar pin",
       icon: "panel-left",
@@ -318,5 +330,5 @@ function usePaletteCommands({
       });
     }
     return out;
-  }, [repos, sessions, setPinned, openTerminalFor]);
+  }, [openTab, repos, sessions, setPinned, openTerminalFor]);
 }

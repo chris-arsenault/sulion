@@ -2,10 +2,11 @@
 
 Standard ahara TrueNAS deploy: Docker Compose via Komodo, shared TrueNAS Postgres auto-provisioned by the migration Lambda, Komodo stack created on demand by the deploy action.
 
-Sulion now has three services:
+Sulion now has four services:
 
 - `backend` — main API + PTY runtime
 - `broker` — secret broker, separate container and UID
+- `runner` — constrained Docker command broker, only service with the host Docker socket
 - `frontend` — static UI + reverse proxy
 
 ## One-time cross-repo registration
@@ -31,8 +32,8 @@ chown 7321:7321 /mnt/apps/apps/sulion
 zfs create apps/apps/sulion/repos
 chown 7321:7321 /mnt/apps/apps/sulion/repos
 
-zfs create apps/apps/sulion/containers
-chown 7321:7321 /mnt/apps/apps/sulion/containers
+zfs create apps/apps/sulion/workspaces
+chown 7321:7321 /mnt/apps/apps/sulion/workspaces
 
 zfs create apps/apps/sulion-broker
 chown 7322:7322 /mnt/apps/apps/sulion-broker
@@ -42,7 +43,7 @@ Why four:
 
 - `apps/apps/sulion` is the dev user's home. Credentials, shell history, claude sessions, etc.
 - `apps/apps/sulion/repos` holds the working trees. On its own dataset so you can expose it via NFS/SMB, snapshot it on a different cadence, and mount it from other machines without carrying home-dir state.
-- `apps/apps/sulion/containers` is podman's rootless image/container store. Split off so it can be monitored (`du -sh`) and cleared (`podman system reset` or a straight `rm -rf`) without touching home or repos.
+- `apps/apps/sulion/workspaces` holds Sulion-created Git worktrees for isolated sessions.
 - `apps/apps/sulion-broker` belongs only to the broker container. It holds the broker master key and is **never** mounted into the PTY container.
 
 ZFS snapshots don't recurse into child datasets by default, so the nested layout keeps parent-level snapshots light — pass `-r` to `zfs snapshot` when you explicitly want everything.
@@ -53,15 +54,7 @@ The broker runs as **7322:7322**, configured in [`broker/Dockerfile`](</home/dev
 
 `compose.yaml` bind-mounts each dataset explicitly — Docker's plain bind doesn't follow nested ZFS datasets under the parent, so every dataset needs its own entry. This also means you can add a `zfs create apps/apps/sulion/<something>` later and the compose file keeps working until you're ready to wire it in.
 
-Copy the podman seccomp profile into place alongside the datasets:
-
-```bash
-cp backend/seccomp.json /mnt/apps/apps/sulion/seccomp.json
-```
-
-`compose.yaml` points `security_opt: seccomp=` at this absolute host path — relative paths aren't resolved against the compose file for seccomp, the daemon reads directly from its own filesystem. No chown needed: the daemon runs as root on the host and just needs read access. The dev user inside the container never touches this file. Re-copy when the repo's `seccomp.json` changes.
-
-That's the whole bootstrap. `backend/entrypoint.sh` self-provisions `~/.claude/`, `~/.ssh/`, `~/.local/bin/`, `~/.local/share/containers/`, `~/.config/gh/`, `~/repos/` on first boot and pre-writes `.claude/settings.json` wiring the `SessionStart` hook.
+That's the whole bootstrap. `backend/entrypoint.sh` self-provisions `~/.claude/`, `~/.ssh/`, `~/.local/bin/`, `~/.config/gh/`, `~/repos/`, and `~/workspaces/` on first boot and pre-writes `.claude/settings.json` wiring the `SessionStart` hook.
 
 ## Broker key
 
@@ -77,7 +70,7 @@ The broker container mounts this dataset read-only at `/var/lib/sulion-broker`. 
 
 ## Deploy
 
-Push to `main`. The shared ahara CI workflow builds both images, pushes to GHCR, and the `deploy-truenas` action:
+Push to `main`. The shared ahara CI workflow builds all Sulion images, pushes to GHCR, and the `deploy-truenas` action:
 
 1. Invokes `ahara-db-migrate-truenas` with `stack_name: "sulion"` → creates every registered Sulion database and publishes `/ahara/truenas-db/sulion/app/{username,password}` plus `/ahara/truenas-db/sulion/broker/{username,password}` to SSM.
 2. Runs `terraform apply` in [`infrastructure/terraform/`](</home/dev/repos/sulion/infrastructure/terraform>) → creates the Sulion Cognito app client and publishes `/ahara/cognito/clients/sulion-app` plus `/ahara/auth-trigger/clients/sulion`.

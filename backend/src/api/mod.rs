@@ -14,6 +14,7 @@ mod routes;
 mod session_routes;
 mod stats;
 mod timeline_routes;
+mod workspace_routes;
 mod ws;
 
 pub use routes::ApiError;

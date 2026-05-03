@@ -24,8 +24,12 @@ import {
   getRepoTimelineTurn,
   getTimeline,
   getTimelineTurn,
+  sendSessionPrompt,
+  startSessionAgent,
 } from "../api/client";
 import type {
+  AgentLaunchType,
+  SessionView,
   TimelineQuery,
   TimelineSubagent,
   TimelineSummaryResponse,
@@ -104,6 +108,10 @@ export function TimelinePane({
     }
     return 0;
   });
+  const session = useSessions((store) =>
+    sessionId ? store.sessions.find((candidate) => candidate.id === sessionId) : undefined,
+  );
+  const refreshSessions = useSessions((store) => store.refresh);
 
   const [inspectorFraction, setInspectorFraction] = useState<number>(() => {
     if (typeof window === "undefined") return DEFAULT_INSPECTOR_FRACTION;
@@ -522,6 +530,13 @@ export function TimelinePane({
           />
         </div>
       )}
+      {sessionId && (
+        <TimelinePromptBar
+          sessionId={sessionId}
+          session={session}
+          onRefresh={refreshSessions}
+        />
+      )}
       {subagent && (
         <SubagentModal
           subagent={subagent}
@@ -531,6 +546,180 @@ export function TimelinePane({
       )}
     </div>
   );
+}
+
+function TimelinePromptBar({
+  sessionId,
+  session,
+  onRefresh,
+}: {
+  sessionId: string;
+  session?: SessionView;
+  onRefresh: () => Promise<void>;
+}) {
+  const [text, setText] = useState("");
+  const [pending, setPending] = useState<"send" | AgentLaunchType | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const runtime = session?.agent_runtime ?? {
+    agent: null,
+    state: "none",
+    started_at: null,
+    ended_at: null,
+    exit_code: null,
+  };
+  const metadata = session?.agent_metadata ?? null;
+  const live = session?.state === "live";
+  const running = live && runtime.state === "running";
+  const starting = live && runtime.state === "starting";
+  const canLaunch = live && !starting && runtime.state !== "running";
+  const canSend = running && text.trim().length > 0 && pending == null;
+  const status = promptStatusText(session ?? null, runtime);
+  const meta = promptMetadataText(metadata);
+
+  const startAgent = useCallback(
+    async (agent: AgentLaunchType) => {
+      if (!canLaunch || pending) return;
+      setPending(agent);
+      setError(null);
+      try {
+        await startSessionAgent(sessionId, agent);
+        await onRefresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "failed to start agent");
+      } finally {
+        setPending(null);
+      }
+    },
+    [canLaunch, onRefresh, pending, sessionId],
+  );
+
+  const sendPrompt = useCallback(async () => {
+    if (!canSend) return;
+    const prompt = text;
+    setPending("send");
+    setError(null);
+    try {
+      await sendSessionPrompt(sessionId, prompt);
+      setText("");
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "failed to send prompt");
+    } finally {
+      setPending(null);
+    }
+  }, [canSend, onRefresh, sessionId, text]);
+
+  const onTextChange = useCallback(
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => setText(e.target.value),
+    [],
+  );
+  const onTextKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        void sendPrompt();
+      }
+    },
+    [sendPrompt],
+  );
+  const onSendClick = useCallback(() => {
+    void sendPrompt();
+  }, [sendPrompt]);
+  const onStartClaude = useCallback(() => {
+    void startAgent("claude");
+  }, [startAgent]);
+  const onStartCodex = useCallback(() => {
+    void startAgent("codex");
+  }, [startAgent]);
+
+  return (
+    <div className="timeline-prompt" aria-label="Agent prompt controls">
+      <div className="timeline-prompt__status">
+        <span>{status}</span>
+        {meta && <span className="timeline-prompt__meta">{meta}</span>}
+        {error && <span className="timeline-prompt__error">{error}</span>}
+      </div>
+      {running ? (
+        <div className="timeline-prompt__input-row">
+          <textarea
+            value={text}
+            onChange={onTextChange}
+            onKeyDown={onTextKeyDown}
+            placeholder="Type a prompt. Ctrl+Enter sends to the running agent."
+            rows={2}
+            className="timeline-prompt__textarea"
+            aria-label="Prompt text"
+            disabled={pending != null}
+          />
+          <button
+            type="button"
+            className="timeline-prompt__button timeline-prompt__button--primary"
+            onClick={onSendClick}
+            disabled={!canSend}
+          >
+            {pending === "send" ? "Sending…" : "Send"}
+          </button>
+        </div>
+      ) : (
+        <div className="timeline-prompt__launch-row">
+          <button
+            type="button"
+            className="timeline-prompt__button"
+            onClick={onStartClaude}
+            disabled={!canLaunch || pending != null}
+          >
+            {pending === "claude" ? "Starting…" : "Start Claude"}
+          </button>
+          <button
+            type="button"
+            className="timeline-prompt__button"
+            onClick={onStartCodex}
+            disabled={!canLaunch || pending != null}
+          >
+            {pending === "codex" ? "Starting…" : "Start Codex"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function promptStatusText(
+  session: SessionView | null,
+  runtime: NonNullable<SessionView["agent_runtime"]>,
+): string {
+  if (!session) return "Loading session state…";
+  if (session.state !== "live") return `Session is ${session.state}`;
+  const agent = runtime.agent ? agentDisplayName(runtime.agent) : "agent";
+  switch (runtime.state) {
+    case "running":
+      return `${agent} is running`;
+    case "starting":
+      return `${agent} is starting`;
+    case "exited": {
+      const exitCode = runtime.exit_code == null ? "" : ` (${runtime.exit_code})`;
+      return `${agent} exited${exitCode}`;
+    }
+    case "none":
+    default:
+      return "No agent running in this PTY";
+  }
+}
+
+function promptMetadataText(metadata: SessionView["agent_metadata"]): string | null {
+  if (!metadata) return null;
+  const bits = [
+    metadata.model,
+    metadata.reasoning_effort ? `effort ${metadata.reasoning_effort}` : null,
+    metadata.model_provider,
+  ].filter(Boolean);
+  return bits.length ? bits.join(" · ") : null;
+}
+
+function agentDisplayName(agent: string): string {
+  if (agent === "claude" || agent === "claude-code") return "Claude";
+  if (agent === "codex") return "Codex";
+  return agent;
 }
 
 function turnKey(_i: number, t: TurnSummary): string {

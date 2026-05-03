@@ -11,6 +11,7 @@ import "./Rail.css";
 interface RailProps {
   pinned: boolean;
   onTogglePinned: () => void;
+  onOpenMonitor: () => void;
   onOpenSecrets: () => void;
   onOpenPalette: () => void;
 }
@@ -18,7 +19,13 @@ interface RailProps {
 /** Left rail — functional. Lists each repo as a sigil with staleness ring
  * + unread dot. Click scrolls the sidebar to that repo and expands it.
  * Also carries pin toggle and command palette trigger. */
-export function Rail({ pinned, onTogglePinned, onOpenSecrets, onOpenPalette }: RailProps) {
+export function Rail({
+  pinned,
+  onTogglePinned,
+  onOpenMonitor,
+  onOpenSecrets,
+  onOpenPalette,
+}: RailProps) {
   const { repos, sessions, isUnread } = useSessions(
     useShallow((store) => ({
       repos: store.repos,
@@ -77,6 +84,17 @@ export function Rail({ pinned, onTogglePinned, onOpenSecrets, onOpenPalette }: R
       </div>
 
       <div className="rail__spacer" />
+
+      <Tooltip label="Monitor active agents" placement="right">
+        <button
+          type="button"
+          className="rail__icon"
+          onClick={onOpenMonitor}
+          aria-label="Open monitor"
+        >
+          <Icon name="activity" size={14} />
+        </button>
+      </Tooltip>
 
       <Tooltip label="Secrets" placement="right">
         <button

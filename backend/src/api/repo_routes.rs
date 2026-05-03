@@ -155,40 +155,40 @@ pub(super) struct FileQuery {
 
 #[derive(Serialize)]
 pub(super) struct FileResponse {
-    path: String,
-    size: u64,
-    mime: String,
-    binary: bool,
-    truncated: bool,
-    content: Option<String>,
+    pub(super) path: String,
+    pub(super) size: u64,
+    pub(super) mime: String,
+    pub(super) binary: bool,
+    pub(super) truncated: bool,
+    pub(super) content: Option<String>,
 }
 
 #[derive(Serialize)]
 pub(super) struct FileTraceTouchResponse {
-    pty_session_id: Option<Uuid>,
-    session_uuid: Uuid,
-    session_agent: Option<String>,
-    session_label: Option<String>,
-    session_state: Option<String>,
-    turn_id: i64,
-    turn_preview: String,
-    turn_timestamp: chrono::DateTime<chrono::Utc>,
-    operation_type: Option<String>,
-    operation_category: Option<String>,
+    pub(super) pty_session_id: Option<Uuid>,
+    pub(super) session_uuid: Uuid,
+    pub(super) session_agent: Option<String>,
+    pub(super) session_label: Option<String>,
+    pub(super) session_state: Option<String>,
+    pub(super) turn_id: i64,
+    pub(super) turn_preview: String,
+    pub(super) turn_timestamp: chrono::DateTime<chrono::Utc>,
+    pub(super) operation_type: Option<String>,
+    pub(super) operation_category: Option<String>,
     /// Stable id of the tool call this touch belongs to. Null for
     /// touches that aren't attached to a specific tool (e.g. bare
     /// user-prompt turns); callers fall back to turn-level focus.
-    pair_id: Option<String>,
-    touch_kind: String,
-    is_write: bool,
+    pub(super) pair_id: Option<String>,
+    pub(super) touch_kind: String,
+    pub(super) is_write: bool,
 }
 
 #[derive(Serialize)]
 pub(super) struct FileTraceResponse {
-    path: String,
-    dirty: Option<String>,
-    current_diff: Option<git::DiffStat>,
-    touches: Vec<FileTraceTouchResponse>,
+    pub(super) path: String,
+    pub(super) dirty: Option<String>,
+    pub(super) current_diff: Option<git::DiffStat>,
+    pub(super) touches: Vec<FileTraceTouchResponse>,
 }
 
 const FILE_PREVIEW_CAP: u64 = 1024 * 1024; // 1 MiB

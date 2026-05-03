@@ -18,22 +18,23 @@ pub enum AgentType {
 }
 
 impl AgentType {
-    fn parse(raw: &str) -> anyhow::Result<Self> {
+    pub fn parse(raw: &str) -> anyhow::Result<Self> {
         match raw {
+            "claude-code" => Ok(Self::Claude),
             "claude" => Ok(Self::Claude),
             "codex" => Ok(Self::Codex),
             other => bail!("unknown agent type: {other}"),
         }
     }
 
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
         }
     }
 
-    fn binary_name(self) -> &'static str {
+    pub fn binary_name(self) -> &'static str {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
@@ -118,10 +119,31 @@ pub fn parse_launcher_args(args: &[OsString]) -> anyhow::Result<LauncherConfig> 
 
 pub async fn run_launcher(cfg: LauncherConfig) -> anyhow::Result<i32> {
     let env = launcher_env()?;
-    match cfg.mode {
+    report_runtime(
+        &env,
+        cfg.agent_type,
+        crate::correlate::RuntimeEvent::Running,
+        None,
+    )
+    .await;
+    let runtime_env = env.clone();
+    let agent_type = cfg.agent_type;
+    let result = match cfg.mode {
         LaunchMode::Real => run_real(cfg, env).await,
         LaunchMode::Mock => run_mock(cfg, env).await,
-    }
+    };
+    let exit_code = match &result {
+        Ok(code) => Some(*code),
+        Err(_) => Some(1),
+    };
+    report_runtime(
+        &runtime_env,
+        agent_type,
+        crate::correlate::RuntimeEvent::Exited,
+        exit_code,
+    )
+    .await;
+    result
 }
 
 fn launcher_env() -> anyhow::Result<LauncherEnv> {
@@ -145,6 +167,29 @@ fn launcher_env() -> anyhow::Result<LauncherEnv> {
             .map(PathBuf::from),
         cwd: std::env::current_dir().context("resolve current directory")?,
     })
+}
+
+async fn report_runtime(
+    env: &LauncherEnv,
+    agent_type: AgentType,
+    event: crate::correlate::RuntimeEvent,
+    exit_code: Option<i32>,
+) {
+    let (Some(pty_id), Some(sock)) = (env.pty_id, env.correlate_sock.as_deref()) else {
+        return;
+    };
+    if let Err(err) =
+        crate::correlate::send_agent_runtime(sock, pty_id, agent_type.as_str(), event, exit_code)
+            .await
+    {
+        tracing::warn!(
+            %pty_id,
+            agent = agent_type.as_str(),
+            ?event,
+            %err,
+            "agent runtime report failed",
+        );
+    }
 }
 
 async fn run_real(cfg: LauncherConfig, env: LauncherEnv) -> anyhow::Result<i32> {

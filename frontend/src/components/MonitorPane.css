@@ -1,0 +1,181 @@
+.monitor-pane {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--canvas-0);
+  color: var(--text);
+}
+
+.monitor-pane__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--canvas-3);
+  background:
+    radial-gradient(circle at 12% 0%, color-mix(in oklab, var(--accent) 20%, transparent), transparent 34%),
+    var(--canvas-2);
+}
+
+.monitor-pane__header h2 {
+  margin: 2px 0 0;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.monitor-pane__eyebrow {
+  color: var(--accent-hi);
+  font-size: var(--t-meta);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.monitor-pane__status {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--t-ui);
+}
+
+.monitor-pane__error {
+  margin: 10px 16px 0;
+  padding: 8px 10px;
+  color: var(--crit-fg);
+  background: var(--crit-bg);
+  border: 1px solid color-mix(in oklab, var(--crit-mark) 35%, transparent);
+  border-radius: var(--r-2);
+  font-size: var(--t-ui);
+}
+
+.monitor-pane__empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: var(--text-dis);
+  font-style: italic;
+}
+
+.monitor-pane__grid {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  align-content: start;
+  gap: 12px;
+  padding: 14px;
+}
+
+.monitor-card {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--canvas-3);
+  border-radius: var(--r-2);
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--canvas-1) 86%, var(--accent) 14%), var(--canvas-1)),
+    var(--canvas-1);
+  box-shadow: 0 10px 28px color-mix(in oklab, black 26%, transparent);
+  overflow: hidden;
+}
+
+.monitor-card__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-bottom: 1px solid var(--canvas-3);
+  padding: 10px 12px;
+  background: color-mix(in oklab, var(--canvas-2) 82%, transparent);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.monitor-card__head:hover {
+  color: var(--accent-hi);
+}
+
+.monitor-card__session {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 650;
+}
+
+.monitor-card__session span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monitor-card__repo,
+.monitor-card__time,
+.monitor-card__agent,
+.monitor-card__tools {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+}
+
+.monitor-card__agent,
+.monitor-card__tools,
+.monitor-card__prompt,
+.monitor-card__assistant {
+  margin-inline: 12px;
+}
+
+.monitor-card__prompt {
+  border-left: 2px solid var(--canvas-3);
+  padding-left: 8px;
+  color: var(--text-lo);
+  font-size: var(--t-ui);
+}
+
+.monitor-card__prompt span {
+  color: var(--text-dis);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  text-transform: uppercase;
+}
+
+.monitor-card__prompt p {
+  margin: 3px 0 0;
+  max-height: 4.5em;
+  overflow: hidden;
+}
+
+.monitor-card__assistant {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: var(--r-1);
+  background: color-mix(in oklab, var(--canvas-0) 82%, transparent);
+  font-size: var(--t-body);
+  line-height: 1.45;
+}
+
+.monitor-card__assistant p:first-child {
+  margin-top: 0;
+}
+
+.monitor-card__assistant p:last-child {
+  margin-bottom: 0;
+}
+
+.monitor-card__muted {
+  color: var(--text-dis);
+  font-style: italic;
+}
+
+.monitor-card__tools {
+  margin-bottom: 12px;
+}

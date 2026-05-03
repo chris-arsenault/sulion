@@ -674,6 +674,20 @@ async fn insert_event(
 
     tx.commit().await.map_err(InsertError::Db)?;
 
+    if inserted {
+        if let Err(err) =
+            super::metadata::upsert_from_event(pool, session_uuid, source.agent_id(), &value).await
+        {
+            tracing::warn!(
+                %err,
+                session = %session_uuid,
+                agent = source.agent_id(),
+                byte_offset,
+                "agent session metadata upsert failed",
+            );
+        }
+    }
+
     if let Some(ctx) = codex_ctx {
         update_codex_context(ctx, &value, session_uuid);
     }
@@ -922,6 +936,37 @@ async fn insert_blocks(
     Ok(())
 }
 
+async fn rewrite_canonical_event(
+    pool: &Pool,
+    session_uuid: Uuid,
+    byte_offset: i64,
+    parsed: &super::canonical::CanonicalEvent,
+) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "UPDATE events SET speaker = $3, content_kind = $4, \
+                event_uuid = $5, parent_event_uuid = $6, related_tool_use_id = $7, \
+                is_sidechain = $8, is_meta = $9, subtype = $10, search_text = $11 \
+         WHERE session_uuid = $1 AND byte_offset = $2",
+    )
+    .bind(session_uuid)
+    .bind(byte_offset)
+    .bind(parsed.speaker.as_str())
+    .bind(parsed.content_kind.as_str())
+    .bind(parsed.event_uuid.as_deref())
+    .bind(parsed.parent_event_uuid.as_deref())
+    .bind(parsed.related_tool_use_id.as_deref())
+    .bind(parsed.is_sidechain)
+    .bind(parsed.is_meta)
+    .bind(parsed.subtype.as_deref())
+    .bind(parsed.search_text())
+    .execute(&mut *tx)
+    .await?;
+    insert_blocks(&mut tx, session_uuid, byte_offset, &parsed.blocks).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// One-shot backfill on startup: walk every event that hasn't been
 /// decomposed into blocks yet and synthesise them from `payload`. Keeps
 /// the frontend's "read from blocks only" invariant true even for rows
@@ -974,28 +1019,7 @@ pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<usize> {
                     byte_offset,
                     Some(&ctx),
                 );
-                let mut tx = pool.begin().await?;
-                sqlx::query(
-                    "UPDATE events SET speaker = $3, content_kind = $4, \
-                            event_uuid = $5, parent_event_uuid = $6, related_tool_use_id = $7, \
-                            is_sidechain = $8, is_meta = $9, subtype = $10, search_text = $11 \
-                     WHERE session_uuid = $1 AND byte_offset = $2",
-                )
-                .bind(row_session_uuid)
-                .bind(byte_offset)
-                .bind(parsed.speaker.as_str())
-                .bind(parsed.content_kind.as_str())
-                .bind(parsed.event_uuid.as_deref())
-                .bind(parsed.parent_event_uuid.as_deref())
-                .bind(parsed.related_tool_use_id.as_deref())
-                .bind(parsed.is_sidechain)
-                .bind(parsed.is_meta)
-                .bind(parsed.subtype.as_deref())
-                .bind(parsed.search_text())
-                .execute(&mut *tx)
-                .await?;
-                insert_blocks(&mut tx, row_session_uuid, byte_offset, &parsed.blocks).await?;
-                tx.commit().await?;
+                rewrite_canonical_event(pool, row_session_uuid, byte_offset, &parsed).await?;
                 if let Some(parent) = detect_codex_parent_session(&payload, row_session_uuid) {
                     set_parent_session(pool, row_session_uuid, parent).await?;
                 }
@@ -1045,31 +1069,7 @@ pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<usize> {
 
     for (session_uuid, byte_offset, agent, payload) in rows {
         let parsed = parse_canonical_event(&agent, &payload, session_uuid, byte_offset, None);
-        let mut tx = pool.begin().await?;
-        // Update the cached discriminator columns while we're here;
-        // older rows may have the default 'claude-code' but stale or
-        // missing canonical metadata.
-        sqlx::query(
-            "UPDATE events SET speaker = $3, content_kind = $4, \
-                    event_uuid = $5, parent_event_uuid = $6, related_tool_use_id = $7, \
-                    is_sidechain = $8, is_meta = $9, subtype = $10, search_text = $11 \
-             WHERE session_uuid = $1 AND byte_offset = $2",
-        )
-        .bind(session_uuid)
-        .bind(byte_offset)
-        .bind(parsed.speaker.as_str())
-        .bind(parsed.content_kind.as_str())
-        .bind(parsed.event_uuid.as_deref())
-        .bind(parsed.parent_event_uuid.as_deref())
-        .bind(parsed.related_tool_use_id.as_deref())
-        .bind(parsed.is_sidechain)
-        .bind(parsed.is_meta)
-        .bind(parsed.subtype.as_deref())
-        .bind(parsed.search_text())
-        .execute(&mut *tx)
-        .await?;
-        insert_blocks(&mut tx, session_uuid, byte_offset, &parsed.blocks).await?;
-        tx.commit().await?;
+        rewrite_canonical_event(pool, session_uuid, byte_offset, &parsed).await?;
     }
     Ok(count + legacy_count)
 }

@@ -218,7 +218,9 @@ describe("Sidebar", () => {
     const state = installFetchMock();
     state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
     setup();
+    const user = userEvent.setup();
     await waitFor(() => expect(screen.getByText(REPO_ALPHA)).toBeDefined());
+    await user.click(screen.getByRole("button", { name: REPO_ALPHA }));
 
     // The Files label exists in the header, but the tree body should
     // not render until the subsection is opened. Initial state is
@@ -232,6 +234,95 @@ describe("Sidebar", () => {
 
     // Files should still be collapsed — the tree body remains absent.
     expect(screen.queryByText(/show all \(incl\. ignored\)/i)).toBeNull();
+  });
+
+  it("does not reopen a manually collapsed repo for reveal commands", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.sessions.push({
+      id: "11111111-1111-1111-1111-111111111111",
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
+      state: "live",
+      created_at: new Date().toISOString(),
+      ended_at: null,
+      exit_code: null,
+      current_session_uuid: null,
+      current_session_agent: null,
+    });
+    setup();
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText(/11111111/)).toBeDefined());
+    await user.click(screen.getByRole("button", { name: REPO_ALPHA }));
+    expect(screen.queryByText(/11111111/)).toBeNull();
+
+    act(() => {
+      appCommands.revealRepo({ repo: REPO_ALPHA });
+      appCommands.revealFile({ repo: REPO_ALPHA, path: "src/lib.rs" });
+    });
+
+    expect(screen.queryByText(/11111111/)).toBeNull();
+  });
+
+  it("keeps repo collapse state across sidebar remounts", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.sessions.push({
+      id: "11111111-1111-1111-1111-111111111111",
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
+      state: "live",
+      created_at: new Date().toISOString(),
+      ended_at: null,
+      exit_code: null,
+      current_session_uuid: null,
+      current_session_agent: null,
+    });
+    const rendered = setup();
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText(/11111111/)).toBeDefined());
+    await user.click(screen.getByRole("button", { name: REPO_ALPHA }));
+    expect(screen.queryByText(/11111111/)).toBeNull();
+
+    rendered.unmount();
+    setup();
+
+    await waitFor(() => expect(screen.getByText(REPO_ALPHA)).toBeDefined());
+    expect(screen.queryByText(/11111111/)).toBeNull();
+  });
+
+  it("collapses empty repos first, then all repos", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.repos.push({ name: "beta", path: "/tmp/beta" });
+    state.sessions.push({
+      id: "11111111-1111-1111-1111-111111111111",
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
+      state: "live",
+      created_at: new Date().toISOString(),
+      ended_at: null,
+      exit_code: null,
+      current_session_uuid: null,
+      current_session_agent: null,
+    });
+    setup();
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText(/11111111/)).toBeDefined());
+    await user.click(screen.getByRole("button", { name: "beta" }));
+    expect(screen.getByText("— no sessions —")).toBeDefined();
+
+    await user.click(
+      screen.getByRole("button", { name: "Collapse repos without sessions" }),
+    );
+    expect(screen.queryByText("— no sessions —")).toBeNull();
+    expect(screen.getByText(/11111111/)).toBeDefined();
+
+    await user.click(screen.getByRole("button", { name: "Collapse all repos" }));
+    expect(screen.queryByText(/11111111/)).toBeNull();
   });
 
   it("shows the future-prompts badge when the session has queued pending entries", async () => {
@@ -280,6 +371,7 @@ describe("Sidebar", () => {
     const user = userEvent.setup();
 
     await waitFor(() => expect(screen.getByText(REPO_ALPHA)).toBeDefined());
+    await user.click(screen.getByRole("button", { name: REPO_ALPHA }));
 
     // Find the "+" button scoped to the alpha group.
     const spawnBtn = screen.getByLabelText("New session in alpha");
@@ -290,7 +382,10 @@ describe("Sidebar", () => {
     await waitFor(() => {
       expect(state.createSessionCalls.length).toBe(1);
     });
-    expect(state.createSessionCalls[0]).toEqual({ repo: REPO_ALPHA });
+    expect(state.createSessionCalls[0]).toEqual({
+      repo: REPO_ALPHA,
+      workspace_mode: "isolated",
+    });
   });
 
   it("deletes a session from the shared context menu", async () => {
@@ -690,6 +785,7 @@ describe("Sidebar", () => {
     const user = userEvent.setup();
 
     await waitFor(() => expect(screen.getByText(REPO_ALPHA)).toBeDefined());
+    await user.click(screen.getByRole("button", { name: REPO_ALPHA }));
     await user.click(screen.getByRole("button", { name: /files/i }));
 
     await waitFor(() => {

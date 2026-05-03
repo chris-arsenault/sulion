@@ -10,7 +10,8 @@ export type TabKind =
   | "file"
   | "diff"
   | "ref"
-  | "secrets";
+  | "secrets"
+  | "monitor";
 
 /** Minimal registry entry. Kind plus the tab's stable handle is the
  * identity; everything else is the tab's own business. */
@@ -21,6 +22,8 @@ export interface TabData {
   sessionId?: string;
   /** For repo-bound tabs (file, diff). */
   repo?: string;
+  /** Optional Sulion workspace binding for repo-bound tabs. */
+  workspaceId?: string;
   /** File path for file/diff tabs; optional for diff (whole-repo). */
   path?: string;
   /** Library slug for reference tabs. */
@@ -299,6 +302,7 @@ export const useTabStore = create<TabStore>()(
             kind: tab.kind,
             sessionId: tab.sessionId,
             repo: tab.repo,
+            workspaceId: tab.workspaceId,
             path: tab.path,
             slug: tab.slug,
             focusTurnId: tab.focusTurnId,
@@ -393,8 +397,9 @@ function removeTabFromState(state: PersistedTabs, id: string): PersistedTabs {
 
 /** Canonical key that de-duplicates a tab spec. */
 export function tabKey(
-  spec: Pick<TabData, "kind" | "sessionId" | "repo" | "path" | "slug">,
+  spec: Pick<TabData, "kind" | "sessionId" | "repo" | "workspaceId" | "path" | "slug">,
 ): string {
+  const repoScope = `${spec.repo ?? ""}:${spec.workspaceId ?? "main"}`;
   switch (spec.kind) {
     case "terminal":
       return `${spec.kind}:${spec.sessionId ?? ""}`;
@@ -403,13 +408,15 @@ export function tabKey(
         ? `timeline:repo:${spec.repo}`
         : `timeline:session:${spec.sessionId ?? ""}`;
     case "file":
-      return `file:${spec.repo ?? ""}:${spec.path ?? ""}`;
+      return `file:${repoScope}:${spec.path ?? ""}`;
     case "diff":
-      return `diff:${spec.repo ?? ""}:${spec.path ?? ""}`;
+      return `diff:${repoScope}:${spec.path ?? ""}`;
     case "ref":
       return `ref:${spec.slug ?? ""}`;
     case "secrets":
       return `secrets:${spec.sessionId ?? ""}`;
+    case "monitor":
+      return "monitor";
   }
 }
 

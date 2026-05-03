@@ -6,6 +6,7 @@ pub struct Config {
     pub listen: SocketAddr,
     pub db_url: String,
     pub repos_root: PathBuf,
+    pub workspaces_root: PathBuf,
     pub library_root: PathBuf,
     pub claude_projects_dir: PathBuf,
     pub codex_sessions_dir: PathBuf,
@@ -25,6 +26,13 @@ impl Config {
             std::env::var("SULION_REPOS_ROOT")
                 .unwrap_or_else(|_| dirs_home().join("repos").to_string_lossy().into_owned()),
         );
+        let workspaces_root =
+            PathBuf::from(std::env::var("SULION_WORKSPACES_ROOT").unwrap_or_else(|_| {
+                dirs_home()
+                    .join(".sulion/workspaces")
+                    .to_string_lossy()
+                    .into_owned()
+            }));
         let library_root =
             PathBuf::from(std::env::var("SULION_LIBRARY_ROOT").unwrap_or_else(|_| {
                 dirs_home()
@@ -49,6 +57,8 @@ impl Config {
         // Persist resolved paths back to the process env so pty.rs
         // forwards them into spawned shells even when the operator
         // didn't set them explicitly.
+        std::env::set_var("SULION_REPOS_ROOT", &repos_root);
+        std::env::set_var("SULION_WORKSPACES_ROOT", &workspaces_root);
         std::env::set_var("SULION_CLAUDE_PROJECTS", &claude_projects_dir);
         std::env::set_var("SULION_CODEX_SESSIONS", &codex_sessions_dir);
         let correlate_sock_path = PathBuf::from(
@@ -60,6 +70,7 @@ impl Config {
             listen,
             db_url,
             repos_root,
+            workspaces_root,
             library_root,
             claude_projects_dir,
             codex_sessions_dir,

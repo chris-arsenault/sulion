@@ -17,7 +17,7 @@ use axum::{Json, Router};
 
 use super::{
     admin_routes, future_prompt_routes, library_routes, repo_routes, session_routes,
-    timeline_routes,
+    timeline_routes, workspace_routes,
 };
 use crate::AppState;
 
@@ -28,6 +28,14 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/sessions/:id",
             delete(session_routes::delete_session).patch(session_routes::patch_session),
+        )
+        .route(
+            "/api/sessions/:id/agent",
+            post(session_routes::start_session_agent),
+        )
+        .route(
+            "/api/sessions/:id/prompt",
+            post(session_routes::send_session_prompt),
         )
         .route(
             "/api/sessions/:id/e2e/drop-ws",
@@ -63,6 +71,44 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/repos/:name/timeline/turns/:session_uuid/:turn_id",
             get(timeline_routes::repo_timeline_turn),
+        )
+        .route(
+            "/api/monitor/timeline",
+            post(timeline_routes::monitor_timeline),
+        )
+        .route("/api/workspaces", get(workspace_routes::list_workspaces))
+        .route("/api/workspaces/:id", get(workspace_routes::get_workspace))
+        .route(
+            "/api/workspaces/:id/refresh",
+            post(workspace_routes::post_workspace_refresh),
+        )
+        .route(
+            "/api/workspaces/:id/dirty-paths",
+            get(workspace_routes::get_workspace_dirty_paths),
+        )
+        .route(
+            "/api/workspaces/:id/files",
+            get(workspace_routes::get_workspace_files),
+        )
+        .route(
+            "/api/workspaces/:id/file",
+            get(workspace_routes::get_workspace_file),
+        )
+        .route(
+            "/api/workspaces/:id/file-trace",
+            get(workspace_routes::get_workspace_file_trace),
+        )
+        .route(
+            "/api/workspaces/:id/git/diff",
+            get(workspace_routes::get_workspace_diff),
+        )
+        .route(
+            "/api/workspaces/:id/git/stage",
+            post(workspace_routes::post_workspace_stage),
+        )
+        .route(
+            "/api/workspaces/:id/upload",
+            post(workspace_routes::post_workspace_upload),
         )
         .route("/api/repos/:name/git/diff", get(repo_routes::get_repo_diff))
         .route(

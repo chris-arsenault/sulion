@@ -31,7 +31,10 @@ const TimelinePane = (props: { sessionId?: string; repo?: string }) => (
   </>
 );
 
-function sessionView(timelineRevision = 0): SessionView {
+function sessionView(
+  timelineRevision = 0,
+  overrides: Partial<SessionView> = {},
+): SessionView {
   return {
     id: "abc",
     repo: "alpha",
@@ -48,6 +51,15 @@ function sessionView(timelineRevision = 0): SessionView {
     pinned: false,
     color: null,
     future_prompts_pending_count: 0,
+    agent_runtime: {
+      agent: null,
+      state: "none",
+      started_at: null,
+      ended_at: null,
+      exit_code: null,
+    },
+    agent_metadata: null,
+    ...overrides,
   };
 }
 
@@ -61,7 +73,10 @@ function repoView(timelineRevision = 0): RepoView {
   };
 }
 
-function stubFetch(handler: (url: string, init?: RequestInit) => Response) {
+function stubFetch(
+  handler: (url: string, init?: RequestInit) => Response,
+  sessions: SessionView[] = [sessionView()],
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo, init?: RequestInit) => {
@@ -69,7 +84,7 @@ function stubFetch(handler: (url: string, init?: RequestInit) => Response) {
       if (url === "/api/app-state") {
         return jsonResponse(
           appStatePayload({
-            sessions: [sessionView()],
+            sessions,
             repos: [repoView()],
           }),
         );
@@ -184,6 +199,71 @@ describe("TimelinePane", () => {
     await waitFor(() => expect(screen.getByText(/hello/)).toBeDefined());
     expect(urls[0]).toMatch(/\/api\/sessions\/abc\/timeline/);
     expect(urls.some((url) => url.includes("/history"))).toBe(false);
+  });
+
+  it("sends prompt text through the session prompt endpoint", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    stubFetch(
+      (url, init) => {
+        if (url === "/api/sessions/abc/prompt") {
+          calls.push(JSON.parse(init?.body as string));
+          return new Response("", { status: 202 });
+        }
+        return new Response(timelineBody(), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+      [
+        sessionView(0, {
+          agent_runtime: {
+            agent: "codex",
+            state: "running",
+            started_at: "2026-05-02T00:00:00Z",
+            ended_at: null,
+            exit_code: null,
+          },
+          agent_metadata: {
+            agent: "codex",
+            model: "gpt-5.4",
+            model_provider: "openai",
+            reasoning_effort: "medium",
+            cli_version: "1.0.0",
+            cwd: "/tmp/alpha",
+            model_context_window: 258400,
+            updated_at: "2026-05-02T00:00:00Z",
+          },
+        }),
+      ],
+    );
+
+    render(<TimelinePane sessionId="abc" />);
+    const user = userEvent.setup();
+    const input = await screen.findByLabelText("Prompt text");
+    await user.type(input, "inspect this");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(calls).toEqual([{ text: "inspect this" }]));
+  });
+
+  it("starts an agent through the session agent endpoint", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    stubFetch((url, init) => {
+      if (url === "/api/sessions/abc/agent") {
+        calls.push(JSON.parse(init?.body as string));
+        return new Response("", { status: 202 });
+      }
+      return new Response(timelineBody({ turns: [], total_event_count: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    render(<TimelinePane sessionId="abc" />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Start Codex" }));
+
+    await waitFor(() => expect(calls).toEqual([{ agent: "codex" }]));
   });
 
   it("surfaces projected event counts in the header", async () => {

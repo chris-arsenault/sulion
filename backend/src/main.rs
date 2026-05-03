@@ -33,6 +33,22 @@ async fn main() -> anyhow::Result<()> {
         let code = sulion::credential_helper::run(&argv[2..]).await?;
         std::process::exit(code);
     }
+    if argv
+        .get(1)
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s == "runner-client")
+    {
+        let code = sulion::container_runner::run_client(&argv[2..]).await?;
+        std::process::exit(code);
+    }
+    if argv
+        .get(1)
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s == "workspace")
+    {
+        let code = sulion::worktree::run_cli(&argv[2..]).await?;
+        std::process::exit(code);
+    }
 
     tracing_subscriber::fmt()
         .json()
@@ -74,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new_with_auth(
         pool.clone(),
         cfg.repos_root.clone(),
+        cfg.workspaces_root.clone(),
         cfg.library_root.clone(),
         ingester.clone(),
         auth,
@@ -95,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     tokio::spawn(run_repo_state_manager(state.repo_state.clone()));
+    tokio::spawn(run_workspace_manager(state.workspace_state.clone()));
     tokio::spawn(sulion::api::run_stats_sampler(state.clone()));
 
     let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
@@ -137,6 +155,18 @@ async fn run_repo_state_manager(repo_state: std::sync::Arc<sulion::repo_state::R
         tracing::warn!(%err, "initial repo state reconcile failed");
     }
     repo_state.run().await;
+}
+
+async fn run_workspace_manager(
+    workspace_state: std::sync::Arc<sulion::worktree::WorkspaceManager>,
+) {
+    if let Err(err) = workspace_state.sync_main_workspaces_once().await {
+        tracing::warn!(%err, "initial workspace sync failed");
+    }
+    if let Err(err) = workspace_state.reconcile_due_once(4).await {
+        tracing::warn!(%err, "initial workspace reconcile failed");
+    }
+    workspace_state.run().await;
 }
 
 async fn run_ingester_supervisor(

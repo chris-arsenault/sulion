@@ -63,7 +63,16 @@ impl PtyState {
 pub async fn reconcile_orphans_on_startup(pool: &Pool) -> anyhow::Result<u64> {
     let result = sqlx::query(
         "UPDATE pty_sessions \
-         SET state = 'orphaned', ended_at = COALESCE(ended_at, NOW()) \
+         SET state = 'orphaned', \
+             ended_at = COALESCE(ended_at, NOW()), \
+             agent_runtime_state = CASE \
+                 WHEN agent_runtime_state IN ('starting', 'running') THEN 'exited' \
+                 ELSE agent_runtime_state \
+             END, \
+             agent_runtime_ended_at = CASE \
+                 WHEN agent_runtime_state IN ('starting', 'running') THEN COALESCE(agent_runtime_ended_at, NOW()) \
+                 ELSE agent_runtime_ended_at \
+             END \
          WHERE state = 'live'",
     )
     .execute(pool)
@@ -76,6 +85,7 @@ pub struct PtyMetadata {
     pub id: Uuid,
     pub repo: String,
     pub working_dir: PathBuf,
+    pub workspace: Option<PtyWorkspaceMetadata>,
     pub state: PtyState,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -91,6 +101,43 @@ pub struct PtyMetadata {
     pub pinned: bool,
     /// Palette-constrained colour tag. See PALETTE in api/routes.rs.
     pub color: Option<String>,
+    /// Runtime state for a first-class agent process launched inside this PTY.
+    /// Distinct from `current_session_*`, which describes the latest
+    /// correlated transcript session.
+    pub agent_runtime: AgentRuntimeMetadata,
+}
+
+#[derive(Debug, Clone)]
+pub struct PtyWorkspaceMetadata {
+    pub id: Uuid,
+    pub repo_name: String,
+    pub kind: String,
+    pub path: PathBuf,
+    pub branch_name: Option<String>,
+    pub base_ref: Option<String>,
+    pub base_sha: Option<String>,
+    pub merge_target: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentRuntimeMetadata {
+    pub agent: Option<String>,
+    pub state: String,
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub exit_code: Option<i32>,
+}
+
+impl Default for AgentRuntimeMetadata {
+    fn default() -> Self {
+        Self {
+            agent: None,
+            state: "none".to_string(),
+            started_at: None,
+            ended_at: None,
+            exit_code: None,
+        }
+    }
 }
 
 /// Live, running PTY session. Holds the master PTY and the channels used
@@ -99,6 +146,7 @@ pub struct PtySession {
     pub id: Uuid,
     pub repo: String,
     pub working_dir: PathBuf,
+    pub workspace: Option<PtyWorkspaceMetadata>,
     /// Broadcast channel of PTY output bytes. Every subscriber (WS attacher)
     /// gets a copy. The shadow emulator is fed directly by the reader task.
     pub output: broadcast::Sender<Vec<u8>>,
@@ -125,10 +173,12 @@ pub struct PtyManager {
 pub struct SpawnParams {
     pub repo: String,
     pub working_dir: PathBuf,
+    pub workspace: Option<PtyWorkspaceMetadata>,
     pub shell: PathBuf,
     pub args: Vec<String>,
     pub cols: u16,
     pub rows: u16,
+    pub initial_agent_runtime_agent: Option<String>,
 }
 
 impl Default for SpawnParams {
@@ -136,10 +186,12 @@ impl Default for SpawnParams {
         Self {
             repo: String::new(),
             working_dir: PathBuf::from("."),
+            workspace: None,
             shell: PathBuf::from("/bin/bash"),
             args: Vec::new(),
             cols: 120,
             rows: 30,
+            initial_agent_runtime_agent: None,
         }
     }
 }
@@ -178,7 +230,13 @@ impl PtyManager {
             cmd.arg(arg);
         }
         cmd.cwd(&params.working_dir);
-        configure_pty_environment(&mut cmd, id, &params.shell, secret_broker_key_path.as_ref());
+        configure_pty_environment(
+            &mut cmd,
+            id,
+            &params.shell,
+            secret_broker_key_path.as_ref(),
+            params.workspace.as_ref(),
+        );
         if let Ok(term) = std::env::var("TERM") {
             cmd.env("TERM", term);
         } else {
@@ -216,12 +274,24 @@ impl PtyManager {
         spawn_writer_task(id, writer, in_rx);
         spawn_resize_task(id, master.clone(), emulator.clone(), resize_rx);
 
+        let now = chrono::Utc::now();
+        let initial_agent_runtime = match params.initial_agent_runtime_agent.clone() {
+            Some(agent) => AgentRuntimeMetadata {
+                agent: Some(agent),
+                state: "starting".to_string(),
+                started_at: Some(now),
+                ended_at: None,
+                exit_code: None,
+            },
+            None => AgentRuntimeMetadata::default(),
+        };
         let meta = PtyMetadata {
             id,
             repo: params.repo.clone(),
             working_dir: params.working_dir.clone(),
+            workspace: params.workspace.clone(),
             state: PtyState::Live,
-            created_at: chrono::Utc::now(),
+            created_at: now,
             ended_at: None,
             exit_code: None,
             current_session_uuid: None,
@@ -230,17 +300,24 @@ impl PtyManager {
             label: None,
             pinned: false,
             color: None,
+            agent_runtime: initial_agent_runtime,
         };
 
         sqlx::query(
-            "INSERT INTO pty_sessions (id, repo, working_dir, state, created_at) \
-             VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO pty_sessions \
+                (id, repo, working_dir, state, created_at, \
+                 agent_runtime_agent, agent_runtime_state, agent_runtime_started_at, workspace_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
         .bind(meta.id)
         .bind(&meta.repo)
         .bind(meta.working_dir.to_string_lossy().as_ref())
         .bind(meta.state.as_str())
         .bind(meta.created_at)
+        .bind(meta.agent_runtime.agent.as_deref())
+        .bind(&meta.agent_runtime.state)
+        .bind(meta.agent_runtime.started_at)
+        .bind(meta.workspace.as_ref().map(|workspace| workspace.id))
         .execute(&self.pool)
         .await?;
 
@@ -248,6 +325,7 @@ impl PtyManager {
             id,
             repo: meta.repo.clone(),
             working_dir: meta.working_dir.clone(),
+            workspace: meta.workspace.clone(),
             output: out_tx,
             input: in_tx,
             resize: resize_tx,
@@ -274,9 +352,16 @@ impl PtyManager {
             "SELECT ps.id, ps.repo, ps.working_dir, ps.state, ps.created_at, \
              ps.ended_at, ps.exit_code, ps.current_session_uuid, ps.current_session_agent, \
              ps.label, ps.pinned, ps.color, \
+             ps.agent_runtime_agent, ps.agent_runtime_state, ps.agent_runtime_started_at, \
+             ps.agent_runtime_ended_at, ps.agent_runtime_exit_code, \
+             ws.id AS workspace_id, ws.repo_name AS workspace_repo_name, \
+             ws.kind AS workspace_kind, ws.path AS workspace_path, \
+             ws.branch_name AS workspace_branch_name, ws.base_ref AS workspace_base_ref, \
+             ws.base_sha AS workspace_base_sha, ws.merge_target AS workspace_merge_target, \
              (SELECT MAX(e.timestamp) FROM events e \
               WHERE e.session_uuid = ps.current_session_uuid) AS last_event_at \
              FROM pty_sessions ps \
+             LEFT JOIN workspaces ws ON ws.id = ps.workspace_id \
              WHERE ps.state <> 'deleted' \
              ORDER BY ps.pinned DESC, ps.created_at DESC",
         )
@@ -340,6 +425,39 @@ impl PtyManager {
         Ok(())
     }
 
+    pub async fn mark_agent_starting(&self, id: Uuid, agent: &str) -> anyhow::Result<()> {
+        let result = sqlx::query(
+            "UPDATE pty_sessions \
+             SET agent_runtime_agent = $2, \
+                 agent_runtime_state = 'starting', \
+                 agent_runtime_started_at = NOW(), \
+                 agent_runtime_ended_at = NULL, \
+                 agent_runtime_exit_code = NULL \
+             WHERE id = $1 AND state = 'live'",
+        )
+        .bind(id)
+        .bind(agent)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            anyhow::bail!("no live PTY session {id}");
+        }
+        Ok(())
+    }
+
+    pub async fn send_input(&self, id: Uuid, bytes: Vec<u8>) -> anyhow::Result<()> {
+        let session = self
+            .get(id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("no live PTY session {id}"))?;
+        session
+            .input
+            .send(bytes)
+            .await
+            .map_err(|_| anyhow::anyhow!("PTY input channel closed"))?;
+        Ok(())
+    }
+
     /// SIGTERM → grace period → SIGKILL. Marks the DB row deleted.
     pub async fn delete(&self, id: Uuid) -> anyhow::Result<()> {
         let session = self.sessions.write().await.remove(&id);
@@ -370,7 +488,22 @@ impl PtyManager {
     async fn mark_dead(&self, id: Uuid, exit_code: Option<i32>) {
         self.sessions.write().await.remove(&id);
         if let Err(err) = sqlx::query(
-            "UPDATE pty_sessions SET state = 'dead', ended_at = NOW(), exit_code = $2 \
+            "UPDATE pty_sessions \
+             SET state = 'dead', \
+                 ended_at = NOW(), \
+                 exit_code = $2, \
+                 agent_runtime_state = CASE \
+                     WHEN agent_runtime_state IN ('starting', 'running') THEN 'exited' \
+                     ELSE agent_runtime_state \
+                 END, \
+                 agent_runtime_ended_at = CASE \
+                     WHEN agent_runtime_state IN ('starting', 'running') THEN NOW() \
+                     ELSE agent_runtime_ended_at \
+                 END, \
+                 agent_runtime_exit_code = CASE \
+                     WHEN agent_runtime_state IN ('starting', 'running') THEN $2 \
+                     ELSE agent_runtime_exit_code \
+                 END \
              WHERE id = $1 AND state = 'live'",
         )
         .bind(id)
@@ -389,6 +522,7 @@ fn configure_pty_environment(
     id: Uuid,
     shell: &Path,
     secret_broker_key_path: Option<&PathBuf>,
+    workspace: Option<&PtyWorkspaceMetadata>,
 ) {
     cmd.env_clear();
 
@@ -419,6 +553,35 @@ fn configure_pty_environment(
     }
 
     cmd.env("SULION_PTY_ID", id.to_string());
+    if let Some(workspace) = workspace {
+        cmd.env("SULION_REPO_NAME", &workspace.repo_name);
+        cmd.env("SULION_WORKSPACE_ID", workspace.id.to_string());
+        cmd.env("SULION_WORKSPACE_KIND", &workspace.kind);
+        cmd.env(
+            "SULION_WORKSPACE_PATH",
+            workspace.path.to_string_lossy().as_ref(),
+        );
+        cmd.env(
+            "SULION_CANONICAL_REPO",
+            std::env::var("SULION_REPOS_ROOT")
+                .map(|root| PathBuf::from(root).join(&workspace.repo_name))
+                .unwrap_or_else(|_| PathBuf::from("/home/dev/repos").join(&workspace.repo_name))
+                .to_string_lossy()
+                .as_ref(),
+        );
+        if let Some(branch) = &workspace.branch_name {
+            cmd.env("SULION_BRANCH", branch);
+        }
+        if let Some(base_ref) = &workspace.base_ref {
+            cmd.env("SULION_BASE_REF", base_ref);
+        }
+        if let Some(base_sha) = &workspace.base_sha {
+            cmd.env("SULION_BASE_SHA", base_sha);
+        }
+        if let Some(merge_target) = &workspace.merge_target {
+            cmd.env("SULION_MERGE_TARGET", merge_target);
+        }
+    }
     cmd.env(
         "SULION_CORRELATE_SOCK",
         std::env::var("SULION_CORRELATE_SOCK")
@@ -429,6 +592,7 @@ fn configure_pty_environment(
         "SULION_CODEX_SESSIONS",
         "SULION_SECRET_BROKER_URL",
         "SULION_AWS_SECRET_ID",
+        "SULION_RUNNER_URL",
     ] {
         forward_env(cmd, key);
     }
@@ -457,20 +621,35 @@ struct PtyRow {
     id: Uuid,
     repo: String,
     working_dir: String,
+    workspace_id: Option<Uuid>,
+    workspace_repo_name: Option<String>,
+    workspace_kind: Option<String>,
+    workspace_path: Option<String>,
+    workspace_branch_name: Option<String>,
+    workspace_base_ref: Option<String>,
+    workspace_base_sha: Option<String>,
+    workspace_merge_target: Option<String>,
     state: String,
     created_at: chrono::DateTime<chrono::Utc>,
     ended_at: Option<chrono::DateTime<chrono::Utc>>,
     exit_code: Option<i32>,
     current_session_uuid: Option<Uuid>,
     current_session_agent: Option<String>,
+    agent_runtime_agent: Option<String>,
+    agent_runtime_state: String,
+    agent_runtime_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    agent_runtime_ended_at: Option<chrono::DateTime<chrono::Utc>>,
+    agent_runtime_exit_code: Option<i32>,
 }
 
 impl PtyRow {
     fn into_meta(self) -> PtyMetadata {
+        let workspace = self.workspace_meta();
         PtyMetadata {
             id: self.id,
             repo: self.repo,
             working_dir: PathBuf::from(self.working_dir),
+            workspace,
             state: PtyState::parse(&self.state).unwrap_or(PtyState::Dead),
             created_at: self.created_at,
             ended_at: self.ended_at,
@@ -481,7 +660,27 @@ impl PtyRow {
             label: None,
             pinned: false,
             color: None,
+            agent_runtime: AgentRuntimeMetadata {
+                agent: self.agent_runtime_agent,
+                state: self.agent_runtime_state,
+                started_at: self.agent_runtime_started_at,
+                ended_at: self.agent_runtime_ended_at,
+                exit_code: self.agent_runtime_exit_code,
+            },
         }
+    }
+
+    fn workspace_meta(&self) -> Option<PtyWorkspaceMetadata> {
+        Some(PtyWorkspaceMetadata {
+            id: self.workspace_id?,
+            repo_name: self.workspace_repo_name.clone()?,
+            kind: self.workspace_kind.clone()?,
+            path: PathBuf::from(self.workspace_path.clone()?),
+            branch_name: self.workspace_branch_name.clone(),
+            base_ref: self.workspace_base_ref.clone(),
+            base_sha: self.workspace_base_sha.clone(),
+            merge_target: self.workspace_merge_target.clone(),
+        })
     }
 }
 
@@ -492,6 +691,14 @@ struct PtyRowWithActivity {
     id: Uuid,
     repo: String,
     working_dir: String,
+    workspace_id: Option<Uuid>,
+    workspace_repo_name: Option<String>,
+    workspace_kind: Option<String>,
+    workspace_path: Option<String>,
+    workspace_branch_name: Option<String>,
+    workspace_base_ref: Option<String>,
+    workspace_base_sha: Option<String>,
+    workspace_merge_target: Option<String>,
     state: String,
     created_at: chrono::DateTime<chrono::Utc>,
     ended_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -501,15 +708,22 @@ struct PtyRowWithActivity {
     label: Option<String>,
     pinned: bool,
     color: Option<String>,
+    agent_runtime_agent: Option<String>,
+    agent_runtime_state: String,
+    agent_runtime_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    agent_runtime_ended_at: Option<chrono::DateTime<chrono::Utc>>,
+    agent_runtime_exit_code: Option<i32>,
     last_event_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl PtyRowWithActivity {
     fn into_meta(self) -> PtyMetadata {
+        let workspace = self.workspace_meta();
         PtyMetadata {
             id: self.id,
             repo: self.repo,
             working_dir: PathBuf::from(self.working_dir),
+            workspace,
             state: PtyState::parse(&self.state).unwrap_or(PtyState::Dead),
             created_at: self.created_at,
             ended_at: self.ended_at,
@@ -520,7 +734,27 @@ impl PtyRowWithActivity {
             label: self.label,
             pinned: self.pinned,
             color: self.color,
+            agent_runtime: AgentRuntimeMetadata {
+                agent: self.agent_runtime_agent,
+                state: self.agent_runtime_state,
+                started_at: self.agent_runtime_started_at,
+                ended_at: self.agent_runtime_ended_at,
+                exit_code: self.agent_runtime_exit_code,
+            },
         }
+    }
+
+    fn workspace_meta(&self) -> Option<PtyWorkspaceMetadata> {
+        Some(PtyWorkspaceMetadata {
+            id: self.workspace_id?,
+            repo_name: self.workspace_repo_name.clone()?,
+            kind: self.workspace_kind.clone()?,
+            path: PathBuf::from(self.workspace_path.clone()?),
+            branch_name: self.workspace_branch_name.clone(),
+            base_ref: self.workspace_base_ref.clone(),
+            base_sha: self.workspace_base_sha.clone(),
+            merge_target: self.workspace_merge_target.clone(),
+        })
     }
 }
 
@@ -625,9 +859,17 @@ async fn wait_for_exit(pid: u32, timeout: std::time::Duration) -> bool {
 /// Used by tests to assert final state.
 pub async fn read_meta(pool: &Pool, id: Uuid) -> anyhow::Result<Option<PtyMetadata>> {
     let row = sqlx::query_as::<_, PtyRow>(
-        "SELECT id, repo, working_dir, state, created_at, ended_at, exit_code, \
-         current_session_uuid, current_session_agent \
-         FROM pty_sessions WHERE id = $1",
+        "SELECT ps.id, ps.repo, ps.working_dir, ps.state, ps.created_at, ps.ended_at, ps.exit_code, \
+         ps.current_session_uuid, ps.current_session_agent, \
+         ps.agent_runtime_agent, ps.agent_runtime_state, ps.agent_runtime_started_at, \
+         ps.agent_runtime_ended_at, ps.agent_runtime_exit_code, \
+         ws.id AS workspace_id, ws.repo_name AS workspace_repo_name, \
+         ws.kind AS workspace_kind, ws.path AS workspace_path, \
+         ws.branch_name AS workspace_branch_name, ws.base_ref AS workspace_base_ref, \
+         ws.base_sha AS workspace_base_sha, ws.merge_target AS workspace_merge_target \
+         FROM pty_sessions ps \
+         LEFT JOIN workspaces ws ON ws.id = ps.workspace_id \
+         WHERE ps.id = $1",
     )
     .bind(id)
     .fetch_optional(pool)

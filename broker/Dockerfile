@@ -1,4 +1,4 @@
-FROM debian:trixie-slim
+FROM docker.io/library/debian:trixie-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

@@ -4,15 +4,41 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Workspace isolation and agent flow
+
+- Added Sulion-managed workspaces so PTY sessions can bind either to the canonical repo checkout or to an isolated Git worktree branch.
+- Added workspace metadata on sessions, workspace-scoped file/diff/dirty/status APIs, and PTY environment variables plus `sulion workspace status` so agents can tell whether they are in `main` or an isolated worktree.
+- Updated session creation so agent sessions default to isolated worktrees while still allowing explicit main-working-tree sessions.
+- Added workspace-aware frontend routing for file tabs, diff tabs, file trace context menus, and session/sidebar indicators.
+- Added first-class Claude/Codex launch support with `cl`/`co` executable shims, backend runtime metadata, and prompt injection from the timeline surface.
+
+### Timeline and monitor UI
+
+- Added the Monitor work-area tab for recent assistant output across active sessions.
+- Added an input-only timeline prompt bar that can send prompts to a running agent without using the full terminal pane.
+- Extended timeline/session metadata to surface agent runtime and transcript-reported model/context information.
+
+### Container runner
+
+- Replaced the old local Docker/Podman shim with a separate `runner` service that owns the host Docker socket and exposes a constrained command broker to PTYs.
+- Added a PTY-visible `docker` wrapper that forwards allowed Docker commands to the runner with Sulion labels, resource defaults, and policy checks.
+- Wired the runner to use the same canonical repo and isolated workspace mounts so `docker build .` works from either checkout.
+
 ### Runtime container and toolchain
 
 - Rebased the backend/PTY image from Debian Trixie to Rocky Linux 10 to keep a glibc 2.39 runtime while using Rocky's `shadow-utils`/`newuidmap` behavior for nested rootless Podman without `SYS_ADMIN`.
 - Translated the backend image package setup from `apt` to `dnf`, with EPEL/CRB enabled and Rocky package names for Podman, build tools, GitHub CLI, PostgreSQL client tooling, and shell utilities.
-- Kept the existing PTY tool surface on the Rocky image, including Rust, .NET 8, .NET 10.0.100, Terraform, DuckDB CLI/Python binding, Node/pnpm, Python helpers, `uv`, `awscli2`, `git-lfs`, and the `docker` to Podman shim.
+- Kept the existing PTY tool surface on the Rocky image, including Rust, .NET 8, .NET 10.0.100, Terraform, DuckDB CLI/Python binding, Node/pnpm, Python helpers, `uv`, `awscli2`, `git-lfs`, and the Sulion `docker` runner wrapper.
 - Changed PTY `python3` to a Python 3.12 shim under `/usr/local/bin` while leaving Rocky's system Python path intact for `dnf`.
 - Changed backend startup so the API listener binds after migrations and orphan reconciliation, while derived transcript repair runs only when `ingest_projection_versions` is behind.
 - Changed transcript repair to preserve source `events` rows and rebuild derived canonical/timeline tables from existing Postgres payloads instead of deleting data and relying on JSONL replay.
 - Fixed canonical-block repair so it skips already-populated events instead of reprocessing historical Codex events on every backend restart.
+
+### Deployment and documentation
+
+- Added the `runner` image/service to platform and compose wiring.
+- Added a dedicated `/home/dev/workspaces` dataset/mount for Sulion-created worktrees.
+- Updated agent-facing toolset docs, architecture docs, deployment docs, and state-management docs for workspaces, runner behavior, and the new PTY tool surface.
 
 ## v1.0.0 - 2026-05-02
 

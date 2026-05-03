@@ -2,6 +2,7 @@ pub mod canonical;
 mod file_scan;
 mod ingester;
 mod maintenance;
+mod metadata;
 mod projection;
 mod reset;
 pub mod timeline;
@@ -10,6 +11,7 @@ pub use ingester::{backfill_canonical_blocks, parse_codex_session_uuid, Ingester
 pub use maintenance::{
     mark_projection_versions_current, run_required_startup_maintenance, StartupMaintenanceStats,
 };
+pub use metadata::upsert_from_event as upsert_session_metadata_from_event;
 pub use projection::{
     annotate_timeline_summaries, annotate_timeline_turns, backfill_timeline_projection,
     load_repo_file_trace, load_repo_timeline_summary_response, load_timeline_response,

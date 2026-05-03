@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { authFetch, getRepoFile } from "../api/client";
+import { authFetch, getRepoFile, getWorkspaceFile } from "../api/client";
 import { Icon } from "../icons";
 import { Tooltip } from "./ui";
 import type { FileResponse } from "../api/types";
@@ -23,7 +23,15 @@ import { FileTracePanel } from "./FileTracePanel";
 import { Markdown } from "./timeline/Markdown";
 import "./FileTab.css";
 
-export function FileTab({ repo, path }: { repo: string; path: string }) {
+export function FileTab({
+  repo,
+  path,
+  workspaceId,
+}: {
+  repo: string;
+  path: string;
+  workspaceId?: string;
+}) {
   const [data, setData] = useState<FileResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [raw, setRaw] = useState(false);
@@ -37,7 +45,10 @@ export function FileTab({ repo, path }: { repo: string; path: string }) {
     setData(null);
     setError(null);
     setRaw(false);
-    getRepoFile(repo, path)
+    const loadFile = workspaceId
+      ? getWorkspaceFile(workspaceId, path)
+      : getRepoFile(repo, path);
+    loadFile
       .then((r) => {
         if (!cancelled) setData(r);
       })
@@ -47,11 +58,11 @@ export function FileTab({ repo, path }: { repo: string; path: string }) {
     return () => {
       cancelled = true;
     };
-  }, [repo, path]);
+  }, [repo, path, workspaceId]);
 
   const openDiffTab = useCallback(
-    () => openTab({ kind: "diff", repo, path }),
-    [openTab, repo, path],
+    () => openTab({ kind: "diff", repo, path, workspaceId }),
+    [openTab, repo, path, workspaceId],
   );
   const toggleRaw = useCallback(() => setRaw((v) => !v), []);
 
@@ -82,7 +93,10 @@ export function FileTab({ repo, path }: { repo: string; path: string }) {
   return (
     <div className="ft" data-testid="file-tab">
       <div className="ft__header">
-        <span className="ft__path">{path}</span>
+        <span className="ft__path">
+          {workspaceId ? "workspace · " : ""}
+          {path}
+        </span>
         <span className="ft__meta">
           {formatSize(data.size)} · {data.mime}
           {data.binary ? " · binary" : ""}
@@ -126,8 +140,8 @@ export function FileTab({ repo, path }: { repo: string; path: string }) {
         )}
       </div>
       <div className="ft__body">
-        <FileTracePanel repo={repo} path={path} />
-        <FileBody data={data} repo={repo} kind={renderKind} />
+        <FileTracePanel repo={repo} path={path} workspaceId={workspaceId} />
+        <FileBody data={data} repo={repo} workspaceId={workspaceId} kind={renderKind} />
       </div>
     </div>
   );
@@ -209,10 +223,12 @@ function canToggleRaw(data: FileResponse): boolean {
 function FileBody({
   data,
   repo,
+  workspaceId,
   kind,
 }: {
   data: FileResponse;
   repo: string;
+  workspaceId?: string;
   kind: RenderKind;
 }) {
   if (kind.kind === "truncated") {
@@ -224,7 +240,14 @@ function FileBody({
     );
   }
   if (kind.kind === "image-binary") {
-    return <AuthenticatedImage repo={repo} path={data.path} alt={data.path} />;
+    return (
+      <AuthenticatedImage
+        repo={repo}
+        workspaceId={workspaceId}
+        path={data.path}
+        alt={data.path}
+      />
+    );
   }
   if (kind.kind === "binary") {
     return (
@@ -320,10 +343,12 @@ function SvgBody({ svg }: { svg: string }) {
 
 function AuthenticatedImage({
   repo,
+  workspaceId,
   path,
   alt,
 }: {
   repo: string;
+  workspaceId?: string;
   path: string;
   alt: string;
 }) {
@@ -338,7 +363,9 @@ function AuthenticatedImage({
     void (async () => {
       try {
         const resp = await authFetch(
-          `/api/repos/${encodeURIComponent(repo)}/file?path=${encodeURIComponent(path)}&raw=1`,
+          workspaceId
+            ? `/api/workspaces/${encodeURIComponent(workspaceId)}/file?path=${encodeURIComponent(path)}&raw=1`
+            : `/api/repos/${encodeURIComponent(repo)}/file?path=${encodeURIComponent(path)}&raw=1`,
           undefined,
           { json: false },
         );
@@ -356,7 +383,7 @@ function AuthenticatedImage({
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [repo, path]);
+  }, [repo, path, workspaceId]);
 
   if (error) return <div className="ft__muted">image preview failed: {error}</div>;
   if (!src) return <div className="ft__muted">loading image…</div>;

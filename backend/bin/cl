@@ -1,0 +1,2 @@
+#!/bin/sh
+exec sulion-agent --type claude --mode real -- --dangerously-skip-permissions "$@"

@@ -25,6 +25,7 @@ import {
 import { buildSecretContextMenu } from "./common/secretContextMenu";
 import { TerminalPane } from "./TerminalPane";
 import { TimelinePane } from "./TimelinePane";
+import { MonitorPane } from "./MonitorPane";
 import { SessionEndedPane } from "./SessionEndedPane";
 import { FileTab } from "./FileTab";
 import { DiffTab } from "./DiffTab";
@@ -594,6 +595,7 @@ function TabHandle({
         data-kind={tab.kind}
         data-session-id={tab.sessionId}
         data-repo={tab.repo}
+        data-workspace-id={tab.workspaceId}
         data-path={tab.path}
         data-slug={tab.slug}
         draggable
@@ -658,13 +660,19 @@ function liveLabel(
       if (tab.repo) return `${tab.repo} · time`;
       return sessionTag ? `${sessionTag} · time` : "timeline";
     case "file":
-      return tab.path ? basename(tab.path) : "file";
+      return tab.path
+        ? `${tab.workspaceId ? "ws · " : ""}${basename(tab.path)}`
+        : "file";
     case "diff":
-      return tab.path ? `diff: ${basename(tab.path)}` : `diff: ${tab.repo ?? ""}`;
+      return tab.path
+        ? `${tab.workspaceId ? "ws " : ""}diff: ${basename(tab.path)}`
+        : `${tab.workspaceId ? "ws " : ""}diff: ${tab.repo ?? ""}`;
     case "ref":
       return tab.slug ? `ref: ${tab.slug}` : "ref";
     case "secrets":
       return tab.sessionId ? `secrets · ${tab.sessionId.slice(0, 8)}` : "secrets";
+    case "monitor":
+      return "monitor";
   }
 }
 
@@ -687,6 +695,8 @@ function tabIcon(tab: TabData): IconName {
       return "pin";
     case "secrets":
       return "settings";
+    case "monitor":
+      return "activity";
   }
 }
 
@@ -694,6 +704,7 @@ function tabTitle(tab: TabData, label: string): string {
   const bits: string[] = [label, tab.kind];
   if (tab.sessionId) bits.push(tab.sessionId.slice(0, 8));
   if (tab.repo) bits.push(tab.repo);
+  if (tab.workspaceId) bits.push(`workspace ${tab.workspaceId.slice(0, 8)}`);
   if (tab.path) bits.push(tab.path);
   return bits.join(" · ");
 }
@@ -716,13 +727,17 @@ function TabContent({ tab, active }: { tab: TabData; active: boolean }) {
           />
         );
       case "file":
-        return <FileTab repo={tab.repo!} path={tab.path!} />;
+        return (
+          <FileTab repo={tab.repo!} path={tab.path!} workspaceId={tab.workspaceId} />
+        );
       case "diff":
-        return <DiffTab repo={tab.repo!} path={tab.path} />;
+        return <DiffTab repo={tab.repo!} path={tab.path} workspaceId={tab.workspaceId} />;
       case "ref":
         return <RefTab slug={tab.slug!} />;
       case "secrets":
         return <SecretsTab />;
+      case "monitor":
+        return <MonitorPane active={active} />;
     }
   }, [active, tab]);
 }

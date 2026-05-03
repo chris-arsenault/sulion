@@ -10,6 +10,7 @@ pub mod api;
 pub mod auth;
 pub mod codex;
 pub mod config;
+pub mod container_runner;
 pub mod correlate;
 pub mod credential_helper;
 pub mod db;
@@ -25,6 +26,7 @@ pub mod secret_broker;
 pub mod secret_protocol;
 pub mod secret_pty;
 pub mod workspace;
+pub mod worktree;
 
 #[derive(Default)]
 pub struct WsTestHooks {
@@ -54,8 +56,10 @@ pub struct AppState {
     pub pool: db::Pool,
     pub pty: Arc<pty::PtyManager>,
     pub repos_root: std::path::PathBuf,
+    pub workspaces_root: std::path::PathBuf,
     pub library_root: std::path::PathBuf,
     pub repo_state: Arc<repo_state::RepoStateManager>,
+    pub workspace_state: Arc<worktree::WorkspaceManager>,
     /// Shared with the background ingester task so the app-state sampler
     /// can read its runtime totals.
     pub ingester: Arc<ingest::Ingester>,
@@ -75,27 +79,43 @@ impl AppState {
     pub fn new(
         pool: db::Pool,
         repos_root: std::path::PathBuf,
+        workspaces_root: std::path::PathBuf,
         library_root: std::path::PathBuf,
         ingester: Arc<ingest::Ingester>,
     ) -> Arc<Self> {
-        Self::new_with_auth(pool, repos_root, library_root, ingester, None)
+        Self::new_with_auth(
+            pool,
+            repos_root,
+            workspaces_root,
+            library_root,
+            ingester,
+            None,
+        )
     }
 
     pub fn new_with_auth(
         pool: db::Pool,
         repos_root: std::path::PathBuf,
+        workspaces_root: std::path::PathBuf,
         library_root: std::path::PathBuf,
         ingester: Arc<ingest::Ingester>,
         auth: Option<Arc<auth::AuthState>>,
     ) -> Arc<Self> {
         let pty = pty::PtyManager::new(pool.clone());
         let repo_state = repo_state::RepoStateManager::new(pool.clone(), repos_root.clone());
+        let workspace_state = worktree::WorkspaceManager::new(
+            pool.clone(),
+            repos_root.clone(),
+            workspaces_root.clone(),
+        );
         Arc::new(Self {
             pool,
             pty,
             repos_root,
+            workspaces_root,
             library_root,
             repo_state,
+            workspace_state,
             ingester,
             start_time: Instant::now(),
             stats_probe: Arc::new(api::StatsProbe::new()),

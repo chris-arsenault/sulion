@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!dist/
+!dist/**
+!docker-entrypoint.d/
+!docker-entrypoint.d/**
+!nginx.conf

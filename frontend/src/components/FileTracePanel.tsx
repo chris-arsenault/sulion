@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { getRepoFileTrace } from "../api/client";
+import { getRepoFileTrace, getWorkspaceFileTrace } from "../api/client";
 import type { FileTraceResponse } from "../api/types";
 import { useTabs } from "../state/TabStore";
 import { buildWorkspaceFileMenuItems } from "./common/fileContextMenu";
@@ -10,7 +10,15 @@ import {
   useContextMenu,
 } from "./common/contextMenuStore";
 
-export function FileTracePanel({ repo, path }: { repo: string; path: string }) {
+export function FileTracePanel({
+  repo,
+  path,
+  workspaceId,
+}: {
+  repo: string;
+  path: string;
+  workspaceId?: string;
+}) {
   const [trace, setTrace] = useState<FileTraceResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -22,7 +30,10 @@ export function FileTracePanel({ repo, path }: { repo: string; path: string }) {
     setTrace(null);
     setError(null);
     setExpanded(false);
-    getRepoFileTrace(repo, path)
+    const loadTrace = workspaceId
+      ? getWorkspaceFileTrace(workspaceId, path)
+      : getRepoFileTrace(repo, path);
+    loadTrace
       .then((response) => {
         if (!cancelled) setTrace(response);
       })
@@ -34,7 +45,7 @@ export function FileTracePanel({ repo, path }: { repo: string; path: string }) {
     return () => {
       cancelled = true;
     };
-  }, [path, repo]);
+  }, [path, repo, workspaceId]);
 
   const toggleExpanded = useCallback(() => {
     setExpanded((value) => !value);
@@ -100,6 +111,7 @@ export function FileTracePanel({ repo, path }: { repo: string; path: string }) {
                 repo={repo}
                 path={path}
                 dirty={trace.dirty}
+                workspaceId={workspaceId}
                 openTurn={openTurn}
                 openCtx={openCtx}
               />
@@ -117,6 +129,7 @@ function TraceRow({
   repo,
   path,
   dirty,
+  workspaceId,
   openTurn,
   openCtx,
 }: {
@@ -124,6 +137,7 @@ function TraceRow({
   repo: string;
   path: string;
   dirty: string | null;
+  workspaceId?: string;
   openTurn: (t: Touch) => void;
   openCtx: ReturnType<typeof useContextMenu<(at: { clientX: number; clientY: number }, items: MenuItem[]) => void>>;
 }) {
@@ -148,10 +162,11 @@ function TraceRow({
         repo,
         path,
         dirty,
+        workspaceId,
       }),
     );
     return items;
-  }, [canOpenTimeline, openTurn, touch, repo, path, dirty]);
+  }, [canOpenTimeline, openTurn, touch, repo, path, dirty, workspaceId]);
 
   const { onContextMenu, onKeyDown: onTriggerKey } = useMemo(
     () => contextMenuTriggerProps(openCtx, buildMenu),

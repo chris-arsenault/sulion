@@ -16,6 +16,7 @@ import type {
   SessionView,
   StatsResponse,
   UpdateSessionRequest,
+  WorkspaceView,
 } from "../api/types";
 import {
   clearLastViewedStorage,
@@ -27,15 +28,20 @@ import {
 } from "./useLastViewed";
 
 const POLL_APP_STATE_MS = 3_000;
+const REPO_EXPANSION_STORAGE_KEY = "sulion.sidebar.repoExpansion.v1";
+
+type RepoExpansionMap = Record<string, boolean>;
 
 export interface SessionStore {
   sessions: SessionView[];
   repos: RepoView[];
+  workspaces: WorkspaceView[];
   stats: StatsResponse | null;
   selectedSessionId: string | null;
   lastError: string | null;
   sessionsLoaded: boolean;
   lastViewed: LastViewedMap;
+  repoExpansion: RepoExpansionMap;
   selectSession: (id: string | null) => void;
   createSession: (req: CreateSessionRequest) => Promise<SessionView>;
   deleteSession: (id: string) => Promise<void>;
@@ -44,26 +50,32 @@ export interface SessionStore {
   refresh: () => Promise<void>;
   isUnread: (sessionId: string, lastEventAt: string | null) => boolean;
   loadAppState: () => Promise<void>;
+  setRepoExpanded: (repo: string, expanded: boolean) => void;
+  collapseRepos: (repos: string[]) => void;
 }
 
 function initialState(): Pick<
   SessionStore,
   | "sessions"
   | "repos"
+  | "workspaces"
   | "stats"
   | "selectedSessionId"
   | "lastError"
   | "sessionsLoaded"
   | "lastViewed"
+  | "repoExpansion"
 > {
   return {
     sessions: [],
     repos: [],
+    workspaces: [],
     stats: null,
     selectedSessionId: readSessionIdFromUrl(),
     lastError: null,
     sessionsLoaded: false,
     lastViewed: loadLastViewedMap(),
+    repoExpansion: loadRepoExpansionMap(),
   };
 }
 
@@ -75,14 +87,17 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
       const data = await getAppState();
       const sessions = Array.isArray(data.sessions) ? data.sessions : [];
       const repos = Array.isArray(data.repos) ? data.repos : [];
+      const workspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
       const stats = data.stats ?? null;
       set((state) => {
-        const sameSessions = sameFlatRecordArray(state.sessions, sessions);
+        const sameSessions = sameJson(state.sessions, sessions);
         const sameRepos = sameJson(state.repos, repos);
+        const sameWorkspaces = sameJson(state.workspaces, workspaces);
         const sameStats = sameJson(state.stats, stats);
         if (
           sameSessions &&
           sameRepos &&
+          sameWorkspaces &&
           sameStats &&
           state.sessionsLoaded &&
           state.lastError == null
@@ -92,6 +107,7 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
         return {
           sessions: sameSessions ? state.sessions : sessions,
           repos: sameRepos ? state.repos : repos,
+          workspaces: sameWorkspaces ? state.workspaces : workspaces,
           stats: sameStats ? state.stats : stats,
           lastError: null,
           sessionsLoaded: true,
@@ -175,6 +191,25 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
   isUnread(sessionId, lastEventAt) {
     return isSessionUnread(get().lastViewed, sessionId, lastEventAt);
   },
+
+  setRepoExpanded(repo, expanded) {
+    set((state) => {
+      const repoExpansion = { ...state.repoExpansion, [repo]: expanded };
+      saveRepoExpansionMap(repoExpansion);
+      return { repoExpansion };
+    });
+  },
+
+  collapseRepos(repos) {
+    set((state) => {
+      const repoExpansion = { ...state.repoExpansion };
+      for (const repo of repos) {
+        repoExpansion[repo] = false;
+      }
+      saveRepoExpansionMap(repoExpansion);
+      return { repoExpansion };
+    });
+  },
 }));
 
 let consumerCount = 0;
@@ -239,6 +274,7 @@ export function resetSessionStore() {
 
 export function resetSessionStoreStorage() {
   clearLastViewedStorage();
+  clearRepoExpansionStorage();
 }
 
 function readSessionIdFromUrl(): string | null {
@@ -254,31 +290,43 @@ function writeSessionIdToUrl(id: string | null) {
   window.history.replaceState({}, "", url.toString());
 }
 
-function sameFlatRecordArray<T extends object>(
-  current: T[],
-  next: T[],
-): boolean {
-  if (current === next) return true;
-  if (current.length !== next.length) return false;
-  for (let i = 0; i < current.length; i += 1) {
-    if (!sameFlatRecord(current[i]!, next[i]!)) return false;
-  }
-  return true;
-}
-
-function sameFlatRecord<T extends object>(a: T, b: T): boolean {
-  if (a === b) return true;
-  const left = a as Record<string, unknown>;
-  const right = b as Record<string, unknown>;
-  const aKeys = Object.keys(left);
-  const bKeys = Object.keys(right);
-  if (aKeys.length !== bKeys.length) return false;
-  for (const key of aKeys) {
-    if (left[key] !== right[key]) return false;
-  }
-  return true;
-}
-
 function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function loadRepoExpansionMap(): RepoExpansionMap {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(REPO_EXPANSION_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: RepoExpansionMap = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof key === "string" && typeof value === "boolean") {
+        out[key] = value;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveRepoExpansionMap(map: RepoExpansionMap) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(REPO_EXPANSION_STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearRepoExpansionStorage() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(REPO_EXPANSION_STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
 }

@@ -221,6 +221,7 @@ describe("Layout", () => {
     const user = userEvent.setup();
 
     await waitFor(() => expect(screen.getByText("alpha")).toBeDefined());
+    await user.click(screen.getByRole("button", { name: "alpha" }));
     await user.click(screen.getByRole("button", { name: /Files/ }));
     const fileRow = await screen.findByText("app.ts");
 

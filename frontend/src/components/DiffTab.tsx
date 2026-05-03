@@ -6,7 +6,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { getRepoDiff, stageRepoPath } from "../api/client";
+import {
+  getRepoDiff,
+  getWorkspaceDiff,
+  getWorkspaceDirtyPaths,
+  stageRepoPath,
+  stageWorkspacePath,
+} from "../api/client";
 import { useRepos } from "../state/RepoStore";
 import { Icon } from "../icons";
 import { Tooltip } from "./ui";
@@ -15,10 +21,20 @@ import "./DiffTab.css";
 
 const EMPTY_DIRTY_MAP: Record<string, string> = {};
 
-export function DiffTab({ repo, path }: { repo: string; path?: string }) {
+export function DiffTab({
+  repo,
+  path,
+  workspaceId,
+}: {
+  repo: string;
+  path?: string;
+  workspaceId?: string;
+}) {
   const [fileDiffs, setFileDiffs] = useState<FileDiff[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [workspaceDirtyMap, setWorkspaceDirtyMap] =
+    useState<Record<string, string>>(EMPTY_DIRTY_MAP);
   const { dirtyMap, refreshRepo } = useRepos(
     useShallow((store) => ({
       dirtyMap: store.repos[repo]?.git?.dirty_by_path ?? EMPTY_DIRTY_MAP,
@@ -44,34 +60,48 @@ export function DiffTab({ repo, path }: { repo: string; path?: string }) {
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
-    getRepoDiff(repo, path)
+    const diffRequest = workspaceId
+      ? getWorkspaceDiff(workspaceId, path)
+      : getRepoDiff(repo, path);
+    const dirtyRequest = workspaceId
+      ? getWorkspaceDirtyPaths(workspaceId)
+      : Promise.resolve(null);
+    Promise.all([diffRequest, dirtyRequest])
       .then((r) => {
-        workerRef.current?.postMessage({ raw: r.diff });
+        workerRef.current?.postMessage({ raw: r[0].diff });
+        if (r[1]) setWorkspaceDirtyMap(r[1].dirty_by_path);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "load failed"))
       .finally(() => setLoading(false));
-  }, [repo, path]);
+  }, [repo, path, workspaceId]);
 
   useEffect(load, [load]);
 
   const onStage = useCallback(
     async (p: string, stage: boolean) => {
       try {
-        await stageRepoPath(repo, p, stage);
-        refreshRepo(repo);
+        if (workspaceId) {
+          await stageWorkspacePath(workspaceId, p, stage);
+        } else {
+          await stageRepoPath(repo, p, stage);
+          refreshRepo(repo);
+        }
         load();
       } catch (err) {
         setError(err instanceof Error ? err.message : "stage failed");
       }
     },
-    [repo, refreshRepo, load],
+    [repo, refreshRepo, load, workspaceId],
   );
+
+  const visibleDirtyMap = workspaceId ? workspaceDirtyMap : dirtyMap;
 
   return (
     <div className="dt" data-testid="diff-tab">
       <div className="dt__header">
         <span className="dt__title">
           {path ? `diff · ${path}` : `${repo} · full diff`}
+          {workspaceId ? " · workspace" : ""}
         </span>
         <button type="button" className="dt__refresh" onClick={load}>
           ↻ refresh
@@ -86,7 +116,7 @@ export function DiffTab({ repo, path }: { repo: string; path?: string }) {
       )}
       <div className="dt__body">
         {fileDiffs.map((fd) => {
-          const code = dirtyMap[fd.path] ?? "  ";
+          const code = visibleDirtyMap[fd.path] ?? "  ";
           const staged = code[0] !== " " && code[0] !== "?";
           return (
             <FileDiffView

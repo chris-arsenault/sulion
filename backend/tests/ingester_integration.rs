@@ -21,7 +21,8 @@ async fn fresh_pool() -> db::Pool {
     let url = test_db_url().expect("SULION_TEST_DB");
     let pool = db::connect(&url).await.expect("connect");
     sqlx::query(
-        "TRUNCATE events, ingester_state, claude_sessions, pty_sessions, repos RESTART IDENTITY CASCADE",
+        "TRUNCATE events, ingester_state, claude_sessions, pty_sessions, repos, \
+         workspaces, workspace_dirty_paths RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
     .await

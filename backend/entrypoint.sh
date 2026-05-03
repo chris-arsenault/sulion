@@ -23,9 +23,9 @@ mkdir -p \
   "${HOME_DIR}/.codex" \
   "${HOME_DIR}/.ssh" \
   "${HOME_DIR}/.local/bin" \
-  "${HOME_DIR}/.local/share/containers" \
   "${HOME_DIR}/.config/gh" \
-  "${HOME_DIR}/repos"
+  "${HOME_DIR}/repos" \
+  "${HOME_DIR}/workspaces"
 
 # SSH refuses to read keys from directories that aren't 0700.
 chmod 0700 "${HOME_DIR}/.ssh"

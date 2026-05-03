@@ -14,6 +14,7 @@ import {
 import { useShallow } from "zustand/react/shallow";
 
 import type {
+  AgentLaunchType,
   DirEntryView,
   GitCommit,
   RepoGitSummary,
@@ -48,6 +49,12 @@ import "./LibrarySection.css";
 
 const EMPTY_SECRET_GRANTS: SecretGrantMetadata[] = [];
 
+type NewSessionFormValue = {
+  working_dir: string;
+  launch_agent: AgentLaunchType | "";
+  workspace_mode: "isolated" | "main";
+};
+
 export function Sidebar() {
   const {
     sessions,
@@ -59,6 +66,9 @@ export function Sidebar() {
     updateSession,
     createRepo,
     isUnread,
+    repoExpansion,
+    setRepoExpanded,
+    collapseRepos,
   } = useSessions(
     useShallow((store) => ({
       sessions: store.sessions,
@@ -70,6 +80,9 @@ export function Sidebar() {
       updateSession: store.updateSession,
       createRepo: store.createRepo,
       isUnread: store.isUnread,
+      repoExpansion: store.repoExpansion,
+      setRepoExpanded: store.setRepoExpanded,
+      collapseRepos: store.collapseRepos,
     })),
   );
 
@@ -90,9 +103,33 @@ export function Sidebar() {
     },
     [openTab, selectSession],
   );
-  const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(grouped.map((g) => [g.name, true])),
+  const expandedByRepo = useMemo(
+    () =>
+      Object.fromEntries(
+        grouped.map((group) => [
+          group.name,
+          repoExpansion[group.name] ?? defaultRepoExpanded(group),
+        ]),
+      ),
+    [grouped, repoExpansion],
   );
+  const collapseTargetRepos = useMemo(() => {
+    const emptyExpanded = grouped
+      .filter((group) => group.sessions.length === 0 && expandedByRepo[group.name])
+      .map((group) => group.name);
+    if (emptyExpanded.length > 0) return emptyExpanded;
+    return grouped
+      .filter((group) => expandedByRepo[group.name])
+      .map((group) => group.name);
+  }, [expandedByRepo, grouped]);
+  const collapseButtonLabel = useMemo(() => {
+    const hasExpandedEmptyRepo = grouped.some(
+      (group) => group.sessions.length === 0 && expandedByRepo[group.name],
+    );
+    return hasExpandedEmptyRepo
+      ? "Collapse repos without sessions"
+      : "Collapse all repos";
+  }, [expandedByRepo, grouped]);
   const [newRepoOpen, setNewRepoOpen] = useState(false);
   const [newSessionFor, setNewSessionFor] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -104,7 +141,6 @@ export function Sidebar() {
   } | null>(null);
 
   useAppCommand("reveal-file", ({ repo, path }) => {
-    setExpanded((prev) => ({ ...prev, [repo]: true }));
     setRevealRequest({ repo, path, nonce: Date.now() });
   });
 
@@ -118,7 +154,6 @@ export function Sidebar() {
   );
 
   useAppCommand("reveal-repo", ({ repo }) => {
-    setExpanded((prev) => ({ ...prev, [repo]: true }));
     const el = repoAnchorsRef.current.get(repo);
     if (el) {
       requestAnimationFrame(() =>
@@ -128,9 +163,13 @@ export function Sidebar() {
   });
 
   const toggleRepo = useCallback(
-    (name: string) =>
-      setExpanded((prev) => ({ ...prev, [name]: !prev[name] })),
-    [],
+    (name: string, currentlyExpanded: boolean) =>
+      setRepoExpanded(name, !currentlyExpanded),
+    [setRepoExpanded],
+  );
+  const collapseRepoGroups = useCallback(
+    () => collapseRepos(collapseTargetRepos),
+    [collapseRepos, collapseTargetRepos],
   );
 
   const onCreateRepo = useCallback(
@@ -150,12 +189,17 @@ export function Sidebar() {
   );
 
   const onCreateSession = useCallback(
-    async (repoName: string, form: { working_dir: string }) => {
+    async (
+      repoName: string,
+      form: NewSessionFormValue,
+    ) => {
       setFormError(null);
       try {
         await createSession({
           repo: repoName,
           working_dir: form.working_dir.trim() || undefined,
+          workspace_mode: form.workspace_mode,
+          launch_agent: form.launch_agent || undefined,
         });
         setNewSessionFor(null);
       } catch (err) {
@@ -235,16 +279,29 @@ export function Sidebar() {
     <div className="sidebar">
       <div className="sidebar__header">
         <span className="sidebar__logo">sulion</span>
-        <Tooltip label="New repo">
-          <button
-            type="button"
-            className="sidebar__icon-button"
-            onClick={toggleNewRepoOpen}
-            aria-label="New repo"
-          >
-            <Icon name="plus" size={14} />
-          </button>
-        </Tooltip>
+        <div className="sidebar__header-actions">
+          <Tooltip label={collapseButtonLabel}>
+            <button
+              type="button"
+              className="sidebar__icon-button"
+              onClick={collapseRepoGroups}
+              aria-label={collapseButtonLabel}
+              disabled={collapseTargetRepos.length === 0}
+            >
+              <Icon name="panel-left-close" size={14} />
+            </button>
+          </Tooltip>
+          <Tooltip label="New repo">
+            <button
+              type="button"
+              className="sidebar__icon-button"
+              onClick={toggleNewRepoOpen}
+              aria-label="New repo"
+            >
+              <Icon name="plus" size={14} />
+            </button>
+          </Tooltip>
+        </div>
       </div>
 
       {newRepoOpen && (
@@ -263,7 +320,7 @@ export function Sidebar() {
             <RepoGroup
               key={group.name}
               group={group}
-              expanded={expanded[group.name] ?? true}
+              expanded={expandedByRepo[group.name] ?? defaultRepoExpanded(group)}
               newSessionRepoName={newSessionFor}
               handlers={repoGroupHandlers}
               selection={repoGroupSelection}
@@ -333,6 +390,10 @@ function groupByRepo(sessions: SessionView[], repos: RepoView[]): RepoGroupData[
   return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function defaultRepoExpanded(group: RepoGroupData): boolean {
+  return group.sessions.length > 0;
+}
+
 function sessionCompare(a: SessionView, b: SessionView): number {
   const ap = a.pinned ? 1 : 0;
   const bp = b.pinned ? 1 : 0;
@@ -363,11 +424,11 @@ interface RepoGroupSessionOps {
  * RepoGroup itself. Keeping the curry inside the group avoids creating
  * new closure/object literals in the parent map body on every render. */
 interface RepoGroupBaseHandlers {
-  toggleRepo: (name: string) => void;
+  toggleRepo: (name: string, currentlyExpanded: boolean) => void;
   setNewSessionFor: (next: (prev: string | null) => string | null) => void;
   createSession: (
     repoName: string,
-    form: { working_dir: string },
+    form: NewSessionFormValue,
   ) => void | Promise<void>;
   registerAnchor: (name: string, el: HTMLLIElement | null) => void;
 }
@@ -407,8 +468,8 @@ function RepoGroup({
   );
 
   const onToggle = useCallback(
-    () => toggleRepo(group.name),
-    [toggleRepo, group.name],
+    () => toggleRepo(group.name, expanded),
+    [toggleRepo, group.name, expanded],
   );
   const newSessionOpen = newSessionRepoName === group.name;
   const newSessionOnStart = useCallback(
@@ -417,7 +478,8 @@ function RepoGroup({
     [setNewSessionFor, group.name],
   );
   const newSessionOnSubmit = useCallback(
-    (form: { working_dir: string }) => createSession(group.name, form),
+    (form: NewSessionFormValue) =>
+      createSession(group.name, form),
     [createSession, group.name],
   );
   const newSessionOnCancel = useCallback(
@@ -1194,9 +1256,13 @@ function buildSessionMenuItems({
     {
       kind: "item",
       id: "open-repo-diff",
-      label: "Open repo diff",
+      label: session.workspace ? "Open workspace diff" : "Open repo diff",
       onSelect: () => {
-        openTab({ kind: "diff", repo: session.repo });
+        openTab({
+          kind: "diff",
+          repo: session.repo,
+          workspaceId: session.workspace?.id,
+        });
         appCommands.closeDrawer();
       },
     },
@@ -1361,6 +1427,9 @@ function SessionRow({
   // the root" at a glance. Empty means the session runs at the repo
   // root (the common case).
   const cwdHint = (() => {
+    if (s.workspace?.kind === "worktree") {
+      return s.workspace.branch_name ?? "isolated";
+    }
     const wd = s.working_dir;
     if (!wd) return null;
     const idx = wd.indexOf(`/${s.repo}/`);
@@ -1368,6 +1437,7 @@ function SessionRow({
     const rel = wd.slice(idx + s.repo.length + 2).replace(/\/+$/, "");
     return rel.length > 0 ? rel : null;
   })();
+  const workspaceTone = s.workspace?.kind === "worktree" ? "workspace" : null;
 
   const rowClass = [
     "sidebar__row",
@@ -1448,7 +1518,15 @@ function SessionRow({
                 {cwdHint && (
                   <>
                     {" · "}
-                    <span className="sidebar__cwd">{cwdHint}</span>
+                    <span
+                      className={
+                        workspaceTone
+                          ? "sidebar__cwd sidebar__cwd--workspace"
+                          : "sidebar__cwd"
+                      }
+                    >
+                      {cwdHint}
+                    </span>
                   </>
                 )}
               </span>
@@ -1593,19 +1671,36 @@ function NewSessionForm({
   onCancel,
 }: {
   repoName: string;
-  onSubmit: (form: { working_dir: string }) => void;
+  onSubmit: (form: NewSessionFormValue) => void;
   onCancel: () => void;
 }) {
   const [workingDir, setWorkingDir] = useState("");
+  const [launchAgent, setLaunchAgent] = useState<AgentLaunchType | "">("");
+  const [workspaceMode, setWorkspaceMode] =
+    useState<NewSessionFormValue["workspace_mode"]>("isolated");
   const submit = useCallback(
     (e: FormEvent) => {
       e.preventDefault();
-      onSubmit({ working_dir: workingDir });
+      onSubmit({
+        working_dir: workspaceMode === "main" ? workingDir : "",
+        launch_agent: launchAgent,
+        workspace_mode: workspaceMode,
+      });
     },
-    [onSubmit, workingDir],
+    [launchAgent, onSubmit, workingDir, workspaceMode],
   );
   const onInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => setWorkingDir(e.target.value),
+    [],
+  );
+  const onAgentChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) =>
+      setLaunchAgent(e.target.value as AgentLaunchType | ""),
+    [],
+  );
+  const onWorkspaceModeChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) =>
+      setWorkspaceMode(e.target.value as NewSessionFormValue["workspace_mode"]),
     [],
   );
   const onInputKeyDown = useCallback(
@@ -1621,10 +1716,32 @@ function NewSessionForm({
         value={workingDir}
         onChange={onInputChange}
         onKeyDown={onInputKeyDown}
-        placeholder={`working dir (default: repos/${repoName})`}
+        placeholder={
+          workspaceMode === "main"
+            ? `working dir (default: repos/${repoName})`
+            : "working dir is the isolated workspace root"
+        }
+        disabled={workspaceMode !== "main"}
         autoFocus
         aria-label="working directory"
       />
+      <select
+        value={workspaceMode}
+        onChange={onWorkspaceModeChange}
+        aria-label="workspace mode"
+      >
+        <option value="isolated">Isolated worktree</option>
+        <option value="main">Main working tree</option>
+      </select>
+      <select
+        value={launchAgent}
+        onChange={onAgentChange}
+        aria-label="launch agent"
+      >
+        <option value="">Shell only</option>
+        <option value="claude">Launch Claude</option>
+        <option value="codex">Launch Codex</option>
+      </select>
       <div className="sidebar__form-actions">
         <button type="button" onClick={onCancel}>
           Cancel

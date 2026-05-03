@@ -29,15 +29,17 @@ Current specs:
 | Session discovery and navigation | Covered | High | `01`, `03`, `04`, `05` cover command-palette open, sidebar selection, and mobile drawer selection. | Add direct repo-jump and session unread-state assertions once that behavior is stable enough to test. |
 | Session metadata management | Covered | Medium | `01` covers rename, pin/unpin, and color assign/clear from the sidebar. | Add reload persistence for renamed/pinned/colored session state. |
 | Workspace tabs and pane movement | Partial | High | `01` covers file/diff tab open, moving a file tab across panes, and reload persistence of restored workspace tabs. | Add tab close/reopen, context-menu move-to-pane, and active-tab restoration assertions. |
+| Workspace isolation | Partial | High | Backend integration tests cover isolated worktree creation, main-worktree binding, workspace dirty-path queries, and session workspace metadata. Browser e2e does not yet create isolated sessions. | Add a create-session e2e path that selects isolated vs main workspace mode and verifies file/diff tabs stay workspace-scoped. |
 | Timeline inspection: Claude path | Covered | High | `02`, `04`, and `07` cover turn selection, prompt detail, thinking flyout, save actions, and a live mock roundtrip that emits Claude-shaped assistant/edit/websearch/subagent JSONL into ingest. | Add multi-turn behavior once seed data includes more than one meaningful Claude turn. |
 | Timeline inspection: Codex lineage path | Covered | High | `03` and `07` cover the Codex task row, subagent modal, lineage drill-down, and a live mock roundtrip that emits Codex-shaped assistant/edit/websearch/subagent JSONL into ingest. | Add a richer Codex sidechain scenario with multiple delegated tasks and parent/child switching. |
+| Monitor tab | Partial | Medium | Unit coverage verifies monitor cards and jump-to-session behavior. No real-stack browser spec opens the Monitor tab yet. | Add a monitor e2e scenario with two active sessions and verify card ordering plus jump-to-timeline. |
 | Timeline filtering and faceting | Partial | High | `02` covers file-path filtering and recovery via `Show all`. | Add speaker/category/error/sidechain filter combinations and persistence of filter state. |
 | File browser and nested tree navigation | Covered | Medium | `01` and `02` cover nested path expansion and opening tree files into tabs. | Add directory collapse/re-expand and dirty-file-only navigation cases. |
 | File viewers | Partial | Medium | `02` covers JSON rendering and raw-mode toggle; `01` indirectly covers diff-open adjacency from a dirty file. | Add markdown, code-highlighted, ndjson, truncated, binary, and image viewer cases. |
 | File trace integration back into timeline | Covered | Medium | `02` covers related-turn display and jump-back into the timeline from the file tab. | Add multiple related touches so ordering and disambiguation are tested. |
 | Git review workflow | Partial | High | `01` covers opening a diff tab from a dirty file. | Add stage/unstage from `DiffTab`, full-repo diff, and clean-working-tree transitions. |
 | Library: prompts and references | Partial | High | `04` covers save prompt, inject into a live mock terminal, save reference, and open reference tab. | Add prompt editing, prompt deletion, reference deletion, and behavior with no active terminal tab. |
-| Terminal integration surfaces | Covered | Medium | `04`, `06`, and `07` cover prompt injection, snapshot-on-attach, typed input echo, streamed output, resize handling, paste-as-file, reconnect, dead-session UI, and mock agent launch from a real shell session. | Add right-click paste and selection-copy browser coverage if those interactions prove stable enough under Playwright. |
+| Terminal integration surfaces | Covered | Medium | `04`, `06`, and `07` cover prompt injection, snapshot-on-attach, typed input echo, streamed output, resize handling, paste-as-file, reconnect, dead-session UI, and mock agent launch from a real shell session. Timeline prompt-bar behavior has unit coverage but no full e2e path yet. | Add right-click paste, selection-copy browser coverage, and a prompt-bar-to-agent e2e path if those interactions prove stable enough under Playwright. |
 | Stats / observability strip | Partial | Medium | `03` covers stats-strip visibility and expanded detail fields. | Add refresh/update behavior and thresholds or warning-state assertions once those semantics are stable. |
 | Mobile shell | Covered | Medium | `05` covers drawer open/close and switching to a timeline tab on mobile Chromium. | Add mobile file/ref navigation and drawer interactions with multiple open sessions/tabs. |
 | Repo creation flow | Missing | High | Not covered by Playwright today. | Add a create-repo scenario against a temporary seeded git target or a local bare repo fixture. |
@@ -56,10 +58,11 @@ Current specs:
 ## Suggested Next Additions In Order
 
 1. Add a `DiffTab` stage/unstage test. It covers a real workflow and would exercise a path that currently has no browser coverage.
-2. Add a session-creation test. That validates the UI path most likely to break when backend/session wiring changes.
+2. Add a session-creation test. That validates the UI path most likely to break when backend/session and workspace-mode wiring changes.
 3. Add a repo-creation test. That closes the last obvious top-level sidebar action gap.
-4. Expand timeline filter coverage beyond file-path filtering to speaker/category/error combinations.
-5. Add file-viewer format coverage for markdown, ndjson, binary/truncated files, and image/svg behavior.
+4. Add monitor-tab and timeline prompt-bar e2e coverage for the new review/input workflow.
+5. Expand timeline filter coverage beyond file-path filtering to speaker/category/error combinations.
+6. Add file-viewer format coverage for markdown, ndjson, binary/truncated files, and image/svg behavior.
 
 ## Explicitly Excluded From This Plan
 

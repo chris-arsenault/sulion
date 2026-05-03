@@ -11,7 +11,13 @@ import {
   getRepoTimelineTurn,
   getTimeline,
   getTimelineTurn,
+  getWorkspaceDirtyPaths,
+  getWorkspaceDiff,
+  getWorkspaceFile,
+  getWorkspaceFileTrace,
+  refreshWorkspaceState,
   refreshRepoState,
+  stageWorkspacePath,
   unlockSecretGrant,
   upsertSecret,
 } from "./client";
@@ -46,6 +52,7 @@ describe("api client", () => {
         generated_at: "2026-01-01T00:00:00Z",
         sessions: [],
         repos: [],
+        workspaces: [],
         stats: { uptime_seconds: 1, process: {}, pty: {}, db: {}, inventory: {} },
       });
     });
@@ -183,6 +190,56 @@ describe("api client", () => {
     });
     const dirty = await getRepoDirtyPaths("r");
     expect(dirty.git_revision).toBe(4);
+  });
+
+  it("fetches workspace-scoped filesystem and git endpoints", async () => {
+    const workspaceId = "00000000-0000-0000-0000-000000000042";
+    const filePath = "src/lib.rs";
+    const filePathEncoded = "src%2Flib.rs";
+    const seen: string[] = [];
+    stubFetch(async (url, init) => {
+      seen.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.endsWith("/dirty-paths")) {
+        return jsonResponse({
+          workspace_id: workspaceId,
+          git_revision: 2,
+          dirty_by_path: { [filePath]: " M" },
+          diff_stats_by_path: {},
+        });
+      }
+      if (url.endsWith(`/git/diff?path=${filePathEncoded}`)) {
+        return jsonResponse({ diff: `diff --git a/${filePath} b/${filePath}\n` });
+      }
+      if (url.endsWith(`/file?path=${filePathEncoded}`)) {
+        return jsonResponse({
+          path: filePath,
+          size: 7,
+          mime: "text/plain",
+          binary: false,
+          truncated: false,
+          content: "changed",
+        });
+      }
+      if (url.endsWith(`/file-trace?path=${filePathEncoded}`)) {
+        return jsonResponse({
+          path: filePath,
+          dirty: " M",
+          current_diff: null,
+          touches: [],
+        });
+      }
+      return new Response(null, { status: 202 });
+    });
+
+    await expect(refreshWorkspaceState(workspaceId)).resolves.toBeUndefined();
+    expect((await getWorkspaceDirtyPaths(workspaceId)).git_revision).toBe(2);
+    expect((await getWorkspaceDiff(workspaceId, filePath)).diff).toContain("diff");
+    expect((await getWorkspaceFile(workspaceId, filePath)).content).toBe("changed");
+    expect((await getWorkspaceFileTrace(workspaceId, filePath)).dirty).toBe(" M");
+    await expect(stageWorkspacePath(workspaceId, filePath, true)).resolves.toBeUndefined();
+
+    expect(seen).toContain(`POST /api/workspaces/${workspaceId}/refresh`);
+    expect(seen).toContain(`POST /api/workspaces/${workspaceId}/git/stage`);
   });
 
   it("requests repo refresh without reading git inline", async () => {

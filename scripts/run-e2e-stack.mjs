@@ -428,7 +428,7 @@ async function ensureDb() {
       "POSTGRES_PASSWORD=testpass",
       "-e",
       "POSTGRES_DB=sulion",
-      "postgres:16",
+      "docker.io/library/postgres:16",
     ],
     { cwd: REPO_ROOT },
   );

@@ -1,4 +1,5 @@
-//! Unix-socket listener for SessionStart correlation.
+//! Unix-socket listener for agent session correlation and PTY-scoped
+//! agent runtime state.
 //!
 //! The backend spawns shells with `SULION_PTY_ID=<uuid>` in their
 //! environment. When Claude Code starts a new session in that shell, its
@@ -21,7 +22,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use uuid::Uuid;
@@ -31,12 +32,35 @@ use crate::db::Pool;
 const CORRELATE_IO_TIMEOUT: Duration = Duration::from_millis(750);
 
 #[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum SocketMsg {
+    Runtime(RuntimeMsg),
+    Correlate(CorrelateMsg),
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CorrelateMsg {
     pub pty_id: Uuid,
     #[serde(alias = "claude_session_uuid")]
     pub session_uuid: Uuid,
     #[serde(default = "default_agent")]
     pub agent: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RuntimeMsg {
+    pub pty_id: Uuid,
+    pub agent: String,
+    pub event: RuntimeEvent,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeEvent {
+    Running,
+    Exited,
 }
 
 fn default_agent() -> String {
@@ -87,8 +111,11 @@ async fn handle_conn(pool: &Pool, stream: UnixStream) -> anyhow::Result<()> {
     if line.is_empty() {
         return Ok(());
     }
-    let msg: CorrelateMsg = serde_json::from_str(line)?;
-    apply(pool, &msg).await?;
+    let msg: SocketMsg = serde_json::from_str(line)?;
+    match msg {
+        SocketMsg::Runtime(msg) => apply_runtime(pool, &msg).await?,
+        SocketMsg::Correlate(msg) => apply(pool, &msg).await?,
+    }
 
     // Tiny ACK so clients that care can block until we've committed.
     let _ = tokio::time::timeout(CORRELATE_IO_TIMEOUT, reader.get_mut().write_all(b"ok\n")).await;
@@ -139,6 +166,55 @@ pub async fn apply(pool: &Pool, msg: &CorrelateMsg) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Apply a PTY-scoped agent runtime transition. This intentionally does
+/// not carry transcript session ids: it is the process lifecycle for the
+/// first-class agent binary running inside the PTY.
+pub async fn apply_runtime(pool: &Pool, msg: &RuntimeMsg) -> anyhow::Result<()> {
+    match msg.event {
+        RuntimeEvent::Running => {
+            sqlx::query(
+                "UPDATE pty_sessions \
+                 SET agent_runtime_agent = $2, \
+                     agent_runtime_state = 'running', \
+                     agent_runtime_started_at = COALESCE(agent_runtime_started_at, NOW()), \
+                     agent_runtime_ended_at = NULL, \
+                     agent_runtime_exit_code = NULL \
+                 WHERE id = $1 AND state = 'live'",
+            )
+            .bind(msg.pty_id)
+            .bind(&msg.agent)
+            .execute(pool)
+            .await?;
+        }
+        RuntimeEvent::Exited => {
+            sqlx::query(
+                "UPDATE pty_sessions \
+                 SET agent_runtime_agent = COALESCE(agent_runtime_agent, $2), \
+                     agent_runtime_state = 'exited', \
+                     agent_runtime_ended_at = NOW(), \
+                     agent_runtime_exit_code = $3 \
+                 WHERE id = $1 \
+                   AND agent_runtime_state IN ('starting', 'running') \
+                   AND (agent_runtime_agent IS NULL OR agent_runtime_agent = $2)",
+            )
+            .bind(msg.pty_id)
+            .bind(&msg.agent)
+            .bind(msg.exit_code)
+            .execute(pool)
+            .await?;
+        }
+    }
+
+    tracing::info!(
+        pty = %msg.pty_id,
+        agent = %msg.agent,
+        event = ?msg.event,
+        exit_code = ?msg.exit_code,
+        "agent runtime recorded",
+    );
+    Ok(())
+}
+
 /// Helper used by the hook script on platforms where it's more ergonomic
 /// to spawn a small correlator binary than a shell script. Not used by the
 /// default hook but useful for diagnostics. Writes one JSON line to the
@@ -170,6 +246,29 @@ pub async fn send_for_agent(
     }
 }
 
+pub async fn send_agent_runtime(
+    sock: &Path,
+    pty_id: Uuid,
+    agent: &str,
+    event: RuntimeEvent,
+    exit_code: Option<i32>,
+) -> std::io::Result<()> {
+    let mut s = tokio::time::timeout(CORRELATE_IO_TIMEOUT, UnixStream::connect(sock))
+        .await
+        .map_err(|_| timeout_error("connecting to correlate socket"))??;
+    let line = runtime_msg_line(pty_id, agent, event, exit_code);
+    tokio::time::timeout(CORRELATE_IO_TIMEOUT, s.write_all(line.as_bytes()))
+        .await
+        .map_err(|_| timeout_error("writing runtime payload"))??;
+    let mut ack = [0u8; 4];
+    match tokio::time::timeout(CORRELATE_IO_TIMEOUT, s.read(&mut ack)).await {
+        Ok(Ok(0)) => Err(unexpected_ack_eof()),
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(err)) => Err(err),
+        Err(_) => Err(timeout_error("waiting for runtime ack")),
+    }
+}
+
 pub fn send_blocking_for_agent(
     sock: &Path,
     pty_id: Uuid,
@@ -194,6 +293,24 @@ pub fn send_blocking_for_agent(
 fn correlate_msg_line(pty_id: Uuid, session_uuid: Uuid, agent: &str) -> String {
     format!(
         "{{\"pty_id\":\"{pty_id}\",\"session_uuid\":\"{session_uuid}\",\"agent\":\"{agent}\"}}\n"
+    )
+}
+
+fn runtime_msg_line(
+    pty_id: Uuid,
+    agent: &str,
+    event: RuntimeEvent,
+    exit_code: Option<i32>,
+) -> String {
+    let msg = RuntimeMsg {
+        pty_id,
+        agent: agent.to_string(),
+        event,
+        exit_code,
+    };
+    format!(
+        "{}\n",
+        serde_json::to_string(&msg).expect("serialize runtime msg")
     )
 }
 
@@ -224,5 +341,21 @@ mod tests {
         assert_eq!(parsed.pty_id, pty);
         assert_eq!(parsed.session_uuid, session);
         assert_eq!(parsed.agent, "claude-code");
+    }
+
+    #[test]
+    fn parse_runtime_msg() {
+        let pty = Uuid::new_v4();
+        let json = format!(r#"{{"pty_id":"{pty}","agent":"codex","event":"running"}}"#);
+        let parsed: SocketMsg = serde_json::from_str(&json).unwrap();
+        match parsed {
+            SocketMsg::Runtime(msg) => {
+                assert_eq!(msg.pty_id, pty);
+                assert_eq!(msg.agent, "codex");
+                assert!(matches!(msg.event, RuntimeEvent::Running));
+                assert_eq!(msg.exit_code, None);
+            }
+            SocketMsg::Correlate(_) => panic!("parsed runtime as correlate"),
+        }
     }
 }

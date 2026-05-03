@@ -20,7 +20,7 @@ available unless compose explicitly mounts them.
 
 ## Agent Shortcuts
 
-Sulion installs wrapper shortcuts for agent sessions:
+Sulion installs executable wrapper shortcuts for agent sessions:
 
 ```sh
 cl
@@ -34,6 +34,31 @@ They expand to Sulion-managed agent launchers:
 
 Use the wrappers instead of invoking raw `claude` or `codex` when you want the
 session to appear correctly in Sulion timelines.
+
+## Workspaces
+
+Sulion may start a PTY in either the canonical repo checkout or an isolated Git
+worktree branch. Check the current binding with:
+
+```sh
+sulion workspace status
+```
+
+The shell also exposes:
+
+```text
+SULION_WORKSPACE_KIND=main|worktree
+SULION_WORKSPACE_PATH=<current checkout>
+SULION_CANONICAL_REPO=<main checkout>
+SULION_BRANCH=<current branch>
+SULION_BASE_REF=<branch/ref used to create this workspace>
+SULION_BASE_SHA=<base commit>
+SULION_MERGE_TARGET=<intended integration target>
+```
+
+An isolated workspace is a real Git worktree. Use normal Git commands inside it.
+From the canonical checkout, `git worktree list` shows active Sulion worktrees
+and their branches for merge/fast-forward work.
 
 ## Credentials
 
@@ -170,17 +195,22 @@ credential grants when a command needs access.
 
 ## Containers
 
-Rootless Podman is installed. `docker` is a compatibility shim to `podman`.
+`docker` is a Sulion wrapper that sends a constrained command request to the
+`sulion-runner` sidecar. The runner owns the host Docker socket; PTYs do not.
 
 Use:
 
 ```sh
-podman ps
 docker ps
+docker build .
+docker run --rm alpine:latest echo ok
 ```
 
-Both commands target the container-local rootless Podman setup, not a host
-Docker socket.
+The runner intentionally supports a narrow Docker CLI subset (`build`, `run`,
+`ps`, `images`, `pull`, `logs`, `stop`, `rm`, `inspect`, `version`). It denies
+privileged runs, host namespaces, extra capabilities, devices, bind mounts, and
+interactive `-it` sessions. If a workflow needs broader container behavior, add
+it to the runner policy first rather than bypassing the wrapper.
 
 ## Other Tools
 

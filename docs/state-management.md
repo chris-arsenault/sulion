@@ -9,7 +9,7 @@ No React context stores.
 
 | Store | Purpose |
 |---|---|
-| `SessionStore` | PTY sessions list, repo list, selected-session URL sync, unread tracking, polling. |
+| `SessionStore` | PTY sessions list, repo list, selected-session URL sync, repo group expansion, unread tracking, polling. |
 | `RepoStore` | Per-repo git status, file tree state, expansion state, polling. |
 | `TabStore` | Thin tab registry only. |
 | `ContextMenuStore` | Ephemeral open/close state for the global context-menu layer. |
@@ -54,9 +54,10 @@ exists and where it is:
 ```ts
 interface TabData {
   id: string;
-  kind: "terminal" | "timeline" | "file" | "diff" | "search" | "ref";
+  kind: "terminal" | "timeline" | "monitor" | "file" | "diff" | "ref" | "secrets";
   sessionId?: string;
   repo?: string;
+  workspaceId?: string;
   path?: string;
   slug?: string;
 }
@@ -72,9 +73,13 @@ The registry does **not** hold:
 - Search query, scope, hit list
 - Diff expanded-file set, stage-pending state
 
-Those live inside their owning components and die with the tab's mount
-lifecycle unless there is a concrete cross-surface need to promote
-them.
+File and diff tabs may carry `workspaceId`. That identifier is routing state,
+not fetched tab content: it decides whether the tab calls canonical repo routes
+or workspace-scoped routes.
+
+The excluded tab-internal state above lives inside its owning component and dies
+with the tab's mount lifecycle unless there is a concrete cross-surface need to
+promote it.
 
 ## Why Zustand
 

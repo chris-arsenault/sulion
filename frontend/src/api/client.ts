@@ -16,6 +16,8 @@ import type {
   HistoryResponse,
   LibraryEntry,
   LibraryKind,
+  MonitorTimelineRequest,
+  MonitorTimelineResponse,
   RepoDirtyPathsResponse,
   RepoView,
   SaveLibraryInput,
@@ -29,6 +31,9 @@ import type {
   TimelineTurnDetailResponse,
   UpdateSessionRequest,
   UpdateFuturePromptInput,
+  AgentLaunchType,
+  WorkspaceDirtyPathsResponse,
+  WorkspaceView,
 } from "./types";
 
 export class ApiError extends Error {
@@ -117,6 +122,23 @@ export function createSession(body: CreateSessionRequest): Promise<SessionView> 
 
 export function deleteSession(id: string): Promise<void> {
   return request<void>(`/api/sessions/${id}`, { method: "DELETE" });
+}
+
+export function startSessionAgent(
+  id: string,
+  agent: AgentLaunchType,
+): Promise<void> {
+  return request<void>(`/api/sessions/${id}/agent`, {
+    method: "POST",
+    body: JSON.stringify({ agent }),
+  });
+}
+
+export function sendSessionPrompt(id: string, text: string): Promise<void> {
+  return request<void>(`/api/sessions/${id}/prompt`, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
 }
 
 /** Update user-facing session metadata. Any field you omit is left
@@ -218,6 +240,15 @@ export function getRepoTimelineTurn(
   );
 }
 
+export function getMonitorTimeline(
+  body: MonitorTimelineRequest,
+): Promise<MonitorTimelineResponse> {
+  return request<MonitorTimelineResponse>("/api/monitor/timeline", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 function appendTimelineFilterParams(
   params: URLSearchParams,
   query: TimelineQuery,
@@ -305,6 +336,81 @@ export function getRepoDirtyPaths(name: string): Promise<RepoDirtyPathsResponse>
   return request<RepoDirtyPathsResponse>(
     `/api/repos/${encodeURIComponent(name)}/dirty-paths`,
   );
+}
+
+export function listWorkspaces(): Promise<WorkspaceView[]> {
+  return request<WorkspaceView[]>("/api/workspaces");
+}
+
+export function getWorkspace(id: string): Promise<WorkspaceView> {
+  return request<WorkspaceView>(`/api/workspaces/${encodeURIComponent(id)}`);
+}
+
+export function getWorkspaceDirtyPaths(
+  id: string,
+): Promise<WorkspaceDirtyPathsResponse> {
+  return request<WorkspaceDirtyPathsResponse>(
+    `/api/workspaces/${encodeURIComponent(id)}/dirty-paths`,
+  );
+}
+
+export function refreshWorkspaceState(id: string): Promise<void> {
+  return request<void>(`/api/workspaces/${encodeURIComponent(id)}/refresh`, {
+    method: "POST",
+  });
+}
+
+export function getWorkspaceFiles(
+  id: string,
+  path = "",
+  all = false,
+): Promise<DirListing> {
+  const qs = new URLSearchParams();
+  if (path) qs.set("path", path);
+  if (all) qs.set("all", "true");
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return request<DirListing>(
+    `/api/workspaces/${encodeURIComponent(id)}/files${suffix}`,
+  );
+}
+
+export function getWorkspaceFile(
+  id: string,
+  path: string,
+): Promise<FileResponse> {
+  return request<FileResponse>(
+    `/api/workspaces/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}`,
+  );
+}
+
+export function getWorkspaceFileTrace(
+  id: string,
+  path: string,
+): Promise<FileTraceResponse> {
+  return request<FileTraceResponse>(
+    `/api/workspaces/${encodeURIComponent(id)}/file-trace?path=${encodeURIComponent(path)}`,
+  );
+}
+
+export function getWorkspaceDiff(
+  id: string,
+  path?: string,
+): Promise<DiffResponse> {
+  const qs = path ? `?path=${encodeURIComponent(path)}` : "";
+  return request<DiffResponse>(
+    `/api/workspaces/${encodeURIComponent(id)}/git/diff${qs}`,
+  );
+}
+
+export function stageWorkspacePath(
+  id: string,
+  path: string,
+  stage: boolean,
+): Promise<void> {
+  return request<void>(`/api/workspaces/${encodeURIComponent(id)}/git/stage`, {
+    method: "POST",
+    body: JSON.stringify({ path, stage }),
+  });
 }
 
 export function refreshRepoState(name: string): Promise<void> {

@@ -2,11 +2,33 @@
 // manually — a small enough surface that codegen would be overkill.
 
 export type SessionState = "live" | "dead" | "deleted" | "orphaned";
+export type AgentLaunchType = "claude" | "codex";
+export type AgentRuntimeState = "none" | "starting" | "running" | "exited";
+
+export interface AgentRuntimeMetadata {
+  agent: AgentLaunchType | string | null;
+  state: AgentRuntimeState;
+  started_at: string | null;
+  ended_at: string | null;
+  exit_code: number | null;
+}
+
+export interface AgentSessionMetadata {
+  agent: string;
+  model: string | null;
+  model_provider: string | null;
+  reasoning_effort: string | null;
+  cli_version: string | null;
+  cwd: string | null;
+  model_context_window: number | null;
+  updated_at: string;
+}
 
 export interface SessionView {
   id: string;
   repo: string;
   working_dir: string;
+  workspace?: SessionWorkspaceView | null;
   state: SessionState;
   created_at: string;
   ended_at: string | null;
@@ -25,10 +47,25 @@ export interface SessionView {
   pinned: boolean;
   /** Palette-constrained colour tag name. */
   color: SessionColor | null;
+  /** PTY-scoped first-class agent process state. */
+  agent_runtime?: AgentRuntimeMetadata;
+  /** Transcript-derived agent metadata for the currently correlated session. */
+  agent_metadata?: AgentSessionMetadata | null;
   /** Count of queued `pending` future prompts for the session's
    * currently correlated transcript session. Drives the sidebar
    * future-prompts badge. 0 when there's no correlated session. */
   future_prompts_pending_count: number;
+}
+
+export interface SessionWorkspaceView {
+  id: string;
+  repo_name: string;
+  kind: "main" | "worktree" | string;
+  path: string;
+  branch_name: string | null;
+  base_ref: string | null;
+  base_sha: string | null;
+  merge_target: string | null;
 }
 
 export type SessionColor =
@@ -61,12 +98,16 @@ export interface UpdateSessionRequest {
 export interface CreateSessionRequest {
   repo: string;
   working_dir?: string;
+  workspace_id?: string;
+  workspace_mode?: "main" | "isolated";
   cols?: number;
   rows?: number;
   /** Resume session id when the backend supports agent-specific resume. */
   resume_session_uuid?: string;
   /** Agent id for `resume_session_uuid`. */
   resume_agent?: string;
+  /** Agent to launch immediately in the new PTY. */
+  launch_agent?: AgentLaunchType;
 }
 
 export interface RepoView {
@@ -81,7 +122,24 @@ export interface AppStateResponse {
   generated_at: string;
   sessions: SessionView[];
   repos: RepoView[];
+  workspaces?: WorkspaceView[];
   stats: StatsResponse;
+}
+
+export interface WorkspaceView {
+  id: string;
+  repo_name: string;
+  kind: "main" | "worktree" | string;
+  path: string;
+  branch_name: string | null;
+  base_ref: string | null;
+  base_sha: string | null;
+  merge_target: string | null;
+  created_by_session_id: string | null;
+  state: "active" | "missing" | "deleted" | string;
+  created_at: string;
+  updated_at: string;
+  git: RepoGitSummary;
 }
 
 export type SecretTool = "with-cred" | "aws";
@@ -196,6 +254,10 @@ export interface TimelineQuery {
   show_bookkeeping?: boolean;
   show_sidechain?: boolean;
   file_path?: string;
+}
+
+export interface MonitorTimelineRequest extends TimelineQuery {
+  session_ids: string[];
 }
 
 export interface TimelineOperationBadge {
@@ -314,6 +376,22 @@ export interface TimelineTurnDetailResponse {
   turn: TimelineTurn;
 }
 
+export interface MonitorSessionTurn {
+  pty_session_id: string;
+  repo: string;
+  label: string | null;
+  pty_state: SessionState;
+  current_session_uuid: string | null;
+  current_session_agent: string | null;
+  total_event_count: number;
+  turn: TimelineTurn | null;
+}
+
+export interface MonitorTimelineResponse {
+  generated_at: string;
+  sessions: MonitorSessionTurn[];
+}
+
 export interface GitCommit {
   sha: string;
   subject: string;
@@ -345,6 +423,13 @@ export interface RepoGitSummary {
 
 export interface RepoDirtyPathsResponse {
   repo: string;
+  git_revision: number;
+  dirty_by_path: Record<string, string>;
+  diff_stats_by_path: Record<string, DiffStat>;
+}
+
+export interface WorkspaceDirtyPathsResponse {
+  workspace_id: string;
   git_revision: number;
   dirty_by_path: Record<string, string>;
   diff_stats_by_path: Record<string, DiffStat>;

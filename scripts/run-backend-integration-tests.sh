@@ -10,6 +10,7 @@ TEST_TARGETS=(
   db_integration
   correlate_integration
   rest_integration
+  workspace_integration
   pty_integration
   ws_integration
   ingester_integration
@@ -58,7 +59,7 @@ ensure_test_db() {
     -p "127.0.0.1::5432" \
     -e POSTGRES_PASSWORD=testpass \
     -e POSTGRES_DB=sulion \
-    postgres:16 >/dev/null
+    docker.io/library/postgres:16 >/dev/null
 
   wait_for_postgres
 
