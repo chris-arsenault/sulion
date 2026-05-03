@@ -181,7 +181,9 @@ pub(super) async fn create_session(
     // succeeds so bad requests don't leave stray worktrees behind.
     let repos_root = repos_root(&state)?;
     let workspace_mode = req.workspace_mode.as_deref().unwrap_or_else(|| {
-        if req.launch_agent.is_some()
+        if req.working_dir.is_some() {
+            "main"
+        } else if req.launch_agent.is_some()
             || req.resume_session_uuid.is_some()
             || req.claude_resume_uuid.is_some()
         {
@@ -381,6 +383,11 @@ fn validate_workspace_request(req: &CreateSessionReq, workspace_mode: &str) -> A
     if req.workspace_id.is_some() && req.working_dir.is_some() {
         return Err(ApiError::BadRequest(
             "workspace_id cannot be combined with working_dir".into(),
+        ));
+    }
+    if req.working_dir.is_some() && matches!(workspace_mode, "isolated" | "worktree") {
+        return Err(ApiError::BadRequest(
+            "working_dir is only supported with workspace_mode=main".into(),
         ));
     }
     match workspace_mode {
@@ -690,7 +697,11 @@ fn agent_launch_shell_command(
 }
 
 fn prompt_input_bytes(text: &str) -> Vec<u8> {
-    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized = text
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim_end_matches('\n')
+        .to_string();
     if normalized.contains('\n') {
         format!("\x1b[200~{normalized}\x1b[201~\r").into_bytes()
     } else {
@@ -708,9 +719,15 @@ mod tests {
     }
 
     #[test]
+    fn prompt_input_strips_trailing_textarea_newline_before_enter() {
+        assert_eq!(prompt_input_bytes("hello\n"), b"hello\r");
+        assert_eq!(prompt_input_bytes("hello\r\n"), b"hello\r");
+    }
+
+    #[test]
     fn prompt_input_uses_bracketed_paste_for_multiline_text() {
         assert_eq!(
-            prompt_input_bytes("hello\r\nworld"),
+            prompt_input_bytes("hello\r\nworld\n"),
             b"\x1b[200~hello\nworld\x1b[201~\r",
         );
     }

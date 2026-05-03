@@ -8,6 +8,10 @@ import { resetSessionStore, useSessionStore } from "../state/SessionStore";
 import { resetTabStore, useTabStore } from "../state/TabStore";
 import { appStatePayload, jsonResponse } from "../test/appState";
 
+const resumeSessionUuid = "deadbeef-dead-beef-dead-beefdeadbeef";
+const successorSessionId = "99999999-9999-9999-9999-999999999999";
+const workspaceSessionId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+
 const orphanedSession: SessionView = {
   id: "11111111-1111-1111-1111-111111111111",
   repo: "ahara",
@@ -16,7 +20,7 @@ const orphanedSession: SessionView = {
   created_at: new Date(Date.now() - 3_600_000).toISOString(),
   ended_at: new Date().toISOString(),
   exit_code: null,
-  current_session_uuid: "deadbeef-dead-beef-dead-beefdeadbeef",
+  current_session_uuid: resumeSessionUuid,
   current_session_agent: "claude-code",
   last_event_at: null,
   label: null,
@@ -55,7 +59,7 @@ function installFetchMock(state: FetchState) {
         state.createSessionCalls.push(JSON.parse(init!.body as string));
         return json(
           {
-            id: "99999999-9999-9999-9999-999999999999",
+            id: successorSessionId,
             repo: "ahara",
             working_dir: "/home/dev/repos/ahara",
             state: "live",
@@ -138,19 +142,20 @@ describe("SessionEndedPane", () => {
     expect(state.createSessionCalls[0]).toMatchObject({
       repo: "ahara",
       working_dir: "/home/dev/repos/ahara",
-      resume_session_uuid: "deadbeef-dead-beef-dead-beefdeadbeef",
+      workspace_mode: "main",
+      resume_session_uuid: resumeSessionUuid,
       resume_agent: "claude-code",
     });
     expect(useSessionStore.getState().selectedSessionId).toBe(
-      "99999999-9999-9999-9999-999999999999",
+      successorSessionId,
     );
     const tabs = Object.values(useTabStore.getState().tabs);
     expect(
       tabs.find((tab) => tab.kind === "terminal")?.sessionId,
-    ).toBe("99999999-9999-9999-9999-999999999999");
+    ).toBe(successorSessionId);
     expect(
       tabs.find((tab) => tab.kind === "timeline")?.sessionId,
-    ).toBe("99999999-9999-9999-9999-999999999999");
+    ).toBe(successorSessionId);
   });
 
   it("carries the orphan's label, pin, and colour onto the successor session", async () => {
@@ -171,7 +176,7 @@ describe("SessionEndedPane", () => {
       expect(state.patches.length).toBe(1);
     });
     expect(state.patches[0]).toEqual({
-      id: "99999999-9999-9999-9999-999999999999",
+      id: successorSessionId,
       body: {
         label: "migration branch",
         pinned: true,
@@ -210,9 +215,69 @@ describe("SessionEndedPane", () => {
       expect(state.createSessionCalls.length).toBe(1);
     });
     expect(state.createSessionCalls[0]).toMatchObject({
-      resume_session_uuid: "deadbeef-dead-beef-dead-beefdeadbeef",
+      resume_session_uuid: resumeSessionUuid,
       resume_agent: "codex",
     });
+  });
+
+  it("resumes workspace-bound orphaned sessions in the same workspace", async () => {
+    setup({
+      ...orphanedSession,
+      working_dir: "/home/dev/workspaces/ahara/ws-1",
+      workspace: {
+        id: workspaceSessionId,
+        repo_name: "ahara",
+        kind: "worktree",
+        path: "/home/dev/workspaces/ahara/ws-1",
+        branch_name: "sulion/ahara/ws-1",
+        base_ref: "main",
+        base_sha: "abc123",
+        merge_target: "main",
+      },
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /resume/i }));
+    await waitFor(() => {
+      expect(state.createSessionCalls.length).toBe(1);
+    });
+    expect(state.createSessionCalls[0]).toMatchObject({
+      repo: "ahara",
+      workspace_id: workspaceSessionId,
+      resume_session_uuid: resumeSessionUuid,
+      resume_agent: "claude-code",
+    });
+    expect(state.createSessionCalls[0]).not.toHaveProperty("working_dir");
+    expect(state.createSessionCalls[0]).not.toHaveProperty("workspace_mode");
+  });
+
+  it("resumes main-workspace orphaned sessions with their stored working dir", async () => {
+    setup({
+      ...orphanedSession,
+      working_dir: "/home/dev/repos/ahara/packages/api",
+      workspace: {
+        id: workspaceSessionId,
+        repo_name: "ahara",
+        kind: "main",
+        path: "/home/dev/repos/ahara",
+        branch_name: "main",
+        base_ref: "main",
+        base_sha: "abc123",
+        merge_target: "main",
+      },
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /resume/i }));
+    await waitFor(() => {
+      expect(state.createSessionCalls.length).toBe(1);
+    });
+    expect(state.createSessionCalls[0]).toMatchObject({
+      repo: "ahara",
+      working_dir: "/home/dev/repos/ahara/packages/api",
+      workspace_mode: "main",
+      resume_session_uuid: resumeSessionUuid,
+      resume_agent: "claude-code",
+    });
+    expect(state.createSessionCalls[0]).not.toHaveProperty("workspace_id");
   });
 
   it("clicking Delete fires DELETE against the session id", async () => {

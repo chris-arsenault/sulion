@@ -595,7 +595,7 @@ function TimelinePromptBar({
 
   const sendPrompt = useCallback(async () => {
     if (!canSend) return;
-    const prompt = text;
+    const prompt = promptTextForSend(text);
     setPending("send");
     setError(null);
     try {
@@ -704,6 +704,10 @@ function promptStatusText(
     default:
       return "No agent running in this PTY";
   }
+}
+
+function promptTextForSend(text: string): string {
+  return text.replace(/(?:\r\n|\r|\n)+$/, "");
 }
 
 function promptMetadataText(metadata: SessionView["agent_metadata"]): string | null {

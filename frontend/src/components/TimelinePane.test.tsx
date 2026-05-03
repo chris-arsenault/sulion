@@ -31,6 +31,8 @@ const TimelinePane = (props: { sessionId?: string; repo?: string }) => (
   </>
 );
 
+const transcriptSessionUuid = "00000000-0000-0000-0000-000000000001";
+
 function sessionView(
   timelineRevision = 0,
   overrides: Partial<SessionView> = {},
@@ -43,7 +45,7 @@ function sessionView(
     created_at: "2026-05-02T00:00:00Z",
     ended_at: null,
     exit_code: null,
-    current_session_uuid: "00000000-0000-0000-0000-000000000001",
+    current_session_uuid: transcriptSessionUuid,
     current_session_agent: "claude-code",
     last_event_at: null,
     timeline_revision: timelineRevision,
@@ -100,7 +102,7 @@ function timelineBody(overrides: Partial<Record<string, unknown>> = {}) {
 
 function timelinePayload(overrides: Partial<Record<string, unknown>> = {}) {
   return {
-    session_uuid: "00000000-0000-0000-0000-000000000001",
+    session_uuid: transcriptSessionUuid,
     session_agent: "claude-code",
     total_event_count: 2,
     turns: [
@@ -119,9 +121,9 @@ function timelinePayload(overrides: Partial<Record<string, unknown>> = {}) {
         has_errors: false,
         markdown: "**Prompt**\n\n> hello",
         chunks: [{ kind: "assistant", items: [{ kind: "text", text: "hi there" }], thinking: [] }],
-        turn_key: "00000000-0000-0000-0000-000000000001:1",
+        turn_key: `${transcriptSessionUuid}:1`,
         pty_session_id: "abc",
-        session_uuid: "00000000-0000-0000-0000-000000000001",
+        session_uuid: transcriptSessionUuid,
         session_agent: "claude-code",
         session_label: "investigation",
         session_state: "dead",
@@ -134,7 +136,7 @@ function timelinePayload(overrides: Partial<Record<string, unknown>> = {}) {
 function timelineDetailBody(turn: Record<string, unknown>) {
   return JSON.stringify({
     session_uuid:
-      turn.session_uuid ?? "00000000-0000-0000-0000-000000000001",
+      turn.session_uuid ?? transcriptSessionUuid,
     session_agent: turn.session_agent ?? "claude-code",
     turn,
   });
@@ -246,6 +248,41 @@ describe("TimelinePane", () => {
     await waitFor(() => expect(calls).toEqual([{ text: "inspect this" }]));
   });
 
+  it("strips textarea-only trailing newlines before sending a prompt", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    stubFetch(
+      (url, init) => {
+        if (url === "/api/sessions/abc/prompt") {
+          calls.push(JSON.parse(init?.body as string));
+          return new Response("", { status: 202 });
+        }
+        return new Response(timelineBody(), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+      [
+        sessionView(0, {
+          agent_runtime: {
+            agent: "codex",
+            state: "running",
+            started_at: "2026-05-02T00:00:00Z",
+            ended_at: null,
+            exit_code: null,
+          },
+        }),
+      ],
+    );
+
+    render(<TimelinePane sessionId="abc" />);
+    const user = userEvent.setup();
+    const input = await screen.findByLabelText("Prompt text");
+    await user.type(input, "inspect this{enter}");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(calls).toEqual([{ text: "inspect this" }]));
+  });
+
   it("starts an agent through the session agent endpoint", async () => {
     const calls: Array<Record<string, unknown>> = [];
     stubFetch((url, init) => {
@@ -303,8 +340,8 @@ describe("TimelinePane", () => {
           thinking: [],
         },
       ],
-      turn_key: `00000000-0000-0000-0000-000000000001:${id}`,
-      session_uuid: "00000000-0000-0000-0000-000000000001",
+      turn_key: `${transcriptSessionUuid}:${id}`,
+      session_uuid: transcriptSessionUuid,
     });
     const turns = [
       makeTurn(1, "hello", "hi there"),

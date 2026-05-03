@@ -4,7 +4,7 @@
 
 import { useCallback, useState } from "react";
 
-import type { SessionView } from "../api/types";
+import type { CreateSessionRequest, SessionView } from "../api/types";
 import { useSessions } from "../state/SessionStore";
 import { useTabs } from "../state/TabStore";
 import { Icon } from "../icons";
@@ -25,6 +25,8 @@ export function SessionEndedPane({ session }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const resumeAgent = session.current_session_agent;
+  const workspaceId = session.workspace?.id;
+  const workspaceKind = session.workspace?.kind;
 
   const canResume =
     session.state === "orphaned" &&
@@ -36,12 +38,18 @@ export function SessionEndedPane({ session }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const created = await createSession({
+      const resumeRequest: CreateSessionRequest = {
         repo: session.repo,
-        working_dir: session.working_dir,
         resume_session_uuid: session.current_session_uuid,
         resume_agent: resumeAgent ?? "claude-code",
-      });
+      };
+      if (workspaceId && workspaceKind !== "main") {
+        resumeRequest.workspace_id = workspaceId;
+      } else {
+        resumeRequest.workspace_mode = "main";
+        resumeRequest.working_dir = session.working_dir;
+      }
+      const created = await createSession(resumeRequest);
       // Carry the user's customisations (label, pin, colour) onto the
       // successor session so a resume feels seamless — same chip in
       // the sidebar, same pin position. Skip the round-trip when
@@ -72,6 +80,8 @@ export function SessionEndedPane({ session }: Props) {
     session.id,
     session.repo,
     session.working_dir,
+    workspaceId,
+    workspaceKind,
     session.label,
     session.pinned,
     session.color,

@@ -158,6 +158,70 @@ async fn main_session_binds_canonical_repo_workspace() {
     h.shutdown_sessions().await;
 }
 
+#[tokio::test]
+async fn resume_with_working_dir_defaults_to_main_workspace() {
+    let h = Harness::new().await;
+    let repo_path = h.state.repos_root.join("app");
+    init_git_repo(&repo_path);
+    std::fs::remove_dir_all(&h.state.workspaces_root).unwrap();
+    std::fs::write(&h.state.workspaces_root, "not a directory").unwrap();
+
+    let resp = h
+        .client
+        .post(format!("{}/api/sessions", h.base))
+        .json(&json!({
+            "repo": "app",
+            "working_dir": repo_path,
+            "resume_session_uuid": Uuid::new_v4(),
+            "resume_agent": "claude-code"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::CREATED);
+    let created: serde_json::Value = resp.json().await.unwrap();
+
+    let workspace = created["workspace"].as_object().unwrap();
+    assert_eq!(workspace["kind"], "main");
+    assert_eq!(
+        PathBuf::from(workspace["path"].as_str().unwrap()),
+        repo_path
+    );
+    assert_eq!(
+        created["working_dir"].as_str().unwrap(),
+        repo_path.to_str().unwrap()
+    );
+
+    h.shutdown_sessions().await;
+}
+
+#[tokio::test]
+async fn isolated_session_rejects_working_dir_before_worktree_creation() {
+    let h = Harness::new().await;
+    let repo_path = h.state.repos_root.join("app");
+    init_git_repo(&repo_path);
+    std::fs::remove_dir_all(&h.state.workspaces_root).unwrap();
+    std::fs::write(&h.state.workspaces_root, "not a directory").unwrap();
+
+    let resp = h
+        .client
+        .post(format!("{}/api/sessions", h.base))
+        .json(&json!({
+            "repo": "app",
+            "workspace_mode": "isolated",
+            "working_dir": repo_path
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["error"],
+        "working_dir is only supported with workspace_mode=main"
+    );
+}
+
 fn init_git_repo(path: &Path) {
     std::fs::create_dir_all(path).unwrap();
     run(path, &["init", "-b", "main"]);
