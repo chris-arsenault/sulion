@@ -36,6 +36,7 @@ cd frontend && pnpm install && pnpm dev
 Postgres-backed tests live in `backend/tests/*_integration.rs`, gated with `#![cfg(feature = "integration-tests")]`, and run through `scripts/run-backend-integration-tests.sh` (also `make test-rust-integration`).
 
 - The harness enables the `integration-tests` Cargo feature, runs each integration target one at a time with `--test-threads=1`, and auto-starts an ephemeral `docker.io/library/postgres:16` container via Docker when `SULION_TEST_DB` is unset.
+- In Sulion PTYs, the runner automatically attaches that container to the `sulion` Docker network, and tests connect to the container name on port `5432`; no Docker socket or host port discovery is required in the PTY.
 - Do not mark backend integration tests `#[ignore]`. When adding a new target, register it in the script so the harness stays the single supported path.
 
 Override the DB:

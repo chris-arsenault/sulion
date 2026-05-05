@@ -224,3 +224,21 @@
   color: var(--canvas-0);
   border-color: var(--accent);
 }
+
+.timeline-prompt__button--icon {
+  width: 36px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+}
+
+.timeline-prompt__button--interrupt {
+  color: var(--crit-fg);
+  border-color: color-mix(in oklab, var(--crit-mark) 42%, var(--canvas-3));
+}
+
+.timeline-prompt__button--interrupt:hover:not(:disabled) {
+  color: var(--crit-fg);
+  border-color: var(--crit-mark);
+  background: var(--crit-bg);
+}

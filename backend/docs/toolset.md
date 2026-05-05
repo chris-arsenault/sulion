@@ -204,13 +204,19 @@ Use:
 docker ps
 docker build .
 docker run --rm alpine:latest echo ok
+docker compose up -d
+docker-compose ps
 ```
 
 The runner intentionally supports a narrow Docker CLI subset (`build`, `run`,
-`ps`, `images`, `pull`, `logs`, `stop`, `rm`, `inspect`, `version`). It denies
-privileged runs, host namespaces, extra capabilities, devices, bind mounts, and
-interactive `-it` sessions. If a workflow needs broader container behavior, add
-it to the runner policy first rather than bypassing the wrapper.
+`ps`, `images`, `pull`, `logs`, `stop`, `rm`, `inspect`, `compose`, `version`).
+Containers launched through `docker run` are always attached to the `sulion`
+Docker network; caller-supplied network flags are rejected. The
+`docker-compose` shim maps Compose's default network to the external `sulion`
+network. The runner denies privileged runs, host namespaces, extra
+capabilities, devices, bind mounts, and interactive `-it` sessions. If a
+workflow needs broader container behavior, add it to the runner policy first
+rather than bypassing the wrapper.
 
 ## Other Tools
 

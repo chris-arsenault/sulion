@@ -4,6 +4,7 @@ import {
   createRepo,
   createSession,
   deleteSession,
+  deleteWorkspace,
   getAppState,
   getHistory,
   getRepoDirtyPaths,
@@ -237,9 +238,13 @@ describe("api client", () => {
     expect((await getWorkspaceFile(workspaceId, filePath)).content).toBe("changed");
     expect((await getWorkspaceFileTrace(workspaceId, filePath)).dirty).toBe(" M");
     await expect(stageWorkspacePath(workspaceId, filePath, true)).resolves.toBeUndefined();
+    await expect(
+      deleteWorkspace(workspaceId, { force: true }),
+    ).resolves.toBeUndefined();
 
     expect(seen).toContain(`POST /api/workspaces/${workspaceId}/refresh`);
     expect(seen).toContain(`POST /api/workspaces/${workspaceId}/git/stage`);
+    expect(seen).toContain(`DELETE /api/workspaces/${workspaceId}?force=true`);
   });
 
   it("requests repo refresh without reading git inline", async () => {

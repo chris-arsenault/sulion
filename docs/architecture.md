@@ -74,7 +74,7 @@ Code boundary:
 
 Three surfaces, one work area.
 
-- **Rail + sidebar** — repos and their PTY sessions, drag-resizable and pinnable. See `frontend/src/components/Sidebar.tsx`.
+- **Rail + sidebar** — repos, PTY sessions, and isolated workspaces with resume/diff/delete actions. See `frontend/src/components/Sidebar.tsx`.
 - **Work area** — tab-strip over two horizontal panes. Each tab is its own subtree keyed by `(session_id, view_kind)`. Terminal, timeline, monitor, file, diff, reference, and secrets-management tabs all live here.
 - **Mobile** — single-pane with drawer below 768px.
 
@@ -92,6 +92,9 @@ REST management (`GET/POST/DELETE` on sessions, repos, timeline, library, git, s
 
 Repo-scoped filesystem/git routes target the canonical checkout. Workspace-scoped
 routes under `/api/workspaces/:id/*` target the session-bound checkout/worktree.
+Deleting an isolated workspace removes the Git worktree registration, optionally
+deletes its Sulion branch, and marks the workspace row deleted; main workspaces
+are not deletable.
 
 WebSocket attach sends a snapshot rendered from the shadow `vt100` emulator on connect, then live-streams bytes. Inbound: keystrokes and `TIOCSWINSZ` resize. Multi-viewer is mirrored; inbound is last-writer-wins (single-user LAN tool).
 
@@ -124,7 +127,9 @@ sends the current working directory, PTY id, and argv to the runner. The runner
 executes the Docker CLI from the same mounted workspace path after applying
 Sulion policy: supported subcommands only, Sulion labels on created containers,
 resource defaults, no privileged mode, no host namespaces, no extra caps, no
-devices, no bind mounts, and no interactive `-it` sessions.
+devices, no bind mounts, automatic attachment to the `sulion` Docker network,
+and no interactive `-it` sessions. Compose commands go through a shim that maps
+Compose's default network to the same external `sulion` network.
 
 The runner is intentionally a command broker, not a Docker API proxy. A runner
 compromise is equivalent to host Docker socket compromise; an agent compromise

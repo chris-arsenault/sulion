@@ -72,6 +72,12 @@
   cursor: not-allowed;
 }
 
+.sidebar__icon-button--danger:hover {
+  color: var(--crit-fg);
+  border-color: var(--crit-mark);
+  background: var(--crit-bg);
+}
+
 /* ─── Messages / empty ───────────────────────────────────────────── */
 
 .sidebar__error {
@@ -656,6 +662,75 @@
   display: inline-flex;
   align-items: center;
   color: var(--warn-mark);
+}
+
+/* ─── Workspace rows ─────────────────────────────────────────────── */
+
+.sidebar__workspace-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0;
+}
+
+.sidebar__workspace-main {
+  min-width: 0;
+  min-height: var(--lane-md);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar__workspace-main:hover,
+.sidebar__workspace-main:focus-visible {
+  background: var(--canvas-2);
+  border-color: var(--hairline);
+  color: var(--text-hi);
+  outline: none;
+}
+
+.sidebar__workspace-icon {
+  display: inline-flex;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.sidebar__workspace-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.sidebar__workspace-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-hi);
+  font-size: var(--t-ui);
+  font-weight: var(--w-500);
+}
+
+.sidebar__workspace-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-lo);
+  font-size: var(--t-meta);
+}
+
+.sidebar__workspace-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
 
 /* ─── Rename / new-repo / new-session forms ──────────────────────── */

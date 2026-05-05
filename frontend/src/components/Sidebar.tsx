@@ -22,6 +22,7 @@ import type {
   SecretGrantMetadata,
   SessionColor,
   SessionView,
+  WorkspaceView,
 } from "../api/types";
 import { SESSION_COLORS } from "../api/types";
 import { ApiError, stageRepoPath, uploadRepoFile } from "../api/client";
@@ -60,9 +61,11 @@ export function Sidebar() {
     sessions,
     repos,
     selectedSessionId,
+    workspaces,
     selectSession,
     createSession,
     deleteSession,
+    deleteWorkspace,
     updateSession,
     createRepo,
     isUnread,
@@ -74,9 +77,11 @@ export function Sidebar() {
       sessions: store.sessions,
       repos: store.repos,
       selectedSessionId: store.selectedSessionId,
+      workspaces: store.workspaces,
       selectSession: store.selectSession,
       createSession: store.createSession,
       deleteSession: store.deleteSession,
+      deleteWorkspace: store.deleteWorkspace,
       updateSession: store.updateSession,
       createRepo: store.createRepo,
       isUnread: store.isUnread,
@@ -88,7 +93,10 @@ export function Sidebar() {
 
   const openTab = useTabs((store) => store.openTab);
 
-  const grouped = useMemo(() => groupByRepo(sessions, repos), [sessions, repos]);
+  const grouped = useMemo(
+    () => groupByRepo(sessions, repos, workspaces),
+    [sessions, repos, workspaces],
+  );
 
   // Opening a session's work area: terminal top + timeline bottom.
   // Called directly from the click handler (no useEffect on selected
@@ -134,6 +142,10 @@ export function Sidebar() {
   const [newSessionFor, setNewSessionFor] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [pendingWorkspaceDelete, setPendingWorkspaceDelete] = useState<{
+    workspace: WorkspaceView;
+    force: boolean;
+  } | null>(null);
   const [revealRequest, setRevealRequest] = useState<{
     repo: string;
     path: string;
@@ -224,6 +236,45 @@ export function Sidebar() {
     }
   }, [deleteSession, pendingDeleteId]);
 
+  const resumeWorkspace = useCallback(
+    async (workspace: WorkspaceView) => {
+      setFormError(null);
+      try {
+        const created = await createSession({
+          repo: workspace.repo_name,
+          workspace_id: workspace.id,
+        });
+        selectSession(created.id);
+        openTab({ kind: "terminal", sessionId: created.id }, "top");
+        openTab({ kind: "timeline", sessionId: created.id }, "bottom");
+        appCommands.closeDrawer();
+      } catch (err) {
+        setFormError(messageOf(err));
+      }
+    },
+    [createSession, openTab, selectSession],
+  );
+
+  const requestWorkspaceDelete = useCallback(
+    (workspace: WorkspaceView, force = false) =>
+      setPendingWorkspaceDelete({ workspace, force }),
+    [],
+  );
+
+  const confirmWorkspaceDelete = useCallback(async () => {
+    const pending = pendingWorkspaceDelete;
+    if (!pending) return;
+    setPendingWorkspaceDelete(null);
+    try {
+      await deleteWorkspace(pending.workspace.id, {
+        force: pending.force,
+        deleteBranch: true,
+      });
+    } catch (err) {
+      setFormError(messageOf(err));
+    }
+  }, [deleteWorkspace, pendingWorkspaceDelete]);
+
   const onUpdateSession = useCallback(
     async (id: string, patch: Parameters<typeof updateSession>[1]) => {
       setFormError(null);
@@ -238,6 +289,10 @@ export function Sidebar() {
 
   const cancelPendingDelete = useCallback(
     () => setPendingDeleteId(null),
+    [],
+  );
+  const cancelPendingWorkspaceDelete = useCallback(
+    () => setPendingWorkspaceDelete(null),
     [],
   );
 
@@ -273,6 +328,13 @@ export function Sidebar() {
       onUpdateSession,
     }),
     [requestDelete, onUpdateSession],
+  );
+  const repoGroupWorkspaceOps = useMemo<RepoGroupWorkspaceOps>(
+    () => ({
+      onResumeWorkspace: resumeWorkspace,
+      onRequestDeleteWorkspace: requestWorkspaceDelete,
+    }),
+    [requestWorkspaceDelete, resumeWorkspace],
   );
 
   return (
@@ -325,6 +387,7 @@ export function Sidebar() {
               handlers={repoGroupHandlers}
               selection={repoGroupSelection}
               sessionOps={repoGroupSessionOps}
+              workspaceOps={repoGroupWorkspaceOps}
               isUnread={isUnread}
               onError={setFormError}
               revealRequest={
@@ -344,6 +407,24 @@ export function Sidebar() {
           onCancel={cancelPendingDelete}
         />
       )}
+      {pendingWorkspaceDelete && (
+        <ConfirmDialog
+          title={
+            pendingWorkspaceDelete.force
+              ? "Force delete workspace?"
+              : "Delete workspace?"
+          }
+          message={
+            pendingWorkspaceDelete.force
+              ? "This removes the Git worktree, deletes the Sulion branch, and discards uncommitted workspace changes."
+              : "This removes the Git worktree and deletes the Sulion branch if it has no unmerged work."
+          }
+          confirmLabel={pendingWorkspaceDelete.force ? "Force delete" : "Delete"}
+          destructive
+          onConfirm={confirmWorkspaceDelete}
+          onCancel={cancelPendingWorkspaceDelete}
+        />
+      )}
       <LibraryPanel />
       <StatsStrip />
       <div className="sidebar__admin">
@@ -359,9 +440,14 @@ interface RepoGroupData {
   git: RepoGitSummary | null;
   timelineRevision: number;
   sessions: SessionView[];
+  workspaces: WorkspaceView[];
 }
 
-function groupByRepo(sessions: SessionView[], repos: RepoView[]): RepoGroupData[] {
+function groupByRepo(
+  sessions: SessionView[],
+  repos: RepoView[],
+  workspaces: WorkspaceView[],
+): RepoGroupData[] {
   const byName = new Map<string, RepoGroupData>();
   for (const r of repos) {
     byName.set(r.name, {
@@ -370,6 +456,7 @@ function groupByRepo(sessions: SessionView[], repos: RepoView[]): RepoGroupData[
       git: r.git ?? null,
       timelineRevision: r.timeline_revision ?? 0,
       sessions: [],
+      workspaces: [],
     });
   }
   for (const s of sessions) {
@@ -380,18 +467,34 @@ function groupByRepo(sessions: SessionView[], repos: RepoView[]): RepoGroupData[
         git: null,
         timelineRevision: 0,
         sessions: [],
+        workspaces: [],
       });
     }
     byName.get(s.repo)!.sessions.push(s);
   }
+  for (const workspace of workspaces) {
+    if (workspace.kind === "main" || workspace.state === "deleted") continue;
+    if (!byName.has(workspace.repo_name)) {
+      byName.set(workspace.repo_name, {
+        name: workspace.repo_name,
+        exists: false,
+        git: null,
+        timelineRevision: 0,
+        sessions: [],
+        workspaces: [],
+      });
+    }
+    byName.get(workspace.repo_name)!.workspaces.push(workspace);
+  }
   for (const g of byName.values()) {
     g.sessions.sort(sessionCompare);
+    g.workspaces.sort(workspaceCompare);
   }
   return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function defaultRepoExpanded(group: RepoGroupData): boolean {
-  return group.sessions.length > 0;
+  return group.sessions.length > 0 || group.workspaces.length > 0;
 }
 
 function sessionCompare(a: SessionView, b: SessionView): number {
@@ -399,6 +502,13 @@ function sessionCompare(a: SessionView, b: SessionView): number {
   const bp = b.pinned ? 1 : 0;
   if (ap !== bp) return bp - ap;
   return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+}
+
+function workspaceCompare(a: WorkspaceView, b: WorkspaceView): number {
+  const dirtyA = a.git.uncommitted_count > 0 ? 1 : 0;
+  const dirtyB = b.git.uncommitted_count > 0 ? 1 : 0;
+  if (dirtyA !== dirtyB) return dirtyB - dirtyA;
+  return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
 }
 
 // ─── Repo group ─────────────────────────────────────────────────────
@@ -418,6 +528,14 @@ interface RepoGroupSessionOps {
       color?: SessionColor | null;
     },
   ) => void | Promise<void>;
+}
+
+interface RepoGroupWorkspaceOps {
+  onResumeWorkspace: (workspace: WorkspaceView) => void | Promise<void>;
+  onRequestDeleteWorkspace: (
+    workspace: WorkspaceView,
+    force?: boolean,
+  ) => void;
 }
 
 /** Base handlers — stable at the parent level and curried per-repo by
@@ -440,6 +558,7 @@ interface RepoGroupProps {
   handlers: RepoGroupBaseHandlers;
   selection: RepoGroupSelection;
   sessionOps: RepoGroupSessionOps;
+  workspaceOps: RepoGroupWorkspaceOps;
   isUnread: (sessionId: string, lastEventAt: string | null) => boolean;
   onError: (message: string | null) => void;
   revealRequest: { repo: string; path: string; nonce: number } | null;
@@ -452,6 +571,7 @@ function RepoGroup({
   handlers,
   selection,
   sessionOps,
+  workspaceOps,
   isUnread,
   onError,
   revealRequest,
@@ -460,6 +580,7 @@ function RepoGroup({
   const openCtx = useContextMenu((store) => store.open);
   const { selectedSessionId, onSelectSession } = selection;
   const { onRequestDelete, onUpdateSession } = sessionOps;
+  const { onResumeWorkspace, onRequestDeleteWorkspace } = workspaceOps;
   const { toggleRepo, setNewSessionFor, createSession, registerAnchor } =
     handlers;
   const anchorRef = useCallback(
@@ -509,9 +630,14 @@ function RepoGroup({
   const git = group.git;
   const [subOpen, setSubOpen] = useState({
     sessions: true,
+    workspaces: true,
     files: false,
     gitSection: true,
   });
+  const toggleWorkspacesSub = useCallback(
+    () => setSubOpen((p) => ({ ...p, workspaces: !p.workspaces })),
+    [],
+  );
 
   // Reveal requests (agent file-touches, "Reveal in file tree" menu,
   // etc.) should respect the Files subsection's current toggle: if
@@ -624,6 +750,26 @@ function RepoGroup({
             ))}
           </Subsection>
 
+          <Subsection
+            label="Workspaces"
+            open={subOpen.workspaces}
+            onToggle={toggleWorkspacesSub}
+            count={group.workspaces.length}
+          >
+            {group.workspaces.length === 0 && (
+              <div className="sidebar__muted">— no isolated workspaces —</div>
+            )}
+            {group.workspaces.map((workspace) => (
+              <WorkspaceRow
+                key={workspace.id}
+                workspace={workspace}
+                sessions={group.sessions}
+                onResume={onResumeWorkspace}
+                onRequestDelete={onRequestDeleteWorkspace}
+              />
+            ))}
+          </Subsection>
+
           <Subsection label="Files" open={subOpen.files} onToggle={toggleFilesSub}>
             {subOpen.files && (
               <FileTree
@@ -722,6 +868,148 @@ function RepoBadge({
         <span className="sidebar__repo-age tabular">{age}</span>
       </span>
     </Tooltip>
+  );
+}
+
+// ─── Workspace row ─────────────────────────────────────────────────
+
+interface WorkspaceRowProps {
+  workspace: WorkspaceView;
+  sessions: SessionView[];
+  onResume: (workspace: WorkspaceView) => void | Promise<void>;
+  onRequestDelete: (workspace: WorkspaceView, force?: boolean) => void;
+}
+
+function WorkspaceRow({
+  workspace,
+  sessions,
+  onResume,
+  onRequestDelete,
+}: WorkspaceRowProps) {
+  const openCtx = useContextMenu((store) => store.open);
+  const openTab = useTabs((store) => store.openTab);
+  const linkedSession = workspace.created_by_session_id
+    ? sessions.find((session) => session.id === workspace.created_by_session_id)
+    : null;
+  const dirtyCount = workspace.git.uncommitted_count;
+  const displayBranch = workspace.branch_name ?? "isolated";
+  const displayName = displayBranch.replace(/^sulion\//, "");
+  const meta = [
+    workspace.state,
+    dirtyCount > 0 ? `${dirtyCount} dirty` : "clean",
+    linkedSession ? `session ${linkedSession.id.slice(0, 8)}` : "no session",
+    ageSince(workspace.updated_at),
+  ].join(" · ");
+
+  const openDiff = useCallback(() => {
+    openTab({
+      kind: "diff",
+      repo: workspace.repo_name,
+      workspaceId: workspace.id,
+    });
+    appCommands.closeDrawer();
+  }, [openTab, workspace.id, workspace.repo_name]);
+  const resume = useCallback(() => {
+    void onResume(workspace);
+  }, [onResume, workspace]);
+  const requestDelete = useCallback(
+    () => onRequestDelete(workspace, false),
+    [onRequestDelete, workspace],
+  );
+  const requestForceDelete = useCallback(
+    () => onRequestDelete(workspace, true),
+    [onRequestDelete, workspace],
+  );
+  const menuItems = useMemo<MenuItem[]>(
+    () => [
+      {
+        kind: "item",
+        id: "resume-workspace",
+        label: "Resume workspace",
+        onSelect: resume,
+      },
+      {
+        kind: "item",
+        id: "open-workspace-diff",
+        label: "Open workspace diff",
+        onSelect: openDiff,
+      },
+      { kind: "separator" },
+      {
+        kind: "item",
+        id: "delete-workspace",
+        label: "Delete workspace",
+        destructive: true,
+        onSelect: requestDelete,
+      },
+      {
+        kind: "item",
+        id: "force-delete-workspace",
+        label: "Force delete workspace",
+        destructive: true,
+        onSelect: requestForceDelete,
+      },
+    ],
+    [openDiff, requestDelete, requestForceDelete, resume],
+  );
+  const buildMenuItems = useCallback(() => menuItems, [menuItems]);
+  const { onContextMenu, onKeyDown } = useMemo(
+    () => contextMenuTriggerProps(openCtx, buildMenuItems),
+    [buildMenuItems, openCtx],
+  );
+
+  return (
+    <div className="sidebar__workspace-row">
+      <Tooltip label="Open workspace diff">
+        <button
+          type="button"
+          className="sidebar__workspace-main"
+          onClick={openDiff}
+          onContextMenu={onContextMenu}
+          onKeyDown={onKeyDown}
+        >
+          <span className="sidebar__workspace-icon" aria-hidden>
+            <Icon name="layers" size={14} />
+          </span>
+          <span className="sidebar__workspace-text">
+            <span className="sidebar__workspace-name">{displayName}</span>
+            <span className="sidebar__workspace-meta tabular">{meta}</span>
+          </span>
+        </button>
+      </Tooltip>
+      <div className="sidebar__workspace-actions">
+        <Tooltip label="Resume workspace">
+          <button
+            type="button"
+            className="sidebar__icon-button"
+            aria-label={`Resume workspace ${displayName}`}
+            onClick={resume}
+          >
+            <Icon name="terminal" size={14} />
+          </button>
+        </Tooltip>
+        <Tooltip label="Open workspace diff">
+          <button
+            type="button"
+            className="sidebar__icon-button"
+            aria-label={`Open workspace diff ${displayName}`}
+            onClick={openDiff}
+          >
+            <Icon name="diff" size={14} />
+          </button>
+        </Tooltip>
+        <Tooltip label="Delete workspace">
+          <button
+            type="button"
+            className="sidebar__icon-button sidebar__icon-button--danger"
+            aria-label={`Delete workspace ${displayName}`}
+            onClick={requestDelete}
+          >
+            <Icon name="trash-2" size={14} />
+          </button>
+        </Tooltip>
+      </div>
+    </div>
   );
 }
 

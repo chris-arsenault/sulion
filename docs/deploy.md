@@ -101,4 +101,4 @@ UI at `http://192.168.66.3:30080/`. The frontend now blocks on Cognito sign-in a
 
 ## Networking
 
-LAN-only via WireGuard, published on `192.168.66.3:30080`. No reverse-proxy route. When public exposure is wanted, add a `reverse_proxy_routes` entry in `ahara-network` with `auth = "jwt-validation"` — the code does not assume the ALB path anywhere.
+LAN-only via WireGuard, published on `192.168.66.3:30080`. The stack also creates the internal Docker network `sulion`; runner-launched containers join that network automatically so PTY workflows can reach them by container name. No reverse-proxy route. When public exposure is wanted, add a `reverse_proxy_routes` entry in `ahara-network` with `auth = "jwt-validation"` — the code does not assume the ALB path anywhere.

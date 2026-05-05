@@ -24,6 +24,7 @@ import {
   getRepoTimelineTurn,
   getTimeline,
   getTimelineTurn,
+  interruptSessionAgent,
   sendSessionPrompt,
   startSessionAgent,
 } from "../api/client";
@@ -51,6 +52,7 @@ import { type ToolPair, type Turn, type TurnSummary } from "./timeline/grouping"
 import { SessionInspectorPane } from "./timeline/SessionInspectorPane";
 import { SubagentModal } from "./timeline/SubagentModal";
 import { TurnRow } from "./timeline/TurnRow";
+import { Icon } from "../icons";
 import { Tooltip } from "./ui";
 import "./TimelinePane.css";
 
@@ -558,7 +560,9 @@ function TimelinePromptBar({
   onRefresh: () => Promise<void>;
 }) {
   const [text, setText] = useState("");
-  const [pending, setPending] = useState<"send" | AgentLaunchType | null>(null);
+  const [pending, setPending] = useState<"send" | "interrupt" | AgentLaunchType | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
   const runtime = session?.agent_runtime ?? {
     agent: null,
@@ -573,6 +577,7 @@ function TimelinePromptBar({
   const starting = live && runtime.state === "starting";
   const canLaunch = live && !starting && runtime.state !== "running";
   const canSend = running && text.trim().length > 0 && pending == null;
+  const canInterrupt = running && pending == null;
   const status = promptStatusText(session ?? null, runtime);
   const meta = promptMetadataText(metadata);
 
@@ -609,6 +614,20 @@ function TimelinePromptBar({
     }
   }, [canSend, onRefresh, sessionId, text]);
 
+  const interruptAgent = useCallback(async () => {
+    if (!canInterrupt) return;
+    setPending("interrupt");
+    setError(null);
+    try {
+      await interruptSessionAgent(sessionId);
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "failed to interrupt agent");
+    } finally {
+      setPending(null);
+    }
+  }, [canInterrupt, onRefresh, sessionId]);
+
   const onTextChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => setText(e.target.value),
     [],
@@ -625,6 +644,9 @@ function TimelinePromptBar({
   const onSendClick = useCallback(() => {
     void sendPrompt();
   }, [sendPrompt]);
+  const onInterruptClick = useCallback(() => {
+    void interruptAgent();
+  }, [interruptAgent]);
   const onStartClaude = useCallback(() => {
     void startAgent("claude");
   }, [startAgent]);
@@ -659,6 +681,17 @@ function TimelinePromptBar({
           >
             {pending === "send" ? "Sending…" : "Send"}
           </button>
+          <Tooltip label="Interrupt running agent (Esc)">
+            <button
+              type="button"
+              className="timeline-prompt__button timeline-prompt__button--icon timeline-prompt__button--interrupt"
+              onClick={onInterruptClick}
+              disabled={!canInterrupt}
+              aria-label="Interrupt agent"
+            >
+              <Icon name="x" size={16} />
+            </button>
+          </Tooltip>
         </div>
       ) : (
         <div className="timeline-prompt__launch-row">

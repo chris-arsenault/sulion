@@ -30,11 +30,13 @@ const REPO_ALPHA_PATH = "/tmp/alpha";
 interface MockState {
   sessions: Array<Record<string, unknown>>;
   repos: Array<Record<string, unknown>>;
+  workspaces: Array<Record<string, unknown>>;
   secrets: Array<Record<string, unknown>>;
   grantsBySession: Record<string, Array<Record<string, unknown>>>;
   createSessionCalls: Array<unknown>;
   createRepoCalls: Array<unknown>;
   deletedIds: string[];
+  deletedWorkspaceRequests: Array<{ id: string; query: string }>;
   patches: Array<{ id: string; body: unknown }>;
   unlocks: Array<unknown>;
   revokes: Array<unknown>;
@@ -44,11 +46,13 @@ function installFetchMock(): MockState {
   const state: MockState = {
     sessions: [],
     repos: [],
+    workspaces: [],
     secrets: [],
     grantsBySession: {},
     createSessionCalls: [],
     createRepoCalls: [],
     deletedIds: [],
+    deletedWorkspaceRequests: [],
     patches: [],
     unlocks: [],
     revokes: [],
@@ -63,7 +67,11 @@ function installFetchMock(): MockState {
 
       if (url === "/api/app-state" && method === "GET") {
         return jsonResp(
-          appStatePayload({ sessions: state.sessions, repos: state.repos }),
+          appStatePayload({
+            sessions: state.sessions,
+            repos: state.repos,
+            workspaces: state.workspaces,
+          }),
         );
       }
       if (url === "/api/sessions" && method === "POST") {
@@ -84,6 +92,13 @@ function installFetchMock(): MockState {
         };
         state.sessions.push(s);
         return jsonResp(s, 201);
+      }
+      if (url.startsWith("/api/workspaces/") && method === "DELETE") {
+        const [path, query = ""] = url.split("?");
+        const id = path.split("/").pop()!;
+        state.workspaces = state.workspaces.filter((w) => w.id !== id);
+        state.deletedWorkspaceRequests.push({ id, query });
+        return new Response(null, { status: 204 });
       }
       if (url.startsWith("/api/sessions/") && method === "DELETE") {
         const id = url.split("/").pop()!;
@@ -149,6 +164,34 @@ function installFetchMock(): MockState {
     }),
   );
   return state;
+}
+
+function workspaceFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "99999999-9999-9999-9999-999999999999",
+    repo_name: REPO_ALPHA,
+    kind: "worktree",
+    path: "/tmp/workspaces/alpha/99999999-9999-9999-9999-999999999999",
+    branch_name: "sulion/alpha/999999999999",
+    base_ref: "main",
+    base_sha: "aaaaaaaaaaaa",
+    merge_target: "main",
+    created_by_session_id: null,
+    state: "active",
+    created_at: new Date(Date.now() - 60_000).toISOString(),
+    updated_at: new Date().toISOString(),
+    git: {
+      revision: 1,
+      branch: "sulion/alpha/999999999999",
+      uncommitted_count: 0,
+      untracked_count: 0,
+      last_commit: null,
+      recent_commits: [],
+      refreshing: false,
+      status_error: null,
+    },
+    ...overrides,
+  };
 }
 
 describe("Sidebar", () => {
@@ -386,6 +429,104 @@ describe("Sidebar", () => {
       repo: REPO_ALPHA,
       workspace_mode: "isolated",
     });
+  });
+
+  it("shows isolated workspaces and opens their workspace diff", async () => {
+    const state = installFetchMock();
+    const workspace = workspaceFixture({
+      git: {
+        revision: 1,
+        branch: "sulion/alpha/999999999999",
+        uncommitted_count: 2,
+        untracked_count: 1,
+        last_commit: null,
+        recent_commits: [],
+        refreshing: false,
+        status_error: null,
+      },
+    });
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.workspaces.push(workspace);
+    setup();
+    const user = userEvent.setup();
+
+    const label = await screen.findByText("alpha/999999999999");
+    expect(screen.getByText(/2 dirty/)).toBeDefined();
+    await user.click(label.closest("button")!);
+
+    const tab = Object.values(useTabStore.getState().tabs).find(
+      (item) =>
+        item.kind === "diff" &&
+        item.repo === REPO_ALPHA &&
+        item.workspaceId === workspace.id,
+    );
+    expect(tab).toBeDefined();
+  });
+
+  it("resumes an isolated workspace from its row action", async () => {
+    const state = installFetchMock();
+    const workspace = workspaceFixture();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.workspaces.push(workspace);
+    setup();
+    const user = userEvent.setup();
+
+    await user.click(
+      await screen.findByLabelText("Resume workspace alpha/999999999999"),
+    );
+
+    await waitFor(() => expect(state.createSessionCalls).toHaveLength(1));
+    expect(state.createSessionCalls[0]).toEqual({
+      repo: REPO_ALPHA,
+      workspace_id: workspace.id,
+    });
+  });
+
+  it("deletes an isolated workspace from its row action", async () => {
+    const state = installFetchMock();
+    const workspace = workspaceFixture();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.workspaces.push(workspace);
+    setup();
+    const user = userEvent.setup();
+
+    await user.click(
+      await screen.findByLabelText("Delete workspace alpha/999999999999"),
+    );
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(state.deletedWorkspaceRequests).toEqual([
+        { id: workspace.id, query: "" },
+      ]),
+    );
+    expect(screen.queryByText("alpha/999999999999")).toBeNull();
+  });
+
+  it("force deletes an isolated workspace from its context menu", async () => {
+    const state = installFetchMock();
+    const workspace = workspaceFixture();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.workspaces.push(workspace);
+    setup();
+    const user = userEvent.setup();
+
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: await screen.findByText("alpha/999999999999"),
+    });
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Force delete workspace" }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Force delete" }),
+    );
+
+    await waitFor(() =>
+      expect(state.deletedWorkspaceRequests).toEqual([
+        { id: workspace.id, query: "force=true" },
+      ]),
+    );
   });
 
   it("deletes a session from the shared context menu", async () => {

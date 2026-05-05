@@ -3,6 +3,7 @@ import type {
   RepoView,
   SessionView,
   StatsResponse,
+  WorkspaceView,
 } from "../api/types";
 
 export function statsPayload(overrides: Partial<StatsResponse> = {}): StatsResponse {
@@ -44,16 +45,19 @@ export function statsPayload(overrides: Partial<StatsResponse> = {}): StatsRespo
 export function appStatePayload({
   sessions = [],
   repos = [],
+  workspaces = [],
   stats = statsPayload(),
 }: {
   sessions?: SessionView[] | Array<Record<string, unknown>>;
   repos?: RepoView[] | Array<Record<string, unknown>>;
+  workspaces?: WorkspaceView[] | Array<Record<string, unknown>>;
   stats?: StatsResponse;
 } = {}): AppStateResponse {
   return {
     generated_at: "2026-05-02T00:00:00Z",
     sessions: sessions as SessionView[],
     repos: repos as RepoView[],
+    workspaces: workspaces as WorkspaceView[],
     stats,
   };
 }

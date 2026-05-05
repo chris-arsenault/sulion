@@ -32,6 +32,7 @@ const TimelinePane = (props: { sessionId?: string; repo?: string }) => (
 );
 
 const transcriptSessionUuid = "00000000-0000-0000-0000-000000000001";
+const sessionStartedAt = "2026-05-02T00:00:00Z";
 
 function sessionView(
   timelineRevision = 0,
@@ -42,7 +43,7 @@ function sessionView(
     repo: "alpha",
     working_dir: "/tmp/alpha",
     state: "live",
-    created_at: "2026-05-02T00:00:00Z",
+    created_at: sessionStartedAt,
     ended_at: null,
     exit_code: null,
     current_session_uuid: transcriptSessionUuid,
@@ -221,7 +222,7 @@ describe("TimelinePane", () => {
           agent_runtime: {
             agent: "codex",
             state: "running",
-            started_at: "2026-05-02T00:00:00Z",
+            started_at: sessionStartedAt,
             ended_at: null,
             exit_code: null,
           },
@@ -233,7 +234,7 @@ describe("TimelinePane", () => {
             cli_version: "1.0.0",
             cwd: "/tmp/alpha",
             model_context_window: 258400,
-            updated_at: "2026-05-02T00:00:00Z",
+            updated_at: sessionStartedAt,
           },
         }),
       ],
@@ -266,7 +267,7 @@ describe("TimelinePane", () => {
           agent_runtime: {
             agent: "codex",
             state: "running",
-            started_at: "2026-05-02T00:00:00Z",
+            started_at: sessionStartedAt,
             ended_at: null,
             exit_code: null,
           },
@@ -301,6 +302,41 @@ describe("TimelinePane", () => {
     await user.click(await screen.findByRole("button", { name: "Start Codex" }));
 
     await waitFor(() => expect(calls).toEqual([{ agent: "codex" }]));
+  });
+
+  it("interrupts a running agent from the prompt bar", async () => {
+    const calls: string[] = [];
+    stubFetch(
+      (url) => {
+        if (url === "/api/sessions/abc/agent/interrupt") {
+          calls.push(url);
+          return new Response("", { status: 202 });
+        }
+        return new Response(timelineBody(), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+      [
+        sessionView(0, {
+          agent_runtime: {
+            agent: "codex",
+            state: "running",
+            started_at: sessionStartedAt,
+            ended_at: null,
+            exit_code: null,
+          },
+        }),
+      ],
+    );
+
+    render(<TimelinePane sessionId="abc" />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Interrupt agent" }));
+
+    await waitFor(() =>
+      expect(calls).toEqual(["/api/sessions/abc/agent/interrupt"]),
+    );
   });
 
   it("surfaces projected event counts in the header", async () => {

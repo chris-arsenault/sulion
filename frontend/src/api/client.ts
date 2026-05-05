@@ -134,6 +134,12 @@ export function startSessionAgent(
   });
 }
 
+export function interruptSessionAgent(id: string): Promise<void> {
+  return request<void>(`/api/sessions/${id}/agent/interrupt`, {
+    method: "POST",
+  });
+}
+
 export function sendSessionPrompt(id: string, text: string): Promise<void> {
   return request<void>(`/api/sessions/${id}/prompt`, {
     method: "POST",
@@ -344,6 +350,19 @@ export function listWorkspaces(): Promise<WorkspaceView[]> {
 
 export function getWorkspace(id: string): Promise<WorkspaceView> {
   return request<WorkspaceView>(`/api/workspaces/${encodeURIComponent(id)}`);
+}
+
+export function deleteWorkspace(
+  id: string,
+  opts: { force?: boolean; deleteBranch?: boolean } = {},
+): Promise<void> {
+  const qs = new URLSearchParams();
+  if (opts.force) qs.set("force", "true");
+  if (opts.deleteBranch === false) qs.set("delete_branch", "false");
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return request<void>(`/api/workspaces/${encodeURIComponent(id)}${suffix}`, {
+    method: "DELETE",
+  });
 }
 
 export function getWorkspaceDirtyPaths(

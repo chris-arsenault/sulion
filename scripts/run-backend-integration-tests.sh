@@ -18,6 +18,9 @@ TEST_TARGETS=(
 INTEGRATION_FEATURE="integration-tests"
 
 DOCKER_CONTAINER_NAME=""
+DOCKER_CONTAINER_PORT="5432"
+DOCKER_DB_HOST="127.0.0.1"
+DOCKER_DB_PORT="${DOCKER_CONTAINER_PORT}"
 
 cleanup() {
   if [[ -n "${DOCKER_CONTAINER_NAME}" ]]; then
@@ -28,15 +31,64 @@ cleanup() {
 wait_for_postgres() {
   local attempt
   for attempt in $(seq 1 30); do
-    if docker exec "${DOCKER_CONTAINER_NAME}" pg_isready -U postgres -d sulion >/dev/null 2>&1 \
-      && docker exec "${DOCKER_CONTAINER_NAME}" psql -U postgres -d sulion -c 'select 1' >/dev/null 2>&1; then
+    local status
+    status="$(
+      docker inspect \
+        --format '{{ if .State.Health }}{{ .State.Health.Status }}{{ else }}{{ .State.Status }}{{ end }}' \
+        "${DOCKER_CONTAINER_NAME}" 2>/dev/null || true
+    )"
+    if [[ "${status}" == "healthy" ]]; then
       return 0
+    fi
+    if [[ "${status}" == "exited" || "${status}" == "dead" ]]; then
+      docker logs "${DOCKER_CONTAINER_NAME}" >&2 || true
+      echo "sulion: postgres test container exited before becoming ready" >&2
+      return 1
     fi
     sleep 1
   done
 
+  docker logs "${DOCKER_CONTAINER_NAME}" >&2 || true
   echo "sulion: postgres test container did not become ready" >&2
   return 1
+}
+
+using_sulion_runner() {
+  [[ "$(command -v docker)" == "/opt/sulion/bin/docker" || -n "${SULION_RUNNER_URL:-}" ]]
+}
+
+start_postgres_container() {
+  local docker_args=(
+    run
+    --rm
+    -d
+    --name "${DOCKER_CONTAINER_NAME}"
+    --health-cmd "pg_isready -U postgres -d sulion -p ${DOCKER_CONTAINER_PORT}"
+    --health-interval 1s
+    --health-timeout 5s
+    --health-retries 30
+    -e POSTGRES_PASSWORD=testpass
+    -e POSTGRES_DB=sulion
+  )
+
+  if using_sulion_runner; then
+    DOCKER_DB_HOST="${DOCKER_CONTAINER_NAME}"
+    DOCKER_DB_PORT="${DOCKER_CONTAINER_PORT}"
+  else
+    docker_args+=(-p "127.0.0.1::${DOCKER_CONTAINER_PORT}")
+    DOCKER_DB_HOST="127.0.0.1"
+  fi
+
+  docker_args+=(docker.io/library/postgres:16)
+  docker "${docker_args[@]}" >/dev/null
+
+  if ! using_sulion_runner; then
+    DOCKER_DB_PORT="$(docker port "${DOCKER_CONTAINER_NAME}" "${DOCKER_CONTAINER_PORT}/tcp" | awk -F: 'END { print $NF }')"
+    if [[ -z "${DOCKER_DB_PORT}" ]]; then
+      echo "sulion: failed to discover mapped postgres port" >&2
+      return 1
+    fi
+  fi
 }
 
 ensure_test_db() {
@@ -52,25 +104,10 @@ ensure_test_db() {
   DOCKER_CONTAINER_NAME="sulion-test-db-${PPID}-$$"
   trap cleanup EXIT
 
-  docker run \
-    --rm \
-    -d \
-    --name "${DOCKER_CONTAINER_NAME}" \
-    -p "127.0.0.1::5432" \
-    -e POSTGRES_PASSWORD=testpass \
-    -e POSTGRES_DB=sulion \
-    docker.io/library/postgres:16 >/dev/null
-
+  start_postgres_container
   wait_for_postgres
 
-  local mapped_port
-  mapped_port="$(docker port "${DOCKER_CONTAINER_NAME}" 5432/tcp | awk -F: 'END { print $NF }')"
-  if [[ -z "${mapped_port}" ]]; then
-    echo "sulion: failed to discover mapped postgres port" >&2
-    return 1
-  fi
-
-  export SULION_TEST_DB="postgres://postgres:testpass@127.0.0.1:${mapped_port}/sulion"
+  export SULION_TEST_DB="postgres://postgres:testpass@${DOCKER_DB_HOST}:${DOCKER_DB_PORT}/sulion"
 }
 
 run_target() {

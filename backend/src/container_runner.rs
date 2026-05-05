@@ -15,6 +15,10 @@ use tokio::process::Command;
 const OWNER_LABEL: &str = "sulion.owner";
 const OWNER_VALUE: &str = "sulion";
 const PTY_LABEL: &str = "sulion.pty_id";
+const SULION_NETWORK: &str = "sulion";
+const COMPOSE_NETWORK_OVERRIDE_PATH: &str = "/tmp/sulion-compose-network.override.yaml";
+const COMPOSE_NETWORK_OVERRIDE: &str =
+    "networks:\n  default:\n    name: sulion\n    external: true\n";
 
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {
@@ -82,7 +86,10 @@ impl RunnerState {
         request: DockerCommandRequest,
     ) -> Result<DockerCommandResponse, RunnerError> {
         let cwd = self.validate_cwd(&request.cwd)?;
-        let prepared = prepare_docker_args(&request, &self.config)?;
+        let prepared = prepare_docker_args(&request, &self.config, &cwd)?;
+        if matches!(prepared.subcommand, DockerSubcommand::Compose) {
+            write_compose_network_override()?;
+        }
         ensure_owned_targets(&self.config.docker_bin, prepared.subcommand, &prepared.args).await?;
 
         let output = Command::new(&self.config.docker_bin)
@@ -222,6 +229,7 @@ enum DockerSubcommand {
     Stop,
     Rm,
     Inspect,
+    Compose,
     Version,
     Help,
 }
@@ -229,6 +237,7 @@ enum DockerSubcommand {
 fn prepare_docker_args(
     request: &DockerCommandRequest,
     config: &RunnerConfig,
+    cwd: &Path,
 ) -> Result<PreparedDockerArgs, RunnerError> {
     if request.argv.is_empty() {
         return Err(RunnerError::bad_request("docker command is required"));
@@ -259,6 +268,7 @@ fn prepare_docker_args(
         "stop" => Ok(simple_args(request, DockerSubcommand::Stop)),
         "rm" => Ok(simple_args(request, DockerSubcommand::Rm)),
         "inspect" => Ok(simple_args(request, DockerSubcommand::Inspect)),
+        "compose" => prepare_compose_args(request, cwd),
         _ => Err(RunnerError::forbidden(format!(
             "docker subcommand is not supported: {command}"
         ))),
@@ -302,6 +312,8 @@ fn prepare_run_args(
         format!("{OWNER_LABEL}={OWNER_VALUE}"),
         "--label".to_string(),
         format!("{PTY_LABEL}={}", pty_label_value(request)),
+        "--network".to_string(),
+        SULION_NETWORK.to_string(),
     ];
     if let Some(memory) = config.default_memory.as_ref() {
         args.push("--memory".to_string());
@@ -338,6 +350,49 @@ fn prepare_ps_args(request: &DockerCommandRequest) -> Result<PreparedDockerArgs,
 fn prepare_logs_args(request: &DockerCommandRequest) -> Result<PreparedDockerArgs, RunnerError> {
     deny_log_streaming_flags(&request.argv[1..])?;
     Ok(simple_args(request, DockerSubcommand::Logs))
+}
+
+fn prepare_compose_args(
+    request: &DockerCommandRequest,
+    cwd: &Path,
+) -> Result<PreparedDockerArgs, RunnerError> {
+    let compose_args = &request.argv[1..];
+    if compose_args
+        .first()
+        .is_some_and(|arg| matches!(arg.as_str(), "version" | "--version" | "-v"))
+    {
+        return Ok(PreparedDockerArgs {
+            subcommand: DockerSubcommand::Compose,
+            args: vec!["compose".to_string(), "version".to_string()],
+        });
+    }
+    let command_index = compose_command_index(compose_args)?;
+    let command = &compose_args[command_index];
+    validate_compose_command(command)?;
+
+    let global_args = &compose_args[..command_index];
+    deny_compose_global_args(global_args)?;
+
+    let mut args = vec!["compose".to_string()];
+    if command != "version" {
+        if !compose_args_include_files(global_args) {
+            for file in default_compose_files(cwd)? {
+                args.push("-f".to_string());
+                args.push(file);
+            }
+        }
+        args.extend_from_slice(global_args);
+        args.push("-f".to_string());
+        args.push(COMPOSE_NETWORK_OVERRIDE_PATH.to_string());
+    } else {
+        args.extend_from_slice(global_args);
+    }
+    args.extend_from_slice(&compose_args[command_index..]);
+
+    Ok(PreparedDockerArgs {
+        subcommand: DockerSubcommand::Compose,
+        args,
+    })
 }
 
 fn pty_label_value(request: &DockerCommandRequest) -> &str {
@@ -438,6 +493,124 @@ fn deny_dangerous_flags(args: &[String], policy: FlagPolicy) -> Result<(), Runne
         index += 1;
     }
     Ok(())
+}
+
+fn compose_command_index(args: &[String]) -> Result<usize, RunnerError> {
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if arg == "--" {
+            return Err(RunnerError::bad_request(
+                "docker compose command is required",
+            ));
+        }
+        if arg == "-f"
+            || arg == "--file"
+            || arg == "-p"
+            || arg == "--project-name"
+            || arg == "--profile"
+            || arg == "--env-file"
+            || arg == "--ansi"
+            || arg == "--progress"
+            || arg == "--parallel"
+        {
+            index += 2;
+            continue;
+        }
+        if arg.starts_with("--file=")
+            || arg.starts_with("--project-name=")
+            || arg.starts_with("--profile=")
+            || arg.starts_with("--env-file=")
+            || arg.starts_with("--ansi=")
+            || arg.starts_with("--progress=")
+            || arg.starts_with("--parallel=")
+        {
+            index += 1;
+            continue;
+        }
+        if arg.starts_with('-') {
+            index += 1;
+            continue;
+        }
+        return Ok(index);
+    }
+    Err(RunnerError::bad_request(
+        "docker compose command is required",
+    ))
+}
+
+fn validate_compose_command(command: &str) -> Result<(), RunnerError> {
+    if matches!(
+        command,
+        "build"
+            | "config"
+            | "down"
+            | "images"
+            | "logs"
+            | "ps"
+            | "pull"
+            | "restart"
+            | "rm"
+            | "start"
+            | "stop"
+            | "up"
+            | "version"
+    ) {
+        Ok(())
+    } else {
+        Err(RunnerError::forbidden(format!(
+            "docker compose command is not supported: {command}"
+        )))
+    }
+}
+
+fn deny_compose_global_args(args: &[String]) -> Result<(), RunnerError> {
+    for arg in args {
+        if arg == "--project-directory" || arg.starts_with("--project-directory=") {
+            return Err(RunnerError::forbidden(
+                "docker compose --project-directory is not supported through sulion-runner",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn compose_args_include_files(args: &[String]) -> bool {
+    args.iter()
+        .any(|arg| matches!(arg.as_str(), "-f" | "--file") || arg.starts_with("--file="))
+}
+
+fn default_compose_files(cwd: &Path) -> Result<Vec<String>, RunnerError> {
+    let mut files = Vec::new();
+    let base = [
+        "compose.yaml",
+        "compose.yml",
+        "docker-compose.yaml",
+        "docker-compose.yml",
+    ]
+    .into_iter()
+    .find(|name| cwd.join(name).is_file())
+    .ok_or_else(|| RunnerError::bad_request("compose file not found"))?;
+    files.push(base.to_string());
+    for name in [
+        "compose.override.yaml",
+        "compose.override.yml",
+        "docker-compose.override.yaml",
+        "docker-compose.override.yml",
+    ] {
+        if cwd.join(name).is_file() {
+            files.push(name.to_string());
+        }
+    }
+    Ok(files)
+}
+
+fn write_compose_network_override() -> Result<(), RunnerError> {
+    std::fs::write(COMPOSE_NETWORK_OVERRIDE_PATH, COMPOSE_NETWORK_OVERRIDE).map_err(|err| {
+        RunnerError::internal(format!(
+            "failed to prepare docker compose network override: {err}"
+        ))
+    })
 }
 
 fn deny_log_streaming_flags(args: &[String]) -> Result<(), RunnerError> {
@@ -599,6 +772,10 @@ mod tests {
         }
     }
 
+    fn prepare(request: &DockerCommandRequest) -> Result<PreparedDockerArgs, RunnerError> {
+        prepare_docker_args(request, &test_config(), Path::new("/home/dev/repos/app"))
+    }
+
     #[test]
     fn run_injects_labels_and_limits() {
         let request = DockerCommandRequest {
@@ -606,7 +783,7 @@ mod tests {
             cwd: "/home/dev/repos/app".into(),
             argv: vec!["run".into(), "--rm".into(), "alpine".into(), "true".into()],
         };
-        let prepared = prepare_docker_args(&request, &test_config()).unwrap();
+        let prepared = prepare(&request).unwrap();
         assert_eq!(prepared.subcommand, DockerSubcommand::Run);
         assert!(prepared
             .args
@@ -617,6 +794,10 @@ mod tests {
             .windows(2)
             .any(|pair| pair == ["--memory", "1g"]));
         assert!(prepared.args.windows(2).any(|pair| pair == ["--cpus", "1"]));
+        assert!(prepared
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--network", "sulion"]));
         assert!(prepared
             .args
             .windows(2)
@@ -631,6 +812,8 @@ mod tests {
             vec!["run", "-v/:/host", "alpine"],
             vec!["run", "--mount", "type=bind,src=/,dst=/host", "alpine"],
             vec!["run", "--network=host", "alpine"],
+            vec!["run", "--network=default", "alpine"],
+            vec!["run", "--network", "none", "alpine"],
             vec!["run", "-it", "alpine"],
         ] {
             let request = DockerCommandRequest {
@@ -638,7 +821,7 @@ mod tests {
                 cwd: "/home/dev/repos/app".into(),
                 argv: args.into_iter().map(str::to_string).collect(),
             };
-            assert!(prepare_docker_args(&request, &test_config()).is_err());
+            assert!(prepare(&request).is_err());
         }
     }
 
@@ -656,7 +839,7 @@ mod tests {
                 cwd: "/home/dev/repos/app".into(),
                 argv: args.into_iter().map(str::to_string).collect(),
             };
-            assert!(prepare_docker_args(&request, &test_config()).is_err());
+            assert!(prepare(&request).is_err());
         }
     }
 
@@ -667,7 +850,7 @@ mod tests {
             cwd: "/home/dev/repos/app".into(),
             argv: vec!["build".into(), "-t".into(), "local/app".into(), ".".into()],
         };
-        let prepared = prepare_docker_args(&request, &test_config()).unwrap();
+        let prepared = prepare(&request).unwrap();
         assert_eq!(prepared.subcommand, DockerSubcommand::Build);
         assert!(prepared
             .args
@@ -687,7 +870,7 @@ mod tests {
                 cwd: "/home/dev/repos/app".into(),
                 argv: args.into_iter().map(str::to_string).collect(),
             };
-            assert!(prepare_docker_args(&request, &test_config()).is_err());
+            assert!(prepare(&request).is_err());
         }
     }
 
@@ -698,7 +881,7 @@ mod tests {
             cwd: "/home/dev/repos/app".into(),
             argv: vec!["logs".into(), "--follow".into(), "container".into()],
         };
-        assert!(prepare_docker_args(&request, &test_config()).is_err());
+        assert!(prepare(&request).is_err());
     }
 
     #[test]
@@ -708,10 +891,64 @@ mod tests {
             cwd: "/home/dev/repos/app".into(),
             argv: vec!["ps".into(), "-a".into()],
         };
-        let prepared = prepare_docker_args(&request, &test_config()).unwrap();
+        let prepared = prepare(&request).unwrap();
         assert_eq!(
             prepared.args,
             vec!["ps", "--filter", "label=sulion.owner=sulion", "-a"]
         );
+    }
+
+    #[test]
+    fn compose_uses_sulion_network_override() {
+        let cwd = std::env::temp_dir().join(format!("sulion-compose-test-{}", std::process::id()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(
+            cwd.join("compose.yaml"),
+            "services:\n  app:\n    image: alpine\n",
+        )
+        .unwrap();
+
+        let request = DockerCommandRequest {
+            pty_id: None,
+            cwd: cwd.to_string_lossy().into_owned(),
+            argv: vec!["compose".into(), "up".into(), "-d".into()],
+        };
+        let prepared = prepare_docker_args(&request, &test_config(), &cwd).unwrap();
+        assert_eq!(prepared.subcommand, DockerSubcommand::Compose);
+        assert_eq!(
+            prepared.args,
+            vec![
+                "compose",
+                "-f",
+                "compose.yaml",
+                "-f",
+                COMPOSE_NETWORK_OVERRIDE_PATH,
+                "up",
+                "-d",
+            ]
+        );
+
+        std::fs::remove_dir_all(cwd).unwrap();
+    }
+
+    #[test]
+    fn compose_denies_exec() {
+        let request = DockerCommandRequest {
+            pty_id: None,
+            cwd: "/home/dev/repos/app".into(),
+            argv: vec!["compose".into(), "exec".into(), "app".into(), "sh".into()],
+        };
+        assert!(prepare(&request).is_err());
+    }
+
+    #[test]
+    fn compose_version_does_not_require_compose_file() {
+        let request = DockerCommandRequest {
+            pty_id: None,
+            cwd: "/home/dev/repos/app".into(),
+            argv: vec!["compose".into(), "--version".into()],
+        };
+        let prepared = prepare(&request).unwrap();
+        assert_eq!(prepared.args, vec!["compose", "version"]);
     }
 }

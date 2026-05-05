@@ -6,6 +6,7 @@ import {
   createRepo as apiCreateRepo,
   createSession as apiCreateSession,
   deleteSession as apiDeleteSession,
+  deleteWorkspace as apiDeleteWorkspace,
   getAppState,
   updateSession as apiUpdateSession,
 } from "../api/client";
@@ -45,6 +46,10 @@ export interface SessionStore {
   selectSession: (id: string | null) => void;
   createSession: (req: CreateSessionRequest) => Promise<SessionView>;
   deleteSession: (id: string) => Promise<void>;
+  deleteWorkspace: (
+    id: string,
+    opts?: { force?: boolean; deleteBranch?: boolean },
+  ) => Promise<void>;
   updateSession: (id: string, patch: UpdateSessionRequest) => Promise<void>;
   createRepo: (req: CreateRepoRequest) => Promise<RepoView>;
   refresh: () => Promise<void>;
@@ -152,6 +157,16 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
       selectedSessionId: selectedSessionId === id ? null : state.selectedSessionId,
     }));
     if (selectedSessionId === id) writeSessionIdToUrl(null);
+  },
+
+  async deleteWorkspace(id, opts) {
+    await apiDeleteWorkspace(id, opts);
+    set((state) => ({
+      workspaces: state.workspaces.filter((workspace) => workspace.id !== id),
+      sessions: state.sessions.map((session) =>
+        session.workspace?.id === id ? { ...session, workspace: null } : session,
+      ),
+    }));
   },
 
   async updateSession(id, patch) {

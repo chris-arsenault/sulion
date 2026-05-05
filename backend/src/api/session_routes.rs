@@ -456,6 +456,23 @@ pub(super) async fn start_session_agent(
     Ok(StatusCode::ACCEPTED)
 }
 
+pub(super) async fn interrupt_session_agent(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let meta = pty::read_meta(&state.pool, id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if meta.state != pty::PtyState::Live {
+        return Err(ApiError::BadRequest("PTY session is not live".into()));
+    }
+    if !matches!(meta.agent_runtime.state.as_str(), "starting" | "running") {
+        return Err(ApiError::BadRequest("agent is not running".into()));
+    }
+    state.pty.send_input(id, agent_interrupt_input()).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
 #[derive(Deserialize)]
 pub(super) struct PromptReq {
     text: String,
@@ -478,10 +495,9 @@ pub(super) async fn send_session_prompt(
     if meta.agent_runtime.state != "running" {
         return Err(ApiError::BadRequest("agent is not running".into()));
     }
-    state
-        .pty
-        .send_input(id, prompt_input_bytes(&req.text))
-        .await?;
+    for chunk in prompt_input_chunks(&req.text) {
+        state.pty.send_input(id, chunk).await?;
+    }
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -696,17 +712,26 @@ fn agent_launch_shell_command(
     command
 }
 
-fn prompt_input_bytes(text: &str) -> Vec<u8> {
+fn prompt_input_chunks(text: &str) -> Vec<Vec<u8>> {
     let normalized = text
         .replace("\r\n", "\n")
         .replace('\r', "\n")
         .trim_end_matches('\n')
         .to_string();
-    if normalized.contains('\n') {
-        format!("\x1b[200~{normalized}\x1b[201~\r").into_bytes()
+    let prompt = if normalized.contains('\n') {
+        format!("\x1b[200~{normalized}\x1b[201~").into_bytes()
     } else {
-        format!("{normalized}\r").into_bytes()
-    }
+        normalized.into_bytes()
+    };
+    vec![prompt, agent_submit_input()]
+}
+
+fn agent_submit_input() -> Vec<u8> {
+    b"\r".to_vec()
+}
+
+fn agent_interrupt_input() -> Vec<u8> {
+    b"\x1b".to_vec()
 }
 
 #[cfg(test)]
@@ -715,20 +740,34 @@ mod tests {
 
     #[test]
     fn prompt_input_submits_single_line_with_enter() {
-        assert_eq!(prompt_input_bytes("hello"), b"hello\r");
+        assert_eq!(
+            prompt_input_chunks("hello"),
+            vec![b"hello".to_vec(), b"\r".to_vec()]
+        );
     }
 
     #[test]
     fn prompt_input_strips_trailing_textarea_newline_before_enter() {
-        assert_eq!(prompt_input_bytes("hello\n"), b"hello\r");
-        assert_eq!(prompt_input_bytes("hello\r\n"), b"hello\r");
+        assert_eq!(
+            prompt_input_chunks("hello\n"),
+            vec![b"hello".to_vec(), b"\r".to_vec()],
+        );
+        assert_eq!(
+            prompt_input_chunks("hello\r\n"),
+            vec![b"hello".to_vec(), b"\r".to_vec()],
+        );
     }
 
     #[test]
     fn prompt_input_uses_bracketed_paste_for_multiline_text() {
         assert_eq!(
-            prompt_input_bytes("hello\r\nworld\n"),
-            b"\x1b[200~hello\nworld\x1b[201~\r",
+            prompt_input_chunks("hello\r\nworld\n"),
+            vec![b"\x1b[200~hello\nworld\x1b[201~".to_vec(), b"\r".to_vec()],
         );
+    }
+
+    #[test]
+    fn agent_interrupt_sends_escape() {
+        assert_eq!(agent_interrupt_input(), b"\x1b");
     }
 }

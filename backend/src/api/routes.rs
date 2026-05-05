@@ -34,6 +34,10 @@ pub fn router() -> Router<Arc<AppState>> {
             post(session_routes::start_session_agent),
         )
         .route(
+            "/api/sessions/:id/agent/interrupt",
+            post(session_routes::interrupt_session_agent),
+        )
+        .route(
             "/api/sessions/:id/prompt",
             post(session_routes::send_session_prompt),
         )
@@ -77,7 +81,10 @@ pub fn router() -> Router<Arc<AppState>> {
             post(timeline_routes::monitor_timeline),
         )
         .route("/api/workspaces", get(workspace_routes::list_workspaces))
-        .route("/api/workspaces/:id", get(workspace_routes::get_workspace))
+        .route(
+            "/api/workspaces/:id",
+            get(workspace_routes::get_workspace).delete(workspace_routes::delete_workspace),
+        )
         .route(
             "/api/workspaces/:id/refresh",
             post(workspace_routes::post_workspace_refresh),

@@ -22,6 +22,8 @@ services:
       SULION_AWS_SECRET_ID: "aws-default"
       SULION_RUNNER_URL: "http://sulion-runner:8082"
       HOME: "/home/dev"
+    networks:
+      - sulion
     volumes:
       # Primary bind: the dataset root *is* the dev user's home.
       # The container entrypoint self-provisions the subtree on first
@@ -49,6 +51,8 @@ services:
       SULION_AUTH_ISSUER_URL: "${SULION_AUTH_ISSUER_URL}"
       SULION_AUTH_CLIENT_ID: "${SULION_AUTH_CLIENT_ID}"
       SULION_SECRET_BROKER_REGISTRATION_TOKEN: "${SULION_SECRET_BROKER_REGISTRATION_TOKEN}"
+    networks:
+      - sulion
     volumes:
       - /mnt/apps/apps/sulion-broker:/var/lib/sulion-broker:ro
 
@@ -62,6 +66,8 @@ services:
       SULION_RUNNER_DEFAULT_MEMORY: "2g"
       SULION_RUNNER_DEFAULT_CPUS: "2"
       SULION_RUNNER_DEFAULT_PIDS: "512"
+    networks:
+      - sulion
     volumes:
       # The runner reads the same workspace paths as backend so
       # `docker build .` uses Docker's normal local context handling.
@@ -81,6 +87,8 @@ services:
     environment:
       SULION_COGNITO_USER_POOL_ID: "${SULION_COGNITO_USER_POOL_ID}"
       SULION_COGNITO_CLIENT_ID: "${SULION_COGNITO_CLIENT_ID}"
+    networks:
+      - sulion
     # No depends_on: the frontend is an nginx serving static files plus a
     # reverse proxy for /api and /ws. It can start independently of the
     # backend — requests to proxied paths 502 until the backend is up,
@@ -88,3 +96,7 @@ services:
 
 volumes:
   sulion_run:
+
+networks:
+  sulion:
+    name: sulion

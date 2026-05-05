@@ -58,6 +58,12 @@ pub struct WorkspaceDirtyPaths {
     pub diff_stats_by_path: HashMap<String, DiffStat>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DeleteWorkspaceOptions {
+    pub force: bool,
+    pub delete_branch: bool,
+}
+
 #[derive(Clone)]
 pub struct WorkspaceManager {
     pool: Pool,
@@ -258,6 +264,137 @@ impl WorkspaceManager {
         .execute(&self.pool)
         .await
         .with_context(|| format!("request workspace refresh for {id}"))?;
+        Ok(())
+    }
+
+    pub async fn delete_workspace(
+        &self,
+        id: Uuid,
+        options: DeleteWorkspaceOptions,
+    ) -> anyhow::Result<()> {
+        let workspace = self.load_workspace(id).await?;
+        if workspace.kind == "main" {
+            anyhow::bail!("main workspaces cannot be deleted");
+        }
+        if workspace.kind != "worktree" {
+            anyhow::bail!("unsupported workspace kind: {}", workspace.kind);
+        }
+
+        let active_sessions: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) \
+               FROM pty_sessions \
+              WHERE workspace_id = $1 AND state IN ('live', 'orphaned')",
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("count active sessions for workspace {id}"))?;
+        if active_sessions.0 > 0 {
+            anyhow::bail!(
+                "workspace is still bound to {} live or orphaned session{}",
+                active_sessions.0,
+                if active_sessions.0 == 1 { "" } else { "s" }
+            );
+        }
+
+        let repo_path = self.repos_root.join(&workspace.repo_name);
+        if !repo_path.is_dir() {
+            anyhow::bail!("repo does not exist: {}", repo_path.display());
+        }
+
+        if workspace.path.is_dir() {
+            let status = git::read_status(workspace.path.clone()).await?;
+            if status.uncommitted_count > 0 && !options.force {
+                anyhow::bail!(
+                    "workspace has {} uncommitted change{}; retry with force to discard it",
+                    status.uncommitted_count,
+                    if status.uncommitted_count == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
+                );
+            }
+        }
+
+        let branch_exists = match workspace.branch_name.as_deref() {
+            Some(branch) => git_branch_exists(&repo_path, branch).await?,
+            None => false,
+        };
+        if options.delete_branch && branch_exists && !options.force {
+            match (
+                workspace.base_sha.as_deref(),
+                workspace.branch_name.as_deref(),
+            ) {
+                (Some(base_sha), Some(branch)) => {
+                    let unique =
+                        rev_list_count(&repo_path, &format!("{base_sha}..{branch}")).await?;
+                    if unique > 0 {
+                        anyhow::bail!(
+                            "workspace branch has {} commit{} not in its base; retry with force to delete it",
+                            unique,
+                            if unique == 1 { "" } else { "s" }
+                        );
+                    }
+                }
+                _ => {
+                    anyhow::bail!(
+                        "workspace branch history cannot be checked; retry with force to delete it"
+                    );
+                }
+            }
+        }
+
+        let worktree_registered = git_worktree_registered(&repo_path, &workspace.path).await?;
+        if workspace.path.is_dir() || worktree_registered {
+            let mut args = vec!["worktree", "remove"];
+            if options.force {
+                args.push("--force");
+            }
+            let workspace_path = workspace.path.to_string_lossy().into_owned();
+            args.push(&workspace_path);
+            run_git_checked(&repo_path, &args)
+                .await
+                .with_context(|| format!("remove git worktree {}", workspace.path.display()))?;
+        }
+
+        if options.delete_branch {
+            if let Some(branch) = workspace.branch_name.as_deref() {
+                if git_branch_exists(&repo_path, branch).await? {
+                    run_git_checked(&repo_path, &["branch", "-D", branch])
+                        .await
+                        .with_context(|| format!("delete workspace branch {branch}"))?;
+                }
+            }
+        }
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin workspace delete tx")?;
+        sqlx::query("DELETE FROM workspace_dirty_paths WHERE workspace_id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("clear dirty paths for workspace {id}"))?;
+        sqlx::query("UPDATE pty_sessions SET workspace_id = NULL WHERE workspace_id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("unbind sessions from workspace {id}"))?;
+        sqlx::query(
+            "UPDATE workspaces \
+                SET state = 'deleted', status_error = NULL, updated_at = NOW() \
+              WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("mark workspace {id} deleted"))?;
+        tx.commit()
+            .await
+            .with_context(|| format!("commit workspace delete for {id}"))?;
         Ok(())
     }
 
@@ -721,6 +858,36 @@ async fn rev_parse(repo_path: &Path, rev: &str) -> anyhow::Result<String> {
         anyhow::bail!("git rev-parse {rev} returned empty output");
     }
     Ok(value)
+}
+
+async fn git_branch_exists(repo_path: &Path, branch: &str) -> anyhow::Result<bool> {
+    let repo_path = repo_path.to_path_buf();
+    let branch = branch.to_string();
+    tokio::task::spawn_blocking(move || {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo_path)
+            .args(["show-ref", "--verify", "--quiet"])
+            .arg(format!("refs/heads/{branch}"))
+            .status()?;
+        Ok(status.success())
+    })
+    .await?
+}
+
+async fn rev_list_count(repo_path: &Path, range: &str) -> anyhow::Result<u64> {
+    let out = run_git_capture(repo_path, &["rev-list", "--count", range]).await?;
+    out.trim()
+        .parse::<u64>()
+        .with_context(|| format!("parse git rev-list count for {range}"))
+}
+
+async fn git_worktree_registered(repo_path: &Path, workspace_path: &Path) -> anyhow::Result<bool> {
+    let out = run_git_capture(repo_path, &["worktree", "list", "--porcelain"]).await?;
+    Ok(out.lines().any(|line| {
+        line.strip_prefix("worktree ")
+            .is_some_and(|path| Path::new(path) == workspace_path)
+    }))
 }
 
 async fn run_git_capture(repo_path: &Path, args: &[&str]) -> anyhow::Result<String> {

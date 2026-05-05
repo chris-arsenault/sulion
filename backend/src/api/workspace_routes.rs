@@ -74,6 +74,31 @@ pub(super) async fn get_workspace(
     Ok(Json(workspace))
 }
 
+#[derive(Deserialize)]
+pub(super) struct DeleteWorkspaceQuery {
+    force: Option<bool>,
+    delete_branch: Option<bool>,
+}
+
+pub(super) async fn delete_workspace(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Query(q): Query<DeleteWorkspaceQuery>,
+) -> ApiResult<StatusCode> {
+    state
+        .workspace_state
+        .delete_workspace(
+            id,
+            worktree::DeleteWorkspaceOptions {
+                force: q.force.unwrap_or(false),
+                delete_branch: q.delete_branch.unwrap_or(true),
+            },
+        )
+        .await
+        .map_err(|err| ApiError::BadRequest(err.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub(super) async fn post_workspace_refresh(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,

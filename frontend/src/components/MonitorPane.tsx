@@ -100,7 +100,7 @@ export function MonitorPane({ active = true }: { active?: boolean }) {
           Open terminal or timeline tabs to monitor their latest agent output.
         </div>
       ) : (
-        <div className="monitor-pane__grid">
+        <div className="monitor-pane__list">
           {(data?.sessions ?? []).map((item) => (
             <MonitorCard key={item.pty_session_id} item={item} />
           ))}
@@ -167,35 +167,39 @@ function MonitorCard({ item }: { item: MonitorSessionTurn }) {
         <span className="monitor-card__time">
           {item.turn ? shortTime(item.turn.end_timestamp) : "no turns"}
         </span>
-      </button>
-      {item.current_session_agent ? (
-        <div className="monitor-card__agent">
-          {item.current_session_agent} · {item.total_event_count} events
-        </div>
-      ) : (
-        <div className="monitor-card__agent">No correlated agent session yet</div>
-      )}
-      {prompt ? (
-        <div className="monitor-card__prompt">
-          <span>Prompt</span>
-          <p>{prompt}</p>
-        </div>
-      ) : null}
-      <div className="monitor-card__assistant">
-        {assistant ? (
-          <Markdown source={assistant} />
-        ) : (
-          <span className="monitor-card__muted">
-            {item.turn ? "No assistant text after current filters." : "Waiting for transcript data."}
+        {item.current_session_agent ? (
+          <span className="monitor-card__agent">
+            {item.current_session_agent} · {item.total_event_count} events
           </span>
+        ) : (
+          <span className="monitor-card__agent">No agent session</span>
         )}
-      </div>
-      {item.turn && item.turn.operation_count > 0 ? (
-        <div className="monitor-card__tools">
-          {item.turn.operation_count} tool call{item.turn.operation_count === 1 ? "" : "s"}
-          {item.turn.has_errors ? " · errors" : ""}
+        {item.turn && item.turn.operation_count > 0 ? (
+          <span className="monitor-card__tools">
+            {item.turn.operation_count} tool call{item.turn.operation_count === 1 ? "" : "s"}
+            {item.turn.has_errors ? " · errors" : ""}
+          </span>
+        ) : null}
+      </button>
+      <div className="monitor-card__body">
+        <div className="monitor-card__assistant">
+          {assistant ? (
+            <Markdown source={assistant} />
+          ) : (
+            <span className="monitor-card__muted">
+              {item.turn
+                ? "No assistant text after current filters."
+                : "Waiting for transcript data."}
+            </span>
+          )}
         </div>
-      ) : null}
+        {prompt ? (
+          <div className="monitor-card__prompt">
+            <span>Prompt</span>
+            <p>{prompt}</p>
+          </div>
+        ) : null}
+      </div>
     </article>
   );
 }

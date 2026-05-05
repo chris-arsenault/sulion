@@ -128,6 +128,151 @@ async fn isolated_session_creates_git_worktree_workspace() {
 }
 
 #[tokio::test]
+async fn delete_workspace_removes_worktree_branch_and_row() {
+    let h = Harness::new().await;
+    let repo_path = h.state.repos_root.join("app");
+    init_git_repo(&repo_path);
+
+    let created: serde_json::Value = h
+        .client
+        .post(format!("{}/api/sessions", h.base))
+        .json(&json!({ "repo": "app", "workspace_mode": "isolated" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let session_id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
+    let workspace = created["workspace"].as_object().unwrap();
+    let workspace_id = workspace["id"].as_str().unwrap().parse::<Uuid>().unwrap();
+    let workspace_path = PathBuf::from(workspace["path"].as_str().unwrap());
+    let branch_name = workspace["branch_name"].as_str().unwrap().to_string();
+
+    h.state.pty.delete(session_id).await.unwrap();
+    let resp = h
+        .client
+        .delete(format!("{}/api/workspaces/{workspace_id}", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::NO_CONTENT);
+    assert!(!workspace_path.exists());
+    assert_eq!(
+        git_stdout(&repo_path, &["branch", "--list", &branch_name]),
+        ""
+    );
+    assert!(h
+        .state
+        .workspace_state
+        .load_workspace(workspace_id)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn delete_workspace_rejects_live_sessions_and_dirty_worktrees() {
+    let h = Harness::new().await;
+    let repo_path = h.state.repos_root.join("app");
+    init_git_repo(&repo_path);
+
+    let created: serde_json::Value = h
+        .client
+        .post(format!("{}/api/sessions", h.base))
+        .json(&json!({ "repo": "app", "workspace_mode": "isolated" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let session_id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
+    let workspace = created["workspace"].as_object().unwrap();
+    let workspace_id = workspace["id"].as_str().unwrap().parse::<Uuid>().unwrap();
+    let workspace_path = PathBuf::from(workspace["path"].as_str().unwrap());
+
+    let resp = h
+        .client
+        .delete(format!("{}/api/workspaces/{workspace_id}", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["error"].as_str().unwrap().contains("live or orphaned"));
+
+    h.state.pty.delete(session_id).await.unwrap();
+    std::fs::write(workspace_path.join("agent.txt"), "changed\n").unwrap();
+
+    let resp = h
+        .client
+        .delete(format!("{}/api/workspaces/{workspace_id}", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["error"].as_str().unwrap().contains("uncommitted"));
+
+    let resp = h
+        .client
+        .delete(format!(
+            "{}/api/workspaces/{workspace_id}?force=true",
+            h.base
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::NO_CONTENT);
+    assert!(!workspace_path.exists());
+}
+
+#[tokio::test]
+async fn delete_workspace_removes_missing_worktree_registration() {
+    let h = Harness::new().await;
+    let repo_path = h.state.repos_root.join("app");
+    init_git_repo(&repo_path);
+
+    let created: serde_json::Value = h
+        .client
+        .post(format!("{}/api/sessions", h.base))
+        .json(&json!({ "repo": "app", "workspace_mode": "isolated" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let session_id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
+    let workspace = created["workspace"].as_object().unwrap();
+    let workspace_id = workspace["id"].as_str().unwrap().parse::<Uuid>().unwrap();
+    let workspace_path = PathBuf::from(workspace["path"].as_str().unwrap());
+    let branch_name = workspace["branch_name"].as_str().unwrap().to_string();
+
+    h.state.pty.delete(session_id).await.unwrap();
+    std::fs::remove_dir_all(&workspace_path).unwrap();
+
+    let resp = h
+        .client
+        .delete(format!("{}/api/workspaces/{workspace_id}", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::NO_CONTENT);
+    assert_eq!(
+        git_stdout(&repo_path, &["branch", "--list", &branch_name]),
+        ""
+    );
+    assert!(
+        !git_stdout(&repo_path, &["worktree", "list", "--porcelain"])
+            .contains(workspace_path.to_str().unwrap())
+    );
+}
+
+#[tokio::test]
 async fn main_session_binds_canonical_repo_workspace() {
     let h = Harness::new().await;
     let repo_path = h.state.repos_root.join("app");
