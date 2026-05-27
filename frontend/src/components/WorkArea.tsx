@@ -11,7 +11,10 @@ import { useShallow } from "zustand/react/shallow";
 
 import type { SecretGrantMetadata, SessionView } from "../api/types";
 import type { PaneId, TabData } from "../state/TabStore";
-import { useTabs } from "../state/TabStore";
+import {
+  unassociatedTerminalTimelineTabIds,
+  useTabs,
+} from "../state/TabStore";
 import { useSessions } from "../state/SessionStore";
 import { useSecretStore } from "../state/SecretStore";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -404,14 +407,27 @@ function TabHandle({
   );
   // Derive the label live from session / repo state so renames reflect
   // without touching every open tab's persisted title.
-  const sessions = useSessions((store) => store.sessions);
-  const { closeTab, moveTab, openTab, setPaneSticky, paneSticky } = useTabs(
+  const { sessions, sessionsLoaded } = useSessions(
+    useShallow((store) => ({
+      sessions: store.sessions,
+      sessionsLoaded: store.sessionsLoaded,
+    })),
+  );
+  const {
+    closeTab,
+    moveTab,
+    openTab,
+    setPaneSticky,
+    paneSticky,
+    tabs: allTabs,
+  } = useTabs(
     useShallow((store) => ({
       closeTab: store.closeTab,
       moveTab: store.moveTab,
       openTab: store.openTab,
       setPaneSticky: store.setPaneSticky,
       paneSticky: store.sticky[paneId],
+      tabs: store.tabs,
     })),
   );
   const {
@@ -435,6 +451,17 @@ function TabHandle({
   );
   const openCtx = useContextMenu((store) => store.open);
   const label = useMemo(() => liveLabel(tab, sessions), [tab, sessions]);
+  const associatedSessionIds = useMemo(
+    () => new Set(sessions.map((session) => session.id)),
+    [sessions],
+  );
+  const unassociatedSessionTabIds = useMemo(
+    () =>
+      sessionsLoaded
+        ? unassociatedTerminalTimelineTabIds(allTabs, associatedSessionIds)
+        : [],
+    [allTabs, associatedSessionIds, sessionsLoaded],
+  );
 
   const pairLinkable = tab.kind === "terminal" || tab.kind === "timeline";
   useEffect(() => {
@@ -448,16 +475,16 @@ function TabHandle({
     openTab({ kind: "secrets", sessionId: tab.sessionId }, paneId);
   }, [openTab, paneId, tab.sessionId]);
   const enableSecret = useCallback(
-    (secretId: string, tool: "with-cred" | "aws", ttlSeconds: number) => {
+    (secretId: string, ttlSeconds: number) => {
       if (!tab.sessionId) return;
-      void enableGrant(tab.sessionId, secretId, tool, ttlSeconds).catch(() => undefined);
+      void enableGrant(tab.sessionId, secretId, ttlSeconds).catch(() => undefined);
     },
     [enableGrant, tab.sessionId],
   );
   const revokeSecret = useCallback(
-    (secretId: string, tool: "with-cred" | "aws") => {
+    (secretId: string) => {
       if (!tab.sessionId) return;
-      void revokeGrant(tab.sessionId, secretId, tool).catch(() => undefined);
+      void revokeGrant(tab.sessionId, secretId).catch(() => undefined);
     },
     [revokeGrant, tab.sessionId],
   );
@@ -493,6 +520,14 @@ function TabHandle({
         disabled: toRight.length === 0,
         onSelect: () => toRight.forEach((id) => closeTab(id)),
       },
+      {
+        kind: "item",
+        id: "close-unassociated-session-tabs",
+        label: "Close unassociated terminals/timelines",
+        disabled: unassociatedSessionTabIds.length === 0,
+        onSelect: () =>
+          unassociatedSessionTabIds.forEach((id) => closeTab(id)),
+      },
       { kind: "separator" },
       {
         kind: "item",
@@ -525,6 +560,7 @@ function TabHandle({
     closeThis,
     closeTab,
     moveTab,
+    unassociatedSessionTabIds,
     pairLinkable,
     paneSticky,
     secretMenu,

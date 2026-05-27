@@ -47,7 +47,7 @@ Examples:
   - `ANTHROPIC_API_KEY=sxxx`
 - `openai-api`
   - `OPENAI_API_KEY=sk-...`
-- `aws-default`
+- `AWS`
   - `AWS_ACCESS_KEY_ID=...`
   - `AWS_SECRET_ACCESS_KEY=...`
   - `AWS_SESSION_TOKEN=...`
@@ -69,18 +69,11 @@ Grants are scoped to:
 
 - `pty_session_id`
 - `secret_id`
-- `tool`
 - `expires_at`
 
-The only supported `tool` values are:
-
-- `with-cred`
-- `aws`
-
-That means a PTY can have:
-
-- one or more env bundles enabled for `with-cred`
-- one or more env bundles enabled for `aws`
+That means a PTY can have one or more env bundles enabled, and the same grant
+can be redeemed through either supported wrapper. The wrapper name is
+audit/runtime context, not part of the grant relationship.
 
 Grants are created and revoked from terminal/session context menus. The Secrets tab is only for creating, updating, and deleting secret bundles.
 
@@ -101,14 +94,12 @@ with-cred -- make test
 Rules:
 
 - `with-cred <secret-id> -- <command...>` injects one specific env bundle
-- `with-cred -- <command...>` injects every currently enabled `with-cred` bundle for that PTY
-- `with-cred` always redeems against the `with-cred` grant bucket, regardless of the target command name
+- `with-cred -- <command...>` injects every currently enabled bundle for that PTY
+- `with-cred` uses the PTY's active credential grants, regardless of the target command name
 
 ### `aws`
 
-The PTY image ships an `aws` wrapper at `/opt/sulion/bin/aws`. It redeems the active AWS grant for the PTY and then execs the real AWS CLI.
-
-By default it uses secret id `aws-default`, unless `SULION_AWS_SECRET_ID` overrides it.
+The PTY image ships an `aws` wrapper at `/opt/sulion/bin/aws`. It redeems the active PTY grant for any enabled secret bundle that contains both `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, then execs the real AWS CLI.
 
 From the user or agent perspective:
 
@@ -117,7 +108,7 @@ aws s3 ls
 aws sts get-caller-identity
 ```
 
-works normally when the PTY has an active `aws` grant and fails cleanly when it does not.
+works normally when the PTY has an active grant for an AWS-shaped secret and fails cleanly when it does not.
 
 ## Conflict handling
 
@@ -132,7 +123,6 @@ PTYs need these runtime values:
 - `SULION_PTY_ID`
 - `SULION_SECRET_BROKER_URL`
 - `SULION_SECRET_BROKER_KEY_PATH`
-- `SULION_AWS_SECRET_ID` for the AWS default secret id override
 
 The backend injects them when it launches the PTY. Wrapper use signs each broker request with the PTY private key. The broker verifies that signature against the public key registered for that PTY before checking active grants.
 
@@ -159,7 +149,7 @@ Grants are managed from terminal/session context menus:
 
 - right-click a terminal or session
 - open **Secrets**
-- use **Enable secret** to choose a secret, tool mode, and TTL
+- use **Enable secret** to choose a secret and TTL
 - use **Active secrets** to see remaining TTL and click a grant to revoke it immediately
 
 ## Broker API

@@ -34,7 +34,7 @@ either the canonical repo checkout (`main`) or a Sulion-created Git worktree on
 an isolated branch. PTYs run with their cwd inside the workspace and receive
 `SULION_WORKSPACE_*` metadata so agents can tell where they are.
 
-The UI's primary object is the PTY session. The timeline defaults to the current agent session within that PTY, and the repo timeline (#56) merges every correlated agent session in a repo into one chronological feed.
+The UI's primary object is the PTY session. The timeline defaults to the current agent session within that PTY, and the repo timeline (#56) merges top-level correlated agent sessions in a repo into one chronological feed. Codex subagent child sessions stay nested under their parent turn instead of becoming first-class repo timeline sessions.
 
 ### Correlation
 
@@ -105,7 +105,7 @@ The backend also launches PTYs with Sulion-managed wrapper tools on `PATH`:
 - `aws` as a wrapper over the real AWS CLI
 - `docker` as a constrained runner client
 
-`with-cred` and `aws` are the only supported secret-consumption paths. The backend does not own the broker master key and does not expose any alternate secret-injection mechanism.
+`with-cred` and `aws` are the only supported secret-consumption paths. Credential grants are scoped to a PTY and secret, not to a specific wrapper. The backend does not own the broker master key and does not expose any alternate secret-injection mechanism.
 
 ## Broker surface
 
@@ -115,7 +115,7 @@ Its responsibilities are intentionally narrow:
 
 - store env-bundle secrets
 - manage PTY-scoped grants with TTL
-- redeem grants for `with-cred` and `aws`
+- redeem PTY grants through `with-cred` and `aws`
 
 It does not run PTYs, ingest transcripts, or serve the main application API.
 

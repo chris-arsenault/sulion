@@ -16,8 +16,10 @@ import {
   getWorkspaceDiff,
   getWorkspaceFile,
   getWorkspaceFileTrace,
+  listSecretGrants,
   refreshWorkspaceState,
   refreshRepoState,
+  revokeSecretGrant,
   stageWorkspacePath,
   unlockSecretGrant,
   upsertSecret,
@@ -40,6 +42,9 @@ const jsonResponse = (body: unknown, status = 200) =>
     status,
     headers: { "Content-Type": "application/json" },
   });
+
+const TEST_PTY_ID = "pty-1";
+const TEST_SECRET_ID = "claude-api";
 
 describe("api client", () => {
   afterEach(() => {
@@ -311,27 +316,109 @@ describe("api client", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("posts grant unlock requests to the broker", async () => {
+  it("posts legacy-compatible grant unlock requests to the broker", async () => {
+    const bodies: unknown[] = [];
     stubFetch(async (url, init) => {
       expect(url).toBe("/broker/v1/grants");
       expect(init?.method).toBe("POST");
-      expect(JSON.parse(init?.body as string)).toEqual({
-        pty_session_id: "pty-1",
-        secret_id: "claude-api",
-        tool: "with-cred",
-        ttl_seconds: 600,
-      });
+      bodies.push(JSON.parse(init?.body as string));
       return new Response(null, { status: 201 });
     });
 
     await expect(
       unlockSecretGrant({
-        pty_session_id: "pty-1",
-        secret_id: "claude-api",
-        tool: "with-cred",
+        pty_session_id: TEST_PTY_ID,
+        secret_id: TEST_SECRET_ID,
         ttl_seconds: 600,
       }),
     ).resolves.toBeUndefined();
+    expect(bodies).toEqual([
+      {
+        pty_session_id: TEST_PTY_ID,
+        secret_id: TEST_SECRET_ID,
+        ttl_seconds: 600,
+        tool: "with-cred",
+      },
+      {
+        pty_session_id: TEST_PTY_ID,
+        secret_id: TEST_SECRET_ID,
+        ttl_seconds: 600,
+        tool: "aws",
+      },
+    ]);
+  });
+
+  it("posts legacy-compatible grant revoke requests to the broker", async () => {
+    const bodies: unknown[] = [];
+    stubFetch(async (url, init) => {
+      expect(url).toBe("/broker/v1/grants");
+      expect(init?.method).toBe("DELETE");
+      bodies.push(JSON.parse(init?.body as string));
+      return new Response(null, { status: 204 });
+    });
+
+    await expect(
+      revokeSecretGrant({
+        pty_session_id: TEST_PTY_ID,
+        secret_id: TEST_SECRET_ID,
+      }),
+    ).resolves.toBeUndefined();
+    expect(bodies).toEqual([
+      {
+        pty_session_id: TEST_PTY_ID,
+        secret_id: TEST_SECRET_ID,
+        tool: "with-cred",
+      },
+      {
+        pty_session_id: TEST_PTY_ID,
+        secret_id: TEST_SECRET_ID,
+        tool: "aws",
+      },
+    ]);
+  });
+
+  it("dedupes legacy tool grant rows by secret id", async () => {
+    stubFetch(async (url, init) => {
+      expect(url).toBe("/broker/v1/grants?pty_session_id=pty-1");
+      expect(init?.method).toBeUndefined();
+      return jsonResponse([
+        {
+          secret_id: "AWS",
+          tool: "with-cred",
+          granted_by_sub: "sub",
+          granted_by_username: "user",
+          expires_at: "2026-01-01T00:00:00Z",
+        },
+        {
+          secret_id: "AWS",
+          tool: "aws",
+          granted_by_sub: "sub",
+          granted_by_username: "user",
+          expires_at: "2026-01-01T00:05:00Z",
+        },
+        {
+          secret_id: "github",
+          granted_by_sub: "sub",
+          granted_by_username: "user",
+          expires_at: "2026-01-01T00:02:00Z",
+        },
+      ]);
+    });
+
+    await expect(listSecretGrants("pty-1")).resolves.toEqual([
+      {
+        secret_id: "AWS",
+        granted_by_sub: "sub",
+        granted_by_username: "user",
+        expires_at: "2026-01-01T00:05:00Z",
+      },
+      {
+        secret_id: "github",
+        granted_by_sub: "sub",
+        granted_by_username: "user",
+        expires_at: "2026-01-01T00:02:00Z",
+      },
+    ]);
   });
 });
 

@@ -591,7 +591,6 @@ fn configure_pty_environment(
         "SULION_CLAUDE_PROJECTS",
         "SULION_CODEX_SESSIONS",
         "SULION_SECRET_BROKER_URL",
-        "SULION_AWS_SECRET_ID",
         "SULION_RUNNER_URL",
     ] {
         forward_env(cmd, key);

@@ -360,6 +360,20 @@ export function resetTabStore() {
   useTabStore.setState(initialState());
 }
 
+export function unassociatedTerminalTimelineTabIds(
+  tabs: Record<string, TabData>,
+  associatedSessionIds: ReadonlySet<string>,
+): string[] {
+  return Object.values(tabs)
+    .filter(
+      (tab) =>
+        (tab.kind === "terminal" || tab.kind === "timeline") &&
+        tab.sessionId != null &&
+        !associatedSessionIds.has(tab.sessionId),
+    )
+    .map((tab) => tab.id);
+}
+
 function removeTabFromState(state: PersistedTabs, id: string): PersistedTabs {
   const nextPanes: Record<PaneId, string[]> = {
     top: state.panes.top.filter((tabId) => tabId !== id),

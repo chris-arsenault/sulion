@@ -340,7 +340,6 @@ struct GrantsQuery {
 #[derive(Debug, Serialize)]
 struct GrantMetadata {
     secret_id: String,
-    tool: String,
     granted_by_sub: String,
     granted_by_username: Option<String>,
     expires_at: chrono::DateTime<chrono::Utc>,
@@ -351,9 +350,14 @@ async fn list_grants(
     Query(query): Query<GrantsQuery>,
 ) -> Result<Json<Vec<GrantMetadata>>, BrokerError> {
     let rows = sqlx::query(
-        "SELECT secret_id, tool, granted_by_sub, granted_by_username, expires_at \
-         FROM secret_broker.grants \
-         WHERE pty_session_id = $1 AND revoked_at IS NULL AND expires_at > NOW() \
+        "SELECT secret_id, granted_by_sub, granted_by_username, expires_at \
+         FROM ( \
+           SELECT DISTINCT ON (secret_id) \
+             secret_id, granted_by_sub, granted_by_username, expires_at \
+           FROM secret_broker.grants \
+           WHERE pty_session_id = $1 AND revoked_at IS NULL AND expires_at > NOW() \
+           ORDER BY secret_id, expires_at DESC \
+         ) latest \
          ORDER BY expires_at DESC",
     )
     .bind(query.pty_session_id)
@@ -363,7 +367,6 @@ async fn list_grants(
         rows.into_iter()
             .map(|row| GrantMetadata {
                 secret_id: row.get("secret_id"),
-                tool: row.get("tool"),
                 granted_by_sub: row.get("granted_by_sub"),
                 granted_by_username: row.get("granted_by_username"),
                 expires_at: row.get("expires_at"),
@@ -376,7 +379,6 @@ async fn list_grants(
 struct GrantRequest {
     pty_session_id: Uuid,
     secret_id: String,
-    tool: String,
     ttl_seconds: i64,
 }
 
@@ -386,26 +388,35 @@ async fn unlock_grant(
     Json(body): Json<GrantRequest>,
 ) -> Result<StatusCode, BrokerError> {
     validate_secret_id(&body.secret_id)?;
-    validate_tool_name(&body.tool)?;
     if !(60..=86_400).contains(&body.ttl_seconds) {
         return Err(BrokerError::bad_request(
             "ttl_seconds must be between 60 and 86400",
         ));
     }
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "UPDATE secret_broker.grants \
+         SET revoked_at = NOW() \
+         WHERE pty_session_id = $1 AND secret_id = $2 AND revoked_at IS NULL",
+    )
+    .bind(body.pty_session_id)
+    .bind(&body.secret_id)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query(
         "INSERT INTO secret_broker.grants \
-         (id, pty_session_id, secret_id, tool, granted_by_sub, granted_by_username, expires_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, NOW() + make_interval(secs => $7::int))",
+         (id, pty_session_id, secret_id, granted_by_sub, granted_by_username, expires_at) \
+         VALUES ($1, $2, $3, $4, $5, NOW() + make_interval(secs => $6::int))",
     )
     .bind(Uuid::new_v4())
     .bind(body.pty_session_id)
-    .bind(body.secret_id)
-    .bind(body.tool)
+    .bind(&body.secret_id)
     .bind(user.sub)
     .bind(user.username)
     .bind(body.ttl_seconds as i32)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(StatusCode::CREATED)
 }
 
@@ -413,7 +424,6 @@ async fn unlock_grant(
 struct RevokeGrantRequest {
     pty_session_id: Uuid,
     secret_id: String,
-    tool: String,
 }
 
 async fn revoke_grant(
@@ -423,11 +433,10 @@ async fn revoke_grant(
     sqlx::query(
         "UPDATE secret_broker.grants \
          SET revoked_at = NOW() \
-         WHERE pty_session_id = $1 AND secret_id = $2 AND tool = $3 AND revoked_at IS NULL",
+         WHERE pty_session_id = $1 AND secret_id = $2 AND revoked_at IS NULL",
     )
     .bind(body.pty_session_id)
     .bind(body.secret_id)
-    .bind(body.tool)
     .execute(&state.pool)
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -480,11 +489,6 @@ async fn use_secret(
 ) -> Result<Json<UseSecretResponse>, BrokerError> {
     verify_signed_use_request(&state, &body).await?;
     validate_tool_name(&body.tool)?;
-    if body.tool == "aws" && body.secret_id.is_none() {
-        return Err(BrokerError::bad_request(
-            "aws redemption requires a secret id",
-        ));
-    }
     let rows = if let Some(secret_id) = &body.secret_id {
         validate_secret_id(secret_id)?;
         sqlx::query(
@@ -493,7 +497,6 @@ async fn use_secret(
              JOIN secret_broker.secrets s ON s.id = g.secret_id \
              WHERE g.pty_session_id = $1 \
                AND g.secret_id = $2 \
-               AND g.tool = $3 \
                AND g.revoked_at IS NULL \
                AND g.expires_at > NOW() \
              ORDER BY g.expires_at DESC \
@@ -501,7 +504,6 @@ async fn use_secret(
         )
         .bind(body.pty_session_id)
         .bind(secret_id)
-        .bind(&body.tool)
         .fetch_all(&state.pool)
         .await?
     } else {
@@ -510,20 +512,19 @@ async fn use_secret(
              FROM secret_broker.grants g \
              JOIN secret_broker.secrets s ON s.id = g.secret_id \
              WHERE g.pty_session_id = $1 \
-               AND g.tool = $2 \
                AND g.revoked_at IS NULL \
                AND g.expires_at > NOW() \
              ORDER BY s.id, g.expires_at DESC",
         )
         .bind(body.pty_session_id)
-        .bind(&body.tool)
         .fetch_all(&state.pool)
         .await?
     };
     if rows.is_empty() {
-        return Err(BrokerError::forbidden(
-            "secret is not unlocked for this terminal/tool",
-        ));
+        return Err(BrokerError::forbidden(redemption_forbidden_message(
+            &body.tool,
+            body.secret_id.as_deref(),
+        )));
     }
     let mut env = HashMap::new();
     let mut granted_secret_ids = Vec::with_capacity(rows.len());
@@ -532,15 +533,23 @@ async fn use_secret(
         let ciphertext: Vec<u8> = row.get("ciphertext");
         let nonce: Vec<u8> = row.get("nonce");
         let secret_env = state.crypto.decrypt_env(&ciphertext, &nonce)?;
+        if !secret_matches_redemption(&body.tool, body.secret_id.as_deref(), &secret_env) {
+            continue;
+        }
         for (key, value) in secret_env {
             if env.insert(key.clone(), value).is_some() {
                 return Err(BrokerError::bad_request(format!(
-                    "conflicting env var {key} across unlocked secrets for tool {}",
-                    body.tool
+                    "conflicting env var {key} across unlocked secrets"
                 )));
             }
         }
         granted_secret_ids.push(secret_id);
+    }
+    if granted_secret_ids.is_empty() {
+        return Err(BrokerError::forbidden(redemption_forbidden_message(
+            &body.tool,
+            body.secret_id.as_deref(),
+        )));
     }
     for secret_id in granted_secret_ids {
         sqlx::query(
@@ -555,6 +564,28 @@ async fn use_secret(
         .await?;
     }
     Ok(Json(UseSecretResponse { env }))
+}
+
+fn secret_matches_redemption(
+    tool: &str,
+    requested_secret_id: Option<&str>,
+    env: &HashMap<String, String>,
+) -> bool {
+    if requested_secret_id.is_some() {
+        return true;
+    }
+    if tool == "aws" {
+        return env.contains_key("AWS_ACCESS_KEY_ID") && env.contains_key("AWS_SECRET_ACCESS_KEY");
+    }
+    true
+}
+
+fn redemption_forbidden_message(tool: &str, requested_secret_id: Option<&str>) -> &'static str {
+    if tool == "aws" && requested_secret_id.is_none() {
+        "no AWS credential is enabled for this terminal"
+    } else {
+        "secret is not unlocked for this terminal"
+    }
 }
 
 async fn verify_signed_use_request(
@@ -813,5 +844,39 @@ mod tests {
             let err = validate_secret_id(id).expect_err("invalid secret id");
             assert_eq!(err.status, StatusCode::BAD_REQUEST);
         }
+    }
+
+    #[test]
+    fn unnamed_aws_redemption_matches_aws_shaped_env_bundle() {
+        let aws_env = HashMap::from([
+            ("AWS_ACCESS_KEY_ID".to_string(), "AKIA...".to_string()),
+            ("AWS_SECRET_ACCESS_KEY".to_string(), "secret".to_string()),
+        ]);
+        let unrelated_env = HashMap::from([("OPENAI_API_KEY".to_string(), "sk-test".to_string())]);
+
+        assert!(secret_matches_redemption("aws", None, &aws_env));
+        assert!(!secret_matches_redemption("aws", None, &unrelated_env));
+        assert!(secret_matches_redemption("with-cred", None, &unrelated_env));
+        assert!(secret_matches_redemption(
+            "aws",
+            Some("explicit-secret"),
+            &unrelated_env
+        ));
+    }
+
+    #[test]
+    fn unnamed_aws_redemption_has_specific_forbidden_message() {
+        assert_eq!(
+            redemption_forbidden_message("aws", None),
+            "no AWS credential is enabled for this terminal"
+        );
+        assert_eq!(
+            redemption_forbidden_message("with-cred", None),
+            "secret is not unlocked for this terminal"
+        );
+        assert_eq!(
+            redemption_forbidden_message("aws", Some("AWS")),
+            "secret is not unlocked for this terminal"
+        );
     }
 }

@@ -17,6 +17,10 @@ import type { LibraryEntry, LibraryKind } from "../api/types";
 import { appCommands, useAppCommand } from "../state/AppCommands";
 import { useTabs } from "../state/TabStore";
 import { Icon } from "../icons";
+import {
+  extractPromptTemplateVariables,
+  type PromptTemplateVariable,
+} from "../lib/promptTemplate";
 import { Tooltip } from "./ui";
 import { ConfirmDialog } from "./common/ConfirmDialog";
 import type { MenuItem } from "./common/contextMenuStore";
@@ -24,6 +28,7 @@ import {
   contextMenuHandler,
   useContextMenu,
 } from "./common/contextMenuStore";
+import { PromptTemplateDialog } from "./PromptTemplateDialog";
 
 export function LibraryPanel() {
   const [references, setReferences] = useState<LibraryEntry[] | null>(null);
@@ -36,6 +41,8 @@ export function LibraryPanel() {
     kind: LibraryKind;
     entry: LibraryEntry;
   } | null>(null);
+  const [pendingTemplate, setPendingTemplate] =
+    useState<PendingPromptTemplate | null>(null);
   const openCtx = useContextMenu((store) => store.open);
   const { openTab, tabs, activeByPane } = useTabs(
     useShallow((store) => ({
@@ -82,9 +89,34 @@ export function LibraryPanel() {
       setError("No active terminal tab to inject into.");
       return;
     }
+    const variables = extractPromptTemplateVariables(entry.body);
+    if (variables.length > 0) {
+      setPendingTemplate({
+        entry,
+        sessionId: activeTerminalSessionId,
+        variables,
+      });
+      setError(null);
+      return;
+    }
     appCommands.injectTerminal({ sessionId: activeTerminalSessionId, text: entry.body });
     setError(null);
   };
+
+  const cancelTemplate = useCallback(() => setPendingTemplate(null), []);
+
+  const sendTemplate = useCallback(
+    (text: string) => {
+      if (!pendingTemplate) return;
+      appCommands.injectTerminal({
+        sessionId: pendingTemplate.sessionId,
+        text,
+      });
+      setPendingTemplate(null);
+      setError(null);
+    },
+    [pendingTemplate],
+  );
 
   const copyBody = async (entry: LibraryEntry) => {
     try {
@@ -98,7 +130,7 @@ export function LibraryPanel() {
     setPendingDelete({ kind, entry });
   };
 
-  const confirmDelete = async () => {
+  const confirmDelete = useCallback(async () => {
     if (!pendingDelete) return;
     const { kind, entry } = pendingDelete;
     setPendingDelete(null);
@@ -109,9 +141,12 @@ export function LibraryPanel() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "delete failed");
     }
-  };
+  }, [pendingDelete]);
 
   const cancelDelete = useCallback(() => setPendingDelete(null), []);
+  const onConfirmDelete = useCallback(() => {
+    void confirmDelete();
+  }, [confirmDelete]);
 
   const onReferenceContextMenu = (entry: LibraryEntry) =>
     contextMenuHandler(openCtx, () => {
@@ -288,12 +323,28 @@ export function LibraryPanel() {
           message={`"${pendingDelete.entry.name}" will be removed from the library. This can't be undone.`}
           confirmLabel="Delete"
           destructive
-          onConfirm={() => void confirmDelete()}
+          onConfirm={onConfirmDelete}
           onCancel={cancelDelete}
+        />
+      )}
+      {pendingTemplate && (
+        <PromptTemplateDialog
+          open
+          promptName={pendingTemplate.entry.name}
+          template={pendingTemplate.entry.body}
+          variables={pendingTemplate.variables}
+          onCancel={cancelTemplate}
+          onSend={sendTemplate}
         />
       )}
     </div>
   );
+}
+
+interface PendingPromptTemplate {
+  entry: LibraryEntry;
+  sessionId: string;
+  variables: PromptTemplateVariable[];
 }
 
 function LibrarySection({

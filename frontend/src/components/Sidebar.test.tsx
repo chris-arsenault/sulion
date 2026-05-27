@@ -140,7 +140,6 @@ function installFetchMock(): MockState {
         state.unlocks.push(body);
         const grant = {
           secret_id: body.secret_id,
-          tool: body.tool,
           granted_by_sub: "user",
           granted_by_username: null,
           expires_at: new Date(Date.now() + body.ttl_seconds * 1000).toISOString(),
@@ -154,10 +153,7 @@ function installFetchMock(): MockState {
         state.revokes.push(body);
         state.grantsBySession[body.pty_session_id] = (
           state.grantsBySession[body.pty_session_id] ?? []
-        ).filter(
-          (grant) =>
-            grant.secret_id !== body.secret_id || grant.tool !== body.tool,
-        );
+        ).filter((grant) => grant.secret_id !== body.secret_id);
         return new Response(null, { status: 204 });
       }
       return new Response("", { status: 404 });
@@ -708,28 +704,36 @@ describe("Sidebar", () => {
     await hoverMenuItem(user, "Secrets");
     await hoverMenuItem(user, "Enable secret");
     await hoverMenuItem(user, "claude-api");
-    await hoverMenuItem(user, "with-cred");
     await user.click(await screen.findByRole("menuitem", { name: "10m" }));
 
-    await waitFor(() => expect(state.unlocks).toHaveLength(1));
-    expect(state.unlocks[0]).toEqual({
+    await waitFor(() => expect(state.unlocks).toHaveLength(2));
+    expect(state.unlocks).toEqual([{
       pty_session_id: sessionId,
       secret_id: "claude-api",
-      tool: "with-cred",
       ttl_seconds: 600,
-    });
+      tool: "with-cred",
+    }, {
+      pty_session_id: sessionId,
+      secret_id: "claude-api",
+      ttl_seconds: 600,
+      tool: "aws",
+    }]);
 
     await openSessionContextMenu(user, /secret-session/);
     await hoverMenuItem(user, "Secrets");
     await hoverMenuItem(user, "Active secrets");
-    await user.click(await screen.findByRole("menuitem", { name: /claude-api · with-cred/ }));
+    await user.click(await screen.findByRole("menuitem", { name: /claude-api ·/ }));
 
-    await waitFor(() => expect(state.revokes).toHaveLength(1));
-    expect(state.revokes[0]).toEqual({
+    await waitFor(() => expect(state.revokes).toHaveLength(2));
+    expect(state.revokes).toEqual([{
       pty_session_id: sessionId,
       secret_id: "claude-api",
       tool: "with-cred",
-    });
+    }, {
+      pty_session_id: sessionId,
+      secret_id: "claude-api",
+      tool: "aws",
+    }]);
   });
 
   it("renames a session through the menu", async () => {

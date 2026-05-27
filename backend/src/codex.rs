@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::ffi::OsString;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -111,7 +110,7 @@ pub async fn run_launcher(cfg: LauncherConfig) -> anyhow::Result<i32> {
 
         if !correlated {
             if let Some(session_uuid) =
-                detect_rollout_session_uuid_in_pid_tree(root_pid, &cfg.sessions_dir)
+                detect_rollout_session_uuid_in_launched_process(root_pid, &cfg.sessions_dir)
             {
                 match crate::correlate::send_for_agent(
                     &cfg.correlate_sock,
@@ -147,19 +146,11 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
     }
 }
 
-pub fn detect_rollout_session_uuid_in_pid_tree(root_pid: u32, sessions_dir: &Path) -> Option<Uuid> {
-    let mut seen = HashSet::new();
-    let mut stack = vec![root_pid];
-    while let Some(pid) = stack.pop() {
-        if !seen.insert(pid) {
-            continue;
-        }
-        if let Some(uuid) = detect_rollout_session_uuid_in_pid(pid, sessions_dir) {
-            return Some(uuid);
-        }
-        stack.extend(read_child_pids(pid));
-    }
-    None
+pub fn detect_rollout_session_uuid_in_launched_process(
+    root_pid: u32,
+    sessions_dir: &Path,
+) -> Option<Uuid> {
+    detect_rollout_session_uuid_in_pid(root_pid, sessions_dir)
 }
 
 fn detect_rollout_session_uuid_in_pid(pid: u32, sessions_dir: &Path) -> Option<Uuid> {
@@ -177,16 +168,6 @@ fn detect_rollout_session_uuid_in_pid(pid: u32, sessions_dir: &Path) -> Option<U
         }
     }
     None
-}
-
-fn read_child_pids(pid: u32) -> Vec<u32> {
-    let children_path = PathBuf::from(format!("/proc/{pid}/task/{pid}/children"));
-    let Ok(raw) = std::fs::read_to_string(children_path) else {
-        return Vec::new();
-    };
-    raw.split_whitespace()
-        .filter_map(|part| part.parse::<u32>().ok())
-        .collect()
 }
 
 #[cfg(test)]

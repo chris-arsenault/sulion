@@ -6,7 +6,7 @@ import {
   revokeSecretGrant,
   unlockSecretGrant,
 } from "../api/client";
-import type { SecretGrantMetadata, SecretMetadata, SecretTool } from "../api/types";
+import type { SecretGrantMetadata, SecretMetadata } from "../api/types";
 
 interface SecretStore {
   secrets: SecretMetadata[];
@@ -16,14 +16,9 @@ interface SecretStore {
   enableGrant: (
     sessionId: string,
     secretId: string,
-    tool: SecretTool,
     ttlSeconds: number,
   ) => Promise<void>;
-  revokeGrant: (
-    sessionId: string,
-    secretId: string,
-    tool: SecretTool,
-  ) => Promise<void>;
+  revokeGrant: (sessionId: string, secretId: string) => Promise<void>;
 }
 
 export const useSecretStore = create<SecretStore>()((set, get) => ({
@@ -42,21 +37,19 @@ export const useSecretStore = create<SecretStore>()((set, get) => ({
     }));
   },
 
-  enableGrant: async (sessionId, secretId, tool, ttlSeconds) => {
+  enableGrant: async (sessionId, secretId, ttlSeconds) => {
     await unlockSecretGrant({
       pty_session_id: sessionId,
       secret_id: secretId,
-      tool,
       ttl_seconds: ttlSeconds,
     });
     await get().refreshGrants(sessionId);
   },
 
-  revokeGrant: async (sessionId, secretId, tool) => {
+  revokeGrant: async (sessionId, secretId) => {
     await revokeSecretGrant({
       pty_session_id: sessionId,
       secret_id: secretId,
-      tool,
     });
     await get().refreshGrants(sessionId);
   },

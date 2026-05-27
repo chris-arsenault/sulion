@@ -150,9 +150,6 @@ impl HelperArgs {
         if !matches!(tool.as_str(), "with-cred" | "aws") {
             return Err("credential-helper: --tool must be with-cred or aws");
         }
-        if tool == "aws" && secret_id.is_none() {
-            return Err("credential-helper: --tool aws requires --secret");
-        }
         let command = args[index..].to_vec();
         if command.is_empty() {
             return Err("credential-helper: missing command");
@@ -162,5 +159,31 @@ impl HelperArgs {
             secret_id,
             command,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HelperArgs;
+    use std::ffi::OsString;
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn aws_helper_can_redeem_active_aws_secret_without_secret_id() {
+        let parsed = HelperArgs::parse(&args(&["--tool", "aws", "--", "aws", "sts"])).unwrap();
+        assert_eq!(parsed.tool, "aws");
+        assert_eq!(parsed.secret_id, None);
+        assert_eq!(parsed.command, args(&["aws", "sts"]));
+    }
+
+    #[test]
+    fn explicit_secret_id_remains_supported_for_direct_helper_use() {
+        let parsed =
+            HelperArgs::parse(&args(&["--tool", "aws", "--secret", "AWS", "--", "aws"])).unwrap();
+        assert_eq!(parsed.tool, "aws");
+        assert_eq!(parsed.secret_id.as_deref(), Some("AWS"));
     }
 }

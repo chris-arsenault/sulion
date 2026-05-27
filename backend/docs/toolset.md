@@ -84,7 +84,7 @@ with-cred -- make test
 Rules:
 
 - `with-cred <secret-id> -- ...` injects one enabled secret bundle.
-- `with-cred -- ...` injects all currently enabled `with-cred` bundles for this PTY.
+- `with-cred -- ...` injects all currently enabled bundles for this PTY.
 - It works only after the user grants that secret to this PTY in the Sulion UI.
 - Secret values are injected only into the child process, not into the shell.
 - Each request is signed with this PTY's Sulion-managed key; there is no shared
@@ -99,9 +99,11 @@ aws sts get-caller-identity
 aws s3 ls
 ```
 
-The `aws` command is a Sulion wrapper. It redeems the currently enabled AWS
-secret for this PTY and then runs the real AWS CLI. If no AWS secret is enabled,
-it fails with an access error.
+The `aws` command is a Sulion wrapper. It redeems any currently enabled
+secret for this PTY that contains `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY`, then runs the real AWS CLI. The grant is the same
+PTY-to-secret grant used by `with-cred`; there is no separate AWS grant mode.
+If no AWS-shaped secret is enabled, it fails with an access error.
 
 Do not try to fetch credentials from files, AWS SSM, or external vaults from a
 PTY. Ask the user to enable the needed Sulion secret for the terminal.

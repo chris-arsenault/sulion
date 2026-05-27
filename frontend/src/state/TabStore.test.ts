@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { resetTabStore, useTabStore } from "./TabStore";
+import {
+  resetTabStore,
+  unassociatedTerminalTimelineTabIds,
+  useTabStore,
+} from "./TabStore";
 
 function openTerminal(sessionId: string, pane: "top" | "bottom" = "top") {
   return useTabStore.getState().openTab({ kind: "terminal", sessionId }, pane);
@@ -121,5 +125,39 @@ describe("TabStore clearTimelineFocus", () => {
     const before = useTabStore.getState().tabs[id];
     useTabStore.getState().clearTimelineFocus(id);
     expect(useTabStore.getState().tabs[id]).toBe(before);
+  });
+});
+
+describe("unassociatedTerminalTimelineTabIds", () => {
+  beforeEach(() => {
+    resetTabStore();
+  });
+
+  afterEach(() => {
+    resetTabStore();
+  });
+
+  it("returns terminal and session timeline tabs whose session is gone", () => {
+    const liveTerm = openTerminal("session-live", "top");
+    const liveTimeline = openTimeline("session-live", "bottom");
+    const goneTerm = openTerminal("session-gone", "top");
+    const goneTimeline = openTimeline("session-gone", "bottom");
+    const repoTimeline = useTabStore
+      .getState()
+      .openTab({ kind: "timeline", repo: "alpha" }, "bottom");
+    const fileTab = useTabStore
+      .getState()
+      .openTab({ kind: "file", repo: "alpha", path: "src/lib.rs" }, "top");
+
+    const ids = unassociatedTerminalTimelineTabIds(
+      useTabStore.getState().tabs,
+      new Set(["session-live"]),
+    );
+
+    expect(ids).toEqual([goneTerm, goneTimeline]);
+    expect(ids).not.toContain(liveTerm);
+    expect(ids).not.toContain(liveTimeline);
+    expect(ids).not.toContain(repoTimeline);
+    expect(ids).not.toContain(fileTab);
   });
 });

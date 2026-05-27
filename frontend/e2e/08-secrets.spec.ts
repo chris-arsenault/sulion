@@ -50,13 +50,12 @@ test("creates a key/value secret, grants it from a terminal tab, redeems it, and
   await page.getByRole("menuitem", { name: "Secrets" }).hover();
   await page.getByRole("menuitem", { name: "Enable secret" }).hover();
   await page.getByRole("menuitem", { name: secretId }).hover();
-  await page.getByRole("menuitem", { name: "with-cred" }).hover();
   await page.getByRole("menuitem", { name: "10m" }).click();
 
   await openContextMenu(page.locator(`[data-session-name="${label}"]`));
   await page.getByRole("menuitem", { name: "Secrets" }).hover();
   await page.getByRole("menuitem", { name: "Active secrets" }).hover();
-  await expect(page.getByRole("menuitem", { name: new RegExp(`${secretId} · with-cred`) })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: new RegExp(`${secretId} ·`) })).toBeVisible();
   await page.keyboard.press("Escape");
 
   await tab(page, "terminal", label).click();
@@ -69,7 +68,7 @@ test("creates a key/value secret, grants it from a terminal tab, redeems it, and
   await openContextMenu(page.locator(`[data-session-name="${label}"]`));
   await page.getByRole("menuitem", { name: "Secrets" }).hover();
   await page.getByRole("menuitem", { name: "Active secrets" }).hover();
-  await page.getByRole("menuitem", { name: new RegExp(`${secretId} · with-cred`) }).click();
+  await page.getByRole("menuitem", { name: new RegExp(`${secretId} ·`) }).click();
 
   await tab(page, "terminal", label).click();
   await runTerminalCommand(

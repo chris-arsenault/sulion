@@ -336,6 +336,74 @@ async fn codex_fixture_preserves_subagent_lineage() {
 }
 
 #[tokio::test]
+async fn repo_timeline_excludes_codex_subagent_sessions_even_if_linked_to_pty() {
+    let pool = fresh_pool().await;
+    let claude_root = tempfile::tempdir().unwrap();
+    let codex_root = tempfile::tempdir().unwrap();
+    let day_dir = codex_root.path().join("2026").join("04").join("19");
+    std::fs::create_dir_all(&day_dir).unwrap();
+
+    let parent = Uuid::parse_str("019da571-ab6d-72e2-94b2-4fc5544f53d2").unwrap();
+    let child = Uuid::parse_str("019da789-c2a6-7f80-b71b-4dc90c7f1802").unwrap();
+    std::fs::write(
+        codex_rollout_path(codex_root.path(), parent),
+        CODEX_RICH_LINEAGE_PARENT,
+    )
+    .unwrap();
+    std::fs::write(
+        codex_rollout_path(codex_root.path(), child),
+        CODEX_RICH_LINEAGE_CHILD,
+    )
+    .unwrap();
+
+    let pty_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pty_sessions (id, repo, working_dir, state) \
+         VALUES ($1, 'repo-a', '/tmp/repo-a', 'live')",
+    )
+    .bind(pty_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let cfg = IngesterConfig::new(claude_root.path().to_path_buf())
+        .with_codex_sessions_dir(codex_root.path().to_path_buf());
+    Ingester::new().tick(&pool, &cfg).await.unwrap();
+
+    sqlx::query(
+        "UPDATE claude_sessions \
+            SET pty_session_id = $1 \
+          WHERE session_uuid IN ($2, $3)",
+    )
+    .bind(pty_id)
+    .bind(parent)
+    .bind(child)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let response =
+        sulion::ingest::load_repo_timeline_summary_response(&pool, "repo-a", &Default::default())
+            .await
+            .unwrap();
+
+    assert!(
+        response
+            .turns
+            .iter()
+            .any(|turn| turn.session_uuid == Some(parent)),
+        "parent session should remain in repo timeline"
+    );
+    assert!(
+        response
+            .turns
+            .iter()
+            .all(|turn| turn.session_uuid != Some(child)),
+        "subagent session should not become a first-class repo timeline session"
+    );
+}
+
+#[tokio::test]
 async fn claude_edit_tool_result_payload_is_persisted_canonically() {
     let pool = fresh_pool().await;
     let fx = Fixture::new();

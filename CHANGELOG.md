@@ -2,6 +2,29 @@
 
 All notable user-visible changes to Sulion are recorded here.
 
+## v1.3.0 - 2026-05-27
+
+### Secrets and credential grants
+
+- Changed secret grants from tool-scoped unlocks to PTY-scoped unlocks. Enabling a secret for a terminal now makes that env bundle available to both supported wrappers instead of requiring separate `with-cred` and `aws` grants.
+- Updated the Secrets context menus and grant API to treat the wrapper name as runtime/audit context rather than part of the grant relationship, with compatibility handling for older brokers during rollout.
+- Updated the `aws` wrapper so it no longer depends on a hard-coded `aws-default` secret id. It now redeems any enabled secret bundle containing `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+
+### Prompt library and workspace UX
+
+- Added templated prompt support for saved prompt-library entries. Prompts using `$name` placeholders open a value dialog before terminal injection; `$$` sends a literal `$`.
+- Added a tab context-menu action to close terminal and session-timeline tabs whose backing PTY/session association no longer exists.
+
+### Timeline correlation fixes
+
+- Fixed Codex session correlation so the launcher only considers the launched process's own rollout file handles, preventing nested subagent work from rebinding the parent PTY.
+- Excluded Codex subagent child sessions from first-class repo timeline membership so delegated work stays visible inside its parent turn instead of taking over repo/session timeline bindings.
+
+### Documentation and tests
+
+- Updated secrets, architecture, user-guide, and PTY toolset docs for PTY-scoped grants, AWS-shaped secret redemption, prompt templates, and repo timeline subagent handling.
+- Added backend coverage for Codex nested-child correlation and repo timeline subagent exclusion, plus frontend coverage for PTY-scoped grant compatibility, tab cleanup, and prompt template rendering.
+
 ## v1.2.0 - 2026-05-05
 
 ### Agent control and monitoring

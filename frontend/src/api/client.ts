@@ -25,7 +25,6 @@ import type {
   SecretEnvelope,
   SecretGrantMetadata,
   SecretMetadata,
-  SecretTool,
   TimelineQuery,
   TimelineSummaryResponse,
   TimelineTurnDetailResponse,
@@ -93,6 +92,8 @@ async function brokerRequest<T>(url: string, init?: RequestInit): Promise<T> {
   }
   return JSON.parse(text) as T;
 }
+
+const LEGACY_SECRET_GRANT_TOOLS = ["with-cred", "aws"] as const;
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const resp = await authFetch(url, init);
@@ -312,30 +313,56 @@ export function deleteSecret(id: string): Promise<void> {
 
 export function listSecretGrants(ptySessionId: string): Promise<SecretGrantMetadata[]> {
   const qs = new URLSearchParams({ pty_session_id: ptySessionId });
-  return brokerRequest<SecretGrantMetadata[]>(`/broker/v1/grants?${qs.toString()}`);
+  return brokerRequest<SecretGrantMetadata[]>(`/broker/v1/grants?${qs.toString()}`).then(
+    dedupeSecretGrants,
+  );
 }
 
-export function unlockSecretGrant(body: {
+export async function unlockSecretGrant(body: {
   pty_session_id: string;
   secret_id: string;
-  tool: SecretTool;
   ttl_seconds: number;
 }): Promise<void> {
-  return brokerRequest<void>("/broker/v1/grants", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
+  for (const tool of LEGACY_SECRET_GRANT_TOOLS) {
+    await brokerRequest<void>("/broker/v1/grants", {
+      method: "POST",
+      body: JSON.stringify({ ...body, tool }),
+    });
+  }
 }
 
-export function revokeSecretGrant(body: {
+export async function revokeSecretGrant(body: {
   pty_session_id: string;
   secret_id: string;
-  tool: SecretTool;
 }): Promise<void> {
-  return brokerRequest<void>("/broker/v1/grants", {
-    method: "DELETE",
-    body: JSON.stringify(body),
-  });
+  for (const tool of LEGACY_SECRET_GRANT_TOOLS) {
+    await brokerRequest<void>("/broker/v1/grants", {
+      method: "DELETE",
+      body: JSON.stringify({ ...body, tool }),
+    });
+  }
+}
+
+function dedupeSecretGrants(grants: SecretGrantMetadata[]): SecretGrantMetadata[] {
+  const latestBySecret = new Map<string, SecretGrantMetadata>();
+  for (const grant of grants) {
+    const normalized: SecretGrantMetadata = {
+      secret_id: grant.secret_id,
+      granted_by_sub: grant.granted_by_sub,
+      granted_by_username: grant.granted_by_username,
+      expires_at: grant.expires_at,
+    };
+    const existing = latestBySecret.get(grant.secret_id);
+    if (
+      !existing ||
+      Date.parse(normalized.expires_at) > Date.parse(existing.expires_at)
+    ) {
+      latestBySecret.set(grant.secret_id, normalized);
+    }
+  }
+  return [...latestBySecret.values()].sort(
+    (left, right) => Date.parse(right.expires_at) - Date.parse(left.expires_at),
+  );
 }
 
 export function getRepoDirtyPaths(name: string): Promise<RepoDirtyPathsResponse> {

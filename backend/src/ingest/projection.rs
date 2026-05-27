@@ -329,6 +329,14 @@ pub async fn load_repo_timeline_summary_response(
            FROM claude_sessions cs \
            JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
           WHERE ps.repo = $1 \
+            AND NOT EXISTS ( \
+                SELECT 1 \
+                  FROM events meta \
+                 WHERE meta.session_uuid = cs.session_uuid \
+                   AND meta.agent = 'codex' \
+                   AND meta.kind = 'session_meta' \
+                   AND meta.payload #> '{payload,source,subagent}' IS NOT NULL \
+            ) \
           ORDER BY cs.started_at ASC, cs.session_uuid ASC",
     )
     .bind(repo_name)

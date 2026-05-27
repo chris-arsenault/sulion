@@ -1654,14 +1654,14 @@ function SessionRow({
     void refreshGrants(s.id).catch(() => undefined);
   }, [refreshSecrets, refreshGrants, s.id]);
   const enableSecret = useCallback(
-    (secretId: string, tool: "with-cred" | "aws", ttlSeconds: number) => {
-      void enableGrant(s.id, secretId, tool, ttlSeconds).catch(() => undefined);
+    (secretId: string, ttlSeconds: number) => {
+      void enableGrant(s.id, secretId, ttlSeconds).catch(() => undefined);
     },
     [enableGrant, s.id],
   );
   const revokeSecret = useCallback(
-    (secretId: string, tool: "with-cred" | "aws") => {
-      void revokeGrant(s.id, secretId, tool).catch(() => undefined);
+    (secretId: string) => {
+      void revokeGrant(s.id, secretId).catch(() => undefined);
     },
     [revokeGrant, s.id],
   );

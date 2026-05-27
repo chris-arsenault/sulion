@@ -33,7 +33,7 @@ function rootMenu(item: MenuItem) {
 }
 
 describe("buildSecretContextMenu", () => {
-  it("builds enable leaves as secret -> tool -> ttl", () => {
+  it("builds enable leaves as secret -> ttl", () => {
     const menu = buildSecretContextMenu({
       secrets: [SECRET],
       grants: [],
@@ -45,8 +45,7 @@ describe("buildSecretContextMenu", () => {
     const root = rootMenu(menu);
     const enable = submenu(root.items, "Enable secret");
     const secret = submenu(enable.items, SECRET_ID);
-    const withCred = submenu(secret.items, "with-cred");
-    expect(withCred.items.map((item) => item.kind === "item" ? item.label : "")).toEqual([
+    expect(secret.items.map((item) => item.kind === "item" ? item.label : "")).toEqual([
       "10m",
       "30m",
       "1h",
@@ -54,7 +53,7 @@ describe("buildSecretContextMenu", () => {
     ]);
   });
 
-  it("passes the selected secret, tool, and ttl to enable", () => {
+  it("passes the selected secret and ttl to enable", () => {
     const onEnable = vi.fn();
     const menu = buildSecretContextMenu({
       secrets: [SECRET],
@@ -67,19 +66,17 @@ describe("buildSecretContextMenu", () => {
     const root = rootMenu(menu);
     const enable = submenu(root.items, "Enable secret");
     const secret = submenu(enable.items, SECRET_ID);
-    const aws = submenu(secret.items, "aws");
-    const tenMinutes = aws.items[0];
+    const tenMinutes = secret.items[0];
     expect(tenMinutes?.kind).toBe("item");
     if (tenMinutes?.kind === "item") tenMinutes.onSelect();
 
-    expect(onEnable).toHaveBeenCalledWith(SECRET_ID, "aws", 600);
+    expect(onEnable).toHaveBeenCalledWith(SECRET_ID, 600);
   });
 
   it("shows active grants as immediate revoke actions", () => {
     const onRevoke = vi.fn();
     const grant: SecretGrantMetadata = {
       secret_id: SECRET_ID,
-      tool: "with-cred",
       granted_by_sub: "user",
       granted_by_username: null,
       expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
@@ -98,10 +95,10 @@ describe("buildSecretContextMenu", () => {
     expect(grantItem?.kind).toBe("item");
     if (grantItem?.kind === "item") grantItem.onSelect();
 
-    expect(onRevoke).toHaveBeenCalledWith(SECRET_ID, "with-cred");
+    expect(onRevoke).toHaveBeenCalledWith(SECRET_ID);
   });
 
-  it("disables with-cred enablement when active bundles would conflict", () => {
+  it("disables enablement when active bundles would conflict", () => {
     const menu = buildSecretContextMenu({
       secrets: [
         SECRET,
@@ -117,7 +114,6 @@ describe("buildSecretContextMenu", () => {
       grants: [
         {
           secret_id: SECRET_ID,
-          tool: "with-cred",
           granted_by_sub: "user",
           granted_by_username: null,
           expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
@@ -130,11 +126,8 @@ describe("buildSecretContextMenu", () => {
 
     const root = rootMenu(menu);
     const enable = submenu(root.items, "Enable secret");
-    const openai = submenu(enable.items, "openai-api");
-    const withCred = submenu(openai.items, "with-cred · conflicts with claude-api");
-    const aws = submenu(openai.items, "aws");
+    const openai = submenu(enable.items, "openai-api · conflicts with claude-api");
 
-    expect(withCred.disabled).toBe(true);
-    expect(aws.disabled).toBeFalsy();
+    expect(openai.disabled).toBe(true);
   });
 });

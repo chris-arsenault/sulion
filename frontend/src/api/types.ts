@@ -142,8 +142,6 @@ export interface WorkspaceView {
   git: RepoGitSummary;
 }
 
-export type SecretTool = "with-cred" | "aws";
-
 export interface SecretMetadata {
   id: string;
   description: string;
@@ -162,7 +160,6 @@ export interface SecretEnvelope {
 
 export interface SecretGrantMetadata {
   secret_id: string;
-  tool: SecretTool;
   granted_by_sub: string;
   granted_by_username: string | null;
   expires_at: string;

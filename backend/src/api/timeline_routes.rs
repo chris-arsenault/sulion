@@ -285,7 +285,16 @@ async fn ensure_session_belongs_to_repo(
         "SELECT cs.session_uuid \
            FROM claude_sessions cs \
            JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
-          WHERE cs.session_uuid = $1 AND ps.repo = $2",
+          WHERE cs.session_uuid = $1 \
+            AND ps.repo = $2 \
+            AND NOT EXISTS ( \
+                SELECT 1 \
+                  FROM events meta \
+                 WHERE meta.session_uuid = cs.session_uuid \
+                   AND meta.agent = 'codex' \
+                   AND meta.kind = 'session_meta' \
+                   AND meta.payload #> '{payload,source,subagent}' IS NOT NULL \
+            )",
     )
     .bind(session_uuid)
     .bind(repo_name)

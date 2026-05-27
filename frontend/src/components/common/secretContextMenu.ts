@@ -1,4 +1,4 @@
-import type { SecretGrantMetadata, SecretMetadata, SecretTool } from "../../api/types";
+import type { SecretGrantMetadata, SecretMetadata } from "../../api/types";
 import type { MenuItem } from "./contextMenuStore";
 
 const TTL_PRESETS = [
@@ -7,8 +7,6 @@ const TTL_PRESETS = [
   { label: "1h", seconds: 3600 },
   { label: "4h", seconds: 14_400 },
 ] as const;
-
-const TOOLS: readonly SecretTool[] = ["with-cred", "aws"];
 
 export function buildSecretContextMenu({
   secrets,
@@ -19,16 +17,16 @@ export function buildSecretContextMenu({
 }: {
   secrets: SecretMetadata[];
   grants: SecretGrantMetadata[];
-  onEnable: (secretId: string, tool: SecretTool, ttlSeconds: number) => void;
-  onRevoke: (secretId: string, tool: SecretTool) => void;
+  onEnable: (secretId: string, ttlSeconds: number) => void;
+  onRevoke: (secretId: string) => void;
   onOpenManager: () => void;
 }): MenuItem {
   const activeItems = grants.map((grant) => ({
     kind: "item" as const,
-    id: `revoke-${grant.secret_id}-${grant.tool}`,
-    label: `${grant.secret_id} · ${grant.tool} · ${relativeExpiry(grant.expires_at)}`,
+    id: `revoke-${grant.secret_id}`,
+    label: `${grant.secret_id} · ${relativeExpiry(grant.expires_at)}`,
     destructive: true,
-    onSelect: () => onRevoke(grant.secret_id, grant.tool),
+    onSelect: () => onRevoke(grant.secret_id),
   }));
 
   return {
@@ -43,13 +41,26 @@ export function buildSecretContextMenu({
         disabled: secrets.length === 0,
         items:
           secrets.length === 0
-            ? [{ kind: "item", label: "No secrets configured", disabled: true, onSelect: () => {} }]
-            : secrets.map((secret) => ({
-                kind: "submenu" as const,
-                id: `secret-${secret.id}`,
-                label: secret.id,
-                items: buildEnableLeaves(secret, secrets, grants, onEnable),
-              })),
+            ? [
+                {
+                  kind: "item",
+                  label: "No secrets configured",
+                  disabled: true,
+                  onSelect: () => {},
+                },
+              ]
+            : secrets.map((secret) => {
+                const conflict = activeGrantConflict(secret, secrets, grants);
+                return {
+                  kind: "submenu" as const,
+                  id: `secret-${secret.id}`,
+                  label: conflict
+                    ? `${secret.id} · conflicts with ${conflict}`
+                    : secret.id,
+                  disabled: conflict != null,
+                  items: buildEnableLeaves(secret, onEnable),
+                };
+              }),
       },
       {
         kind: "submenu",
@@ -59,7 +70,14 @@ export function buildSecretContextMenu({
         items:
           activeItems.length > 0
             ? activeItems
-            : [{ kind: "item", label: "No active secrets", disabled: true, onSelect: () => {} }],
+            : [
+                {
+                  kind: "item",
+                  label: "No active secrets",
+                  disabled: true,
+                  onSelect: () => {},
+                },
+              ],
       },
       { kind: "separator" },
       {
@@ -74,36 +92,24 @@ export function buildSecretContextMenu({
 
 function buildEnableLeaves(
   secret: SecretMetadata,
-  secrets: SecretMetadata[],
-  grants: SecretGrantMetadata[],
-  onEnable: (secretId: string, tool: SecretTool, ttlSeconds: number) => void,
+  onEnable: (secretId: string, ttlSeconds: number) => void,
 ): MenuItem[] {
-  return TOOLS.map((tool) => {
-    const conflict =
-      tool === "with-cred" ? withCredConflict(secret, secrets, grants) : null;
-    return {
-      kind: "submenu" as const,
-      id: `enable-${secret.id}-${tool}`,
-      label: conflict ? `${tool} · conflicts with ${conflict}` : tool,
-      disabled: conflict != null,
-      items: TTL_PRESETS.map((preset) => ({
-        kind: "item" as const,
-        id: `enable-${secret.id}-${tool}-${preset.seconds}`,
-        label: preset.label,
-        onSelect: () => onEnable(secret.id, tool, preset.seconds),
-      })),
-    };
-  });
+  return TTL_PRESETS.map((preset) => ({
+    kind: "item" as const,
+    id: `enable-${secret.id}-${preset.seconds}`,
+    label: preset.label,
+    onSelect: () => onEnable(secret.id, preset.seconds),
+  }));
 }
 
-function withCredConflict(
+function activeGrantConflict(
   secret: SecretMetadata,
   secrets: SecretMetadata[],
   grants: SecretGrantMetadata[],
 ): string | null {
   const currentKeys = new Set(secret.env_keys);
   for (const grant of grants) {
-    if (grant.tool !== "with-cred" || grant.secret_id === secret.id) continue;
+    if (grant.secret_id === secret.id) continue;
     const grantedSecret = secrets.find((item) => item.id === grant.secret_id);
     const overlap = (grantedSecret?.env_keys ?? []).filter((key) =>
       currentKeys.has(key),

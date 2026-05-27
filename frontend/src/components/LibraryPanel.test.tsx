@@ -79,6 +79,47 @@ describe("LibraryPanel", () => {
     unsubscribe();
   });
 
+  it("asks for template values before injecting a prompt with variables", async () => {
+    vi.spyOn(apiClient, "listLibrary")
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          slug: "deploy",
+          name: DEPLOY_PROMPT_NAME,
+          created_at: null,
+          updated_at: null,
+          body: "do item $n in $repo. cost $$5. repeat $n",
+        },
+      ]);
+    useTabStore.getState().openTab({ kind: "terminal", sessionId: "sess-1" }, "top");
+
+    const seen: Array<unknown> = [];
+    const unsubscribe = subscribeToAppCommands((command) => {
+      seen.push(command);
+    });
+
+    render(<LibraryPanel />);
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText(DEPLOY_PROMPT_NAME)).toBeDefined());
+    await user.click(screen.getByText(DEPLOY_PROMPT_NAME));
+
+    expect(screen.getByText("Prompt Values")).toBeDefined();
+    expect(seen).toHaveLength(0);
+
+    await user.type(screen.getByLabelText("Value for n"), "42");
+    await user.type(screen.getByLabelText("Value for repo"), "sulion");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(seen).toContainEqual({
+      type: "inject-terminal",
+      sessionId: "sess-1",
+      text: "do item 42 in sulion. cost $5. repeat 42",
+    });
+    expect(screen.queryByText("Prompt Values")).toBeNull();
+    unsubscribe();
+  });
+
   it("opens a reference tab on click", async () => {
     vi.spyOn(apiClient, "listLibrary")
       .mockResolvedValueOnce([

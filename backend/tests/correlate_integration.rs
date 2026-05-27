@@ -63,6 +63,21 @@ fn write_fake_codex(path: &Path) {
     }
 }
 
+fn write_fake_codex_with_nested_child(path: &Path) {
+    std::fs::write(
+        path,
+        "#!/usr/bin/env bash\nset -euo pipefail\nchild_rollout=\"$1\"\nroot_rollout=\"$2\"\n(\n  exec 4>>\"${child_rollout}\"\n  printf '{\"kind\":\"response_item\",\"who\":\"child\"}\\n' >&4\n  sleep 1\n) &\nsleep 0.25\nexec 3>>\"${root_rollout}\"\nprintf '{\"kind\":\"response_item\",\"who\":\"root\"}\\n' >&3\nwait\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).unwrap();
+    }
+}
+
 #[tokio::test]
 async fn apply_upserts_claude_session_and_points_pty() {
     let pool = fresh_pool().await;
@@ -295,6 +310,88 @@ async fn codex_launcher_correlates_session_uuid_from_open_rollout_file() {
             .unwrap();
     assert_eq!(linked_pty, Some(pty_id));
     assert_eq!(stored_agent, "codex");
+
+    listener_task.abort();
+    let _ = std::fs::remove_file(&sock);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn codex_launcher_ignores_nested_child_rollout_files() {
+    let pool = fresh_pool().await;
+    let pty_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pty_sessions (id, repo, working_dir, state, created_at) \
+         VALUES ($1, $2, $3, 'live', NOW())",
+    )
+    .bind(pty_id)
+    .bind("r")
+    .bind("/tmp")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let sock = tmp_sock();
+    let sock_for_listener = sock.clone();
+    let listener_pool = pool.clone();
+    let listener_task = tokio::spawn(async move {
+        let _ = correlate::run(listener_pool, sock_for_listener).await;
+    });
+
+    wait_for_socket(&sock).await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let sessions_dir = tmp.path().join("sessions");
+    let day_dir = sessions_dir.join("2026").join("04").join("19");
+    std::fs::create_dir_all(&day_dir).unwrap();
+
+    let root_session_uuid = Uuid::new_v4();
+    let child_session_uuid = Uuid::new_v4();
+    let root_rollout = day_dir.join(format!(
+        "rollout-2026-04-19T01-53-43-{root_session_uuid}.jsonl"
+    ));
+    let child_rollout = day_dir.join(format!(
+        "rollout-2026-04-19T01-53-44-{child_session_uuid}.jsonl"
+    ));
+
+    let fake_codex = tmp.path().join("fake-codex-nested.sh");
+    write_fake_codex_with_nested_child(&fake_codex);
+
+    let code = tokio::time::timeout(
+        Duration::from_secs(3),
+        run_launcher(LauncherConfig {
+            codex_bin: fake_codex,
+            pty_id,
+            sessions_dir,
+            correlate_sock: sock.clone(),
+            args: vec![
+                child_rollout.into_os_string(),
+                root_rollout.into_os_string(),
+            ],
+        }),
+    )
+    .await
+    .expect("launcher timed out")
+    .unwrap();
+    assert_eq!(code, 0);
+
+    let (current_uuid, current_agent): (Option<Uuid>, Option<String>) = sqlx::query_as(
+        "SELECT current_session_uuid, current_session_agent \
+           FROM pty_sessions WHERE id = $1",
+    )
+    .bind(pty_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(current_uuid, Some(root_session_uuid));
+    assert_eq!(current_agent.as_deref(), Some("codex"));
+
+    let child_link: Option<(Option<Uuid>,)> =
+        sqlx::query_as("SELECT pty_session_id FROM claude_sessions WHERE session_uuid = $1")
+            .bind(child_session_uuid)
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+    assert_eq!(child_link, None);
 
     listener_task.abort();
     let _ = std::fs::remove_file(&sock);

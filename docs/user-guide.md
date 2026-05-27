@@ -23,6 +23,8 @@ The left rail is the navigation surface. Repos group their PTY sessions,
 a lightweight file tree, and per-repo git staleness. The **Library**
 section at the bottom lists saved prompts and references. Just above the
 command palette entry, the rail also exposes the **Secrets** manager tab.
+Saved prompts can include `$name` placeholders; `$$` sends a literal
+`$`.
 
 ![Sidebar](screenshots/01-sidebar.png)
 
@@ -55,7 +57,8 @@ transcript.
 Tabs support file, diff, monitor, and reference kinds alongside terminal
 and timeline, plus the Secrets manager tab. Drag a tab header onto the
 other pane's drop zone to split the work area; the layout persists
-across reloads.
+across reloads. The tab context menu can also close stale terminal and
+session-timeline tabs whose backing session is no longer associated.
 
 ## Timeline — turns, filters, detail
 
@@ -120,10 +123,8 @@ working-tree changes. Each file hunk has its own **stage** button.
 The **Secrets** tab is Sulion's credential-management surface. Secrets
 are stored as env bundles such as `ANTHROPIC_API_KEY=...` or AWS
 credential sets. Grants are made from a terminal/session context menu
-with a TTL for one of two execution paths:
-
-- `with-cred`
-- `aws`
+with a TTL. A grant enables that credential bundle for the PTY; both
+`with-cred` and the `aws` wrapper redeem the same PTY-scoped grant.
 
 The tab supports secret metadata and explicit key/value pairs. Once a
 secret is saved, the UI shows only env key names; blank values on update
