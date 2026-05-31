@@ -174,8 +174,10 @@ stable-x86_64-unknown-linux-gnu
 ```
 
 `cargo`, `rustc`, `rustfmt`, and `cargo clippy` are available from a plain
-shell. If another named local toolchain is broken, prefer the stable toolchain
-above instead of debugging unrelated rustup state.
+shell. `cargo xwin` is installed for Windows MSVC cross-builds, with
+`x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc` targets preinstalled.
+If another named local toolchain is broken, prefer the stable toolchain above
+instead of debugging unrelated rustup state.
 
 ## .NET
 
@@ -236,6 +238,15 @@ capabilities, devices, bind mounts, and interactive `-it` sessions. If a
 workflow needs broader container behavior, add it to the runner policy first
 rather than bypassing the wrapper.
 
+## Media
+
+FFmpeg is installed globally:
+
+```sh
+ffmpeg -version
+ffprobe -version
+```
+
 ## Other Tools
 
 Common tools installed in the image:
@@ -246,6 +257,8 @@ Common tools installed in the image:
 - `jq`
 - `rg`
 - `fd`
+- `ffmpeg`
+- `ffprobe`
 - `vim`
 - `nano`
 - `less`

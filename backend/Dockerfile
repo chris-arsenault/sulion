@@ -6,6 +6,7 @@ FROM docker.io/rockylinux/rockylinux:10
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ARG DUCKDB_VERSION=1.5.2
+ARG CARGO_XWIN_VERSION=0.22.0
 
 # Base shell + dev workbench tools. The PTYs that the backend forks
 # inherit this image's filesystem, so every tool the user needs in
@@ -29,6 +30,7 @@ RUN dnf install -y --setopt=install_weak_deps=False dnf-plugins-core epel-releas
     jq \
     ripgrep \
     fd-find \
+    ffmpeg-free \
     python3 \
     python3-pip \
     python3-devel \
@@ -109,7 +111,11 @@ RUN dnf groupinstall -y "Development Tools" \
        | sh -s -- -y --default-toolchain stable --profile minimal \
   && rustup toolchain install stable-x86_64-unknown-linux-gnu --profile minimal \
   && rustup component add --toolchain stable-x86_64-unknown-linux-gnu clippy rustfmt \
+  && rustup target add --toolchain stable-x86_64-unknown-linux-gnu \
+       x86_64-pc-windows-msvc \
+       aarch64-pc-windows-msvc \
   && rustup default stable-x86_64-unknown-linux-gnu \
+  && cargo install --locked cargo-xwin --version "${CARGO_XWIN_VERSION}" \
   # a+rwX so non-root PTY users can populate the registry / target
   # caches under /usr/local/cargo. The installer writes everything
   # root-owned; matching the official rust image's "shared toolchain"
