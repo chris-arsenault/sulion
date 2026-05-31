@@ -290,6 +290,36 @@ export function triggerReindex(): Promise<ReindexResponse> {
   return request<ReindexResponse>("/api/admin/reindex", { method: "POST" });
 }
 
+export interface RetrievalBackfillRequest {
+  repo?: string;
+  agent_session_uuid?: string;
+  limit?: number;
+  max_batches?: number;
+}
+
+export interface RetrievalBackfillResponse {
+  embedded: number;
+  skipped: number;
+  batches: number;
+  complete: boolean;
+  vector: {
+    extension_installed: boolean;
+    column_exists: boolean;
+    ann_index_exists: boolean;
+  };
+  embedding_model: string;
+  embedding_dimensions: number;
+}
+
+export function triggerRetrievalBackfill(
+  body: RetrievalBackfillRequest = {},
+): Promise<RetrievalBackfillResponse> {
+  return request<RetrievalBackfillResponse>("/api/admin/retrieval/reindex", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export function listSecrets(): Promise<SecretMetadata[]> {
   return brokerRequest<SecretMetadata[]>("/broker/v1/secrets");
 }

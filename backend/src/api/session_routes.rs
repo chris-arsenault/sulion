@@ -1,7 +1,7 @@
 //! `/api/sessions*` handlers — spawning, updating, deleting, and history
 //! reads. Ambient session listing is owned by `/api/app-state`.
 
-use std::path::PathBuf;
+use std::path::{Path as StdPath, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
@@ -180,118 +180,8 @@ pub(super) async fn create_session(
     // intentionally deferred until after all launch/resume validation
     // succeeds so bad requests don't leave stray worktrees behind.
     let repos_root = repos_root(&state)?;
-    let workspace_mode = req.workspace_mode.as_deref().unwrap_or_else(|| {
-        if req.working_dir.is_some() {
-            "main"
-        } else if req.launch_agent.is_some()
-            || req.resume_session_uuid.is_some()
-            || req.claude_resume_uuid.is_some()
-        {
-            "isolated"
-        } else {
-            "main"
-        }
-    });
-
-    // When resuming a prior agent session, boot bash directly into the
-    // agent-specific resume command and fall back to an interactive
-    // shell after. The uuid is `Uuid`-typed so no shell injection is
-    // possible.
-    let e2e_fixture = req
-        .e2e_fixture
-        .as_deref()
-        .map(str::trim)
-        .filter(|fixture| !fixture.is_empty());
-    let resume_session_uuid = req.resume_session_uuid.or(req.claude_resume_uuid);
-    let resume_agent = req
-        .resume_agent
-        .as_deref()
-        .or_else(|| resume_session_uuid.map(|_| "claude-code"));
-    let launch_agent = req
-        .launch_agent
-        .as_deref()
-        .map(parse_launch_agent)
-        .transpose()?;
-    if e2e_fixture.is_some() && (resume_session_uuid.is_some() || launch_agent.is_some()) {
-        return Err(ApiError::BadRequest(
-            "e2e_fixture cannot be combined with agent launch/resume".into(),
-        ));
-    }
-    if resume_session_uuid.is_some() && launch_agent.is_some() {
-        return Err(ApiError::BadRequest(
-            "launch_agent cannot be combined with resume_session_uuid".into(),
-        ));
-    }
-    let (shell, args, initial_agent_runtime_agent) =
-        match (e2e_fixture, resume_session_uuid, resume_agent, launch_agent) {
-            (Some(crate::e2e::MOCK_TERMINAL_FIXTURE), None, _, None) => {
-                if !crate::e2e::fixtures_enabled() {
-                    return Err(ApiError::BadRequest(
-                        "e2e fixtures are disabled on this backend".into(),
-                    ));
-                }
-                let path = crate::e2e::mock_terminal_script_path(&repos_root);
-                if !path.is_file() {
-                    return Err(ApiError::Internal(anyhow::anyhow!(
-                        "mock terminal fixture missing: {}",
-                        path.display()
-                    )));
-                }
-                (path, Vec::new(), None)
-            }
-            (Some(fixture), None, _, None) => {
-                return Err(ApiError::BadRequest(format!(
-                    "unknown e2e fixture {fixture}",
-                )));
-            }
-            (Some(_), Some(_), _, _) => unreachable!("fixture + resume handled above"),
-            (Some(_), None, _, Some(_)) => unreachable!("fixture + launch handled above"),
-            (None, Some(_), _, Some(_)) => unreachable!("resume + launch handled above"),
-            (None, Some(uuid), Some("claude-code" | "claude"), None) => (
-                PathBuf::from("/bin/bash"),
-                vec![
-                    "-c".to_string(),
-                    agent_launch_shell_command(
-                        AgentType::Claude,
-                        &[
-                            "--dangerously-skip-permissions".to_string(),
-                            "--resume".to_string(),
-                            uuid.to_string(),
-                        ],
-                        true,
-                    ),
-                ],
-                Some("claude".to_string()),
-            ),
-            (None, Some(uuid), Some("codex"), None) => (
-                PathBuf::from("/bin/bash"),
-                vec![
-                    "-c".to_string(),
-                    agent_launch_shell_command(
-                        AgentType::Codex,
-                        &["--yolo".to_string(), "resume".to_string(), uuid.to_string()],
-                        true,
-                    ),
-                ],
-                Some("codex".to_string()),
-            ),
-            (None, Some(_), Some(agent), None) => {
-                return Err(ApiError::BadRequest(format!(
-                    "resume is not implemented for agent {agent}",
-                )));
-            }
-            (None, Some(_), None, None) => {
-                return Err(ApiError::BadRequest(
-                    "resume_agent is required when resume_session_uuid is set".into(),
-                ));
-            }
-            (None, None, _, Some(agent)) => (
-                PathBuf::from("/bin/bash"),
-                vec!["-c".to_string(), default_agent_launch_command(agent, true)],
-                Some(agent.as_str().to_string()),
-            ),
-            (None, None, _, None) => (pty::default_shell(), Vec::new(), None),
-        };
+    let workspace_mode = requested_workspace_mode(&req);
+    let launch = resolve_session_launch(&req, &repos_root)?;
 
     let workspace_record = resolve_session_workspace(&state, &req, workspace_mode).await?;
     let workspace_root = workspace_record.path.clone();
@@ -316,11 +206,11 @@ pub(super) async fn create_session(
         repo: req.repo.clone(),
         working_dir,
         workspace: Some(pty_workspace_metadata(&workspace_record)),
-        shell,
-        args,
+        shell: launch.shell,
+        args: launch.args,
         cols: req.cols.unwrap_or(120),
         rows: req.rows.unwrap_or(32),
-        initial_agent_runtime_agent,
+        initial_agent_runtime_agent: launch.initial_agent_runtime_agent,
     };
     let meta = state.pty.spawn(params).await?;
     state
@@ -329,6 +219,138 @@ pub(super) async fn create_session(
         .await
         .map_err(ApiError::Internal)?;
     Ok((StatusCode::CREATED, Json(SessionView::from(meta))))
+}
+
+struct SessionLaunch {
+    shell: PathBuf,
+    args: Vec<String>,
+    initial_agent_runtime_agent: Option<String>,
+}
+
+fn requested_workspace_mode(req: &CreateSessionReq) -> &str {
+    req.workspace_mode
+        .as_deref()
+        .unwrap_or_else(|| default_workspace_mode(req))
+}
+
+fn default_workspace_mode(req: &CreateSessionReq) -> &'static str {
+    if req.working_dir.is_some() {
+        "main"
+    } else if req.launch_agent.is_some()
+        || req.resume_session_uuid.is_some()
+        || req.claude_resume_uuid.is_some()
+    {
+        "isolated"
+    } else {
+        "main"
+    }
+}
+
+fn resolve_session_launch(
+    req: &CreateSessionReq,
+    repos_root: &StdPath,
+) -> ApiResult<SessionLaunch> {
+    let e2e_fixture = req
+        .e2e_fixture
+        .as_deref()
+        .map(str::trim)
+        .filter(|fixture| !fixture.is_empty());
+    let resume_session_uuid = req.resume_session_uuid.or(req.claude_resume_uuid);
+    let resume_agent = req
+        .resume_agent
+        .as_deref()
+        .or_else(|| resume_session_uuid.map(|_| "claude-code"));
+    let launch_agent = req
+        .launch_agent
+        .as_deref()
+        .map(parse_launch_agent)
+        .transpose()?;
+
+    if e2e_fixture.is_some() && (resume_session_uuid.is_some() || launch_agent.is_some()) {
+        return Err(ApiError::BadRequest(
+            "e2e_fixture cannot be combined with agent launch/resume".into(),
+        ));
+    }
+    if resume_session_uuid.is_some() && launch_agent.is_some() {
+        return Err(ApiError::BadRequest(
+            "launch_agent cannot be combined with resume_session_uuid".into(),
+        ));
+    }
+
+    match (e2e_fixture, resume_session_uuid, resume_agent, launch_agent) {
+        (Some(crate::e2e::MOCK_TERMINAL_FIXTURE), None, _, None) => {
+            resolve_mock_terminal_launch(repos_root)
+        }
+        (Some(fixture), None, _, None) => Err(ApiError::BadRequest(format!(
+            "unknown e2e fixture {fixture}",
+        ))),
+        (Some(_), Some(_), _, _) => unreachable!("fixture + resume handled above"),
+        (Some(_), None, _, Some(_)) => unreachable!("fixture + launch handled above"),
+        (None, Some(_), _, Some(_)) => unreachable!("resume + launch handled above"),
+        (None, Some(uuid), Some("claude-code" | "claude"), None) => {
+            Ok(resume_agent_launch(AgentType::Claude, uuid))
+        }
+        (None, Some(uuid), Some("codex"), None) => Ok(resume_agent_launch(AgentType::Codex, uuid)),
+        (None, Some(_), Some(agent), None) => Err(ApiError::BadRequest(format!(
+            "resume is not implemented for agent {agent}",
+        ))),
+        (None, Some(_), None, None) => Err(ApiError::BadRequest(
+            "resume_agent is required when resume_session_uuid is set".into(),
+        )),
+        (None, None, _, Some(agent)) => Ok(default_agent_launch(agent)),
+        (None, None, _, None) => Ok(SessionLaunch {
+            shell: pty::default_shell(),
+            args: Vec::new(),
+            initial_agent_runtime_agent: None,
+        }),
+    }
+}
+
+fn resolve_mock_terminal_launch(repos_root: &StdPath) -> ApiResult<SessionLaunch> {
+    if !crate::e2e::fixtures_enabled() {
+        return Err(ApiError::BadRequest(
+            "e2e fixtures are disabled on this backend".into(),
+        ));
+    }
+    let path = crate::e2e::mock_terminal_script_path(repos_root);
+    if !path.is_file() {
+        return Err(ApiError::Internal(anyhow::anyhow!(
+            "mock terminal fixture missing: {}",
+            path.display()
+        )));
+    }
+    Ok(SessionLaunch {
+        shell: path,
+        args: Vec::new(),
+        initial_agent_runtime_agent: None,
+    })
+}
+
+fn resume_agent_launch(agent: AgentType, uuid: Uuid) -> SessionLaunch {
+    let agent_args = match agent {
+        AgentType::Claude => vec![
+            "--dangerously-skip-permissions".to_string(),
+            "--resume".to_string(),
+            uuid.to_string(),
+        ],
+        AgentType::Codex => vec!["--yolo".to_string(), "resume".to_string(), uuid.to_string()],
+    };
+    SessionLaunch {
+        shell: PathBuf::from("/bin/bash"),
+        args: vec![
+            "-c".to_string(),
+            agent_launch_shell_command(agent, &agent_args, true),
+        ],
+        initial_agent_runtime_agent: Some(agent.as_str().to_string()),
+    }
+}
+
+fn default_agent_launch(agent: AgentType) -> SessionLaunch {
+    SessionLaunch {
+        shell: PathBuf::from("/bin/bash"),
+        args: vec!["-c".to_string(), default_agent_launch_command(agent, true)],
+        initial_agent_runtime_agent: Some(agent.as_str().to_string()),
+    }
 }
 
 async fn resolve_session_workspace(

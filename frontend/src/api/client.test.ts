@@ -21,6 +21,7 @@ import {
   refreshRepoState,
   revokeSecretGrant,
   stageWorkspacePath,
+  triggerRetrievalBackfill,
   unlockSecretGrant,
   upsertSecret,
 } from "./client";
@@ -182,6 +183,31 @@ describe("api client", () => {
     });
     const r = await createRepo({ name: "x" });
     expect(r.name).toBe("x");
+  });
+
+  it("triggerRetrievalBackfill POSTs the admin retrieval endpoint", async () => {
+    stubFetch(async (url, init) => {
+      expect(url).toBe("/api/admin/retrieval/reindex");
+      expect(init?.method).toBe("POST");
+      expect(init?.body).toBe(JSON.stringify({ repo: "sulion", limit: 25 }));
+      return jsonResponse({
+        embedded: 9,
+        skipped: 1,
+        batches: 2,
+        complete: true,
+        vector: {
+          extension_installed: true,
+          column_exists: true,
+          ann_index_exists: false,
+        },
+        embedding_model: "test-model",
+        embedding_dimensions: 768,
+      });
+    });
+    const resp = await triggerRetrievalBackfill({ repo: "sulion", limit: 25 });
+    expect(resp.embedded).toBe(9);
+    expect(resp.complete).toBe(true);
+    expect(resp.vector.column_exists).toBe(true);
   });
 
   it("fetches cached repo dirty paths from the detail endpoint", async () => {

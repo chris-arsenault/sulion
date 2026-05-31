@@ -151,6 +151,10 @@ pub fn router() -> Router<Arc<AppState>> {
                 .delete(library_routes::delete_library_entry),
         )
         .route("/api/admin/reindex", post(admin_routes::reindex))
+        .route(
+            "/api/admin/retrieval/reindex",
+            post(admin_routes::retrieval_reindex),
+        )
 }
 
 // ─── error type ───────────────────────────────────────────────────────
@@ -161,6 +165,8 @@ pub enum ApiError {
     NotFound,
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("unavailable: {0}")]
+    Unavailable(String),
     #[error("internal: {0}")]
     Internal(#[from] anyhow::Error),
     #[error("db: {0}")]
@@ -174,6 +180,7 @@ impl IntoResponse for ApiError {
         let (status, msg) = match &self {
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
+            ApiError::Unavailable(m) => (StatusCode::SERVICE_UNAVAILABLE, m.clone()),
             ApiError::Internal(e) => {
                 tracing::error!(%e, "internal error");
                 (

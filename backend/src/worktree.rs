@@ -10,12 +10,19 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::db::Pool;
-use crate::git::{self, DiffStat, GitStatus};
+use crate::git::{self, DiffStat};
 use crate::repo_state::RepoGitSummary;
 
 const WORKSPACE_SCAN_INTERVAL: Duration = Duration::from_secs(30);
 const WORKSPACE_STATUS_CADENCE_SECS: i32 = 30;
 const WORKSPACE_STATUS_ERROR_CADENCE_SECS: i32 = 90;
+
+mod git_ops;
+
+use git_ops::{
+    branch_component, current_branch, git_branch_exists, git_worktree_registered, rev_parse,
+    run_git_checked, status_fingerprint, unmerged_branch_commit_count,
+};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkspaceRecord {
@@ -322,26 +329,19 @@ impl WorkspaceManager {
             None => false,
         };
         if options.delete_branch && branch_exists && !options.force {
-            match (
-                workspace.base_sha.as_deref(),
-                workspace.branch_name.as_deref(),
-            ) {
-                (Some(base_sha), Some(branch)) => {
-                    let unique =
-                        rev_list_count(&repo_path, &format!("{base_sha}..{branch}")).await?;
-                    if unique > 0 {
-                        anyhow::bail!(
-                            "workspace branch has {} commit{} not in its base; retry with force to delete it",
-                            unique,
-                            if unique == 1 { "" } else { "s" }
-                        );
-                    }
-                }
-                _ => {
+            if let Some(branch) = workspace.branch_name.as_deref() {
+                let unmerged = unmerged_branch_commit_count(&repo_path, &workspace, branch).await?;
+                if unmerged > 0 {
                     anyhow::bail!(
-                        "workspace branch history cannot be checked; retry with force to delete it"
+                        "workspace branch has {} commit{} not merged into its target; retry with force to delete it",
+                        unmerged,
+                        if unmerged == 1 { "" } else { "s" }
                     );
                 }
+            } else {
+                anyhow::bail!(
+                    "workspace branch history cannot be checked; retry with force to delete it"
+                );
             }
         }
 
@@ -397,7 +397,9 @@ impl WorkspaceManager {
             .with_context(|| format!("commit workspace delete for {id}"))?;
         Ok(())
     }
+}
 
+impl WorkspaceManager {
     pub async fn reconcile_due_once(&self, limit: i64) -> anyhow::Result<usize> {
         let rows: Vec<(Uuid, String)> = sqlx::query_as(
             "SELECT id, path \
@@ -823,131 +825,4 @@ fn validate_repo_name(name: &str) -> anyhow::Result<()> {
         anyhow::bail!("invalid repo name");
     }
     Ok(())
-}
-
-fn branch_component(value: &str) -> String {
-    let mut out = String::new();
-    for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-            out.push(ch);
-        } else {
-            out.push('-');
-        }
-    }
-    if out.is_empty() {
-        "repo".to_string()
-    } else {
-        out
-    }
-}
-
-async fn current_branch(repo_path: &Path) -> anyhow::Result<Option<String>> {
-    let out = run_git_capture(repo_path, &["branch", "--show-current"]).await?;
-    let branch = out.trim().to_string();
-    Ok(if branch.is_empty() {
-        None
-    } else {
-        Some(branch)
-    })
-}
-
-async fn rev_parse(repo_path: &Path, rev: &str) -> anyhow::Result<String> {
-    let out = run_git_capture(repo_path, &["rev-parse", rev]).await?;
-    let value = out.trim().to_string();
-    if value.is_empty() {
-        anyhow::bail!("git rev-parse {rev} returned empty output");
-    }
-    Ok(value)
-}
-
-async fn git_branch_exists(repo_path: &Path, branch: &str) -> anyhow::Result<bool> {
-    let repo_path = repo_path.to_path_buf();
-    let branch = branch.to_string();
-    tokio::task::spawn_blocking(move || {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo_path)
-            .args(["show-ref", "--verify", "--quiet"])
-            .arg(format!("refs/heads/{branch}"))
-            .status()?;
-        Ok(status.success())
-    })
-    .await?
-}
-
-async fn rev_list_count(repo_path: &Path, range: &str) -> anyhow::Result<u64> {
-    let out = run_git_capture(repo_path, &["rev-list", "--count", range]).await?;
-    out.trim()
-        .parse::<u64>()
-        .with_context(|| format!("parse git rev-list count for {range}"))
-}
-
-async fn git_worktree_registered(repo_path: &Path, workspace_path: &Path) -> anyhow::Result<bool> {
-    let out = run_git_capture(repo_path, &["worktree", "list", "--porcelain"]).await?;
-    Ok(out.lines().any(|line| {
-        line.strip_prefix("worktree ")
-            .is_some_and(|path| Path::new(path) == workspace_path)
-    }))
-}
-
-async fn run_git_capture(repo_path: &Path, args: &[&str]) -> anyhow::Result<String> {
-    let repo_path = repo_path.to_path_buf();
-    let args = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
-    tokio::task::spawn_blocking(move || {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo_path)
-            .args(&args)
-            .output()?;
-        if !out.status.success() {
-            anyhow::bail!(
-                "git {:?} failed: {}",
-                args,
-                String::from_utf8_lossy(&out.stderr)
-            );
-        }
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-    })
-    .await?
-}
-
-async fn run_git_checked(repo_path: &Path, args: &[&str]) -> anyhow::Result<()> {
-    run_git_capture(repo_path, args).await.map(|_| ())
-}
-
-fn status_fingerprint(status: &GitStatus) -> String {
-    let mut parts = Vec::new();
-    parts.push(format!("branch={}", status.branch.as_deref().unwrap_or("")));
-    parts.push(format!(
-        "head={}",
-        status
-            .last_commit
-            .as_ref()
-            .map(|commit| commit.sha.as_str())
-            .unwrap_or("")
-    ));
-    let mut dirty = status.dirty_by_path.iter().collect::<Vec<_>>();
-    dirty.sort_by(|left, right| left.0.cmp(right.0));
-    for (path, code) in dirty {
-        let diff = status.diff_stats_by_path.get(path);
-        let additions = diff.map(|d| d.additions).unwrap_or(0);
-        let deletions = diff.map(|d| d.deletions).unwrap_or(0);
-        parts.push(format!("{path}:{code}:{additions}:{deletions}"));
-    }
-    parts.join("\n")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn branch_component_keeps_git_safe_chars() {
-        assert_eq!(branch_component("the-canonry_game.1"), "the-canonry_game.1");
-    }
-
-    #[test]
-    fn branch_component_replaces_unsafe_chars() {
-        assert_eq!(branch_component("bad/repo name"), "bad-repo-name");
-    }
 }

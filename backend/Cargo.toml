@@ -23,6 +23,10 @@ path = "src/bin/sulion_broker.rs"
 name = "sulion-runner"
 path = "src/bin/sulion_runner.rs"
 
+[[bin]]
+name = "sulion-retrieval"
+path = "src/bin/sulion_retrieval.rs"
+
 [dependencies]
 axum = { version = "0.7", features = ["ws", "multipart"] }
 tokio = { version = "1", features = ["full"] }

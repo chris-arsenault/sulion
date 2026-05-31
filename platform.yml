@@ -8,10 +8,12 @@ truenas: true
 images:
   - backend
   - broker
+  - retrieval
   - runner
   - frontend
 rust_artifacts:
   binaries:
     - { bin: sulion, image: backend }
     - { bin: sulion-broker, image: broker }
+    - { bin: sulion-retrieval, image: retrieval }
     - { bin: sulion-runner, image: runner }

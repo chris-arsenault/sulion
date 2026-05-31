@@ -19,6 +19,8 @@ services:
       SULION_AUTH_CLIENT_ID: "${SULION_AUTH_CLIENT_ID}"
       SULION_SECRET_BROKER_URL: "http://sulion-broker:8081"
       SULION_SECRET_BROKER_REGISTRATION_TOKEN: "${SULION_SECRET_BROKER_REGISTRATION_TOKEN}"
+      SULION_RETRIEVAL_URL: "http://sulion-retrieval:8083"
+      SULION_RETRIEVAL_TOKEN: "${SULION_RETRIEVAL_TOKEN}"
       SULION_RUNNER_URL: "http://sulion-runner:8082"
       SULION_DEV_PORT_RANGE: "26000-26010"
       HOME: "/home/dev"
@@ -60,6 +62,21 @@ services:
       - sulion
     volumes:
       - /mnt/apps/apps/sulion-broker:/var/lib/sulion-broker:ro
+
+  retrieval:
+    image: ghcr.io/chris-arsenault/sulion/retrieval:${IMAGE_TAG}
+    container_name: sulion-retrieval
+    restart: unless-stopped
+    environment:
+      SULION_RETRIEVAL_LISTEN: "0.0.0.0:8083"
+      SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@192.168.66.3:5432/sulion"
+      SULION_RETRIEVAL_TOKEN: "${SULION_RETRIEVAL_TOKEN}"
+      SULION_RETRIEVAL_EMBEDDING_URL: "http://192.168.66.3:5361"
+      SULION_RETRIEVAL_EMBEDDING_MODEL: "nomic-ai/nomic-embed-text-v1.5"
+      SULION_RETRIEVAL_EMBEDDING_DIMENSIONS: "768"
+      SULION_RETRIEVAL_REINDEX_SECONDS: "300"
+    networks:
+      - sulion
 
   runner:
     image: ghcr.io/chris-arsenault/sulion/runner:${IMAGE_TAG}

@@ -7,11 +7,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::http::HeaderMap;
 use chrono::{DateTime, Utc};
 use serde_json::json;
 use sulion::db;
 use sulion::{app, AppState};
 use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 fn test_db_url() -> Option<String> {
@@ -169,6 +171,89 @@ async fn create_session_with_missing_repo_returns_400() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn admin_retrieval_reindex_proxies_to_retrieval_service() {
+    let h = Harness::new().await;
+    let seen = Arc::new(Mutex::new(Vec::<(Option<String>, serde_json::Value)>::new()));
+    let mock_url = start_retrieval_admin_mock(seen.clone()).await;
+    let old_url = std::env::var_os("SULION_RETRIEVAL_URL");
+    let old_token = std::env::var_os("SULION_RETRIEVAL_TOKEN");
+    std::env::set_var("SULION_RETRIEVAL_URL", mock_url);
+    std::env::set_var("SULION_RETRIEVAL_TOKEN", "admin-token");
+
+    let resp = h
+        .client
+        .post(format!("{}/api/admin/retrieval/reindex", h.base))
+        .json(&json!({ "repo": " sulion ", "limit": 17 }))
+        .send()
+        .await
+        .unwrap();
+
+    restore_env("SULION_RETRIEVAL_URL", old_url);
+    restore_env("SULION_RETRIEVAL_TOKEN", old_token);
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["embedded"], 12);
+    assert_eq!(body["batches"], 2);
+    assert_eq!(body["complete"], true);
+    assert_eq!(body["embedding_model"], "test-embed");
+
+    let seen = seen.lock().await;
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].0.as_deref(), Some("Bearer admin-token"));
+    assert_eq!(seen[0].1["repo"], "sulion");
+    assert_eq!(seen[0].1["limit"], 17);
+}
+
+async fn start_retrieval_admin_mock(
+    seen: Arc<Mutex<Vec<(Option<String>, serde_json::Value)>>>,
+) -> String {
+    async fn handler(
+        axum::extract::State(seen): axum::extract::State<
+            Arc<Mutex<Vec<(Option<String>, serde_json::Value)>>>,
+        >,
+        headers: HeaderMap,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::Json<serde_json::Value> {
+        let auth = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let mut seen = seen.lock().await;
+        seen.push((auth, body));
+        let embedded = if seen.len() == 1 { 12 } else { 0 };
+        axum::Json(json!({
+            "embedded": embedded,
+            "skipped": 0,
+            "vector": {
+                "extension_installed": true,
+                "column_exists": true,
+                "ann_index_exists": true
+            },
+            "embedding_model": "test-embed",
+            "embedding_dimensions": 768
+        }))
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = axum::Router::new()
+        .route("/v1/reindex", axum::routing::post(handler))
+        .with_state(seen);
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    format!("http://{addr}")
+}
+
+fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
+    if let Some(value) = value {
+        std::env::set_var(key, value);
+    } else {
+        std::env::remove_var(key);
+    }
 }
 
 #[tokio::test]

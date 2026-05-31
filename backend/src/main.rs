@@ -49,6 +49,14 @@ async fn main() -> anyhow::Result<()> {
         let code = sulion::worktree::run_cli(&argv[2..]).await?;
         std::process::exit(code);
     }
+    if argv
+        .get(1)
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s == "retrieve")
+    {
+        let code = sulion::retrieval_cli::run(&argv[2..]).await?;
+        std::process::exit(code);
+    }
 
     tracing_subscriber::fmt()
         .json()

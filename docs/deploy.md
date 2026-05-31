@@ -2,10 +2,11 @@
 
 Standard ahara TrueNAS deploy: Docker Compose via Komodo, shared TrueNAS Postgres auto-provisioned by the migration Lambda, Komodo stack created on demand by the deploy action.
 
-Sulion now has four services:
+Sulion now has five services:
 
 - `backend` — main API + PTY runtime
 - `broker` — secret broker, separate container and UID
+- `retrieval` — agent-facing transcript/timeline retrieval API
 - `runner` — constrained Docker command broker, only service with the host Docker socket
 - `frontend` — static UI + reverse proxy
 
@@ -20,6 +21,7 @@ Sulion also carries project-local Terraform under [`infrastructure/terraform/`](
 
 - `/ahara/cognito/clients/sulion-app`
 - `/ahara/auth-trigger/clients/sulion`
+- `/ahara/sulion/retrieval-token`
 
 ## One-time TrueNAS bootstrap
 
@@ -78,6 +80,21 @@ Push to `main`. The shared ahara CI workflow builds all Sulion images, pushes to
 4. Resolves the SSM paths declared in [`secret-paths.yml`](</home/dev/repos/sulion/secret-paths.yml>), sets them as Komodo stack env vars, and deploys.
 
 No manual Komodo UI setup. No manual SSM puts.
+
+## Retrieval Search
+
+The retrieval service reads the existing Sulion Postgres tables directly. Migrations add non-blocking indexes for lexical search and a `retrieval_embeddings` table that stores embedding vectors plus source keys only; transcript text remains in the canonical event/timeline tables.
+
+Lexical search uses `pg_trgm`, which is installed by migration as `CREATE EXTENSION IF NOT EXISTS pg_trgm`.
+
+Semantic search works in two tiers:
+
+- Without `pgvector`, embeddings are stored in `REAL[]` and semantic search can exact-scan that table.
+- For indexed ANN search, a database superuser must run `CREATE EXTENSION vector;` once in the `sulion` database. The extension must already be available on the Postgres host. The current TrueNAS Postgres image has it available, so this is an install step, not a recompilation step.
+
+After `vector` is installed, the retrieval service idempotently adds the `embedding_vector vector(768)` column and HNSW index on startup. Embedding backfill and semantic search use the local embedding service configured by `SULION_RETRIEVAL_EMBEDDING_URL`, defaulting to `http://192.168.66.3:5361` with `nomic-ai/nomic-embed-text-v1.5`.
+
+The PTY helper is `sulion-retrieve`; the full API contract is in [`docs/retrieval.md`](retrieval.md).
 
 ## Drop in credentials
 

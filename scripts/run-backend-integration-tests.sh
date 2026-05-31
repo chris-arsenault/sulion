@@ -10,6 +10,7 @@ TEST_TARGETS=(
   db_integration
   correlate_integration
   rest_integration
+  retrieval_integration
   workspace_integration
   pty_integration
   ws_integration

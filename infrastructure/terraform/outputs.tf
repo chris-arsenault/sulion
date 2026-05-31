@@ -13,3 +13,7 @@ output "cognito_user_pool_id" {
 output "secret_broker_registration_token_ssm_path" {
   value = aws_ssm_parameter.secret_broker_registration_token.name
 }
+
+output "retrieval_token_ssm_path" {
+  value = aws_ssm_parameter.retrieval_token.name
+}

@@ -22,6 +22,8 @@ pub mod ingest;
 pub mod library;
 pub mod pty;
 pub mod repo_state;
+pub mod retrieval;
+pub mod retrieval_cli;
 pub mod secret_broker;
 pub mod secret_protocol;
 pub mod secret_pty;

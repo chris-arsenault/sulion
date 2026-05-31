@@ -60,6 +60,23 @@ An isolated workspace is a real Git worktree. Use normal Git commands inside it.
 From the canonical checkout, `git worktree list` shows active Sulion worktrees
 and their branches for merge/fast-forward work.
 
+## Retrieval
+
+Sulion PTYs include an authenticated retrieval helper:
+
+```sh
+sulion-retrieve search "what were we changing" --limit 5
+sulion-retrieve search "exec_command" --tools --tool-category utility
+sulion-retrieve file-history backend/src/retrieval/search.rs
+sulion-retrieve reindex --repo sulion --limit 500
+```
+
+Repo scope is the default and is inferred from `SULION_REPO_NAME` or the current
+working directory. Tool usage is excluded by default; pass `--tools`,
+`--include tool_result`, `--tool-category`, or `--tool-name` to opt in.
+
+Use `--json` for machine-readable output.
+
 ## Credentials
 
 Sulion supports exactly two credential paths.

@@ -23,6 +23,12 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+interface FetchCall {
+  url: string;
+  method: string | null;
+  body?: string | null;
+}
+
 describe("ReindexButton", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -34,6 +40,10 @@ describe("ReindexButton", () => {
     const btn = screen.getByTestId("reindex-button");
     expect(btn.textContent).toMatch(/reindex/i);
     expect(btn).toHaveProperty("disabled", false);
+    expect(screen.getByTestId("retrieval-backfill-button")).toHaveProperty(
+      "disabled",
+      false,
+    );
   });
 
   it("click opens the typed-phrase confirm dialog", async () => {
@@ -50,9 +60,9 @@ describe("ReindexButton", () => {
   });
 
   it("typing 'refresh' unlocks confirm, which POSTs the reindex endpoint and shows stats", async () => {
-    const calls: Array<{ url: string; method: string | undefined }> = [];
+    const calls: FetchCall[] = [];
     installFetchMock((url, init) => {
-      calls.push({ url, method: init?.method });
+      calls.push({ url, method: init?.method ?? null });
       if (url === "/api/admin/reindex") {
         return jsonResponse({
           sessions_rebuilt: 3,
@@ -86,6 +96,58 @@ describe("ReindexButton", () => {
     ).toBeDefined();
   });
 
+  it("typing 'backfill' triggers retrieval embedding backfill and shows stats", async () => {
+    const calls: FetchCall[] = [];
+    installFetchMock((url, init) => {
+      const body = typeof init?.body === "string" ? init.body : null;
+      calls.push({
+        url,
+        method: init?.method ?? null,
+        body,
+      });
+      if (url === "/api/admin/retrieval/reindex") {
+        return jsonResponse({
+          embedded: 12,
+          skipped: 1,
+          batches: 2,
+          complete: true,
+          vector: {
+            extension_installed: true,
+            column_exists: true,
+            ann_index_exists: true,
+          },
+          embedding_model: "nomic-ai/nomic-embed-text-v1.5",
+          embedding_dimensions: 768,
+        });
+      }
+      return new Response("", { status: 404 });
+    });
+
+    const user = userEvent.setup();
+    render(<ReindexButton />);
+    await user.click(screen.getByTestId("retrieval-backfill-button"));
+    await user.type(screen.getByLabelText(/type backfill to confirm/i), "backfill");
+    await user.click(screen.getByRole("button", { name: "Backfill" }));
+
+    await waitFor(() => {
+      expect(
+        calls.some(
+          (c) =>
+            c.url === "/api/admin/retrieval/reindex" &&
+            c.method === "POST" &&
+            c.body === JSON.stringify({ limit: 500, max_batches: 20 }),
+        ),
+      ).toBe(true);
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Backfill complete")).toBeDefined();
+    });
+    expect(
+      screen.getByText(/Embedded 12 retrieval sources; skipped 1; batches: 2/),
+    ).toBeDefined();
+    expect(screen.getByText(/nomic-ai\/nomic-embed-text-v1.5 \(768d\)/)).toBeDefined();
+  });
+
   it("shows an error dialog when the reindex request fails", async () => {
     installFetchMock(() =>
       jsonResponse({ error: "db unreachable" }, 500),
@@ -96,7 +158,7 @@ describe("ReindexButton", () => {
     await user.type(screen.getByLabelText(/type refresh to confirm/i), "refresh");
     await user.click(screen.getByRole("button", { name: "Reindex" }));
     await waitFor(() => {
-      expect(screen.getByText("Reindex failed")).toBeDefined();
+      expect(screen.getByText("Admin action failed")).toBeDefined();
       expect(screen.getByText(/db unreachable/)).toBeDefined();
     });
   });
