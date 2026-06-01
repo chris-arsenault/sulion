@@ -17,6 +17,12 @@ describe("promptTemplate", () => {
     ]);
   });
 
+  it("extracts uppercase variables", () => {
+    expect(extractPromptTemplateVariables("Implement item $N.")).toEqual([
+      { name: "N", occurrences: 1 },
+    ]);
+  });
+
   it("renders variables while preserving literal dollars", () => {
     expect(
       renderPromptTemplate("do item $n for $$5 in $repo", {

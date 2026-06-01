@@ -211,11 +211,12 @@ export function LibraryPanel() {
 
   const savePrompt = useCallback(async (draft: PromptDraft) => {
     try {
-      await saveLibraryEntry(
+      const saved = await saveLibraryEntry(
         "prompts",
         { name: draft.name.trim(), body: draft.body },
         draft.slug,
       );
+      setPrompts((current) => upsertLibraryEntry(current, saved));
       appCommands.libraryChanged({ kind: "prompts" });
       setEditingPrompt(null);
       setError(null);
@@ -345,6 +346,18 @@ interface PendingPromptTemplate {
   entry: LibraryEntry;
   sessionId: string;
   variables: PromptTemplateVariable[];
+}
+
+function upsertLibraryEntry(
+  entries: LibraryEntry[] | null,
+  saved: LibraryEntry,
+): LibraryEntry[] {
+  if (!entries) return [saved];
+  const index = entries.findIndex((entry) => entry.slug === saved.slug);
+  if (index === -1) return [saved, ...entries];
+  const next = [...entries];
+  next[index] = saved;
+  return next;
 }
 
 function LibrarySection({

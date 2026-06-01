@@ -12,6 +12,7 @@ Read these before editing:
 - [docs/deploy.md](docs/deploy.md) — TrueNAS dataset layout and deploy flow
 - [docs/secrets.md](docs/secrets.md) — brokered secrets, wrappers, trust boundary
 - [docs/e2e-coverage-plan.md](docs/e2e-coverage-plan.md) — Playwright suite shape and gaps
+- [docs/code-intel.md](docs/code-intel.md) — agent-facing structural code navigation contract
 
 ## Invariants — do not break
 
@@ -30,6 +31,7 @@ Full list in [docs/architecture.md](docs/architecture.md#invariants--do-not-brea
 - E2E is the single Playwright suite in `frontend/e2e/`, backed by `scripts/run-e2e-stack.mjs`. No in-browser MSW mock mode.
 - Git staleness, invariants, and the dataset layout live in docs/; don't re-explain them in comments or commit messages.
 - Codex and Claude share the same canonical event schema. When editing ingest code, assume both agents flow through it.
+- In Sulion PTYs, run `sulion-code help` before structural code navigation.
 
 ## Companion doc
 

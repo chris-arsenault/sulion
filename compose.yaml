@@ -21,6 +21,8 @@ services:
       SULION_SECRET_BROKER_REGISTRATION_TOKEN: "${SULION_SECRET_BROKER_REGISTRATION_TOKEN}"
       SULION_RETRIEVAL_URL: "http://sulion-retrieval:8083"
       SULION_RETRIEVAL_TOKEN: "${SULION_RETRIEVAL_TOKEN}"
+      SULION_CODE_INTEL_URL: "http://sulion-code-intel:8084"
+      SULION_CODE_INTEL_TOKEN: "${SULION_CODE_INTEL_TOKEN}"
       SULION_RUNNER_URL: "http://sulion-runner:8082"
       SULION_DEV_PORT_RANGE: "26000-26010"
       HOME: "/home/dev"
@@ -77,6 +79,21 @@ services:
       SULION_RETRIEVAL_REINDEX_SECONDS: "300"
     networks:
       - sulion
+
+  code-intel:
+    image: ghcr.io/chris-arsenault/sulion/code-intel:${IMAGE_TAG}
+    container_name: sulion-code-intel
+    restart: unless-stopped
+    environment:
+      SULION_CODE_INTEL_LISTEN: "0.0.0.0:8084"
+      SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@192.168.66.3:5432/sulion"
+      SULION_CODE_INTEL_TOKEN: "${SULION_CODE_INTEL_TOKEN}"
+      SULION_CODE_INTEL_ALLOWED_ROOTS: "/home/dev/repos,/home/dev/workspaces"
+    networks:
+      - sulion
+    volumes:
+      - /mnt/apps/apps/sulion/repos:/home/dev/repos:ro
+      - /mnt/apps/apps/sulion/workspaces:/home/dev/workspaces:ro
 
   runner:
     image: ghcr.io/chris-arsenault/sulion/runner:${IMAGE_TAG}

@@ -9,6 +9,7 @@ images:
   - backend
   - broker
   - retrieval
+  - code-intel
   - runner
   - frontend
 rust_artifacts:
@@ -16,4 +17,5 @@ rust_artifacts:
     - { bin: sulion, image: backend }
     - { bin: sulion-broker, image: broker }
     - { bin: sulion-retrieval, image: retrieval }
+    - { bin: sulion-code-intel, image: code-intel }
     - { bin: sulion-runner, image: runner }

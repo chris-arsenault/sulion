@@ -261,19 +261,25 @@ export function Sidebar() {
     [],
   );
 
-  const confirmWorkspaceDelete = useCallback(async () => {
+  const deletePendingWorkspace = useCallback(async (force?: boolean) => {
     const pending = pendingWorkspaceDelete;
     if (!pending) return;
     setPendingWorkspaceDelete(null);
     try {
       await deleteWorkspace(pending.workspace.id, {
-        force: pending.force,
+        force: force ?? pending.force,
         deleteBranch: true,
       });
     } catch (err) {
       setFormError(messageOf(err));
     }
   }, [deleteWorkspace, pendingWorkspaceDelete]);
+  const confirmWorkspaceDelete = useCallback(async () => {
+    await deletePendingWorkspace();
+  }, [deletePendingWorkspace]);
+  const confirmWorkspaceForceDelete = useCallback(async () => {
+    await deletePendingWorkspace(true);
+  }, [deletePendingWorkspace]);
 
   const onUpdateSession = useCallback(
     async (id: string, patch: Parameters<typeof updateSession>[1]) => {
@@ -416,12 +422,19 @@ export function Sidebar() {
           }
           message={
             pendingWorkspaceDelete.force
-              ? "This removes the Git worktree, deletes the Sulion branch, and discards uncommitted workspace changes."
-              : "This removes the Git worktree and deletes the Sulion branch if it has no unmerged work."
+              ? "This removes the Git worktree, deletes the Sulion branch, and discards uncommitted changes and unmerged commits."
+              : "This removes the Git worktree and deletes the Sulion branch if Git can verify the branch is merged."
           }
           confirmLabel={pendingWorkspaceDelete.force ? "Force delete" : "Delete"}
-          destructive
+          secondaryConfirmLabel={
+            pendingWorkspaceDelete.force ? undefined : "Force delete"
+          }
+          destructive={pendingWorkspaceDelete.force}
+          secondaryDestructive
           onConfirm={confirmWorkspaceDelete}
+          onSecondaryConfirm={
+            pendingWorkspaceDelete.force ? undefined : confirmWorkspaceForceDelete
+          }
           onCancel={cancelPendingWorkspaceDelete}
         />
       )}

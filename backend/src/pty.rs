@@ -593,6 +593,8 @@ fn configure_pty_environment(
         "SULION_SECRET_BROKER_URL",
         "SULION_RETRIEVAL_URL",
         "SULION_RETRIEVAL_TOKEN",
+        "SULION_CODE_INTEL_URL",
+        "SULION_CODE_INTEL_TOKEN",
         "SULION_RUNNER_URL",
     ] {
         forward_env(cmd, key);

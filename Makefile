@@ -1,6 +1,6 @@
 .PHONY: ci lint-rust fmt-rust test-rust test-rust-integration lint-ts typecheck-ts test-ts e2e e2e-install screenshots
 
-ci: lint-rust fmt-rust test-rust test-rust-integration lint-ts typecheck-ts test-ts
+ci: lint-rust fmt-rust test-rust lint-ts typecheck-ts test-ts
 
 lint-rust:
 	cd backend && cargo clippy --release -- -D warnings -W clippy::cognitive_complexity

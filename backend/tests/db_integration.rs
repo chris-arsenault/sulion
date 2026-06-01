@@ -47,6 +47,12 @@ async fn migrations_apply_on_empty_db() {
     let names: Vec<String> = tables.into_iter().map(|(n,)| n).collect();
     for expected in [
         "claude_sessions",
+        "code_files",
+        "code_imports",
+        "code_index_jobs",
+        "code_references",
+        "code_roots",
+        "code_symbols",
         "events",
         "event_blocks",
         "ingester_state",

@@ -13,15 +13,18 @@ export interface ConfirmDialogProps {
   title: string;
   message: string;
   confirmLabel?: string;
+  secondaryConfirmLabel?: string;
   cancelLabel?: string;
   /** If true, the confirm button is rendered red. Defaults to false. */
   destructive?: boolean;
+  secondaryDestructive?: boolean;
   /** Gate the confirm button behind a typed-phrase match. When set,
    * the dialog shows a text input and Confirm stays disabled until
    * the input exactly equals this value. Used for destructive,
    * hard-to-undo actions (the reindex button). */
   requireText?: string;
   onConfirm: () => void;
+  onSecondaryConfirm?: () => void;
   onCancel: () => void;
 }
 
@@ -29,10 +32,13 @@ export function ConfirmDialog({
   title,
   message,
   confirmLabel = "Confirm",
+  secondaryConfirmLabel,
   cancelLabel = "Cancel",
   destructive = false,
+  secondaryDestructive = false,
   requireText,
   onConfirm,
+  onSecondaryConfirm,
   onCancel,
 }: ConfirmDialogProps) {
   const confirmRef = useRef<HTMLButtonElement>(null);
@@ -45,6 +51,10 @@ export function ConfirmDialog({
     if (!canConfirm) return;
     onConfirm();
   }, [canConfirm, onConfirm]);
+  const handleSecondaryConfirm = useCallback(() => {
+    if (!canConfirm) return;
+    onSecondaryConfirm?.();
+  }, [canConfirm, onSecondaryConfirm]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -118,6 +128,20 @@ export function ConfirmDialog({
           >
             {confirmLabel}
           </button>
+          {secondaryConfirmLabel && onSecondaryConfirm && (
+            <button
+              type="button"
+              className={
+                secondaryDestructive
+                  ? "cd__btn cd__btn--destructive"
+                  : "cd__btn cd__btn--primary"
+              }
+              onClick={handleSecondaryConfirm}
+              disabled={!canConfirm}
+            >
+              {secondaryConfirmLabel}
+            </button>
+          )}
         </div>
       </div>
     </div>,

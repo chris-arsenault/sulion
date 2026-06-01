@@ -3,7 +3,7 @@
 //! REST API integration tests: full axum stack, real Postgres, real
 //! filesystem for repo scans. Gated on `SULION_TEST_DB`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,6 +33,21 @@ async fn fresh_pool() -> db::Pool {
     .await
     .expect("truncate test tables");
     pool
+}
+
+async fn insert_test_pty(pool: &db::Pool, repo: &str, working_dir: &Path) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pty_sessions (id, repo, working_dir, state, created_at) \
+         VALUES ($1, $2, $3, 'live', NOW())",
+    )
+    .bind(id)
+    .bind(repo)
+    .bind(working_dir.to_string_lossy().as_ref())
+    .execute(pool)
+    .await
+    .unwrap();
+    id
 }
 
 struct Harness {
@@ -513,17 +528,7 @@ async fn timeline_returns_projected_turns() {
     let h = Harness::new().await;
 
     std::fs::create_dir_all(h.repos_root().join("r")).unwrap();
-    let created: serde_json::Value = h
-        .client
-        .post(format!("{}/api/sessions", h.base))
-        .json(&json!({ "repo": "r" }))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let pty_id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
+    let pty_id = insert_test_pty(&h.state.pool, "r", &h.repos_root().join("r")).await;
 
     let session_uuid = Uuid::new_v4();
     sulion::correlate::apply(
@@ -629,15 +634,14 @@ async fn timeline_returns_projected_turns() {
     .await
     .unwrap();
 
-    let body: serde_json::Value = h
+    let response = h
         .client
         .get(format!("{}/api/sessions/{}/timeline", h.base, pty_id))
         .send()
         .await
-        .unwrap()
-        .json()
-        .await
         .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = response.json().await.unwrap();
 
     assert_eq!(body["session_uuid"], session_uuid.to_string());
     assert_eq!(body["session_agent"], "claude-code");
@@ -647,24 +651,37 @@ async fn timeline_returns_projected_turns() {
     assert_eq!(body["turns"][0]["session_uuid"], session_uuid.to_string());
     assert_eq!(body["turns"][0]["pty_session_id"], pty_id.to_string());
     assert_eq!(body["turns"][0]["operation_count"], 1);
-    assert_eq!(body["turns"][0]["tool_pairs"][0]["name"], "read");
-    assert_eq!(body["turns"][0]["tool_pairs"][0]["category"], "inspect");
+    assert_eq!(body["turns"][0]["operation_badges"][0]["name"], "read");
+    assert_eq!(body["turns"][0]["operation_badges"][0]["count"], 1);
+
+    let detail_response = h
+        .client
+        .get(format!(
+            "{}/api/sessions/{}/timeline/turns/0",
+            h.base, pty_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(detail_response.status(), reqwest::StatusCode::OK);
+    let detail: serde_json::Value = detail_response.json().await.unwrap();
+    let turn = &detail["turn"];
+    assert_eq!(turn["tool_pairs"][0]["name"], "read");
+    assert_eq!(turn["tool_pairs"][0]["category"], "inspect");
     assert_eq!(
-        body["turns"][0]["tool_pairs"][0]["result"]["payload"]["old_text"],
+        turn["tool_pairs"][0]["result"]["payload"]["old_text"],
         "fn old() {}"
     );
     assert_eq!(
-        body["turns"][0]["tool_pairs"][0]["result"]["payload"]["new_text"],
+        turn["tool_pairs"][0]["result"]["payload"]["new_text"],
         "fn main() {}"
     );
     assert_eq!(
-        body["turns"][0]["tool_pairs"][0]["file_touches"][0]["path"],
+        turn["tool_pairs"][0]["file_touches"][0]["path"],
         "src/lib.rs"
     );
-    assert_eq!(body["turns"][0]["chunks"][0]["kind"], "assistant");
-    assert_eq!(body["turns"][0]["chunks"][1]["kind"], "tool");
-
-    h.shutdown_sessions().await;
+    assert_eq!(turn["chunks"][0]["kind"], "assistant");
+    assert_eq!(turn["chunks"][1]["kind"], "tool");
 }
 
 #[tokio::test]
@@ -810,17 +827,7 @@ async fn file_trace_returns_related_turns() {
 
     std::fs::create_dir_all(h.repos_root().join("r/src")).unwrap();
     std::fs::write(h.repos_root().join("r/src/lib.rs"), "fn main() {}\n").unwrap();
-    let created: serde_json::Value = h
-        .client
-        .post(format!("{}/api/sessions", h.base))
-        .json(&json!({ "repo": "r" }))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let pty_id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
+    let pty_id = insert_test_pty(&h.state.pool, "r", &h.repos_root().join("r")).await;
 
     let session_uuid = Uuid::new_v4();
     sulion::correlate::apply(
@@ -871,8 +878,13 @@ async fn file_trace_returns_related_turns() {
     sulion::ingest::rebuild_session_projection(&h.state.pool, session_uuid)
         .await
         .unwrap();
+    h.state
+        .repo_state
+        .upsert_repo("r", &h.repos_root().join("r"))
+        .await
+        .unwrap();
 
-    let body: serde_json::Value = h
+    let response = h
         .client
         .get(format!(
             "{}/api/repos/r/file-trace?path=src%2Flib.rs",
@@ -880,18 +892,15 @@ async fn file_trace_returns_related_turns() {
         ))
         .send()
         .await
-        .unwrap()
-        .json()
-        .await
         .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = response.json().await.unwrap();
 
     assert_eq!(body["path"], "src/lib.rs");
     assert_eq!(body["touches"].as_array().unwrap().len(), 1);
     assert_eq!(body["touches"][0]["pty_session_id"], pty_id.to_string());
     assert_eq!(body["touches"][0]["turn_id"], 0);
     assert_eq!(body["touches"][0]["touch_kind"], "inspect");
-
-    h.shutdown_sessions().await;
 }
 
 #[tokio::test]

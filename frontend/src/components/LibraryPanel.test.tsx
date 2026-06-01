@@ -120,6 +120,45 @@ describe("LibraryPanel", () => {
     unsubscribe();
   });
 
+  it("uses a newly saved uppercase template variable before refresh completes", async () => {
+    const listLibrary = vi.spyOn(apiClient, "listLibrary");
+    listLibrary
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockImplementation(
+        () => new Promise<Awaited<ReturnType<typeof apiClient.listLibrary>>>(() => {}),
+      );
+    vi.spyOn(apiClient, "saveLibraryEntry").mockResolvedValue({
+      slug: "refactor",
+      name: "refactor",
+      created_at: null,
+      updated_at: "2026-05-28T03:15:29Z",
+      body: "Implement item $N.",
+    });
+    useTabStore.getState().openTab({ kind: "terminal", sessionId: "sess-1" }, "top");
+
+    render(<LibraryPanel />);
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText(/save a past user prompt/)).toBeDefined());
+    await user.click(screen.getByLabelText("New prompt"));
+    await user.type(screen.getByLabelText("Prompt name"), "refactor");
+    await user.type(screen.getByLabelText("Prompt body"), "Implement item $N.");
+    await user.click(screen.getByRole("button", { name: "Save prompt" }));
+    await waitFor(() =>
+      expect(apiClient.saveLibraryEntry).toHaveBeenCalledWith(
+        "prompts",
+        { name: "refactor", body: "Implement item $N." },
+        undefined,
+      ),
+    );
+
+    await user.click(screen.getByText("refactor"));
+
+    expect(screen.getByText("Prompt Values")).toBeDefined();
+    expect(screen.getByLabelText("Value for N")).toBeDefined();
+  });
+
   it("opens a reference tab on click", async () => {
     vi.spyOn(apiClient, "listLibrary")
       .mockResolvedValueOnce([

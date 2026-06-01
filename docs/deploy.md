@@ -2,11 +2,12 @@
 
 Standard ahara TrueNAS deploy: Docker Compose via Komodo, shared TrueNAS Postgres auto-provisioned by the migration Lambda, Komodo stack created on demand by the deploy action.
 
-Sulion now has five services:
+Sulion now has six services:
 
 - `backend` — main API + PTY runtime
 - `broker` — secret broker, separate container and UID
 - `retrieval` — agent-facing transcript/timeline retrieval API
+- `code-intel` — agent-facing structural source navigation API
 - `runner` — constrained Docker command broker, only service with the host Docker socket
 - `frontend` — static UI + reverse proxy
 
@@ -22,6 +23,7 @@ Sulion also carries project-local Terraform under [`infrastructure/terraform/`](
 - `/ahara/cognito/clients/sulion-app`
 - `/ahara/auth-trigger/clients/sulion`
 - `/ahara/sulion/retrieval-token`
+- `/ahara/sulion/code-intel-token`
 
 ## One-time TrueNAS bootstrap
 
@@ -95,6 +97,23 @@ Semantic search works in two tiers:
 After `vector` is installed, the retrieval service idempotently adds the `embedding_vector vector(768)` column and HNSW index on startup. Embedding backfill and semantic search use the local embedding service configured by `SULION_RETRIEVAL_EMBEDDING_URL`, defaulting to `http://192.168.66.3:5361` with `nomic-ai/nomic-embed-text-v1.5`.
 
 The PTY helper is `sulion-retrieve`; the full API contract is in [`docs/retrieval.md`](retrieval.md).
+
+## Code Intelligence
+
+The code-intelligence service indexes compact structural facts for mounted repos
+and workspaces. It stores roots, file freshness, symbols, references, imports,
+and index jobs in Postgres. It does not store full source text or serialized AST
+blobs. Source text is read from the read-only repo/workspace mounts at query
+time.
+
+The service uses Tree-sitter for syntactic parsing, ast-grep for structural
+search and diff-only patch generation, and language servers for best-effort
+semantic `def`/`refs` escalation. Semantic fallback and language-server health
+are visible through `sulion-code status`.
+
+The PTY helper is `sulion-code`; the full command contract is in
+[`docs/code-intel.md`](code-intel.md), and the durable design decision is in
+[`docs/adrs/0001-code-intelligence-agent-tool.md`](adrs/0001-code-intelligence-agent-tool.md).
 
 ## Drop in credentials
 

@@ -40,6 +40,27 @@ describe("ConfirmDialog", () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
+  it("calls onSecondaryConfirm when the secondary confirm button is clicked", async () => {
+    const onConfirm = vi.fn();
+    const onSecondaryConfirm = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ConfirmDialog
+        title="t"
+        message="m"
+        onConfirm={onConfirm}
+        onSecondaryConfirm={onSecondaryConfirm}
+        onCancel={noop}
+        confirmLabel="Delete safely"
+        secondaryConfirmLabel="Force delete"
+        secondaryDestructive
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Force delete" }));
+    expect(onSecondaryConfirm).toHaveBeenCalled();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
   it("calls onCancel when the cancel button is clicked", async () => {
     const onConfirm = vi.fn();
     const onCancel = vi.fn();

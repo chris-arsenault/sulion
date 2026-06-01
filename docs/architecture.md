@@ -6,8 +6,9 @@ Pointers into the code are the source of truth. This doc exists to orient a read
 
 ## Shape
 
-One Rust backend, one React frontend, one Rust secret broker, one Rust Docker
-runner, two Postgres databases, and several explicitly mounted TrueNAS datasets.
+One Rust backend, one React frontend, one Rust secret broker, one Rust retrieval
+service, one Rust code-intelligence service, one Rust Docker runner, two
+Postgres databases, and several explicitly mounted TrueNAS datasets.
 
 ```
 PTY shell ──► xterm.js               (live: WebSocket bytes, no scrollback)
@@ -15,6 +16,8 @@ PTY shell ──► xterm.js               (live: WebSocket bytes, no scrollback
 
 browser UI ──► frontend ──► backend ──► PTY runtime
           └──► /broker/* ──► secret broker ──► sulion_broker Postgres
+
+PTY helpers ──► retrieval/code-intel/runner services ──► Postgres or mounts
 ```
 
 The live pane shows "now." All review happens in the structured timeline, sourced from the ingested transcript, not the terminal buffer.
@@ -101,6 +104,8 @@ WebSocket attach sends a snapshot rendered from the shadow `vt100` emulator on c
 The backend also launches PTYs with Sulion-managed wrapper tools on `PATH`:
 
 - `cl` / `co` for correlated Claude/Codex startup
+- `sulion-retrieve` for transcript/timeline retrieval
+- `sulion-code` for structural code navigation
 - `with-cred` for general env-bundle injection
 - `aws` as a wrapper over the real AWS CLI
 - `docker` as a constrained runner client
@@ -118,6 +123,29 @@ Its responsibilities are intentionally narrow:
 - redeem PTY grants through `with-cred` and `aws`
 
 It does not run PTYs, ingest transcripts, or serve the main application API.
+
+## Retrieval Service
+
+The retrieval service is a separate Rust service and container for
+agent-facing transcript/timeline search. It reads canonical Sulion Postgres
+tables directly and does not duplicate transcript text into another projection.
+Semantic search stores embeddings plus source keys in `retrieval_embeddings`;
+result text is loaded from canonical event and timeline tables at query time.
+
+PTYs use `sulion-retrieve`, which adds static bearer auth and Sulion context
+headers from the PTY environment. See [`retrieval.md`](retrieval.md).
+
+## Code Intelligence Service
+
+The code-intelligence service is a separate Rust service and container for
+agent-facing structural source navigation. It indexes compact facts about
+mounted repos and workspaces: roots, file freshness, symbols, references,
+imports, and jobs. It does not store full source text or serialized ASTs.
+
+PTYs use `sulion-code`, which adds static bearer auth and Sulion context
+headers from the PTY environment. Scope is inferred from cwd. See
+[`code-intel.md`](code-intel.md) and
+[`adrs/0001-code-intelligence-agent-tool.md`](adrs/0001-code-intelligence-agent-tool.md).
 
 ## Container Runner
 
@@ -137,7 +165,12 @@ is bounded by runner policy.
 
 ## Deployment shape
 
-Docker Compose, orchestrated by Komodo, on TrueNAS. Four images (`backend`, `broker`, `runner`, `frontend`), shared TrueNAS Postgres at `192.168.66.3:5432`, backend state under `/mnt/apps/apps/sulion`, canonical repos under `/mnt/apps/apps/sulion/repos`, isolated worktrees under `/mnt/apps/apps/sulion/workspaces`, and broker key material under `/mnt/apps/apps/sulion-broker`. Full setup in [`deploy.md`](deploy.md).
+Docker Compose, orchestrated by Komodo, on TrueNAS. Six images (`backend`,
+`broker`, `retrieval`, `code-intel`, `runner`, `frontend`), shared TrueNAS
+Postgres at `192.168.66.3:5432`, backend state under `/mnt/apps/apps/sulion`,
+canonical repos under `/mnt/apps/apps/sulion/repos`, isolated worktrees under
+`/mnt/apps/apps/sulion/workspaces`, and broker key material under
+`/mnt/apps/apps/sulion-broker`. Full setup in [`deploy.md`](deploy.md).
 
 ## Historical reasoning
 

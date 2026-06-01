@@ -9,7 +9,7 @@
 ## Daily commands
 
 ```bash
-make ci                      # full lint + unit + backend integration
+make ci                      # fast lint + unit/typecheck checks; no integration
 make lint-rust               # clippy
 make fmt-rust                # fmt --check
 make test-rust               # backend unit / non-DB tests

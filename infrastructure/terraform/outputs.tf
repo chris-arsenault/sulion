@@ -17,3 +17,7 @@ output "secret_broker_registration_token_ssm_path" {
 output "retrieval_token_ssm_path" {
   value = aws_ssm_parameter.retrieval_token.name
 }
+
+output "code_intel_token_ssm_path" {
+  value = aws_ssm_parameter.code_intel_token.name
+}

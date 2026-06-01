@@ -8,6 +8,8 @@ use uuid::Uuid;
 pub mod agent;
 pub mod api;
 pub mod auth;
+pub mod code_cli;
+pub mod code_intel;
 pub mod codex;
 pub mod config;
 pub mod container_runner;

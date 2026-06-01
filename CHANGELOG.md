@@ -2,6 +2,50 @@
 
 All notable user-visible changes to Sulion are recorded here.
 
+## v1.4.0 - 2026-06-01
+
+### Agent retrieval
+
+- Added the `retrieval` service and `sulion-retrieve` PTY helper for
+  transcript/timeline search, turn lookup, file history, facets, and reindex
+  actions from agent shells.
+- Added lexical and semantic retrieval over existing Sulion Postgres data
+  without duplicating transcript text into a separate projection. Semantic
+  indexing stores embeddings plus source keys and uses the local embedding
+  service at `192.168.66.3:5361`.
+- Added optional `pgvector` acceleration for retrieval embeddings while keeping
+  a `REAL[]` exact-scan fallback when the extension is unavailable.
+- Added a UI-triggered retrieval backfill path through the backend admin route
+  so embedding backfill can be kicked off without exposing the retrieval static
+  token to the browser.
+
+### Code intelligence
+
+- Added the standalone `code-intel` service and `sulion-code` PTY helper for
+  agent-facing structural source navigation.
+- Added compact code index tables for roots, files, symbols, references,
+  imports, and index jobs. The index stores structural facts and ranges, not
+  full source text or serialized ASTs.
+- Added Tree-sitter parsing, incremental refresh, normalized symbol extraction,
+  lightweight syntactic references, ast-grep structural `search`, diff-only
+  structural `patch`, LSP-backed `def`/`refs` escalation with syntactic
+  fallback, and budgeted `pack` responses.
+- Added the authenticated `/v1/help`, `/v1/status`, `/v1/refresh`,
+  `/v1/outline`, `/v1/find`, `/v1/def`, `/v1/refs`, `/v1/search`, `/v1/patch`,
+  and `/v1/pack` code-intelligence API routes.
+
+### Deployment and tests
+
+- Added `retrieval` and `code-intel` image, compose, platform, token, and PTY
+  environment wiring. Repos and workspaces are mounted read-only into
+  `code-intel`.
+- Updated `make ci` to stay a fast lint/unit/typecheck gate; the Postgres-backed
+  backend integration suite remains an explicit `make test-rust-integration`
+  gate.
+- Added backend unit and integration coverage for retrieval indexing/search,
+  code-intelligence parsing/indexing/navigation/structural operations, PTY env
+  forwarding, and the agent-facing CLI contracts.
+
 ## v1.3.0 - 2026-05-27
 
 ### Secrets and credential grants

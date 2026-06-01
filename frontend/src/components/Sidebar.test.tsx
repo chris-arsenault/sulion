@@ -499,6 +499,29 @@ describe("Sidebar", () => {
     expect(screen.queryByText("alpha/999999999999")).toBeNull();
   });
 
+  it("force deletes an isolated workspace from the row delete dialog", async () => {
+    const state = installFetchMock();
+    const workspace = workspaceFixture();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.workspaces.push(workspace);
+    setup();
+    const user = userEvent.setup();
+
+    await user.click(
+      await screen.findByLabelText("Delete workspace alpha/999999999999"),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Force delete" }),
+    );
+
+    await waitFor(() =>
+      expect(state.deletedWorkspaceRequests).toEqual([
+        { id: workspace.id, query: "force=true" },
+      ]),
+    );
+    expect(screen.queryByText("alpha/999999999999")).toBeNull();
+  });
+
   it("force deletes an isolated workspace from its context menu", async () => {
     const state = installFetchMock();
     const workspace = workspaceFixture();
