@@ -31,6 +31,21 @@ cd backend && cargo run
 cd frontend && pnpm install && pnpm dev
 ```
 
+## PTY Postgres
+
+In a Sulion PTY, use one managed workspace Postgres for repo tests:
+
+```bash
+sulion postgres -- cargo test
+```
+
+`sulion postgres -- <command>` creates or reuses a workspace-scoped Postgres 16
+container, injects `DATABASE_URL`, `TEST_DATABASE_URL`, and `PG*` variables into
+the command, and leaves the container running for the next test run. Use
+`sulion postgres --restart -- <command>` for a clean database, or
+`sulion postgres --temp -- <command>` for a one-off database removed after the
+command exits.
+
 ## Backend integration test contract
 
 Postgres-backed tests live in `backend/tests/*_integration.rs`, gated with `#![cfg(feature = "integration-tests")]`, and run through `scripts/run-backend-integration-tests.sh` (also `make test-rust-integration`).

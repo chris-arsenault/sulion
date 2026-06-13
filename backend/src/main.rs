@@ -44,6 +44,14 @@ async fn main() -> anyhow::Result<()> {
     if argv
         .get(1)
         .and_then(|s| s.to_str())
+        .is_some_and(|s| s == "postgres")
+    {
+        let code = sulion::container_runner::run_postgres_cli(&argv[2..]).await?;
+        std::process::exit(code);
+    }
+    if argv
+        .get(1)
+        .and_then(|s| s.to_str())
         .is_some_and(|s| s == "workspace")
     {
         let code = sulion::worktree::run_cli(&argv[2..]).await?;

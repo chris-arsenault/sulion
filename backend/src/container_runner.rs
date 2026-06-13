@@ -12,6 +12,8 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
+mod postgres;
+
 const OWNER_LABEL: &str = "sulion.owner";
 const OWNER_VALUE: &str = "sulion";
 const PTY_LABEL: &str = "sulion.pty_id";
@@ -134,6 +136,18 @@ pub fn app(state: Arc<RunnerState>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/v1/commands/docker", post(run_docker_command))
+        .route(
+            "/v1/services/postgres/ensure",
+            post(postgres::ensure_postgres),
+        )
+        .route(
+            "/v1/services/postgres/cleanup",
+            post(postgres::cleanup_postgres),
+        )
+        .route(
+            "/v1/services/postgres/clean",
+            post(postgres::clean_postgres),
+        )
         .with_state(state)
 }
 
@@ -756,6 +770,8 @@ pub async fn run_client(args: &[OsString]) -> anyhow::Result<i32> {
     eprint!("{}", payload.stderr);
     Ok(payload.exit_code)
 }
+
+pub use postgres::run_postgres_cli;
 
 #[cfg(test)]
 mod tests;
