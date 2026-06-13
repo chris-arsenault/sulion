@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use sulion::codex::{run_launcher, LauncherConfig};
-use sulion::correlate::{self, CorrelateMsg};
+use sulion::correlate::{self, CorrelateMsg, RuntimeEvent, RuntimeMsg};
 use sulion::db;
 use sulion::pty::{PtyManager, SpawnParams};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -235,6 +235,55 @@ async fn socket_listener_accepts_json_line_and_updates_db() {
     listener_task.abort();
     mgr.delete(pty.id).await.ok();
     let _ = std::fs::remove_file(&sock);
+}
+
+#[tokio::test]
+async fn runtime_running_waits_for_pty_row_insert() {
+    let pool = fresh_pool().await;
+    let pty_id = Uuid::new_v4();
+    let runtime_pool = pool.clone();
+    let runtime_task = tokio::spawn(async move {
+        correlate::apply_runtime(
+            &runtime_pool,
+            &RuntimeMsg {
+                pty_id,
+                agent: "codex".to_string(),
+                event: RuntimeEvent::Running,
+                exit_code: None,
+            },
+        )
+        .await
+        .unwrap();
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    sqlx::query(
+        "INSERT INTO pty_sessions (id, repo, working_dir, state, created_at, \
+             agent_runtime_agent, agent_runtime_state, agent_runtime_started_at) \
+         VALUES ($1, $2, $3, 'live', NOW(), 'codex', 'starting', NOW())",
+    )
+    .bind(pty_id)
+    .bind("r")
+    .bind("/tmp")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    tokio::time::timeout(Duration::from_secs(2), runtime_task)
+        .await
+        .expect("runtime update timed out")
+        .unwrap();
+
+    let (agent, state): (Option<String>, String) = sqlx::query_as(
+        "SELECT agent_runtime_agent, agent_runtime_state \
+           FROM pty_sessions WHERE id = $1",
+    )
+    .bind(pty_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(agent.as_deref(), Some("codex"));
+    assert_eq!(state, "running");
 }
 
 #[tokio::test(flavor = "current_thread")]

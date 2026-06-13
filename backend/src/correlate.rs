@@ -30,6 +30,8 @@ use uuid::Uuid;
 use crate::db::Pool;
 
 const CORRELATE_IO_TIMEOUT: Duration = Duration::from_millis(750);
+const RUNTIME_UPDATE_RETRY_DELAY: Duration = Duration::from_millis(50);
+const RUNTIME_UPDATE_MAX_ATTEMPTS: usize = 20;
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -172,19 +174,36 @@ pub async fn apply(pool: &Pool, msg: &CorrelateMsg) -> anyhow::Result<()> {
 pub async fn apply_runtime(pool: &Pool, msg: &RuntimeMsg) -> anyhow::Result<()> {
     match msg.event {
         RuntimeEvent::Running => {
-            sqlx::query(
-                "UPDATE pty_sessions \
-                 SET agent_runtime_agent = $2, \
-                     agent_runtime_state = 'running', \
-                     agent_runtime_started_at = COALESCE(agent_runtime_started_at, NOW()), \
-                     agent_runtime_ended_at = NULL, \
-                     agent_runtime_exit_code = NULL \
-                 WHERE id = $1 AND state = 'live'",
-            )
-            .bind(msg.pty_id)
-            .bind(&msg.agent)
-            .execute(pool)
-            .await?;
+            let mut rows_affected = 0;
+            for attempt in 0..RUNTIME_UPDATE_MAX_ATTEMPTS {
+                let result = sqlx::query(
+                    "UPDATE pty_sessions \
+                     SET agent_runtime_agent = $2, \
+                         agent_runtime_state = 'running', \
+                         agent_runtime_started_at = COALESCE(agent_runtime_started_at, NOW()), \
+                         agent_runtime_ended_at = NULL, \
+                         agent_runtime_exit_code = NULL \
+                     WHERE id = $1 AND state = 'live'",
+                )
+                .bind(msg.pty_id)
+                .bind(&msg.agent)
+                .execute(pool)
+                .await?;
+                rows_affected = result.rows_affected();
+                if rows_affected > 0 {
+                    break;
+                }
+                if attempt + 1 < RUNTIME_UPDATE_MAX_ATTEMPTS {
+                    tokio::time::sleep(RUNTIME_UPDATE_RETRY_DELAY).await;
+                }
+            }
+            if rows_affected == 0 {
+                tracing::warn!(
+                    pty = %msg.pty_id,
+                    agent = %msg.agent,
+                    "agent runtime running event matched no live PTY",
+                );
+            }
         }
         RuntimeEvent::Exited => {
             sqlx::query(
