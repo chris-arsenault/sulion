@@ -293,7 +293,7 @@ pub(super) struct DevicePrincipal {
     pub user_sub: String,
 }
 
-/// Auth layer for device-token routes (e.g. MIDI ingest). Validates the bearer
+/// Auth layer for device-token routes (e.g. repo content ingest). Validates the bearer
 /// token against `device_tokens`, touches `last_used_at`, and inserts a
 /// [`DevicePrincipal`]. This is *separate* from `require_http_auth`, which
 /// validates Cognito JWTs.

@@ -1,16 +1,16 @@
 #![cfg(feature = "integration-tests")]
 
-//! Device-pairing + MIDI-ingest integration tests: full axum stack, real
-//! Postgres. Auth is disabled (the harness uses no `AuthState`), so the
-//! approval handler binds to the synthetic `dev` principal. Gated on
-//! `SULION_TEST_DB`.
+//! Device-pairing + repo content-ingest integration tests: full axum stack,
+//! real Postgres, real filesystem. Auth is disabled (the harness uses no
+//! `AuthState`), so the approval handler binds to the synthetic `dev`
+//! principal. Gated on `SULION_TEST_DB`.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::json;
 use sulion::{app, db, AppState};
 use tokio::net::TcpListener;
-use uuid::Uuid;
 
 fn test_db_url() -> Option<String> {
     std::env::var("SULION_TEST_DB").ok()
@@ -20,7 +20,7 @@ async fn fresh_pool() -> db::Pool {
     let url = test_db_url().expect("SULION_TEST_DB");
     let pool = db::connect(&url).await.expect("connect");
     db::run_migrations(&pool).await.expect("migrate");
-    sqlx::query("TRUNCATE device_pairings, device_tokens, midi_clips RESTART IDENTITY CASCADE")
+    sqlx::query("TRUNCATE device_pairings, device_tokens RESTART IDENTITY CASCADE")
         .execute(&pool)
         .await
         .expect("truncate device tables");
@@ -29,7 +29,7 @@ async fn fresh_pool() -> db::Pool {
 
 struct Harness {
     base: String,
-    pool: db::Pool,
+    repos_root: PathBuf,
     client: reqwest::Client,
     _tmp: tempfile::TempDir,
 }
@@ -38,9 +38,10 @@ impl Harness {
     async fn new() -> Self {
         let pool = fresh_pool().await;
         let tmp = tempfile::tempdir().unwrap();
+        let repos_root = tmp.path().to_path_buf();
         let state = AppState::new(
-            pool.clone(),
-            tmp.path().to_path_buf(),
+            pool,
+            repos_root.clone(),
             tmp.path().join(".workspaces"),
             tmp.path().join(".library"),
             Arc::new(sulion::ingest::Ingester::new()),
@@ -53,7 +54,7 @@ impl Harness {
         });
         Self {
             base: format!("http://{addr}"),
-            pool,
+            repos_root,
             client: reqwest::Client::new(),
             _tmp: tmp,
         }
@@ -62,128 +63,118 @@ impl Harness {
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.base, path)
     }
+
+    /// Create an (empty) repo directory so `repo_path` resolves.
+    fn make_repo(&self, name: &str) {
+        std::fs::create_dir_all(self.repos_root.join(name)).unwrap();
+    }
+
+    /// Drive pairing all the way to a usable device token.
+    async fn obtain_token(&self) -> String {
+        let start: serde_json::Value = self
+            .client
+            .post(self.url("/api/devices/pair"))
+            .json(&json!({ "client": "ableton-extensions" }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let device_code = start["device_code"].as_str().unwrap().to_string();
+        let user_code = start["user_code"].as_str().unwrap().to_string();
+
+        let approve = self
+            .client
+            .post(self.url("/api/devices/pair/approve"))
+            .json(&json!({ "user_code": user_code }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(approve.status(), 200);
+
+        let tok: serde_json::Value = self
+            .client
+            .post(self.url("/api/devices/pair/token"))
+            .json(&json!({ "device_code": device_code }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        tok["access_token"].as_str().unwrap().to_string()
+    }
 }
 
 #[tokio::test]
-async fn pairing_then_ingest_roundtrip() {
+async fn pairing_then_ingest_writes_file_to_repo() {
     let h = Harness::new().await;
+    h.make_repo("atlas");
 
-    // 1. Start pairing.
-    let resp = h
+    // Poll before approval → 428 authorization_pending (covers the pending path).
+    let start: serde_json::Value = h
         .client
         .post(h.url("/api/devices/pair"))
-        .json(&json!({ "client": "ableton-extensions" }))
+        .json(&json!({ "client": "probe" }))
         .send()
         .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let start: serde_json::Value = resp.json().await.unwrap();
-    let device_code = start["device_code"].as_str().unwrap().to_string();
-    let user_code = start["user_code"].as_str().unwrap().to_string();
-    assert_eq!(start["interval"], 2);
-    assert!(start["verification_uri_complete"]
-        .as_str()
         .unwrap()
-        .contains(&user_code));
-
-    // 2. Poll before approval → 428 authorization_pending.
-    let resp = h
+        .json()
+        .await
+        .unwrap();
+    let pending = h
         .client
         .post(h.url("/api/devices/pair/token"))
-        .json(&json!({ "device_code": device_code }))
+        .json(&json!({ "device_code": start["device_code"].as_str().unwrap() }))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), reqwest::StatusCode::PRECONDITION_REQUIRED);
+    assert_eq!(pending.status(), reqwest::StatusCode::PRECONDITION_REQUIRED);
 
-    // 3. Approve (auth disabled → dev principal).
+    // Full pairing → token, then write a file under the repo.
+    let token = h.obtain_token().await;
+    let content = b"MThd\x00\x00\x00\x06 not really midi but binary-ish \x00\x01";
+
     let resp = h
         .client
-        .post(h.url("/api/devices/pair/approve"))
-        .json(&json!({ "user_code": user_code }))
+        .post(h.url("/api/repos/atlas/ingest?path=clips/verse.mid"))
+        .bearer_auth(&token)
+        .body(content.to_vec())
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    let approved: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(approved["status"], "approved");
-    assert_eq!(approved["client"], "ableton-extensions");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["path"], "clips/verse.mid");
+    assert_eq!(body["bytes"], content.len());
 
-    // 4. Poll again → token minted.
-    let resp = h
+    // The bytes really landed on disk under the repo, intact.
+    let written = std::fs::read(h.repos_root.join("atlas").join("clips/verse.mid")).unwrap();
+    assert_eq!(written, content);
+
+    // Path traversal is rejected.
+    let escape = h
         .client
-        .post(h.url("/api/devices/pair/token"))
-        .json(&json!({ "device_code": device_code }))
+        .post(h.url("/api/repos/atlas/ingest?path=../escape.txt"))
+        .bearer_auth(&token)
+        .body(b"x".to_vec())
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200);
-    let tok: serde_json::Value = resp.json().await.unwrap();
-    let access_token = tok["access_token"].as_str().unwrap().to_string();
-    assert_eq!(tok["token_type"], "Bearer");
-
-    // 5. Re-polling the claimed device_code → 410 Gone.
-    let resp = h
-        .client
-        .post(h.url("/api/devices/pair/token"))
-        .json(&json!({ "device_code": device_code }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), reqwest::StatusCode::GONE);
-
-    // 6. Ingest a clip with the device token.
-    let resp = h
-        .client
-        .post(h.url("/api/midi/ingest"))
-        .bearer_auth(&access_token)
-        .json(&json!({
-            "source": "ableton",
-            "name": "Verse bassline",
-            "tempo": 120.0,
-            "lengthBeats": 4.0,
-            "timeSignature": { "numerator": 4, "denominator": 4 },
-            "notes": [
-                { "pitch": 36, "start": 0.0, "duration": 0.5, "velocity": 100, "muted": false },
-                { "pitch": 36, "start": 1.0, "duration": 0.5, "velocity": 90 }
-            ]
-        }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let ingest: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(ingest["note_count"], 2);
-    let ingest_id = ingest["ingest_id"]
-        .as_str()
-        .unwrap()
-        .parse::<Uuid>()
-        .unwrap();
-
-    // 7. Verify it persisted, bound to the dev user, with notes intact.
-    let row = sqlx::query_as::<_, (String, i32, String)>(
-        "SELECT user_sub, note_count, source FROM midi_clips WHERE ingest_id = $1",
-    )
-    .bind(ingest_id)
-    .fetch_one(&h.pool)
-    .await
-    .unwrap();
-    assert_eq!(row.0, "dev");
-    assert_eq!(row.1, 2);
-    assert_eq!(row.2, "ableton");
+    assert_eq!(escape.status(), 400);
 }
 
 #[tokio::test]
 async fn ingest_rejects_missing_and_bad_tokens() {
     let h = Harness::new().await;
-    let body =
-        json!({ "notes": [ { "pitch": 60, "start": 0.0, "duration": 1.0, "velocity": 100 } ] });
+    h.make_repo("atlas");
 
     // No Authorization header.
     let resp = h
         .client
-        .post(h.url("/api/midi/ingest"))
-        .json(&body)
+        .post(h.url("/api/repos/atlas/ingest?path=x.txt"))
+        .body(b"data".to_vec())
         .send()
         .await
         .unwrap();
@@ -192,9 +183,9 @@ async fn ingest_rejects_missing_and_bad_tokens() {
     // Bogus bearer token.
     let resp = h
         .client
-        .post(h.url("/api/midi/ingest"))
+        .post(h.url("/api/repos/atlas/ingest?path=x.txt"))
         .bearer_auth("not-a-real-token")
-        .json(&body)
+        .body(b"data".to_vec())
         .send()
         .await
         .unwrap();

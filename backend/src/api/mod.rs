@@ -1,6 +1,12 @@
 use std::sync::Arc;
 
-use axum::{extract::State, http::StatusCode, middleware, routing::get, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    middleware,
+    routing::{get, post},
+    Json, Router,
+};
 use serde::Serialize;
 
 use crate::{db, AppState};
@@ -10,7 +16,6 @@ mod app_state_routes;
 mod device_routes;
 mod future_prompt_routes;
 mod library_routes;
-mod midi_routes;
 mod repo_routes;
 mod routes;
 mod session_routes;
@@ -38,11 +43,17 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     // Public pairing endpoints — the device has no credential yet.
     let device_public = device_routes::public_router();
 
-    // Device-token-authenticated surface (MIDI ingest), guarded by its own layer.
-    let device_authed = midi_routes::router().route_layer(middleware::from_fn_with_state(
-        state,
-        device_routes::require_device_token,
-    ));
+    // Device-token-authenticated surface: external tools write content into a
+    // repo on disk. Guarded by its own layer (device tokens, not Cognito JWTs).
+    let device_authed = Router::new()
+        .route(
+            "/api/repos/:name/ingest",
+            post(repo_routes::post_repo_ingest),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            state,
+            device_routes::require_device_token,
+        ));
 
     Router::new()
         .route("/health", get(health))

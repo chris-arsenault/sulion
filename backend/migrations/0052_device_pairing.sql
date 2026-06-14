@@ -1,8 +1,12 @@
--- Device pairing + MIDI clip ingest for external extensions (first consumer:
--- the Ableton "Send to Sulion" extension). Pairing follows the OAuth
--- device-authorization shape: a device gets a short user_code, the logged-in
--- user approves it in the browser, and the device exchanges its device_code for
--- a long-lived opaque token. Only hashes of secrets are stored.
+-- Device pairing + tokens for external tools (first consumer: the Ableton
+-- "Send to Sulion" extension). Pairing follows the OAuth device-authorization
+-- shape: a device gets a short user_code, the logged-in user approves it in the
+-- browser, and the device exchanges its device_code for a long-lived opaque
+-- token. Only base64(SHA-256) hashes of secrets are stored.
+--
+-- The minted token then authenticates generic content writes via
+-- POST /api/repos/:name/ingest, which writes bytes to a file on disk under the
+-- repo (like the terminal's paste-as-file) — there is no content table.
 
 -- In-flight pairing requests. `device_code` and the minted token are never
 -- persisted in the clear — only their base64(SHA-256) hashes.
@@ -41,24 +45,3 @@ CREATE TABLE IF NOT EXISTS device_tokens (
 CREATE INDEX IF NOT EXISTS device_tokens_active_idx
     ON device_tokens(user_sub)
     WHERE revoked_at IS NULL;
-
--- Captured MIDI clips. Notes are stored verbatim as JSONB; `note_count` is
--- denormalized for cheap listing. ingest_id is the app-facing handle.
-CREATE TABLE IF NOT EXISTS midi_clips (
-    id BIGSERIAL PRIMARY KEY,
-    ingest_id UUID NOT NULL UNIQUE,
-    device_token_id BIGINT REFERENCES device_tokens(id) ON DELETE SET NULL,
-    user_sub TEXT NOT NULL,
-    source TEXT NOT NULL,
-    name TEXT,
-    tempo DOUBLE PRECISION,
-    length_beats DOUBLE PRECISION,
-    time_sig_numerator INT,
-    time_sig_denominator INT,
-    note_count INT NOT NULL,
-    notes JSONB NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS midi_clips_user_recent_idx
-    ON midi_clips(user_sub, created_at DESC);

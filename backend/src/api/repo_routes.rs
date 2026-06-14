@@ -4,12 +4,14 @@
 
 use std::sync::Arc;
 
+use axum::body::Bytes;
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
+use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::device_routes::DevicePrincipal;
 use super::routes::{repo_path, repos_root, ApiError, ApiResult};
 use crate::{git, ingest, repo_state, workspace, AppState};
 
@@ -416,4 +418,63 @@ pub(super) async fn post_repo_upload(
         Some((path, size)) => Ok(Json(UploadResponse { path, size })),
         None => Err(ApiError::BadRequest("no file field".into())),
     }
+}
+
+#[derive(Deserialize)]
+pub(super) struct IngestQuery {
+    /// Repo-relative destination path, e.g. `clips/verse.mid`. Required.
+    path: String,
+}
+
+#[derive(Serialize)]
+pub(super) struct IngestResponse {
+    path: String,
+    bytes: u64,
+}
+
+/// Device-token-authenticated content drop: write the raw request body to
+/// `path` (a repo-relative path) under repo `name`, creating parent dirs. This
+/// is the HTTP analogue of the terminal's paste-as-file, for external tools
+/// (first consumer: the Ableton "Send to Sulion" extension). It's
+/// content-agnostic — binary or text, the caller chooses the filename.
+///
+/// Path safety (no `..`, no absolute, no symlink escape) is enforced by
+/// `workspace::write_file`.
+pub(super) async fn post_repo_ingest(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Query(q): Query<IngestQuery>,
+    Extension(principal): Extension<DevicePrincipal>,
+    body: Bytes,
+) -> ApiResult<Json<IngestResponse>> {
+    let root = repo_path(&state, &name)?;
+    let rel = q.path.trim().trim_start_matches('/').to_string();
+    if rel.is_empty() {
+        return Err(ApiError::BadRequest("path is required".into()));
+    }
+    let bytes = body.len() as u64;
+    if bytes > UPLOAD_MAX_BYTES {
+        return Err(ApiError::BadRequest(format!(
+            "content exceeds {UPLOAD_MAX_BYTES} bytes"
+        )));
+    }
+
+    workspace::write_file(root, rel.clone(), body.to_vec())
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    state
+        .repo_state
+        .request_refresh(&name)
+        .await
+        .map_err(ApiError::Internal)?;
+
+    tracing::info!(
+        repo = %name,
+        path = %rel,
+        bytes,
+        token_id = principal.token_id,
+        user = %principal.user_sub,
+        "repo content ingested",
+    );
+    Ok(Json(IngestResponse { path: rel, bytes }))
 }
