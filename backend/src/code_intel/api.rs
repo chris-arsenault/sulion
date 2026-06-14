@@ -19,13 +19,13 @@ mod root;
 
 use model::{
     confidence_for_summary, escape_like, freshness_for_summary, rows_to_symbol_results,
-    summary_warnings, Budget, CommandResponse, IndexJobView, IndexStatsView, IndexSummary,
-    IndexSummaryView, PatchResponse, RefreshResponse, RootView, SemanticStatus, StatusResponse,
-    SymbolResult,
+    summary_warnings, Budget, CommandResponse, IndexJobView, IndexStatusResponse, IndexSummary,
+    IndexSummaryView, PatchResponse, RefreshResponse, RefreshStatsView, RootView, SemanticStatus,
+    StatusResponse, SymbolResult,
 };
 use root::{resolve_target, ResolvedTarget, TargetKind};
 
-use super::indexer::{self, CodeRootSpec, IndexOptions, IndexStats, IndexTrigger};
+use super::indexer::{self, CodeRootSpec, IndexOptions, IndexTrigger, RefreshStats};
 use super::parser::{SourceLanguage, SourceWalkOptions};
 use super::structural::{self, StructuralLanguage, StructuralMatchResult};
 use super::CodeIntelState;
@@ -38,6 +38,7 @@ pub fn router() -> Router<Arc<CodeIntelState>> {
     Router::new()
         .route("/v1/help", get(help_route))
         .route("/v1/status", get(status_route))
+        .route("/v1/index/status", get(index_status_route))
         .route("/v1/refresh", post(refresh_route))
         .route("/v1/outline", get(outline_route))
         .route("/v1/find", get(find_route))
@@ -154,6 +155,30 @@ async fn status_route(
     }))
 }
 
+async fn index_status_route(
+    State(state): State<Arc<CodeIntelState>>,
+    headers: HeaderMap,
+    Query(query): Query<RootQuery>,
+) -> Result<Json<IndexStatusResponse>, CodeIntelError> {
+    let target = resolve_target(
+        &state.config.allowed_roots,
+        &headers,
+        query.cwd.as_deref(),
+        None,
+    )?;
+    let summary = load_index_summary(&state.pool, &target.root).await?;
+    let warnings = summary_warnings(&summary, false);
+    Ok(Json(IndexStatusResponse {
+        schema_version: SCHEMA_VERSION,
+        command: "index_status",
+        root: RootView::from_spec(&target.root),
+        freshness: freshness_for_summary(&summary),
+        confidence: confidence_for_summary(&summary, false),
+        warnings,
+        index: IndexSummaryView::from_summary(summary),
+    }))
+}
+
 async fn refresh_route(
     State(state): State<Arc<CodeIntelState>>,
     headers: HeaderMap,
@@ -169,7 +194,7 @@ async fn refresh_route(
         trigger: IndexTrigger::Manual,
         ..IndexOptions::default()
     };
-    let stats = refresh_target(&state.pool, &target, &options).await?;
+    let stats = refresh_target(state.clone(), target.clone(), options).await?;
     let summary = load_index_summary(&state.pool, &target.root).await?;
     Ok(Json(RefreshResponse {
         schema_version: SCHEMA_VERSION,
@@ -177,9 +202,9 @@ async fn refresh_route(
         root: RootView::from_spec(&target.root),
         path: target.relative_path.clone(),
         freshness: freshness_for_summary(&summary),
-        confidence: confidence_for_summary(&summary, stats.files_failed > 0),
-        warnings: summary_warnings(&summary, stats.files_failed > 0),
-        stats: IndexStatsView::from_stats(stats),
+        confidence: confidence_for_summary(&summary, false),
+        warnings: summary_warnings(&summary, false),
+        stats: RefreshStatsView::from_stats(stats),
     }))
 }
 
@@ -201,14 +226,20 @@ async fn outline_route(
             target.target_path.display()
         )));
     }
-    let options = IndexOptions {
-        trigger: IndexTrigger::Query,
-        ..IndexOptions::default()
-    };
-    refresh_target(&state.pool, &target, &options).await?;
-    let root_id = load_root_id(&state.pool, &target.root).await?;
-    let (results, truncated) = load_outline_symbols(&state.pool, root_id, &target, budget).await?;
     let summary = load_index_summary(&state.pool, &target.root).await?;
+    let Some(root_id) = summary.root_id else {
+        return Ok(Json(CommandResponse {
+            schema_version: SCHEMA_VERSION,
+            command: "outline",
+            root: RootView::from_spec(&target.root),
+            freshness: freshness_for_summary(&summary),
+            confidence: confidence_for_summary(&summary, false),
+            warnings: summary_warnings(&summary, false),
+            truncated: false,
+            results: Vec::new(),
+        }));
+    };
+    let (results, truncated) = load_outline_symbols(&state.pool, root_id, &target, budget).await?;
     Ok(Json(CommandResponse {
         schema_version: SCHEMA_VERSION,
         command: "outline",
@@ -236,14 +267,20 @@ async fn find_route(
         query.cwd.as_deref(),
         None,
     )?;
-    let options = IndexOptions {
-        trigger: IndexTrigger::Query,
-        ..IndexOptions::default()
-    };
-    indexer::index_root(&state.pool, &target.root, &options).await?;
-    let root_id = load_root_id(&state.pool, &target.root).await?;
-    let (results, truncated) = load_find_symbols(&state.pool, root_id, needle, budget).await?;
     let summary = load_index_summary(&state.pool, &target.root).await?;
+    let Some(root_id) = summary.root_id else {
+        return Ok(Json(CommandResponse {
+            schema_version: SCHEMA_VERSION,
+            command: "find",
+            root: RootView::from_spec(&target.root),
+            freshness: freshness_for_summary(&summary),
+            confidence: confidence_for_summary(&summary, false),
+            warnings: summary_warnings(&summary, false),
+            truncated: false,
+            results: Vec::new(),
+        }));
+    };
+    let (results, truncated) = load_find_symbols(&state.pool, root_id, needle, budget).await?;
     Ok(Json(CommandResponse {
         schema_version: SCHEMA_VERSION,
         command: "find",
@@ -271,11 +308,6 @@ async fn search_route(
         query.cwd.as_deref(),
         query.path.as_deref(),
     )?;
-    let options = IndexOptions {
-        trigger: IndexTrigger::Query,
-        ..IndexOptions::default()
-    };
-    refresh_target(&state.pool, &target, &options).await?;
     let files = structural::discover_structural_files(
         &target.root.path,
         &target.target_path,
@@ -316,11 +348,6 @@ async fn patch_route(
         request.cwd.as_deref(),
         request.path.as_deref(),
     )?;
-    let options = IndexOptions {
-        trigger: IndexTrigger::Query,
-        ..IndexOptions::default()
-    };
-    refresh_target(&state.pool, &target, &options).await?;
     let files = structural::discover_structural_files(
         &target.root.path,
         &target.target_path,
@@ -375,14 +402,23 @@ fn resolve_existing_target(
 }
 
 async fn refresh_target(
+    state: Arc<CodeIntelState>,
+    target: ResolvedTarget,
+    options: IndexOptions,
+) -> anyhow::Result<RefreshStats> {
+    let _guard = state.index_lock.lock().await;
+    refresh_target_inner(&state.pool, &target, &options).await
+}
+
+async fn refresh_target_inner(
     pool: &Pool,
     target: &ResolvedTarget,
     options: &IndexOptions,
-) -> anyhow::Result<IndexStats> {
+) -> anyhow::Result<RefreshStats> {
     if target.relative_path.is_none() {
-        indexer::index_root(pool, &target.root, options).await
+        indexer::mark_root_dirty(pool, &target.root, options).await
     } else {
-        indexer::index_path(pool, &target.root, &target.target_path, options).await
+        indexer::mark_path_dirty(pool, &target.root, &target.target_path, options).await
     }
 }
 
@@ -394,6 +430,8 @@ async fn load_index_summary(
         "SELECT cr.id, cr.last_scan_at, \
                 MAX(f.indexed_at) FILTER (WHERE f.deleted_at IS NULL) AS latest_indexed_at, \
                 COUNT(DISTINCT f.id) FILTER (WHERE f.deleted_at IS NULL) AS file_count, \
+                COUNT(DISTINCT f.id) FILTER (WHERE f.deleted_at IS NULL AND f.parse_status = 'pending') AS pending_file_count, \
+                COUNT(DISTINCT f.id) FILTER (WHERE f.deleted_at IS NOT NULL OR f.parse_status = 'deleted') AS deleted_file_count, \
                 COUNT(DISTINCT s.id) AS symbol_count, \
                 COUNT(DISTINCT f.id) FILTER (WHERE f.deleted_at IS NULL AND f.parse_status = 'partial') AS partial_file_count, \
                 COUNT(DISTINCT f.id) FILTER (WHERE f.deleted_at IS NULL AND f.parse_status = 'failed') AS failed_file_count \
@@ -412,6 +450,8 @@ async fn load_index_summary(
             last_scan_at: None,
             latest_indexed_at: None,
             file_count: 0,
+            pending_file_count: 0,
+            deleted_file_count: 0,
             symbol_count: 0,
             partial_file_count: 0,
             failed_file_count: 0,
@@ -424,6 +464,8 @@ async fn load_index_summary(
         last_scan_at: row.try_get("last_scan_at").ok().flatten(),
         latest_indexed_at: row.try_get("latest_indexed_at").ok().flatten(),
         file_count: row.try_get("file_count").unwrap_or(0),
+        pending_file_count: row.try_get("pending_file_count").unwrap_or(0),
+        deleted_file_count: row.try_get("deleted_file_count").unwrap_or(0),
         symbol_count: row.try_get("symbol_count").unwrap_or(0),
         partial_file_count: row.try_get("partial_file_count").unwrap_or(0),
         failed_file_count: row.try_get("failed_file_count").unwrap_or(0),
@@ -463,7 +505,7 @@ async fn load_root_id(pool: &Pool, root: &CodeRootSpec) -> Result<Uuid, CodeInte
         .bind(root.path.to_string_lossy().as_ref())
         .fetch_optional(pool)
         .await?
-        .ok_or_else(|| CodeIntelError::not_found("index root not found after refresh"))
+        .ok_or_else(|| CodeIntelError::not_found("index root not found; run sulion-code refresh"))
 }
 
 async fn load_outline_symbols(
@@ -643,6 +685,11 @@ mod tests {
             (
                 Method::GET,
                 format!("/v1/status?cwd={}", repo.display()),
+                Body::empty(),
+            ),
+            (
+                Method::GET,
+                format!("/v1/index/status?cwd={}", repo.display()),
                 Body::empty(),
             ),
             (

@@ -70,6 +70,12 @@ async fn search_inner(
     }
 
     if matches!(search_mode, SearchMode::Hybrid | SearchMode::Semantic) {
+        let pending_sources = super::embeddings::pending_source_count(state).await?;
+        if pending_sources > 0 {
+            warnings.push(format!(
+                "{pending_sources} retrieval sources are pending semantic indexing; semantic results may be stale"
+            ));
+        }
         let embedder = state.embedding_client();
         let query_embedding = match embedder.embed_one(&q).await {
             Ok(embedding) => embedding,
@@ -137,7 +143,10 @@ async fn lexical_search(
                 cs.agent, cs.pty_session_id, ps.repo AS pty_repo, asm.cwd, asm.model, \
                 b.text, \
                 (similarity(b.text, $1) + \
-                 COALESCE(ts_rank_cd(to_tsvector('simple', b.text), plainto_tsquery('simple', $1)), 0))::REAL AS lexical_score, \
+                 CASE WHEN octet_length(b.text) <= 1000000 \
+                      THEN COALESCE(ts_rank_cd(to_tsvector('simple', b.text), plainto_tsquery('simple', $1)), 0) \
+                      ELSE 0 \
+                 END)::REAL AS lexical_score, \
                 tt.turn_id, tt.preview AS turn_preview \
              FROM event_blocks b \
              JOIN events e ON e.session_uuid = b.session_uuid AND e.byte_offset = b.byte_offset \
@@ -154,7 +163,13 @@ async fn lexical_search(
                  LIMIT 1 \
              ) tt ON TRUE \
              WHERE b.text IS NOT NULL \
-               AND (b.text ILIKE '%' || $1 || '%' OR to_tsvector('simple', b.text) @@ plainto_tsquery('simple', $1)) \
+               AND ( \
+                   b.text ILIKE '%' || $1 || '%' \
+                   OR CASE WHEN octet_length(b.text) <= 1000000 \
+                           THEN to_tsvector('simple', b.text) @@ plainto_tsquery('simple', $1) \
+                           ELSE FALSE \
+                      END \
+               ) \
                AND ($2::UUID IS NULL OR e.session_uuid = $2) \
                AND ($3::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $3) \
                AND ($4::TEXT IS NULL OR cs.agent = $4) \
@@ -274,10 +289,19 @@ async fn lexical_tool_search(
         ), candidates AS ( \
              SELECT *, \
                 (similarity(text, $1) + \
-                 COALESCE(ts_rank_cd(to_tsvector('simple', text), plainto_tsquery('simple', $1)), 0))::REAL AS lexical_score \
+                 CASE WHEN octet_length(text) <= 1000000 \
+                      THEN COALESCE(ts_rank_cd(to_tsvector('simple', text), plainto_tsquery('simple', $1)), 0) \
+                      ELSE 0 \
+                 END)::REAL AS lexical_score \
                FROM tool_sources \
               WHERE length(trim(text)) > 0 \
-                AND (text ILIKE '%' || $1 || '%' OR to_tsvector('simple', text) @@ plainto_tsquery('simple', $1)) \
+                AND ( \
+                    text ILIKE '%' || $1 || '%' \
+                    OR CASE WHEN octet_length(text) <= 1000000 \
+                            THEN to_tsvector('simple', text) @@ plainto_tsquery('simple', $1) \
+                            ELSE FALSE \
+                       END \
+                ) \
                 AND source_kind = ANY($2) \
                 AND ($3::UUID IS NULL OR session_uuid = $3) \
                 AND ($4::TEXT IS NULL OR COALESCE(pty_repo, CASE WHEN cwd LIKE '/home/dev/repos/%' THEN split_part(substr(cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $4) \

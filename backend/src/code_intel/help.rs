@@ -8,6 +8,7 @@ Usage:
 Commands:
   help
   status
+  index-status
   refresh [path]
   outline [path]
   find <symbol-or-name>
@@ -55,9 +56,14 @@ pub const COMMANDS: &[HelpCommand] = &[
         summary: "show root, index freshness, languages, and semantic availability",
     },
     HelpCommand {
+        name: "index-status",
+        usage: "sulion-code index-status",
+        summary: "show index backlog and latest indexing job for the current root",
+    },
+    HelpCommand {
         name: "refresh",
         usage: "sulion-code refresh [path]",
-        summary: "refresh the current root or a path inside it",
+        summary: "mark the current root or path dirty for background indexing",
     },
     HelpCommand {
         name: "outline",

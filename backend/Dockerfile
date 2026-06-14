@@ -74,14 +74,15 @@ RUN if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; the
       ln -s /usr/bin/fdfind /usr/local/bin/fd; \
     fi
 
-# Node 20 LTS from NodeSource; distro Node channels lag behind modern
-# npm tooling used by the agent CLIs.
-RUN curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - \
+# Node 24 LTS from NodeSource; distro Node channels lag behind modern
+# npm tooling used by the agent CLIs, and the Ableton Extensions SDK
+# pins Node 24.16.0.
+RUN curl -fsSL https://rpm.nodesource.com/setup_24.x | bash - \
   && dnf install -y --setopt=install_weak_deps=False nodejs \
   && dnf clean all \
   && rm -rf /var/cache/dnf
 
-# pnpm via corepack (bundled with Node 20). The frontend Makefile
+# pnpm via corepack (bundled with Node 24). The frontend Makefile
 # targets invoke `pnpm exec …` directly, so pnpm has to be on PATH
 # inside every PTY.
 RUN corepack enable \
@@ -110,7 +111,7 @@ RUN dnf groupinstall -y "Development Tools" \
   && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
        | sh -s -- -y --default-toolchain stable --profile minimal \
   && rustup toolchain install stable-x86_64-unknown-linux-gnu --profile minimal \
-  && rustup component add --toolchain stable-x86_64-unknown-linux-gnu clippy rustfmt \
+  && rustup component add --toolchain stable-x86_64-unknown-linux-gnu clippy rustfmt rust-analyzer \
   && rustup target add --toolchain stable-x86_64-unknown-linux-gnu \
        x86_64-pc-windows-msvc \
        aarch64-pc-windows-msvc \
@@ -191,7 +192,7 @@ RUN dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.rep
 # `claude login` / `codex login` without any bootstrap. Users who
 # want a different version override locally via `npm i -g …` (prefix
 # is set to ~/.local in the entrypoint, so user installs shadow these).
-RUN npm install -g @anthropic-ai/claude-code @openai/codex
+RUN npm install -g @anthropic-ai/claude-code @openai/codex typescript typescript-language-server
 
 # 7321 is a deliberately unusual UID/GID to avoid colliding with the
 # ~1000 range that most consumer apps claim. Must match the ownership

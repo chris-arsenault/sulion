@@ -24,6 +24,11 @@ The live pane shows "now." All review happens in the structured timeline, source
 
 The broker exists to keep secret storage and unlock state out of the PTY runtime and out of the main backend. General app data lives in the main `sulion` database; encrypted secret bundles and grant state live in the separate `sulion_broker` database.
 
+The backend is the only service that runs migrations for the main `sulion`
+database. Retrieval and code-intelligence containers start their processes,
+connect to Postgres, and wait in-app until the backend-owned migration set is
+recorded as successful before binding their service loops.
+
 ## Session model
 
 Two layers.
@@ -129,8 +134,13 @@ It does not run PTYs, ingest transcripts, or serve the main application API.
 The retrieval service is a separate Rust service and container for
 agent-facing transcript/timeline search. It reads canonical Sulion Postgres
 tables directly and does not duplicate transcript text into another projection.
-Semantic search stores embeddings plus source keys in `retrieval_embeddings`;
-result text is loaded from canonical event and timeline tables at query time.
+Semantic indexing stores source-key freshness in `retrieval_embedding_sources`,
+durable cursor backfills in `retrieval_embedding_backfills`, and embeddings in
+`retrieval_embeddings`; result text is loaded from canonical event and timeline
+tables at query time. The service schedules an initial keyset backfill on
+startup when source state is empty; reindex requests schedule the same durable
+backfills manually. The background worker advances backfills and drains pending
+sources continuously while work exists.
 
 PTYs use `sulion-retrieve`, which adds static bearer auth and Sulion context
 headers from the PTY environment. See [`retrieval.md`](retrieval.md).
@@ -141,6 +151,14 @@ The code-intelligence service is a separate Rust service and container for
 agent-facing structural source navigation. It indexes compact facts about
 mounted repos and workspaces: roots, file freshness, symbols, references,
 imports, and jobs. It does not store full source text or serialized ASTs.
+Indexing is owned by the code-intelligence service background worker. Startup
+runs one discovery pass over allowed roots so a fresh deployment begins
+indexing from zero. `sulion-code refresh` only marks a root or path dirty and
+records deletions; the worker incrementally and idempotently drains pending
+files into the index.
+Navigation and search routes read the current index or mounted files and report
+stale/partial state instead of performing hidden root indexing in the request
+path.
 
 PTYs use `sulion-code`, which adds static bearer auth and Sulion context
 headers from the PTY environment. Scope is inferred from cwd. See

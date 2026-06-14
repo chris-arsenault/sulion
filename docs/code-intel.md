@@ -5,10 +5,11 @@ source repos and workspaces. It is independent of transcript retrieval and has
 no browser UI surface.
 
 Status: this document defines the canonical contract. The service skeleton,
-parser, indexer, real CLI, and `/v1/help`, `/v1/status`, `/v1/refresh`,
-`/v1/outline`, `/v1/find`, `/v1/def`, `/v1/refs`, `/v1/search`, `/v1/patch`,
-and `/v1/pack` service routes exist. Semantic `def`/`refs` escalation is
-attempted when a configured language server is available.
+parser, indexer, real CLI, and `/v1/help`, `/v1/status`, `/v1/index/status`,
+`/v1/refresh`, `/v1/outline`, `/v1/find`, `/v1/def`, `/v1/refs`,
+`/v1/search`, `/v1/patch`, and `/v1/pack` service routes exist. Semantic
+`def`/`refs` escalation is attempted when a configured language server is
+available.
 
 Durable design decisions live in
 [`adrs/0001-code-intelligence-agent-tool.md`](adrs/0001-code-intelligence-agent-tool.md).
@@ -48,6 +49,7 @@ canonical path. The service owns those choices.
 ```sh
 sulion-code help
 sulion-code status
+sulion-code index-status
 sulion-code refresh [path]
 sulion-code outline [path]
 sulion-code find <symbol-or-name>
@@ -81,9 +83,30 @@ Example:
 sulion-code status
 ```
 
+### index-status
+
+Shows the current root's indexing backlog, deleted-file count, latest indexed
+timestamp, and latest worker job. This is the narrow status endpoint for
+checking whether background indexing has caught up.
+
+Example:
+
+```sh
+sulion-code index-status
+```
+
 ### refresh
 
-Refreshes the current root or a path within it.
+Marks the current root or a path within it dirty for the background indexer.
+It discovers supported files, marks them `pending`, and marks missing files
+deleted. It does not parse files, replace symbols, or create indexing jobs in
+the request path. Other commands read the current index and return
+stale/partial warnings rather than indexing the root inline.
+
+On service startup, code-intel performs one background discovery pass over the
+allowed roots so a fresh deployment starts indexing without a manual refresh.
+After that, the periodic worker only drains pending files; it keeps looping
+quickly while a backlog exists and sleeps on the idle interval when caught up.
 
 Examples:
 
@@ -283,8 +306,8 @@ Syntactic results must not be presented as semantic certainty.
 - If `sulion-code` reports `SULION_CODE_INTEL_URL` or
   `SULION_CODE_INTEL_TOKEN` is missing, the shell is not running with Sulion PTY
   code-intelligence environment forwarding.
-- If `status` reports a stale index, run `sulion-code refresh` before depending
-  on symbol or reference results.
+- If `status` reports a stale index, run `sulion-code refresh`, then check
+  `sulion-code index-status` until the pending count drains.
 - If a file has parse errors, `outline`, `find`, and `search` may still return
   partial results; check the confidence and warnings fields.
 - If `def` or `refs` returns syntactic confidence, check `status.semantic` for

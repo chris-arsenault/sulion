@@ -293,15 +293,15 @@ export function triggerReindex(): Promise<ReindexResponse> {
 export interface RetrievalBackfillRequest {
   repo?: string;
   agent_session_uuid?: string;
-  limit?: number;
-  max_batches?: number;
 }
 
 export interface RetrievalBackfillResponse {
-  embedded: number;
-  skipped: number;
-  batches: number;
-  complete: boolean;
+  generation: number;
+  backfills_started: number;
+  sources_seen: number;
+  sources_marked_pending: number;
+  sources_deleted: number;
+  pending_sources: number;
   vector: {
     extension_installed: boolean;
     column_exists: boolean;
@@ -317,6 +317,27 @@ export function triggerRetrievalBackfill(
   return request<RetrievalBackfillResponse>("/api/admin/retrieval/reindex", {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+// ─── device pairing ──────────────────────────────────────────────────
+
+export interface ApproveDevicePairingResponse {
+  status: string;
+  client: string;
+  user_code: string;
+}
+
+/** Approve a device-pairing request from the browser `/pair` page. The
+ * device polls `/api/devices/pair/token` separately and receives its token
+ * once this succeeds. Throws {@link ApiError} (404 unknown code, 400 expired
+ * or already used). */
+export function approveDevicePairing(
+  userCode: string,
+): Promise<ApproveDevicePairingResponse> {
+  return request<ApproveDevicePairingResponse>("/api/devices/pair/approve", {
+    method: "POST",
+    body: JSON.stringify({ user_code: userCode }),
   });
 }
 

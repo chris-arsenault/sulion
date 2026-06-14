@@ -16,6 +16,8 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+type RetrievalAdminMockSeen = Arc<Mutex<Vec<(Option<String>, serde_json::Value)>>>;
+
 fn test_db_url() -> Option<String> {
     std::env::var("SULION_TEST_DB").ok()
 }
@@ -25,7 +27,8 @@ async fn fresh_pool() -> db::Pool {
     let pool = db::connect(&url).await.expect("connect");
     db::run_migrations(&pool).await.expect("migrate");
     sqlx::query(
-        "TRUNCATE events, ingester_state, claude_sessions, pty_sessions, repos, \
+        "TRUNCATE retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, \
+         events, ingester_state, claude_sessions, pty_sessions, repos, \
          repo_runtime_state, repo_dirty_paths, timeline_session_state, \
          future_prompt_session_state, workspaces, workspace_dirty_paths RESTART IDENTITY CASCADE",
     )
@@ -201,7 +204,7 @@ async fn admin_retrieval_reindex_proxies_to_retrieval_service() {
     let resp = h
         .client
         .post(format!("{}/api/admin/retrieval/reindex", h.base))
-        .json(&json!({ "repo": " sulion ", "limit": 17 }))
+        .json(&json!({ "repo": " sulion " }))
         .send()
         .await
         .unwrap();
@@ -210,25 +213,24 @@ async fn admin_retrieval_reindex_proxies_to_retrieval_service() {
     restore_env("SULION_RETRIEVAL_TOKEN", old_token);
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["embedded"], 12);
-    assert_eq!(body["batches"], 2);
-    assert_eq!(body["complete"], true);
+    assert_eq!(body["generation"], 4);
+    assert_eq!(body["backfills_started"], 3);
+    assert_eq!(body["sources_seen"], 12);
+    assert_eq!(body["sources_marked_pending"], 12);
+    assert_eq!(body["sources_deleted"], 1);
+    assert_eq!(body["pending_sources"], 12);
     assert_eq!(body["embedding_model"], "test-embed");
 
     let seen = seen.lock().await;
-    assert_eq!(seen.len(), 2);
+    assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].0.as_deref(), Some("Bearer admin-token"));
     assert_eq!(seen[0].1["repo"], "sulion");
-    assert_eq!(seen[0].1["limit"], 17);
+    assert!(seen[0].1.get("limit").is_none());
 }
 
-async fn start_retrieval_admin_mock(
-    seen: Arc<Mutex<Vec<(Option<String>, serde_json::Value)>>>,
-) -> String {
+async fn start_retrieval_admin_mock(seen: RetrievalAdminMockSeen) -> String {
     async fn handler(
-        axum::extract::State(seen): axum::extract::State<
-            Arc<Mutex<Vec<(Option<String>, serde_json::Value)>>>,
-        >,
+        axum::extract::State(seen): axum::extract::State<RetrievalAdminMockSeen>,
         headers: HeaderMap,
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> axum::Json<serde_json::Value> {
@@ -238,10 +240,13 @@ async fn start_retrieval_admin_mock(
             .map(str::to_string);
         let mut seen = seen.lock().await;
         seen.push((auth, body));
-        let embedded = if seen.len() == 1 { 12 } else { 0 };
         axum::Json(json!({
-            "embedded": embedded,
-            "skipped": 0,
+            "generation": 4,
+            "backfills_started": 3,
+            "sources_seen": 12,
+            "sources_marked_pending": 12,
+            "sources_deleted": 1,
+            "pending_sources": 12,
             "vector": {
                 "extension_installed": true,
                 "column_exists": true,

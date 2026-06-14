@@ -58,6 +58,8 @@ async fn migrations_apply_on_empty_db() {
         "ingester_state",
         "pty_sessions",
         "repos",
+        "retrieval_embedding_backfills",
+        "retrieval_embedding_sources",
         "retrieval_embeddings",
         "timeline_activity_signals",
         "timeline_file_touches",
@@ -82,4 +84,23 @@ async fn migrations_are_idempotent() {
     reset_schema(&pool).await;
     db::run_migrations(&pool).await.expect("first migrate");
     db::run_migrations(&pool).await.expect("second migrate");
+}
+
+#[tokio::test]
+async fn migration_wait_returns_after_backend_migrations_apply() {
+    let Some(url) = test_db_url() else {
+        eprintln!("skipping: SULION_TEST_DB not set");
+        return;
+    };
+    let pool = db::connect(&url).await.expect("connect");
+    reset_schema(&pool).await;
+    db::run_migrations(&pool).await.expect("migrate");
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        db::wait_for_migrations(&pool, "test-service"),
+    )
+    .await
+    .expect("wait timed out")
+    .expect("wait failed");
 }

@@ -8,6 +8,7 @@ use axum::extract::State;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Serialize;
+use tokio::sync::Mutex;
 
 use crate::db::{self, Pool};
 
@@ -60,20 +61,20 @@ pub struct CodeIntelState {
     pub(crate) pool: Pool,
     pub(crate) config: Arc<CodeIntelConfig>,
     pub(crate) lsp: lsp::LspManager,
+    pub(crate) index_lock: Arc<Mutex<()>>,
 }
 
 impl CodeIntelState {
     pub async fn from_config(config: CodeIntelConfig) -> anyhow::Result<Arc<Self>> {
-        let pool = db::connect(&config.db_url).await?;
-        db::run_migrations(&pool)
-            .await
-            .context("run code-intel migrations")?;
+        let pool = db::connect_and_wait_for_migrations(&config.db_url, "code-intel").await?;
+        indexer::cancel_orphaned_running_jobs(&pool).await?;
         let state = Arc::new(Self {
             pool,
             config: Arc::new(config),
             lsp: lsp::LspManager::default(),
+            index_lock: Arc::new(Mutex::new(())),
         });
-        tokio::spawn(indexer::run_background_indexer(
+        tokio::spawn(indexer::run_startup_and_background_indexer(
             state.clone(),
             Duration::from_secs(BACKGROUND_INDEX_SECONDS),
         ));
@@ -85,6 +86,7 @@ impl CodeIntelState {
             pool,
             config: Arc::new(config),
             lsp: lsp::LspManager::default(),
+            index_lock: Arc::new(Mutex::new(())),
         })
     }
 }

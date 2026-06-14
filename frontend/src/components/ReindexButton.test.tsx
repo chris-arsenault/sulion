@@ -96,7 +96,7 @@ describe("ReindexButton", () => {
     ).toBeDefined();
   });
 
-  it("typing 'backfill' triggers retrieval embedding backfill and shows stats", async () => {
+  it("typing 'refresh' marks retrieval sources dirty and shows queue stats", async () => {
     const calls: FetchCall[] = [];
     installFetchMock((url, init) => {
       const body = typeof init?.body === "string" ? init.body : null;
@@ -107,10 +107,12 @@ describe("ReindexButton", () => {
       });
       if (url === "/api/admin/retrieval/reindex") {
         return jsonResponse({
-          embedded: 12,
-          skipped: 1,
-          batches: 2,
-          complete: true,
+          generation: 9,
+          backfills_started: 3,
+          sources_seen: 12,
+          sources_marked_pending: 10,
+          sources_deleted: 1,
+          pending_sources: 10,
           vector: {
             extension_installed: true,
             column_exists: true,
@@ -126,8 +128,8 @@ describe("ReindexButton", () => {
     const user = userEvent.setup();
     render(<ReindexButton />);
     await user.click(screen.getByTestId("retrieval-backfill-button"));
-    await user.type(screen.getByLabelText(/type backfill to confirm/i), "backfill");
-    await user.click(screen.getByRole("button", { name: "Backfill" }));
+    await user.type(screen.getByLabelText(/type refresh to confirm/i), "refresh");
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
 
     await waitFor(() => {
       expect(
@@ -135,15 +137,15 @@ describe("ReindexButton", () => {
           (c) =>
             c.url === "/api/admin/retrieval/reindex" &&
             c.method === "POST" &&
-            c.body === JSON.stringify({ limit: 500, max_batches: 20 }),
+            c.body === JSON.stringify({}),
         ),
       ).toBe(true);
     });
     await waitFor(() => {
-      expect(screen.getByText("Backfill complete")).toBeDefined();
+      expect(screen.getByText("Retrieval refresh queued")).toBeDefined();
     });
     expect(
-      screen.getByText(/Embedded 12 retrieval sources; skipped 1; batches: 2/),
+      screen.getByText(/Started 3 retrieval backfills for generation 9/),
     ).toBeDefined();
     expect(screen.getByText(/nomic-ai\/nomic-embed-text-v1.5 \(768d\)/)).toBeDefined();
   });

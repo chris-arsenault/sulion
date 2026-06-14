@@ -41,16 +41,16 @@ pub(super) async fn reindex(
 pub(super) struct RetrievalReindexRequest {
     repo: Option<String>,
     agent_session_uuid: Option<Uuid>,
-    limit: Option<i64>,
-    max_batches: Option<u32>,
 }
 
 #[derive(Deserialize, Serialize)]
 pub(super) struct RetrievalReindexResponse {
-    embedded: usize,
-    skipped: usize,
-    batches: u32,
-    complete: bool,
+    generation: i64,
+    backfills_started: usize,
+    sources_seen: usize,
+    sources_marked_pending: usize,
+    sources_deleted: usize,
+    pending_sources: i64,
     vector: RetrievalVectorStatus,
     embedding_model: String,
     embedding_dimensions: i32,
@@ -58,8 +58,12 @@ pub(super) struct RetrievalReindexResponse {
 
 #[derive(Deserialize)]
 struct RetrievalServiceReindexResponse {
-    embedded: usize,
-    skipped: usize,
+    generation: i64,
+    backfills_started: usize,
+    sources_seen: usize,
+    sources_marked_pending: usize,
+    sources_deleted: usize,
+    pending_sources: i64,
     vector: RetrievalVectorStatus,
     embedding_model: String,
     embedding_dimensions: i32,
@@ -77,38 +81,18 @@ pub(super) async fn retrieval_reindex(
 ) -> ApiResult<Json<RetrievalReindexResponse>> {
     let target = RetrievalServiceTarget::from_env()?;
     let request = request.normalized();
-    let max_batches = request.max_batches.unwrap_or(20).clamp(1, 200);
     let client = reqwest::Client::new();
-    let mut total_embedded = 0_usize;
-    let mut total_skipped = 0_usize;
-    let mut batches = 0_u32;
-    let mut last = None;
-
-    for _ in 0..max_batches {
-        let batch = call_retrieval_reindex(&client, &target, &request).await?;
-        batches += 1;
-        total_embedded += batch.embedded;
-        total_skipped += batch.skipped;
-        let done = batch.embedded == 0;
-        last = Some(batch);
-        if done {
-            break;
-        }
-    }
-
-    let Some(last) = last else {
-        return Err(ApiError::Unavailable(
-            "retrieval backfill did not run".to_string(),
-        ));
-    };
+    let marked = call_retrieval_reindex(&client, &target, &request).await?;
     Ok(Json(RetrievalReindexResponse {
-        embedded: total_embedded,
-        skipped: total_skipped,
-        batches,
-        complete: last.embedded == 0,
-        vector: last.vector,
-        embedding_model: last.embedding_model,
-        embedding_dimensions: last.embedding_dimensions,
+        generation: marked.generation,
+        backfills_started: marked.backfills_started,
+        sources_seen: marked.sources_seen,
+        sources_marked_pending: marked.sources_marked_pending,
+        sources_deleted: marked.sources_deleted,
+        pending_sources: marked.pending_sources,
+        vector: marked.vector,
+        embedding_model: marked.embedding_model,
+        embedding_dimensions: marked.embedding_dimensions,
     }))
 }
 
@@ -121,8 +105,6 @@ impl RetrievalReindexRequest {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
             agent_session_uuid: self.agent_session_uuid,
-            limit: self.limit.map(|limit| limit.clamp(1, 5000)),
-            max_batches: self.max_batches,
         }
     }
 }

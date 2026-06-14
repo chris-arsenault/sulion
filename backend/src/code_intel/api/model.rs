@@ -4,7 +4,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use super::{clean_str, CodeIntelError};
-use crate::code_intel::indexer::{CodeRootKind, CodeRootSpec, IndexStats};
+use crate::code_intel::indexer::{CodeRootKind, CodeRootSpec, RefreshStats};
 use crate::code_intel::lsp::{LspLocation, SemanticRuntimeStatus};
 use crate::code_intel::structural::StructuralPatchFileSummary;
 
@@ -83,6 +83,17 @@ pub(super) struct StatusResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub(super) struct IndexStatusResponse {
+    pub(super) schema_version: u32,
+    pub(super) command: &'static str,
+    pub(super) root: RootView,
+    pub(super) freshness: Freshness,
+    pub(super) confidence: Confidence,
+    pub(super) warnings: Vec<String>,
+    pub(super) index: IndexSummaryView,
+}
+
+#[derive(Debug, Serialize)]
 pub(super) struct RefreshResponse {
     pub(super) schema_version: u32,
     pub(super) command: &'static str,
@@ -91,7 +102,7 @@ pub(super) struct RefreshResponse {
     pub(super) freshness: Freshness,
     pub(super) confidence: Confidence,
     pub(super) warnings: Vec<String>,
-    pub(super) stats: IndexStatsView,
+    pub(super) stats: RefreshStatsView,
 }
 
 #[derive(Debug, Serialize)]
@@ -219,6 +230,8 @@ pub(super) struct IndexSummaryView {
     last_scan_at: Option<DateTime<Utc>>,
     latest_indexed_at: Option<DateTime<Utc>>,
     file_count: i64,
+    pending_file_count: i64,
+    deleted_file_count: i64,
     symbol_count: i64,
     partial_file_count: i64,
     failed_file_count: i64,
@@ -231,6 +244,8 @@ impl IndexSummaryView {
             last_scan_at: summary.last_scan_at,
             latest_indexed_at: summary.latest_indexed_at,
             file_count: summary.file_count,
+            pending_file_count: summary.pending_file_count,
+            deleted_file_count: summary.deleted_file_count,
             symbol_count: summary.symbol_count,
             partial_file_count: summary.partial_file_count,
             failed_file_count: summary.failed_file_count,
@@ -252,24 +267,18 @@ pub(super) struct IndexJobView {
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct IndexStatsView {
+pub(super) struct RefreshStatsView {
     files_seen: usize,
-    files_indexed: usize,
-    files_skipped_unchanged: usize,
+    files_marked_pending: usize,
     files_deleted: usize,
-    files_failed: usize,
-    symbols_indexed: usize,
 }
 
-impl IndexStatsView {
-    pub(super) fn from_stats(stats: IndexStats) -> Self {
+impl RefreshStatsView {
+    pub(super) fn from_stats(stats: RefreshStats) -> Self {
         Self {
             files_seen: stats.files_seen,
-            files_indexed: stats.files_indexed,
-            files_skipped_unchanged: stats.files_skipped_unchanged,
+            files_marked_pending: stats.files_marked_pending,
             files_deleted: stats.files_deleted,
-            files_failed: stats.files_failed,
-            symbols_indexed: stats.symbols_indexed,
         }
     }
 }
@@ -445,7 +454,9 @@ fn reference_result_from_row(row: sqlx::postgres::PgRow) -> ReferenceResult {
     let path: String = row.try_get("path").unwrap_or_default();
     let parse_status: String = row.try_get("parse_status").unwrap_or_default();
     let parse_error_count: i32 = row.try_get("parse_error_count").unwrap_or(0);
-    let confidence = if parse_status == "partial" || parse_error_count > 0 {
+    let confidence = if parse_status == "pending" {
+        Confidence::Stale
+    } else if parse_status == "partial" || parse_error_count > 0 {
         Confidence::Partial
     } else {
         confidence_from_db(row.try_get("confidence").unwrap_or("syntactic"))
@@ -462,11 +473,7 @@ fn reference_result_from_row(row: sqlx::postgres::PgRow) -> ReferenceResult {
             end_col: row.try_get("end_col").unwrap_or(1),
         },
         confidence,
-        freshness: if matches!(confidence, Confidence::Partial) {
-            Freshness::Partial
-        } else {
-            Freshness::Fresh
-        },
+        freshness: freshness_from_confidence(confidence),
     }
 }
 
@@ -476,6 +483,8 @@ pub(super) struct IndexSummary {
     pub(super) last_scan_at: Option<DateTime<Utc>>,
     pub(super) latest_indexed_at: Option<DateTime<Utc>>,
     pub(super) file_count: i64,
+    pub(super) pending_file_count: i64,
+    pub(super) deleted_file_count: i64,
     pub(super) symbol_count: i64,
     pub(super) partial_file_count: i64,
     pub(super) failed_file_count: i64,
@@ -499,7 +508,9 @@ fn symbol_result_from_row(row: sqlx::postgres::PgRow) -> SymbolResult {
     let path: String = row.try_get("path").unwrap_or_default();
     let parse_status: String = row.try_get("parse_status").unwrap_or_default();
     let parse_error_count: i32 = row.try_get("parse_error_count").unwrap_or(0);
-    let confidence = if parse_status == "partial" || parse_error_count > 0 {
+    let confidence = if parse_status == "pending" {
+        Confidence::Stale
+    } else if parse_status == "partial" || parse_error_count > 0 {
         Confidence::Partial
     } else {
         confidence_from_db(row.try_get("confidence").unwrap_or("syntactic"))
@@ -522,11 +533,7 @@ fn symbol_result_from_row(row: sqlx::postgres::PgRow) -> SymbolResult {
         visibility: row.try_get("visibility").ok().flatten(),
         exported: row.try_get("exported").ok().flatten(),
         confidence,
-        freshness: if matches!(confidence, Confidence::Partial) {
-            Freshness::Partial
-        } else {
-            Freshness::Fresh
-        },
+        freshness: freshness_from_confidence(confidence),
     }
 }
 
@@ -551,8 +558,17 @@ pub(super) fn confidence_from_db(value: &str) -> Confidence {
     }
 }
 
+fn freshness_from_confidence(confidence: Confidence) -> Freshness {
+    match confidence {
+        Confidence::Stale => Freshness::Stale,
+        Confidence::Partial => Freshness::Partial,
+        Confidence::Semantic | Confidence::Syntactic | Confidence::Mixed => Freshness::Fresh,
+    }
+}
+
 pub(super) fn freshness_for_summary(summary: &IndexSummary) -> Freshness {
-    if summary.root_id.is_none() || summary.last_scan_at.is_none() {
+    if summary.root_id.is_none() || summary.last_scan_at.is_none() || summary.pending_file_count > 0
+    {
         Freshness::Stale
     } else if summary.partial_file_count > 0 || summary.failed_file_count > 0 {
         Freshness::Partial
@@ -565,7 +581,8 @@ pub(super) fn confidence_for_summary(
     summary: &IndexSummary,
     truncated_or_failed: bool,
 ) -> Confidence {
-    if summary.root_id.is_none() || summary.last_scan_at.is_none() {
+    if summary.root_id.is_none() || summary.last_scan_at.is_none() || summary.pending_file_count > 0
+    {
         Confidence::Stale
     } else if truncated_or_failed || summary.partial_file_count > 0 || summary.failed_file_count > 0
     {
@@ -579,6 +596,12 @@ pub(super) fn summary_warnings(summary: &IndexSummary, truncated: bool) -> Vec<S
     let mut warnings = Vec::new();
     if summary.root_id.is_none() || summary.last_scan_at.is_none() {
         warnings.push("index is missing or stale; run sulion-code refresh".to_string());
+    }
+    if summary.pending_file_count > 0 {
+        warnings.push(format!(
+            "{} files are pending indexing; results may be stale",
+            summary.pending_file_count
+        ));
     }
     if summary.partial_file_count > 0 {
         warnings.push(format!(

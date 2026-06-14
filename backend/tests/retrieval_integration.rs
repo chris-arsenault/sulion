@@ -5,6 +5,7 @@
 
 use chrono::Utc;
 use reqwest::StatusCode;
+use ring::digest;
 use serde_json::json;
 use sulion::{db, retrieval};
 use tokio::net::TcpListener;
@@ -19,7 +20,7 @@ async fn fresh_pool() -> db::Pool {
     let pool = db::connect(&url).await.expect("connect");
     db::run_migrations(&pool).await.expect("migrate");
     sqlx::query(
-        "TRUNCATE retrieval_embeddings, events, event_blocks, timeline_turns, \
+        "TRUNCATE retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, events, event_blocks, timeline_turns, \
          timeline_operations, timeline_file_touches, timeline_activity_signals, \
          timeline_session_state, claude_sessions, pty_sessions, workspaces \
          RESTART IDENTITY CASCADE",
@@ -33,6 +34,7 @@ async fn fresh_pool() -> db::Pool {
 struct Harness {
     base: String,
     client: reqwest::Client,
+    state: std::sync::Arc<retrieval::RetrievalState>,
 }
 
 impl Harness {
@@ -49,13 +51,14 @@ impl Harness {
     async fn from_state(state: std::sync::Arc<retrieval::RetrievalState>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let router = retrieval::app(state);
+        let router = retrieval::app(state.clone());
         tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;
         });
         Self {
             base: format!("http://{addr}"),
             client: reqwest::Client::new(),
+            state,
         }
     }
 
@@ -243,6 +246,71 @@ async fn default_search_excludes_tools_until_opted_in() {
 }
 
 #[tokio::test]
+async fn lexical_search_handles_oversized_text_without_vectorizing_it() {
+    let Some(_) = test_db_url() else {
+        eprintln!("skipping: SULION_TEST_DB not set");
+        return;
+    };
+    let pool = fresh_pool().await;
+    let session_uuid = seed_retrieval_fixture(&pool).await;
+    seed_oversized_retrieval_text(&pool, session_uuid).await;
+    let h = Harness::new(pool).await;
+
+    let missing: serde_json::Value = h
+        .auth(
+            h.client
+                .get(format!("{}/v1/search", h.base))
+                .query(&[
+                    ("q", "definitely-not-in-the-oversized-block"),
+                    ("search_mode", "lexical"),
+                    ("include", "assistant,tool_result"),
+                    ("limit", "5"),
+                ])
+                .header("x-sulion-repo", "sulion"),
+        )
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(missing["results"].as_array().unwrap().len(), 0);
+
+    let matched: serde_json::Value = h
+        .auth(
+            h.client
+                .get(format!("{}/v1/search", h.base))
+                .query(&[
+                    ("q", "oversized lexical guard"),
+                    ("search_mode", "lexical"),
+                    ("include", "assistant"),
+                    ("limit", "5"),
+                ])
+                .header("x-sulion-repo", "sulion"),
+        )
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let results = matched["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "{matched:#}");
+    assert_eq!(results[0]["source_kind"], "assistant_text");
+    assert!(
+        results[0]["snippet"]
+            .as_str()
+            .unwrap()
+            .contains("oversized lexical guard"),
+        "{matched:#}"
+    );
+}
+
+#[tokio::test]
 async fn tool_category_filter_opts_into_tool_results() {
     let Some(_) = test_db_url() else {
         eprintln!("skipping: SULION_TEST_DB not set");
@@ -277,7 +345,52 @@ async fn tool_category_filter_opts_into_tool_results() {
 }
 
 #[tokio::test]
-async fn reindex_uses_local_embedding_service_and_refreshes_stale_hashes() {
+async fn startup_schedules_initial_backfill_when_source_state_is_empty() {
+    let Some(url) = test_db_url() else {
+        eprintln!("skipping: SULION_TEST_DB not set");
+        return;
+    };
+    let pool = fresh_pool().await;
+    seed_retrieval_fixture(&pool).await;
+
+    let config = retrieval::RetrievalConfig {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        db_url: url,
+        token: "test-token".to_string(),
+        embedding_service_url: "http://127.0.0.1:1".to_string(),
+        embedding_model: "test-embed".to_string(),
+        embedding_dimensions: 3,
+        embedding_batch_size: 8,
+        embedding_max_chars: 6000,
+        background_index_seconds: None,
+    };
+    let _state = retrieval::RetrievalState::from_config(config.clone())
+        .await
+        .unwrap();
+
+    let scheduled: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) \
+           FROM retrieval_embedding_backfills \
+          WHERE status = 'running'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(scheduled, 3);
+
+    let _second_state = retrieval::RetrievalState::from_config(config)
+        .await
+        .unwrap();
+    let still_scheduled: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM retrieval_embedding_backfills")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(still_scheduled, 3);
+}
+
+#[tokio::test]
+async fn reindex_marks_pending_and_worker_refreshes_stale_hashes() {
     let Some(_) = test_db_url() else {
         eprintln!("skipping: SULION_TEST_DB not set");
         return;
@@ -296,12 +409,12 @@ async fn reindex_uses_local_embedding_service_and_refreshes_stale_hashes() {
             embedding_dimensions: 3,
             embedding_batch_size: 8,
             embedding_max_chars: 6000,
-            background_reindex_seconds: None,
+            background_index_seconds: None,
         },
     )
     .await;
 
-    let first: serde_json::Value = h
+    let marked: serde_json::Value = h
         .auth(
             h.client
                 .post(format!("{}/v1/reindex", h.base))
@@ -315,13 +428,22 @@ async fn reindex_uses_local_embedding_service_and_refreshes_stale_hashes() {
         .json()
         .await
         .unwrap();
-    assert!(first["embedded"].as_u64().unwrap() >= 3, "{first:#}");
+    assert_eq!(marked["backfills_started"], 3, "{marked:#}");
+    assert_eq!(marked["sources_seen"], 0, "{marked:#}");
+    assert_eq!(marked["sources_marked_pending"], 0, "{marked:#}");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM retrieval_embeddings")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
 
-    let second: serde_json::Value = h
+    let refreshed: serde_json::Value = h
         .auth(
             h.client
                 .post(format!("{}/v1/reindex", h.base))
-                .json(&json!({ "repo": "sulion", "limit": 10 })),
+                .json(&json!({ "repo": "sulion" })),
         )
         .send()
         .await
@@ -331,7 +453,28 @@ async fn reindex_uses_local_embedding_service_and_refreshes_stale_hashes() {
         .json()
         .await
         .unwrap();
-    assert_eq!(second["embedded"], 0);
+    assert_eq!(refreshed["backfills_started"], 3, "{refreshed:#}");
+
+    retrieval::run_indexer_once_for_tests(&h.state, 10)
+        .await
+        .unwrap();
+    let indexed_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM retrieval_embeddings")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(indexed_count >= 3);
+
+    let status: serde_json::Value = h
+        .auth(h.client.get(format!("{}/v1/index/status", h.base)))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(status["pending_sources"], 0, "{status:#}");
 
     sqlx::query(
         "UPDATE event_blocks \
@@ -343,21 +486,18 @@ async fn reindex_uses_local_embedding_service_and_refreshes_stale_hashes() {
     .await
     .unwrap();
 
-    let third: serde_json::Value = h
-        .auth(
-            h.client
-                .post(format!("{}/v1/reindex", h.base))
-                .json(&json!({ "repo": "sulion", "limit": 10 })),
-        )
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap()
-        .json()
+    retrieval::run_indexer_once_for_tests(&h.state, 10)
         .await
         .unwrap();
-    assert_eq!(third["embedded"], 1, "{third:#}");
+    let updated_hashes: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM retrieval_embeddings WHERE content_hash = $1")
+            .bind(hash_text(
+                "The semantic retrieval updated text should refresh stale embeddings.",
+            ))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(updated_hashes, 1);
 
     let semantic: serde_json::Value = h
         .auth(
@@ -545,6 +685,50 @@ async fn seed_retrieval_fixture(pool: &db::Pool) -> Uuid {
     .await
     .unwrap();
     session_uuid
+}
+
+async fn seed_oversized_retrieval_text(pool: &db::Pool, session_uuid: Uuid) {
+    let now = Utc::now();
+    let oversized = format!("oversized lexical guard {}", "x".repeat(1_050_000));
+    sqlx::query(
+        "INSERT INTO events \
+            (session_uuid, byte_offset, timestamp, kind, payload, agent, speaker, content_kind, search_text) \
+         VALUES ($1, 20, $2, 'message', $3, 'codex', 'assistant', 'text', 'oversized lexical guard')",
+    )
+    .bind(session_uuid)
+    .bind(now)
+    .bind(json!({ "test": true, "oversized": true }))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO event_blocks (session_uuid, byte_offset, ord, kind, text) \
+         VALUES ($1, 20, 0, 'text', $2)",
+    )
+    .bind(session_uuid)
+    .bind(&oversized)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "UPDATE timeline_operations \
+            SET result_content = $2, result_payload = NULL \
+          WHERE session_uuid = $1 AND turn_id = 10 AND operation_ord = 0",
+    )
+    .bind(session_uuid)
+    .bind("y".repeat(1_050_000))
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn hash_text(text: &str) -> String {
+    let hash = digest::digest(&digest::SHA256, text.as_bytes());
+    hash.as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 async fn seed_empty_session(pool: &db::Pool, repo: &str) -> Uuid {

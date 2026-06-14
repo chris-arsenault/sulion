@@ -52,12 +52,12 @@ export function ReindexButton() {
   const runRetrievalBackfill = useCallback(async () => {
     setPhase({ kind: "running", target: "retrieval" });
     try {
-      const stats = await triggerRetrievalBackfill({ limit: 500, max_batches: 20 });
+      const stats = await triggerRetrievalBackfill();
       setPhase({ kind: "retrieval-done", stats });
     } catch (err) {
       setPhase({
         kind: "error",
-        message: errorMessage(err, "retrieval backfill failed"),
+        message: errorMessage(err, "retrieval refresh failed"),
       });
     }
   }, []);
@@ -89,7 +89,7 @@ export function ReindexButton() {
         </button>
       </Tooltip>
 
-      <Tooltip label="Backfill retrieval embeddings through the retrieval service">
+      <Tooltip label="Mark retrieval sources dirty for background semantic indexing">
         <button
           type="button"
           className="reindex__btn"
@@ -100,8 +100,8 @@ export function ReindexButton() {
           <Icon name="search" size={12} />
           <span>
             {phase.kind === "running" && phase.target === "retrieval"
-              ? "backfilling..."
-              : "backfill"}
+              ? "refreshing..."
+              : "refresh search"}
           </span>
         </button>
       </Tooltip>
@@ -124,13 +124,13 @@ export function ReindexButton() {
 
       {phase.kind === "confirming" && phase.target === "retrieval" && (
         <ConfirmDialog
-          title="Backfill retrieval?"
+          title="Refresh retrieval index?"
           message={
-            "This asks the retrieval service to embed the next batch of transcript and timeline sources. " +
-            "Canonical transcript rows remain the source of truth; the retrieval index stores source keys and vectors."
+            "This marks transcript and timeline sources dirty for the retrieval service. " +
+            "The background indexer embeds pending sources; canonical transcript rows remain the source of truth."
           }
-          requireText="backfill"
-          confirmLabel="Backfill"
+          requireText="refresh"
+          confirmLabel="Refresh"
           onConfirm={confirmRunRetrievalBackfill}
           onCancel={cancelConfirm}
         />
@@ -149,7 +149,7 @@ export function ReindexButton() {
 
       {phase.kind === "retrieval-done" && (
         <ConfirmDialog
-          title={phase.stats.complete ? "Backfill complete" : "Backfill paused"}
+          title="Retrieval refresh queued"
           message={formatRetrievalDoneMessage(phase.stats)}
           confirmLabel="OK"
           cancelLabel="OK"
@@ -195,8 +195,9 @@ function formatRetrievalDoneMessage(stats: RetrievalBackfillResponse): string {
       ? "pgvector column ready"
       : "exact vector scan";
   return (
-    `Embedded ${stats.embedded} retrieval ${sources(stats.embedded)}; ` +
-    `skipped ${stats.skipped}; batches: ${stats.batches}. ` +
+    `Started ${stats.backfills_started} retrieval ${backfills(stats.backfills_started)} ` +
+    `for generation ${stats.generation}; ` +
+    `pending queue: ${stats.pending_sources}. ` +
     `Model: ${stats.embedding_model} (${stats.embedding_dimensions}d); ${vector}.`
   );
 }
@@ -209,6 +210,6 @@ function events(n: number): string {
   return n === 1 ? "row" : "rows";
 }
 
-function sources(n: number): string {
-  return n === 1 ? "source" : "sources";
+function backfills(n: number): string {
+  return n === 1 ? "backfill" : "backfills";
 }

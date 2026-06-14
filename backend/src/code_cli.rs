@@ -114,6 +114,7 @@ impl CliInvocation {
 enum CodeCommand {
     Help,
     Status,
+    IndexStatus,
     Refresh {
         path: Option<String>,
     },
@@ -154,6 +155,7 @@ impl CodeCommand {
         match command {
             "help" => no_args(args, Self::Help, "sulion-code help"),
             "status" => no_args(args, Self::Status, "sulion-code status"),
+            "index-status" => no_args(args, Self::IndexStatus, "sulion-code index-status"),
             "refresh" => optional_path(args, |path| Self::Refresh { path }, "refresh"),
             "outline" => optional_path(args, |path| Self::Outline { path }, "outline"),
             "find" => one_arg(
@@ -216,6 +218,9 @@ impl CodeCommand {
         match self {
             Self::Help => unreachable!("help is handled locally"),
             Self::Status => CodeRequest::get("/v1/status", vec![("cwd", cwd.to_string())]),
+            Self::IndexStatus => {
+                CodeRequest::get("/v1/index/status", vec![("cwd", cwd.to_string())])
+            }
             Self::Refresh { path } => CodeRequest::post_query(
                 "/v1/refresh",
                 query_with_path(cwd, budget, path.as_deref()),
@@ -526,6 +531,7 @@ fn infer_repo(cwd: &str) -> Option<String> {
 fn print_text(command: &CodeCommand, body: &Value) {
     match command {
         CodeCommand::Status => print_status(body),
+        CodeCommand::IndexStatus => print_index_status(body),
         CodeCommand::Refresh { .. } => print_refresh(body),
         CodeCommand::Outline { .. } | CodeCommand::Find { .. } | CodeCommand::Def { .. } => {
             print_symbol_results(body)
@@ -535,6 +541,33 @@ fn print_text(command: &CodeCommand, body: &Value) {
         CodeCommand::Patch { .. } => print_patch(body),
         CodeCommand::Pack { .. } => print_pack(body),
         CodeCommand::Help => unreachable!("help is handled locally"),
+    }
+}
+
+fn print_index_status(body: &Value) {
+    print_warnings(body);
+    println!(
+        "root: {} {} {}",
+        text(&body["root"], "kind"),
+        text(&body["root"], "name"),
+        text(&body["root"], "path")
+    );
+    println!(
+        "state: freshness={} confidence={}",
+        text(body, "freshness"),
+        text(body, "confidence")
+    );
+    print_index_summary(&body["index"]);
+    let latest_job = &body["index"]["latest_job"];
+    if latest_job.is_object() {
+        println!(
+            "latest-job: status={} trigger={} seen={} indexed={} failed={}",
+            text(latest_job, "status"),
+            text(latest_job, "trigger"),
+            number(latest_job, "files_seen"),
+            number(latest_job, "files_indexed"),
+            number(latest_job, "files_failed")
+        );
     }
 }
 
@@ -551,14 +584,7 @@ fn print_status(body: &Value) {
         text(body, "freshness"),
         text(body, "confidence")
     );
-    let index = &body["index"];
-    println!(
-        "index: files={} symbols={} partial={} failed={}",
-        number(index, "file_count"),
-        number(index, "symbol_count"),
-        number(index, "partial_file_count"),
-        number(index, "failed_file_count")
-    );
+    print_index_summary(&body["index"]);
     let semantic = &body["semantic"];
     println!(
         "semantic: available={} fallback={} timeout_ms={}",
@@ -568,6 +594,18 @@ fn print_status(body: &Value) {
     );
     print_string_list("languages", &body["supported_languages"]);
     print_string_list("next", &body["examples"]);
+}
+
+fn print_index_summary(index: &Value) {
+    println!(
+        "index: files={} symbols={} pending={} deleted={} partial={} failed={}",
+        number(index, "file_count"),
+        number(index, "symbol_count"),
+        number(index, "pending_file_count"),
+        number(index, "deleted_file_count"),
+        number(index, "partial_file_count"),
+        number(index, "failed_file_count")
+    );
 }
 
 fn print_refresh(body: &Value) {
@@ -581,13 +619,10 @@ fn print_refresh(body: &Value) {
     );
     let stats = &body["stats"];
     println!(
-        "stats: seen={} indexed={} unchanged={} deleted={} failed={} symbols={}",
+        "stats: seen={} marked_pending={} deleted={}",
         number(stats, "files_seen"),
-        number(stats, "files_indexed"),
-        number(stats, "files_skipped_unchanged"),
-        number(stats, "files_deleted"),
-        number(stats, "files_failed"),
-        number(stats, "symbols_indexed")
+        number(stats, "files_marked_pending"),
+        number(stats, "files_deleted")
     );
 }
 

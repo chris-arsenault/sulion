@@ -13,10 +13,7 @@ use super::model::{
     RootView, SymbolResult,
 };
 use super::root::{resolve_target, ResolvedTarget, TargetKind};
-use super::{
-    clean_str, load_index_summary, load_root_id, refresh_target, CodeIntelError, SCHEMA_VERSION,
-};
-use crate::code_intel::indexer::{self, IndexOptions, IndexTrigger};
+use super::{clean_str, load_index_summary, load_root_id, CodeIntelError, SCHEMA_VERSION};
 use crate::code_intel::lsp::SemanticResponse;
 use crate::code_intel::navigation::{
     first_identifier_column_on_line, identifier_at_position, parse_navigation_target,
@@ -51,11 +48,6 @@ pub(super) async fn def_route(
                 query.cwd.as_deref(),
                 None,
             )?;
-            let options = IndexOptions {
-                trigger: IndexTrigger::Query,
-                ..IndexOptions::default()
-            };
-            indexer::index_root(&state.pool, &target.root, &options).await?;
             let root_id = load_root_id(&state.pool, &target.root).await?;
             let symbol_target = load_symbol_navigation_target(&state.pool, root_id, &symbol_id)
                 .await?
@@ -93,11 +85,6 @@ pub(super) async fn def_route(
                 query.cwd.as_deref(),
                 &position,
             )?;
-            let options = IndexOptions {
-                trigger: IndexTrigger::Query,
-                ..IndexOptions::default()
-            };
-            refresh_target(&state.pool, &target, &options).await?;
             let root_id = load_root_id(&state.pool, &target.root).await?;
             let semantic_name =
                 reference_name_for_position(&state.pool, root_id, &target, &position)
@@ -163,11 +150,6 @@ pub(super) async fn refs_route(
                 query.cwd.as_deref(),
                 None,
             )?;
-            let options = IndexOptions {
-                trigger: IndexTrigger::Query,
-                ..IndexOptions::default()
-            };
-            indexer::index_root(&state.pool, &target.root, &options).await?;
             let root_id = load_root_id(&state.pool, &target.root).await?;
             let symbol_target = load_symbol_navigation_target(&state.pool, root_id, &symbol_id)
                 .await?
@@ -193,11 +175,6 @@ pub(super) async fn refs_route(
                 query.cwd.as_deref(),
                 &position,
             )?;
-            let options = IndexOptions {
-                trigger: IndexTrigger::Query,
-                ..IndexOptions::default()
-            };
-            indexer::index_root(&state.pool, &target.root, &options).await?;
             let root_id = load_root_id(&state.pool, &target.root).await?;
             let name = reference_name_for_position(&state.pool, root_id, &target, &position)
                 .await?

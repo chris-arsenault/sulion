@@ -7,8 +7,10 @@ use crate::{db, AppState};
 
 mod admin_routes;
 mod app_state_routes;
+mod device_routes;
 mod future_prompt_routes;
 mod library_routes;
+mod midi_routes;
 mod repo_routes;
 mod routes;
 mod session_routes;
@@ -21,16 +23,32 @@ pub use routes::ApiError;
 pub use stats::{run_stats_sampler, sample_stats_once, StatsCache, StatsProbe};
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
+    // Cognito-authenticated surface. Device-pairing *approval* lives here so the
+    // approving user's identity is captured.
     let protected = Router::new()
         .route("/api/app-state", get(app_state_routes::app_state))
         .route("/ws/sessions/:id", get(ws::attach))
         .merge(routes::router())
+        .merge(device_routes::approve_router())
         .route_layer(middleware::from_fn_with_state(
-            state,
+            state.clone(),
             crate::auth::require_http_auth,
         ));
 
-    Router::new().route("/health", get(health)).merge(protected)
+    // Public pairing endpoints — the device has no credential yet.
+    let device_public = device_routes::public_router();
+
+    // Device-token-authenticated surface (MIDI ingest), guarded by its own layer.
+    let device_authed = midi_routes::router().route_layer(middleware::from_fn_with_state(
+        state,
+        device_routes::require_device_token,
+    ));
+
+    Router::new()
+        .route("/health", get(health))
+        .merge(protected)
+        .merge(device_public)
+        .merge(device_authed)
 }
 
 #[derive(Serialize)]

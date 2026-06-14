@@ -1,4 +1,5 @@
 use anyhow::Context;
+use ring::digest;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
@@ -7,7 +8,7 @@ use crate::db::Pool;
 use super::{load_file_touch_context, load_projection_source_events};
 use crate::ingest::timeline::{
     build_session_projection, load_session_events, SessionEventFilter, StoredEvent,
-    StoredTurnProjection,
+    StoredOperationProjection, StoredTurnProjection,
 };
 
 pub async fn rebuild_session_projection(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<usize> {
@@ -128,6 +129,7 @@ async fn clear_session_projection(
     tx: &mut Transaction<'_, Postgres>,
     session_uuid: Uuid,
 ) -> anyhow::Result<()> {
+    mark_operation_embedding_sources_deleted(tx, session_uuid, None).await?;
     for table in [
         "timeline_file_touches",
         "timeline_activity_signals",
@@ -149,6 +151,7 @@ async fn clear_session_projection_from(
     session_uuid: Uuid,
     from_turn_id: i64,
 ) -> anyhow::Result<()> {
+    mark_operation_embedding_sources_deleted(tx, session_uuid, Some(from_turn_id)).await?;
     for table in [
         "timeline_file_touches",
         "timeline_activity_signals",
@@ -174,6 +177,38 @@ async fn insert_projection_rows(
     for turn in projected {
         insert_projected_turn(tx, session_uuid, turn).await?;
     }
+    Ok(())
+}
+
+async fn mark_operation_embedding_sources_deleted(
+    tx: &mut Transaction<'_, Postgres>,
+    session_uuid: Uuid,
+    from_turn_id: Option<i64>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "WITH stale AS ( \
+             SELECT source_key \
+               FROM retrieval_embedding_sources \
+              WHERE session_uuid = $1 \
+                AND source_family IN ('operation_call', 'operation_result') \
+                AND ($2::BIGINT IS NULL OR turn_id >= $2) \
+                AND deleted_at IS NULL \
+        ), removed_embeddings AS ( \
+             DELETE FROM retrieval_embeddings re \
+              USING stale \
+              WHERE re.source_key = stale.source_key \
+              RETURNING re.source_key \
+        ) \
+        UPDATE retrieval_embedding_sources s \
+           SET index_status = 'deleted', deleted_at = NOW(), updated_at = NOW() \
+          FROM stale \
+         WHERE s.source_key = stale.source_key",
+    )
+    .bind(session_uuid)
+    .bind(from_turn_id)
+    .execute(&mut **tx)
+    .await
+    .context("mark operation retrieval sources deleted")?;
     Ok(())
 }
 
@@ -283,8 +318,174 @@ async fn insert_projected_operations(
         .execute(&mut **tx)
         .await
         .context("insert timeline_operations row")?;
+        enqueue_operation_embedding_sources(tx, session_uuid, turn.turn.id, operation).await?;
     }
     Ok(())
+}
+
+async fn enqueue_operation_embedding_sources(
+    tx: &mut Transaction<'_, Postgres>,
+    session_uuid: Uuid,
+    turn_id: i64,
+    operation: &StoredOperationProjection,
+) -> anyhow::Result<()> {
+    let call_key = format!(
+        "operation:{session_uuid}:{turn_id}:{}:call",
+        operation.operation_ord
+    );
+    if let Some(text) = operation_call_text(operation).filter(|text| !text.trim().is_empty()) {
+        upsert_operation_embedding_source(
+            tx,
+            "operation_call",
+            "tool_call",
+            &call_key,
+            session_uuid,
+            turn_id,
+            operation.operation_ord,
+            &text,
+        )
+        .await?;
+    } else {
+        mark_embedding_source_deleted(tx, &call_key).await?;
+    }
+
+    let result_key = format!(
+        "operation:{session_uuid}:{turn_id}:{}:result",
+        operation.operation_ord
+    );
+    if let Some((source_kind, text)) =
+        operation_result_text(operation).filter(|(_, text)| !text.trim().is_empty())
+    {
+        upsert_operation_embedding_source(
+            tx,
+            "operation_result",
+            source_kind,
+            &result_key,
+            session_uuid,
+            turn_id,
+            operation.operation_ord,
+            &text,
+        )
+        .await?;
+    } else {
+        mark_embedding_source_deleted(tx, &result_key).await?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn upsert_operation_embedding_source(
+    tx: &mut Transaction<'_, Postgres>,
+    source_family: &str,
+    source_kind: &str,
+    source_key: &str,
+    session_uuid: Uuid,
+    turn_id: i64,
+    operation_ord: i32,
+    text: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO retrieval_embedding_sources \
+            (source_family, source_kind, source_key, session_uuid, turn_id, operation_ord, \
+             content_hash, index_status, index_error, last_seen_at, dirty_at, deleted_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', NULL, NOW(), NOW(), NULL, NOW()) \
+         ON CONFLICT (source_key) DO UPDATE SET \
+             source_family = EXCLUDED.source_family, \
+             source_kind = EXCLUDED.source_kind, \
+             session_uuid = EXCLUDED.session_uuid, \
+             byte_offset = NULL, \
+             block_ord = NULL, \
+             turn_id = EXCLUDED.turn_id, \
+             operation_ord = EXCLUDED.operation_ord, \
+             content_hash = EXCLUDED.content_hash, \
+             index_status = 'pending', \
+             index_error = NULL, \
+             dirty_at = NOW(), \
+             deleted_at = NULL, \
+             updated_at = NOW()",
+    )
+    .bind(source_family)
+    .bind(source_kind)
+    .bind(source_key)
+    .bind(session_uuid)
+    .bind(turn_id)
+    .bind(operation_ord)
+    .bind(hash_text(text.trim()))
+    .execute(&mut **tx)
+    .await
+    .context("upsert operation retrieval source")?;
+    Ok(())
+}
+
+async fn mark_embedding_source_deleted(
+    tx: &mut Transaction<'_, Postgres>,
+    source_key: &str,
+) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM retrieval_embeddings WHERE source_key = $1")
+        .bind(source_key)
+        .execute(&mut **tx)
+        .await
+        .context("delete retrieval embedding")?;
+    sqlx::query(
+        "UPDATE retrieval_embedding_sources \
+            SET index_status = 'deleted', deleted_at = NOW(), updated_at = NOW() \
+          WHERE source_key = $1",
+    )
+    .bind(source_key)
+    .execute(&mut **tx)
+    .await
+    .context("mark retrieval source deleted")?;
+    Ok(())
+}
+
+fn operation_call_text(operation: &StoredOperationProjection) -> Option<String> {
+    let input = operation.input.as_ref()?;
+    let mut parts = vec![operation.name.clone()];
+    if let Some(raw_name) = &operation.raw_name {
+        parts.push(raw_name.clone());
+    }
+    if let Some(operation_type) = &operation.operation_type {
+        parts.push(operation_type.clone());
+    }
+    if let Some(category) = operation.operation_category {
+        parts.push(category.as_str().to_string());
+    }
+    parts.push(input.to_string());
+    Some(parts.join(" "))
+}
+
+fn operation_result_text(operation: &StoredOperationProjection) -> Option<(&'static str, String)> {
+    if operation.result_content.is_none()
+        && operation.result_payload.is_none()
+        && !operation.result_is_error
+        && !operation.is_error
+    {
+        return None;
+    }
+    let payload = operation.result_payload.as_ref().map(ToString::to_string);
+    let text = [
+        Some(operation.name.as_str()),
+        operation.result_content.as_deref(),
+        payload.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ");
+    let source_kind = if operation.result_is_error || operation.is_error {
+        "tool_error"
+    } else {
+        "tool_result"
+    };
+    Some((source_kind, text))
+}
+
+fn hash_text(text: &str) -> String {
+    let hash = digest::digest(&digest::SHA256, text.as_bytes());
+    hash.as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 async fn insert_projected_file_touches(

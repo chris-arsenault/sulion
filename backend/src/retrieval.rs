@@ -16,7 +16,7 @@ use ring::digest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::Row;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::db::{self, Pool};
@@ -29,7 +29,10 @@ mod search;
 use context::{
     clean_opt, context_route, infer_repo_from_cwd, resolve_context, ContextQuery, ResolvedContext,
 };
-use embeddings::{reindex_inner, reindex_route, EmbeddingClient, ReindexRequest};
+use embeddings::{
+    bootstrap_index_if_empty, index_has_work, index_status_route, reindex_route,
+    run_retrieval_indexer_once, EmbeddingClient,
+};
 use routes_extra::{facets_route, file_history_route, sessions_route, turn_route};
 use search::{load_evidence, search_route, EvidencePacket};
 
@@ -41,6 +44,8 @@ const DEFAULT_EMBEDDING_MAX_CHARS: usize = 6000;
 const MAX_BATCH_SIZE: usize = 256;
 const MAX_EMBEDDING_MAX_CHARS: usize = 20000;
 const DEFAULT_REINDEX_LIMIT: i64 = 500;
+const BACKGROUND_INDEX_SECONDS: u64 = 300;
+const BACKGROUND_BUSY_DELAY: Duration = Duration::from_secs(1);
 const MAX_SEARCH_LIMIT: i64 = 100;
 const MAX_REINDEX_LIMIT: i64 = 5000;
 
@@ -54,7 +59,7 @@ pub struct RetrievalConfig {
     pub embedding_dimensions: i32,
     pub embedding_batch_size: usize,
     pub embedding_max_chars: usize,
-    pub background_reindex_seconds: Option<u64>,
+    pub background_index_seconds: Option<u64>,
 }
 
 impl RetrievalConfig {
@@ -91,10 +96,12 @@ impl RetrievalConfig {
             .context("invalid SULION_RETRIEVAL_EMBEDDING_MAX_CHARS")?
             .unwrap_or(DEFAULT_EMBEDDING_MAX_CHARS)
             .clamp(256, MAX_EMBEDDING_MAX_CHARS);
-        let background_reindex_seconds = env_optional("SULION_RETRIEVAL_REINDEX_SECONDS")
+        let background_index_seconds = env_optional("SULION_RETRIEVAL_INDEX_SECONDS")
+            .or_else(|| env_optional("SULION_RETRIEVAL_REINDEX_SECONDS"))
             .map(|value| value.parse::<u64>())
             .transpose()
-            .context("invalid SULION_RETRIEVAL_REINDEX_SECONDS")?;
+            .context("invalid SULION_RETRIEVAL_INDEX_SECONDS")?
+            .or(Some(BACKGROUND_INDEX_SECONDS));
         Ok(Self {
             listen,
             db_url,
@@ -104,7 +111,7 @@ impl RetrievalConfig {
             embedding_dimensions,
             embedding_batch_size,
             embedding_max_chars,
-            background_reindex_seconds,
+            background_index_seconds,
         })
     }
 }
@@ -131,23 +138,25 @@ pub struct RetrievalState {
     config: Arc<RetrievalConfig>,
     http: reqwest::Client,
     vector_capabilities: Arc<RwLock<VectorCapabilities>>,
+    index_lock: Arc<Mutex<()>>,
 }
 
 impl RetrievalState {
     pub async fn from_config(config: RetrievalConfig) -> anyhow::Result<Arc<Self>> {
-        let pool = db::connect(&config.db_url).await?;
-        db::run_migrations(&pool)
-            .await
-            .context("run retrieval migrations")?;
+        let pool = db::connect_and_wait_for_migrations(&config.db_url, "retrieval").await?;
         let state = Arc::new(Self {
             pool,
             config: Arc::new(config),
             http: reqwest::Client::new(),
             vector_capabilities: Arc::new(RwLock::new(VectorCapabilities::default())),
+            index_lock: Arc::new(Mutex::new(())),
         });
         state.refresh_vector_capabilities().await?;
-        if let Some(seconds) = state.config.background_reindex_seconds {
-            tokio::spawn(run_background_reindex(state.clone(), seconds));
+        bootstrap_index_if_empty(&state)
+            .await
+            .map_err(|err| anyhow!(err.to_string()))?;
+        if let Some(seconds) = state.config.background_index_seconds {
+            tokio::spawn(run_background_indexer(state.clone(), seconds));
         }
         Ok(state)
     }
@@ -164,7 +173,7 @@ impl RetrievalState {
                 embedding_dimensions: DEFAULT_EMBEDDING_DIMENSIONS,
                 embedding_batch_size: DEFAULT_BATCH_SIZE,
                 embedding_max_chars: DEFAULT_EMBEDDING_MAX_CHARS,
-                background_reindex_seconds: None,
+                background_index_seconds: None,
             },
         )
     }
@@ -175,6 +184,7 @@ impl RetrievalState {
             config: Arc::new(config),
             http: reqwest::Client::new(),
             vector_capabilities: Arc::new(RwLock::new(VectorCapabilities::default())),
+            index_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -261,6 +271,17 @@ impl RetrievalState {
     }
 }
 
+#[cfg(feature = "integration-tests")]
+pub async fn run_indexer_once_for_tests(
+    state: &Arc<RetrievalState>,
+    limit: i64,
+) -> anyhow::Result<()> {
+    run_retrieval_indexer_once(state, limit)
+        .await
+        .map(|_| ())
+        .map_err(|err| anyhow!(err.to_string()))
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct VectorCapabilities {
     pub extension_installed: bool,
@@ -268,18 +289,24 @@ pub struct VectorCapabilities {
     pub ann_index_exists: bool,
 }
 
-async fn run_background_reindex(state: Arc<RetrievalState>, seconds: u64) {
-    let mut interval = tokio::time::interval(Duration::from_secs(seconds.max(5)));
+async fn run_background_indexer(state: Arc<RetrievalState>, seconds: u64) {
+    let idle_delay = Duration::from_secs(seconds.max(5));
     loop {
-        interval.tick().await;
-        let request = ReindexRequest {
-            repo: None,
-            agent_session_uuid: None,
-            limit: Some(DEFAULT_REINDEX_LIMIT),
+        let delay = match run_retrieval_indexer_once(&state, DEFAULT_REINDEX_LIMIT).await {
+            Ok(_) => match index_has_work(&state).await {
+                Ok(true) => BACKGROUND_BUSY_DELAY,
+                Ok(false) => idle_delay,
+                Err(err) => {
+                    tracing::warn!(%err, "retrieval background index status check failed");
+                    idle_delay
+                }
+            },
+            Err(err) => {
+                tracing::warn!(%err, "retrieval background indexer failed");
+                idle_delay
+            }
         };
-        if let Err(err) = reindex_inner(&state, request).await {
-            tracing::warn!(%err, "retrieval background reindex failed");
-        }
+        tokio::time::sleep(delay).await;
     }
 }
 
@@ -292,6 +319,7 @@ pub fn app(state: Arc<RetrievalState>) -> Router {
         .route("/v1/facets", get(facets_route))
         .route("/v1/turns", get(turn_route))
         .route("/v1/reindex", post(reindex_route))
+        .route("/v1/index/status", get(index_status_route))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             require_retrieval_auth,

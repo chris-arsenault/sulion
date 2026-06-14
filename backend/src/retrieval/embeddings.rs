@@ -4,16 +4,45 @@ use super::*;
 pub(super) struct ReindexRequest {
     pub(super) repo: Option<String>,
     pub(super) agent_session_uuid: Option<Uuid>,
-    pub(super) limit: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
 pub(super) struct ReindexResponse {
-    embedded: usize,
-    skipped: usize,
+    generation: i64,
+    backfills_started: usize,
+    sources_seen: usize,
+    sources_marked_pending: usize,
+    sources_deleted: usize,
+    pending_sources: i64,
     vector: VectorCapabilities,
     embedding_model: String,
     embedding_dimensions: i32,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct IndexStatusResponse {
+    pending_sources: i64,
+    indexed_sources: i64,
+    failed_sources: i64,
+    deleted_sources: i64,
+    running_backfills: i64,
+    failed_backfills: i64,
+    latest_backfill_generation: Option<i64>,
+    backfill_rows_seen: i64,
+    backfill_rows_marked_pending: i64,
+    embedding_count: i64,
+    latest_indexed_at: Option<DateTime<Utc>>,
+    vector: VectorCapabilities,
+    embedding_model: String,
+    embedding_dimensions: i32,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(super) struct EmbeddingIndexStats {
+    pub(super) sources_seen: usize,
+    pub(super) embedded: usize,
+    pub(super) skipped: usize,
+    pub(super) failed: usize,
 }
 
 pub(super) async fn reindex_route(
@@ -28,23 +57,111 @@ pub(super) async fn reindex_inner(
     state: &RetrievalState,
     request: ReindexRequest,
 ) -> Result<ReindexResponse, RetrievalError> {
-    let embedder = state.embedding_client();
     let vector = state.refresh_vector_capabilities().await?;
-    let limit = request
-        .limit
-        .unwrap_or(DEFAULT_REINDEX_LIMIT)
-        .clamp(1, MAX_REINDEX_LIMIT);
-    let sources = load_embedding_sources(
-        &state.pool,
+    let _guard = state.index_lock.lock().await;
+    let generation = next_backfill_generation(state).await?;
+    let backfills_started = start_backfill_runs(
+        state,
+        generation,
         request.repo.as_deref(),
         request.agent_session_uuid,
-        &state.config.embedding_model,
-        state.config.embedding_dimensions,
-        limit,
+        false,
     )
     .await?;
-    let mut embedded = 0_usize;
-    let mut skipped = 0_usize;
+    let status = load_index_status_inner(state, vector).await?;
+    Ok(ReindexResponse {
+        generation,
+        backfills_started,
+        sources_seen: 0,
+        sources_marked_pending: 0,
+        sources_deleted: 0,
+        pending_sources: status.pending_sources,
+        vector,
+        embedding_model: state.config.embedding_model.clone(),
+        embedding_dimensions: state.config.embedding_dimensions,
+    })
+}
+
+pub(super) async fn bootstrap_index_if_empty(
+    state: &RetrievalState,
+) -> Result<bool, RetrievalError> {
+    let _guard = state.index_lock.lock().await;
+    let (source_count, backfill_count): (i64, i64) = sqlx::query_as(
+        "SELECT \
+            (SELECT COUNT(*) FROM retrieval_embedding_sources)::BIGINT, \
+            (SELECT COUNT(*) FROM retrieval_embedding_backfills)::BIGINT",
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    if source_count > 0 || backfill_count > 0 {
+        return Ok(false);
+    }
+    let generation = next_backfill_generation(state).await?;
+    let started = start_backfill_runs(state, generation, None, None, false).await?;
+    tracing::info!(
+        generation,
+        backfills_started = started,
+        "scheduled initial retrieval semantic index backfill"
+    );
+    Ok(started > 0)
+}
+
+pub(super) async fn index_status_route(
+    State(state): State<Arc<RetrievalState>>,
+) -> Result<Json<IndexStatusResponse>, RetrievalError> {
+    let vector = *state.vector_capabilities.read().await;
+    Ok(Json(load_index_status_inner(&state, vector).await?))
+}
+
+pub(super) async fn pending_source_count(state: &RetrievalState) -> Result<i64, RetrievalError> {
+    let count = sqlx::query_scalar(
+        "SELECT COUNT(*) \
+           FROM retrieval_embedding_sources \
+          WHERE index_status = 'pending' \
+            AND deleted_at IS NULL",
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(count)
+}
+
+pub(super) async fn index_has_work(state: &RetrievalState) -> Result<bool, RetrievalError> {
+    let has_work = sqlx::query_scalar(
+        "SELECT EXISTS ( \
+             SELECT 1 FROM retrieval_embedding_sources \
+              WHERE index_status = 'pending' AND deleted_at IS NULL \
+             UNION ALL \
+             SELECT 1 FROM retrieval_embedding_backfills \
+              WHERE status = 'running' \
+         )",
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(has_work)
+}
+
+pub(super) async fn run_retrieval_indexer_once(
+    state: &RetrievalState,
+    limit: i64,
+) -> Result<EmbeddingIndexStats, RetrievalError> {
+    let _guard = state.index_lock.lock().await;
+    state.refresh_vector_capabilities().await?;
+    advance_backfill_runs(state, DEFAULT_REINDEX_LIMIT).await?;
+    index_pending_embeddings(state, limit).await
+}
+
+pub(super) async fn index_pending_embeddings(
+    state: &RetrievalState,
+    limit: i64,
+) -> Result<EmbeddingIndexStats, RetrievalError> {
+    let embedder = state.embedding_client();
+    let vector = *state.vector_capabilities.read().await;
+    let limit = limit.clamp(1, MAX_REINDEX_LIMIT);
+    let sources = load_pending_embedding_sources(state, limit).await?;
+    let mut stats = EmbeddingIndexStats {
+        sources_seen: sources.len(),
+        ..EmbeddingIndexStats::default()
+    };
     for chunk in sources.chunks(state.config.embedding_batch_size) {
         let texts = chunk
             .iter()
@@ -53,23 +170,80 @@ pub(super) async fn reindex_inner(
         let vectors = embedder.embed_batch(&texts).await?;
         for (source, embedding) in chunk.iter().zip(vectors) {
             if embedding.len() != state.config.embedding_dimensions as usize {
-                return Err(RetrievalError::unavailable(format!(
+                let err = format!(
                     "embedding dimensions mismatch: expected {}, got {}",
                     state.config.embedding_dimensions,
                     embedding.len()
-                )));
+                );
+                mark_source_failed(state, &source.source_key, &err).await?;
+                stats.failed += 1;
+                continue;
             }
             if source.text.trim().is_empty() {
-                skipped += 1;
+                stats.skipped += 1;
                 continue;
             }
             upsert_embedding(state, source, &embedding, vector.column_exists).await?;
-            embedded += 1;
+            mark_source_indexed(state, source).await?;
+            stats.embedded += 1;
         }
     }
-    Ok(ReindexResponse {
-        embedded,
-        skipped,
+    Ok(stats)
+}
+
+async fn load_index_status_inner(
+    state: &RetrievalState,
+    vector: VectorCapabilities,
+) -> Result<IndexStatusResponse, RetrievalError> {
+    let row = sqlx::query(
+        "SELECT \
+            COUNT(*) FILTER (WHERE index_status = 'pending' AND deleted_at IS NULL) AS pending_sources, \
+            COUNT(*) FILTER (WHERE index_status = 'indexed' AND deleted_at IS NULL) AS indexed_sources, \
+            COUNT(*) FILTER (WHERE index_status = 'failed' AND deleted_at IS NULL) AS failed_sources, \
+            COUNT(*) FILTER (WHERE deleted_at IS NOT NULL OR index_status = 'deleted') AS deleted_sources, \
+            MAX(indexed_at) FILTER (WHERE index_status = 'indexed' AND deleted_at IS NULL) AS latest_indexed_at \
+           FROM retrieval_embedding_sources",
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    let embedding_count = sqlx::query_scalar(
+        "SELECT COUNT(*) \
+           FROM retrieval_embeddings \
+          WHERE embedding_model = $1 \
+            AND embedding_dimensions = $2",
+    )
+    .bind(&state.config.embedding_model)
+    .bind(state.config.embedding_dimensions)
+    .fetch_one(&state.pool)
+    .await?;
+    let backfill = sqlx::query(
+        "SELECT \
+            COUNT(*) FILTER (WHERE status = 'running') AS running_backfills, \
+            COUNT(*) FILTER (WHERE status = 'failed') AS failed_backfills, \
+            MAX(generation) AS latest_backfill_generation, \
+            COALESCE(SUM(rows_seen), 0)::BIGINT AS backfill_rows_seen, \
+            COALESCE(SUM(rows_marked_pending), 0)::BIGINT AS backfill_rows_marked_pending \
+           FROM retrieval_embedding_backfills",
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(IndexStatusResponse {
+        pending_sources: row.try_get("pending_sources").unwrap_or(0),
+        indexed_sources: row.try_get("indexed_sources").unwrap_or(0),
+        failed_sources: row.try_get("failed_sources").unwrap_or(0),
+        deleted_sources: row.try_get("deleted_sources").unwrap_or(0),
+        running_backfills: backfill.try_get("running_backfills").unwrap_or(0),
+        failed_backfills: backfill.try_get("failed_backfills").unwrap_or(0),
+        latest_backfill_generation: backfill
+            .try_get("latest_backfill_generation")
+            .ok()
+            .flatten(),
+        backfill_rows_seen: backfill.try_get("backfill_rows_seen").unwrap_or(0),
+        backfill_rows_marked_pending: backfill
+            .try_get("backfill_rows_marked_pending")
+            .unwrap_or(0),
+        embedding_count,
+        latest_indexed_at: row.try_get("latest_indexed_at").ok().flatten(),
         vector,
         embedding_model: state.config.embedding_model.clone(),
         embedding_dimensions: state.config.embedding_dimensions,
@@ -78,6 +252,7 @@ pub(super) async fn reindex_inner(
 
 #[derive(Debug, Clone)]
 struct EmbeddingSource {
+    source_family: SourceFamily,
     source_kind: SourceKind,
     source_key: String,
     session_uuid: Uuid,
@@ -90,136 +265,737 @@ struct EmbeddingSource {
     text: String,
 }
 
-async fn load_embedding_sources(
-    pool: &Pool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceFamily {
+    EventBlock,
+    OperationCall,
+    OperationResult,
+}
+
+impl SourceFamily {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::EventBlock => "event_block",
+            Self::OperationCall => "operation_call",
+            Self::OperationResult => "operation_result",
+        }
+    }
+
+    fn from_db(raw: &str) -> Result<Self, RetrievalError> {
+        match raw {
+            "event_block" => Ok(Self::EventBlock),
+            "operation_call" => Ok(Self::OperationCall),
+            "operation_result" => Ok(Self::OperationResult),
+            other => Err(RetrievalError::internal(anyhow!(
+                "unknown retrieval source family: {other}"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct BackfillRun {
+    id: Uuid,
+    generation: i64,
+    source_family: SourceFamily,
+    scope_repo: Option<String>,
+    scope_session_uuid: Option<Uuid>,
+    force: bool,
+    cursor_session_uuid: Option<Uuid>,
+    cursor_byte_offset: Option<i64>,
+    cursor_block_ord: Option<i32>,
+    cursor_turn_id: Option<i64>,
+    cursor_operation_ord: Option<i32>,
+    started_at: DateTime<Utc>,
+}
+
+struct PendingSourceRow {
+    source_family: SourceFamily,
+    source_key: String,
+    session_uuid: Uuid,
+    byte_offset: Option<i64>,
+    block_ord: Option<i32>,
+    turn_id: Option<i64>,
+    operation_ord: Option<i32>,
+}
+
+async fn next_backfill_generation(state: &RetrievalState) -> Result<i64, RetrievalError> {
+    let generation =
+        sqlx::query_scalar("SELECT nextval('retrieval_embedding_backfill_generation_seq')::BIGINT")
+            .fetch_one(&state.pool)
+            .await?;
+    Ok(generation)
+}
+
+async fn start_backfill_runs(
+    state: &RetrievalState,
+    generation: i64,
     repo: Option<&str>,
     session_uuid: Option<Uuid>,
-    embedding_model: &str,
-    embedding_dimensions: i32,
+    force: bool,
+) -> Result<usize, RetrievalError> {
+    let families = [
+        SourceFamily::EventBlock,
+        SourceFamily::OperationCall,
+        SourceFamily::OperationResult,
+    ];
+    let mut started = 0;
+    for family in families {
+        sqlx::query(
+            "INSERT INTO retrieval_embedding_backfills \
+                (generation, source_family, scope_repo, scope_session_uuid, force, status, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, 'running', NOW())",
+        )
+        .bind(generation)
+        .bind(family.as_str())
+        .bind(repo)
+        .bind(session_uuid)
+        .bind(force)
+        .execute(&state.pool)
+        .await?;
+        started += 1;
+    }
+    Ok(started)
+}
+
+async fn advance_backfill_runs(state: &RetrievalState, limit: i64) -> Result<(), RetrievalError> {
+    let runs = load_running_backfill_runs(state).await?;
+    if runs.is_empty() {
+        return Ok(());
+    }
+    let limit = limit.clamp(1, MAX_REINDEX_LIMIT);
+    for run in runs {
+        if let Err(err) = advance_backfill_run(state, &run, limit).await {
+            mark_backfill_failed(state, run.id, &err.to_string()).await?;
+            return Err(err);
+        }
+    }
+    Ok(())
+}
+
+async fn load_running_backfill_runs(
+    state: &RetrievalState,
+) -> Result<Vec<BackfillRun>, RetrievalError> {
+    let rows = sqlx::query(
+        "SELECT id, generation, source_family, scope_repo, scope_session_uuid, force, \
+                cursor_session_uuid, cursor_byte_offset, cursor_block_ord, cursor_turn_id, \
+                cursor_operation_ord, started_at \
+           FROM retrieval_embedding_backfills \
+          WHERE status = 'running' \
+          ORDER BY updated_at ASC, id ASC \
+          LIMIT 3",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            let family: String = row.try_get("source_family")?;
+            Ok(BackfillRun {
+                id: row.try_get("id")?,
+                generation: row.try_get("generation")?,
+                source_family: SourceFamily::from_db(&family)?,
+                scope_repo: row.try_get("scope_repo")?,
+                scope_session_uuid: row.try_get("scope_session_uuid")?,
+                force: row.try_get("force")?,
+                cursor_session_uuid: row.try_get("cursor_session_uuid")?,
+                cursor_byte_offset: row.try_get("cursor_byte_offset")?,
+                cursor_block_ord: row.try_get("cursor_block_ord")?,
+                cursor_turn_id: row.try_get("cursor_turn_id")?,
+                cursor_operation_ord: row.try_get("cursor_operation_ord")?,
+                started_at: row.try_get("started_at")?,
+            })
+        })
+        .collect()
+}
+
+async fn advance_backfill_run(
+    state: &RetrievalState,
+    run: &BackfillRun,
+    limit: i64,
+) -> Result<(), RetrievalError> {
+    let sources = load_backfill_sources(state, run, limit).await?;
+    let mut marked_pending = 0_i64;
+    for source in &sources {
+        if upsert_source_seen(state, source, run.generation, run.force).await? {
+            marked_pending += 1;
+        }
+    }
+
+    if let Some(last) = sources.last() {
+        sqlx::query(
+            "UPDATE retrieval_embedding_backfills \
+                SET cursor_session_uuid = $2, \
+                    cursor_byte_offset = $3, \
+                    cursor_block_ord = $4, \
+                    cursor_turn_id = $5, \
+                    cursor_operation_ord = $6, \
+                    rows_seen = rows_seen + $7, \
+                    rows_marked_pending = rows_marked_pending + $8, \
+                    updated_at = NOW() \
+              WHERE id = $1",
+        )
+        .bind(run.id)
+        .bind(last.session_uuid)
+        .bind(last.byte_offset)
+        .bind(last.block_ord)
+        .bind(last.turn_id)
+        .bind(last.operation_ord)
+        .bind(sources.len() as i64)
+        .bind(marked_pending)
+        .execute(&state.pool)
+        .await?;
+    }
+
+    if sources.len() < limit as usize {
+        delete_stale_sources_for_completed_run(state, run).await?;
+        sqlx::query(
+            "UPDATE retrieval_embedding_backfills \
+                SET status = 'complete', finished_at = NOW(), updated_at = NOW() \
+              WHERE id = $1",
+        )
+        .bind(run.id)
+        .execute(&state.pool)
+        .await?;
+    }
+    Ok(())
+}
+
+async fn mark_backfill_failed(
+    state: &RetrievalState,
+    id: Uuid,
+    error: &str,
+) -> Result<(), RetrievalError> {
+    sqlx::query(
+        "UPDATE retrieval_embedding_backfills \
+            SET status = 'failed', last_error = $2, finished_at = NOW(), updated_at = NOW() \
+          WHERE id = $1",
+    )
+    .bind(id)
+    .bind(error)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
+}
+
+async fn load_backfill_sources(
+    state: &RetrievalState,
+    run: &BackfillRun,
+    limit: i64,
+) -> Result<Vec<EmbeddingSource>, RetrievalError> {
+    match run.source_family {
+        SourceFamily::EventBlock => load_event_backfill_sources(state, run, limit).await,
+        SourceFamily::OperationCall => {
+            load_operation_backfill_sources(state, run, false, limit).await
+        }
+        SourceFamily::OperationResult => {
+            load_operation_backfill_sources(state, run, true, limit).await
+        }
+    }
+}
+
+async fn load_event_backfill_sources(
+    state: &RetrievalState,
+    run: &BackfillRun,
     limit: i64,
 ) -> Result<Vec<EmbeddingSource>, RetrievalError> {
     let rows = sqlx::query(
-        "WITH source_rows AS ( \
-             SELECT \
-                CASE \
-                  WHEN e.speaker = 'assistant' AND b.kind = 'text' THEN 'assistant_text' \
-                  WHEN e.speaker = 'user' AND b.kind = 'text' THEN 'user_prompt' \
-                  WHEN e.speaker = 'summary' AND b.kind = 'text' THEN 'summary' \
-                  WHEN b.kind = 'tool_result' AND COALESCE(b.is_error, FALSE) THEN 'tool_error' \
-                  ELSE NULL \
-                END AS source_kind, \
-                ('event:' || e.session_uuid::TEXT || ':' || e.byte_offset::TEXT || ':' || b.ord::TEXT) AS source_key, \
-                e.session_uuid, e.byte_offset, b.ord AS block_ord, tt.turn_id, NULL::INT AS operation_ord, \
-                COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
-                b.text \
-             FROM event_blocks b \
-             JOIN events e ON e.session_uuid = b.session_uuid AND e.byte_offset = b.byte_offset \
-             JOIN claude_sessions cs ON cs.session_uuid = e.session_uuid \
-             LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
-             LEFT JOIN agent_session_metadata asm ON asm.session_uuid = cs.session_uuid \
-             LEFT JOIN LATERAL ( \
-                SELECT turn_id \
-                  FROM timeline_turns tt \
-                 WHERE tt.session_uuid = e.session_uuid \
-                   AND tt.start_timestamp <= e.timestamp \
-                   AND tt.end_timestamp >= e.timestamp \
-                 ORDER BY tt.duration_ms ASC, tt.turn_id ASC \
-                 LIMIT 1 \
-             ) tt ON TRUE \
-             WHERE b.text IS NOT NULL \
-               AND length(trim(b.text)) > 0 \
-               AND ($1::UUID IS NULL OR e.session_uuid = $1) \
-               AND ($2::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $2) \
-             UNION ALL \
-             SELECT \
-                'tool_call' AS source_kind, \
-                ('operation:' || o.session_uuid::TEXT || ':' || o.turn_id::TEXT || ':' || o.operation_ord::TEXT || ':call') AS source_key, \
-                o.session_uuid, NULL::BIGINT AS byte_offset, NULL::INT AS block_ord, o.turn_id, o.operation_ord, \
-                COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
-                concat_ws(' ', o.name, o.raw_name, o.operation_type, o.operation_category, o.input::TEXT) AS text \
-             FROM timeline_operations o \
-             JOIN claude_sessions cs ON cs.session_uuid = o.session_uuid \
-             LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
-             LEFT JOIN agent_session_metadata asm ON asm.session_uuid = cs.session_uuid \
-             WHERE o.input IS NOT NULL \
-               AND ($1::UUID IS NULL OR o.session_uuid = $1) \
-               AND ($2::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $2) \
-             UNION ALL \
-             SELECT \
-                CASE WHEN o.result_is_error OR o.is_error THEN 'tool_error' ELSE 'tool_result' END AS source_kind, \
-                ('operation:' || o.session_uuid::TEXT || ':' || o.turn_id::TEXT || ':' || o.operation_ord::TEXT || ':result') AS source_key, \
-                o.session_uuid, NULL::BIGINT AS byte_offset, NULL::INT AS block_ord, o.turn_id, o.operation_ord, \
-                COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
-                concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT) AS text \
-             FROM timeline_operations o \
-             JOIN claude_sessions cs ON cs.session_uuid = o.session_uuid \
-             LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
-             LEFT JOIN agent_session_metadata asm ON asm.session_uuid = cs.session_uuid \
-             WHERE (o.result_content IS NOT NULL OR o.result_payload IS NOT NULL OR o.result_is_error OR o.is_error) \
-               AND ($1::UUID IS NULL OR o.session_uuid = $1) \
-               AND ($2::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $2) \
-        ) \
-        SELECT s.*, re.content_hash AS existing_hash, re.embedding_dimensions AS existing_dimensions \
-          FROM source_rows s \
-          LEFT JOIN retrieval_embeddings re \
-            ON re.embedding_model = $3 \
-           AND re.source_key = s.source_key \
-         WHERE s.source_kind IS NOT NULL \
-           AND length(trim(s.text)) > 0 \
-         ORDER BY s.session_uuid ASC, s.byte_offset ASC, s.block_ord ASC \
-         LIMIT $4",
+        "SELECT \
+            CASE \
+              WHEN e.speaker = 'assistant' AND b.kind = 'text' THEN 'assistant_text' \
+              WHEN e.speaker = 'user' AND b.kind = 'text' THEN 'user_prompt' \
+              WHEN e.speaker = 'summary' AND b.kind = 'text' THEN 'summary' \
+              WHEN b.kind = 'tool_result' AND COALESCE(b.is_error, FALSE) THEN 'tool_error' \
+              ELSE NULL \
+            END AS source_kind, \
+            ('event:' || e.session_uuid::TEXT || ':' || e.byte_offset::TEXT || ':' || b.ord::TEXT) AS source_key, \
+            e.session_uuid, e.byte_offset, b.ord AS block_ord, tt.turn_id, NULL::INT AS operation_ord, \
+            COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
+            b.text \
+           FROM event_blocks b \
+           JOIN events e ON e.session_uuid = b.session_uuid AND e.byte_offset = b.byte_offset \
+           JOIN claude_sessions cs ON cs.session_uuid = e.session_uuid \
+           LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
+           LEFT JOIN agent_session_metadata asm ON asm.session_uuid = cs.session_uuid \
+           LEFT JOIN LATERAL ( \
+              SELECT turn_id \
+                FROM timeline_turns tt \
+               WHERE tt.session_uuid = e.session_uuid \
+                 AND tt.start_timestamp <= e.timestamp \
+                 AND tt.end_timestamp >= e.timestamp \
+               ORDER BY tt.duration_ms ASC, tt.turn_id ASC \
+               LIMIT 1 \
+           ) tt ON TRUE \
+          WHERE b.text IS NOT NULL \
+            AND length(trim(b.text)) > 0 \
+            AND ( \
+                (e.speaker IN ('assistant', 'user', 'summary') AND b.kind = 'text') \
+                OR (b.kind = 'tool_result' AND COALESCE(b.is_error, FALSE)) \
+            ) \
+            AND ($1::UUID IS NULL OR e.session_uuid = $1) \
+            AND ($2::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $2) \
+            AND ( \
+                $3::UUID IS NULL \
+                OR e.session_uuid > $3 \
+                OR (e.session_uuid = $3 AND e.byte_offset > $4) \
+                OR (e.session_uuid = $3 AND e.byte_offset = $4 AND b.ord > $5) \
+            ) \
+          ORDER BY e.session_uuid ASC, e.byte_offset ASC, b.ord ASC \
+          LIMIT $6",
     )
-    .bind(session_uuid)
-    .bind(repo)
-    .bind(embedding_model)
-    .bind(limit.saturating_mul(4).max(limit))
-    .fetch_all(pool)
+    .bind(run.scope_session_uuid)
+    .bind(run.scope_repo.as_deref())
+    .bind(run.cursor_session_uuid)
+    .bind(run.cursor_byte_offset)
+    .bind(run.cursor_block_ord)
+    .bind(limit)
+    .fetch_all(&state.pool)
     .await?;
 
+    source_rows_from_db(rows, SourceFamily::EventBlock)
+}
+
+async fn load_operation_backfill_sources(
+    state: &RetrievalState,
+    run: &BackfillRun,
+    result_sources: bool,
+    limit: i64,
+) -> Result<Vec<EmbeddingSource>, RetrievalError> {
+    let sql = if result_sources {
+        "SELECT \
+            CASE WHEN o.result_is_error OR o.is_error THEN 'tool_error' ELSE 'tool_result' END AS source_kind, \
+            ('operation:' || o.session_uuid::TEXT || ':' || o.turn_id::TEXT || ':' || o.operation_ord::TEXT || ':result') AS source_key, \
+            o.session_uuid, NULL::BIGINT AS byte_offset, NULL::INT AS block_ord, o.turn_id, o.operation_ord, \
+            COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
+            concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT) AS text \
+           FROM timeline_operations o \
+           JOIN claude_sessions cs ON cs.session_uuid = o.session_uuid \
+           LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
+           LEFT JOIN agent_session_metadata asm ON asm.session_uuid = cs.session_uuid \
+          WHERE (o.result_content IS NOT NULL OR o.result_payload IS NOT NULL OR o.result_is_error OR o.is_error) \
+            AND length(trim(concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT))) > 0 \
+            AND ($1::UUID IS NULL OR o.session_uuid = $1) \
+            AND ($2::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $2) \
+            AND ( \
+                $3::UUID IS NULL \
+                OR o.session_uuid > $3 \
+                OR (o.session_uuid = $3 AND o.turn_id > $4) \
+                OR (o.session_uuid = $3 AND o.turn_id = $4 AND o.operation_ord > $5) \
+            ) \
+          ORDER BY o.session_uuid ASC, o.turn_id ASC, o.operation_ord ASC \
+          LIMIT $6"
+    } else {
+        "SELECT \
+            'tool_call' AS source_kind, \
+            ('operation:' || o.session_uuid::TEXT || ':' || o.turn_id::TEXT || ':' || o.operation_ord::TEXT || ':call') AS source_key, \
+            o.session_uuid, NULL::BIGINT AS byte_offset, NULL::INT AS block_ord, o.turn_id, o.operation_ord, \
+            COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
+            concat_ws(' ', o.name, o.raw_name, o.operation_type, o.operation_category, o.input::TEXT) AS text \
+           FROM timeline_operations o \
+           JOIN claude_sessions cs ON cs.session_uuid = o.session_uuid \
+           LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
+           LEFT JOIN agent_session_metadata asm ON asm.session_uuid = cs.session_uuid \
+          WHERE o.input IS NOT NULL \
+            AND length(trim(concat_ws(' ', o.name, o.raw_name, o.operation_type, o.operation_category, o.input::TEXT))) > 0 \
+            AND ($1::UUID IS NULL OR o.session_uuid = $1) \
+            AND ($2::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $2) \
+            AND ( \
+                $3::UUID IS NULL \
+                OR o.session_uuid > $3 \
+                OR (o.session_uuid = $3 AND o.turn_id > $4) \
+                OR (o.session_uuid = $3 AND o.turn_id = $4 AND o.operation_ord > $5) \
+            ) \
+          ORDER BY o.session_uuid ASC, o.turn_id ASC, o.operation_ord ASC \
+          LIMIT $6"
+    };
+    let rows = sqlx::query(sql)
+        .bind(run.scope_session_uuid)
+        .bind(run.scope_repo.as_deref())
+        .bind(run.cursor_session_uuid)
+        .bind(run.cursor_turn_id)
+        .bind(run.cursor_operation_ord)
+        .bind(limit)
+        .fetch_all(&state.pool)
+        .await?;
+    source_rows_from_db(
+        rows,
+        if result_sources {
+            SourceFamily::OperationResult
+        } else {
+            SourceFamily::OperationCall
+        },
+    )
+}
+
+fn source_rows_from_db(
+    rows: Vec<sqlx::postgres::PgRow>,
+    source_family: SourceFamily,
+) -> Result<Vec<EmbeddingSource>, RetrievalError> {
     let mut sources = Vec::new();
     for row in rows {
-        let kind: String = match row.try_get("source_kind") {
-            Ok(kind) => kind,
-            Err(_) => continue,
-        };
-        let text: String = match row.try_get("text") {
-            Ok(text) => text,
-            Err(_) => continue,
-        };
-        let source_kind = match kind.as_str() {
-            "assistant_text" => SourceKind::AssistantText,
-            "user_prompt" => SourceKind::UserPrompt,
-            "summary" => SourceKind::Summary,
-            "tool_call" => SourceKind::ToolCall,
-            "tool_result" => SourceKind::ToolResult,
-            "tool_error" => SourceKind::ToolError,
-            _ => continue,
-        };
-        let content_hash = hash_text(&text);
-        let existing_hash: Option<String> = row.try_get("existing_hash").ok().flatten();
-        let existing_dimensions: Option<i32> = row.try_get("existing_dimensions").ok().flatten();
-        if existing_hash.as_deref() == Some(content_hash.as_str())
-            && existing_dimensions == Some(embedding_dimensions)
-        {
-            continue;
-        }
-        sources.push(EmbeddingSource {
-            source_kind,
-            source_key: row.try_get("source_key")?,
-            session_uuid: row.try_get("session_uuid")?,
-            byte_offset: row.try_get("byte_offset").ok(),
-            block_ord: row.try_get("block_ord").ok(),
-            turn_id: row.try_get("turn_id").ok().flatten(),
-            operation_ord: row.try_get("operation_ord").ok().flatten(),
-            repo_name: row.try_get("repo_name").ok().flatten(),
-            content_hash,
-            text,
-        });
-        if sources.len() >= limit as usize {
-            break;
+        if let Some(source) = source_from_row(row, source_family)? {
+            sources.push(source);
         }
     }
     Ok(sources)
+}
+
+fn source_from_row(
+    row: sqlx::postgres::PgRow,
+    source_family: SourceFamily,
+) -> Result<Option<EmbeddingSource>, RetrievalError> {
+    let kind: String = match row.try_get("source_kind") {
+        Ok(kind) => kind,
+        Err(_) => return Ok(None),
+    };
+    let text: String = match row.try_get("text") {
+        Ok(text) => text,
+        Err(_) => return Ok(None),
+    };
+    let Some(source_kind) = source_kind_from_db(&kind) else {
+        return Ok(None);
+    };
+    Ok(Some(EmbeddingSource {
+        source_family,
+        source_kind,
+        source_key: row.try_get("source_key")?,
+        session_uuid: row.try_get("session_uuid")?,
+        byte_offset: row.try_get("byte_offset").ok().flatten(),
+        block_ord: row.try_get("block_ord").ok().flatten(),
+        turn_id: row.try_get("turn_id").ok().flatten(),
+        operation_ord: row.try_get("operation_ord").ok().flatten(),
+        repo_name: row.try_get("repo_name").ok().flatten(),
+        content_hash: hash_text(&text),
+        text,
+    }))
+}
+
+fn source_kind_from_db(raw: &str) -> Option<SourceKind> {
+    match raw {
+        "assistant_text" => Some(SourceKind::AssistantText),
+        "user_prompt" => Some(SourceKind::UserPrompt),
+        "summary" => Some(SourceKind::Summary),
+        "tool_call" => Some(SourceKind::ToolCall),
+        "tool_result" => Some(SourceKind::ToolResult),
+        "tool_error" => Some(SourceKind::ToolError),
+        "turn_digest" => Some(SourceKind::TurnDigest),
+        _ => None,
+    }
+}
+
+async fn upsert_source_seen(
+    state: &RetrievalState,
+    source: &EmbeddingSource,
+    generation: i64,
+    force: bool,
+) -> Result<bool, RetrievalError> {
+    let existing = sqlx::query(
+        "SELECT s.content_hash, s.index_status, s.deleted_at, \
+                EXISTS ( \
+                    SELECT 1 \
+                      FROM retrieval_embeddings re \
+                     WHERE re.embedding_model = $2 \
+                       AND re.embedding_dimensions = $3 \
+                       AND re.source_key = s.source_key \
+                       AND re.content_hash = s.content_hash \
+                ) AS has_current_embedding \
+           FROM retrieval_embedding_sources s \
+          WHERE s.source_key = $1",
+    )
+    .bind(&source.source_key)
+    .bind(&state.config.embedding_model)
+    .bind(state.config.embedding_dimensions)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let should_pending = match existing {
+        None => true,
+        Some(row) => {
+            let content_hash: String = row.try_get("content_hash")?;
+            let index_status: String = row.try_get("index_status")?;
+            let deleted_at: Option<DateTime<Utc>> = row.try_get("deleted_at")?;
+            let has_current_embedding: bool = row.try_get("has_current_embedding")?;
+            force
+                || deleted_at.is_some()
+                || index_status != "indexed"
+                || content_hash != source.content_hash
+                || !has_current_embedding
+        }
+    };
+    let status = if should_pending { "pending" } else { "indexed" };
+
+    sqlx::query(
+        "INSERT INTO retrieval_embedding_sources \
+            (source_family, source_kind, source_key, session_uuid, byte_offset, block_ord, \
+             turn_id, operation_ord, repo_name, content_hash, last_seen_generation, \
+             index_status, index_error, last_seen_at, dirty_at, deleted_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL, NOW(), NOW(), NULL, NOW()) \
+         ON CONFLICT (source_key) DO UPDATE SET \
+             source_family = EXCLUDED.source_family, \
+             source_kind = EXCLUDED.source_kind, \
+             session_uuid = EXCLUDED.session_uuid, \
+             byte_offset = EXCLUDED.byte_offset, \
+             block_ord = EXCLUDED.block_ord, \
+             turn_id = EXCLUDED.turn_id, \
+             operation_ord = EXCLUDED.operation_ord, \
+             repo_name = EXCLUDED.repo_name, \
+             content_hash = EXCLUDED.content_hash, \
+             last_seen_generation = EXCLUDED.last_seen_generation, \
+             index_status = EXCLUDED.index_status, \
+             index_error = CASE WHEN $13::BOOLEAN THEN NULL ELSE retrieval_embedding_sources.index_error END, \
+             last_seen_at = NOW(), \
+             dirty_at = CASE WHEN $13::BOOLEAN THEN NOW() ELSE retrieval_embedding_sources.dirty_at END, \
+             deleted_at = NULL, \
+             updated_at = NOW()",
+    )
+    .bind(source.source_family.as_str())
+    .bind(source.source_kind.as_str())
+    .bind(&source.source_key)
+    .bind(source.session_uuid)
+    .bind(source.byte_offset)
+    .bind(source.block_ord)
+    .bind(source.turn_id)
+    .bind(source.operation_ord)
+    .bind(source.repo_name.as_deref())
+    .bind(&source.content_hash)
+    .bind(generation)
+    .bind(status)
+    .bind(should_pending)
+    .execute(&state.pool)
+    .await?;
+
+    Ok(should_pending)
+}
+
+async fn delete_stale_sources_for_completed_run(
+    state: &RetrievalState,
+    run: &BackfillRun,
+) -> Result<i64, RetrievalError> {
+    let deleted = sqlx::query_scalar(
+        "WITH stale AS ( \
+             SELECT source_key \
+               FROM retrieval_embedding_sources \
+              WHERE source_family = $1 \
+                AND deleted_at IS NULL \
+                AND COALESCE(last_seen_generation, 0) < $2 \
+                AND updated_at < $3 \
+                AND ($4::UUID IS NULL OR session_uuid = $4) \
+                AND ($5::TEXT IS NULL OR repo_name = $5) \
+        ), removed_embeddings AS ( \
+             DELETE FROM retrieval_embeddings re \
+              USING stale \
+              WHERE re.source_key = stale.source_key \
+              RETURNING re.source_key \
+        ), removed_sources AS ( \
+             UPDATE retrieval_embedding_sources s \
+                SET index_status = 'deleted', deleted_at = NOW(), updated_at = NOW() \
+               FROM stale \
+              WHERE s.source_key = stale.source_key \
+              RETURNING s.id \
+        ) \
+        SELECT COUNT(*)::BIGINT FROM removed_sources",
+    )
+    .bind(run.source_family.as_str())
+    .bind(run.generation)
+    .bind(run.started_at)
+    .bind(run.scope_session_uuid)
+    .bind(run.scope_repo.as_deref())
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(deleted)
+}
+
+async fn load_pending_embedding_sources(
+    state: &RetrievalState,
+    limit: i64,
+) -> Result<Vec<EmbeddingSource>, RetrievalError> {
+    let pending = load_pending_source_rows(state, limit).await?;
+    let mut sources = Vec::new();
+    for pending_source in pending {
+        match load_current_source(state, &pending_source).await? {
+            Some(source) => sources.push(source),
+            None => mark_source_deleted(state, &pending_source.source_key).await?,
+        }
+    }
+    Ok(sources)
+}
+
+async fn load_pending_source_rows(
+    state: &RetrievalState,
+    limit: i64,
+) -> Result<Vec<PendingSourceRow>, RetrievalError> {
+    let rows = sqlx::query(
+        "SELECT source_family, source_key, session_uuid, byte_offset, block_ord, turn_id, operation_ord \
+           FROM retrieval_embedding_sources \
+          WHERE index_status = 'pending' \
+            AND deleted_at IS NULL \
+          ORDER BY dirty_at ASC, id ASC \
+          LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let family: String = row.try_get("source_family")?;
+            Ok(PendingSourceRow {
+                source_family: SourceFamily::from_db(&family)?,
+                source_key: row.try_get("source_key")?,
+                session_uuid: row.try_get("session_uuid")?,
+                byte_offset: row.try_get("byte_offset")?,
+                block_ord: row.try_get("block_ord")?,
+                turn_id: row.try_get("turn_id")?,
+                operation_ord: row.try_get("operation_ord")?,
+            })
+        })
+        .collect()
+}
+
+async fn load_current_source(
+    state: &RetrievalState,
+    pending: &PendingSourceRow,
+) -> Result<Option<EmbeddingSource>, RetrievalError> {
+    match pending.source_family {
+        SourceFamily::EventBlock => load_current_event_source(state, pending).await,
+        SourceFamily::OperationCall => load_current_operation_source(state, pending, false).await,
+        SourceFamily::OperationResult => load_current_operation_source(state, pending, true).await,
+    }
+}
+
+async fn load_current_event_source(
+    state: &RetrievalState,
+    pending: &PendingSourceRow,
+) -> Result<Option<EmbeddingSource>, RetrievalError> {
+    let Some(byte_offset) = pending.byte_offset else {
+        return Ok(None);
+    };
+    let Some(block_ord) = pending.block_ord else {
+        return Ok(None);
+    };
+    let row = sqlx::query(
+        "SELECT \
+            CASE \
+              WHEN e.speaker = 'assistant' AND b.kind = 'text' THEN 'assistant_text' \
+              WHEN e.speaker = 'user' AND b.kind = 'text' THEN 'user_prompt' \
+              WHEN e.speaker = 'summary' AND b.kind = 'text' THEN 'summary' \
+              WHEN b.kind = 'tool_result' AND COALESCE(b.is_error, FALSE) THEN 'tool_error' \
+              ELSE NULL \
+            END AS source_kind, \
+            ('event:' || e.session_uuid::TEXT || ':' || e.byte_offset::TEXT || ':' || b.ord::TEXT) AS source_key, \
+            e.session_uuid, e.byte_offset, b.ord AS block_ord, tt.turn_id, NULL::INT AS operation_ord, \
+            COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
+            b.text \
+           FROM event_blocks b \
+           JOIN events e ON e.session_uuid = b.session_uuid AND e.byte_offset = b.byte_offset \
+           JOIN claude_sessions cs ON cs.session_uuid = e.session_uuid \
+           LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
+           LEFT JOIN agent_session_metadata asm ON asm.session_uuid = cs.session_uuid \
+           LEFT JOIN LATERAL ( \
+              SELECT turn_id \
+                FROM timeline_turns tt \
+               WHERE tt.session_uuid = e.session_uuid \
+                 AND tt.start_timestamp <= e.timestamp \
+                 AND tt.end_timestamp >= e.timestamp \
+               ORDER BY tt.duration_ms ASC, tt.turn_id ASC \
+               LIMIT 1 \
+           ) tt ON TRUE \
+          WHERE e.session_uuid = $1 \
+            AND e.byte_offset = $2 \
+            AND b.ord = $3 \
+            AND b.text IS NOT NULL \
+            AND length(trim(b.text)) > 0 \
+            AND ( \
+                (e.speaker IN ('assistant', 'user', 'summary') AND b.kind = 'text') \
+                OR (b.kind = 'tool_result' AND COALESCE(b.is_error, FALSE)) \
+            )",
+    )
+    .bind(pending.session_uuid)
+    .bind(byte_offset)
+    .bind(block_ord)
+    .fetch_optional(&state.pool)
+    .await?;
+    row.map(|row| source_from_row(row, SourceFamily::EventBlock))
+        .transpose()
+        .map(Option::flatten)
+}
+
+async fn load_current_operation_source(
+    state: &RetrievalState,
+    pending: &PendingSourceRow,
+    result_source: bool,
+) -> Result<Option<EmbeddingSource>, RetrievalError> {
+    let Some(turn_id) = pending.turn_id else {
+        return Ok(None);
+    };
+    let Some(operation_ord) = pending.operation_ord else {
+        return Ok(None);
+    };
+    let sql = if result_source {
+        "SELECT \
+            CASE WHEN o.result_is_error OR o.is_error THEN 'tool_error' ELSE 'tool_result' END AS source_kind, \
+            ('operation:' || o.session_uuid::TEXT || ':' || o.turn_id::TEXT || ':' || o.operation_ord::TEXT || ':result') AS source_key, \
+            o.session_uuid, NULL::BIGINT AS byte_offset, NULL::INT AS block_ord, o.turn_id, o.operation_ord, \
+            COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
+            concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT) AS text \
+           FROM timeline_operations o \
+           JOIN claude_sessions cs ON cs.session_uuid = o.session_uuid \
+           LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
+           LEFT JOIN agent_session_metadata asm ON asm.session_uuid = cs.session_uuid \
+          WHERE o.session_uuid = $1 \
+            AND o.turn_id = $2 \
+            AND o.operation_ord = $3 \
+            AND (o.result_content IS NOT NULL OR o.result_payload IS NOT NULL OR o.result_is_error OR o.is_error) \
+            AND length(trim(concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT))) > 0"
+    } else {
+        "SELECT \
+            'tool_call' AS source_kind, \
+            ('operation:' || o.session_uuid::TEXT || ':' || o.turn_id::TEXT || ':' || o.operation_ord::TEXT || ':call') AS source_key, \
+            o.session_uuid, NULL::BIGINT AS byte_offset, NULL::INT AS block_ord, o.turn_id, o.operation_ord, \
+            COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
+            concat_ws(' ', o.name, o.raw_name, o.operation_type, o.operation_category, o.input::TEXT) AS text \
+           FROM timeline_operations o \
+           JOIN claude_sessions cs ON cs.session_uuid = o.session_uuid \
+           LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
+           LEFT JOIN agent_session_metadata asm ON asm.session_uuid = cs.session_uuid \
+          WHERE o.session_uuid = $1 \
+            AND o.turn_id = $2 \
+            AND o.operation_ord = $3 \
+            AND o.input IS NOT NULL \
+            AND length(trim(concat_ws(' ', o.name, o.raw_name, o.operation_type, o.operation_category, o.input::TEXT))) > 0"
+    };
+    let row = sqlx::query(sql)
+        .bind(pending.session_uuid)
+        .bind(turn_id)
+        .bind(operation_ord)
+        .fetch_optional(&state.pool)
+        .await?;
+    let family = if result_source {
+        SourceFamily::OperationResult
+    } else {
+        SourceFamily::OperationCall
+    };
+    row.map(|row| source_from_row(row, family))
+        .transpose()
+        .map(Option::flatten)
+}
+
+async fn mark_source_deleted(
+    state: &RetrievalState,
+    source_key: &str,
+) -> Result<(), RetrievalError> {
+    sqlx::query("DELETE FROM retrieval_embeddings WHERE source_key = $1")
+        .bind(source_key)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query(
+        "UPDATE retrieval_embedding_sources \
+            SET index_status = 'deleted', deleted_at = NOW(), updated_at = NOW() \
+          WHERE source_key = $1",
+    )
+    .bind(source_key)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
 }
 
 async fn upsert_embedding(
@@ -285,6 +1061,61 @@ async fn upsert_embedding(
         .execute(&state.pool)
         .await?;
     }
+    Ok(())
+}
+
+async fn mark_source_indexed(
+    state: &RetrievalState,
+    source: &EmbeddingSource,
+) -> Result<(), RetrievalError> {
+    sqlx::query(
+        "UPDATE retrieval_embedding_sources \
+            SET source_kind = $2, \
+                session_uuid = $3, \
+                byte_offset = $4, \
+                block_ord = $5, \
+                turn_id = $6, \
+                operation_ord = $7, \
+                repo_name = $8, \
+                content_hash = $9, \
+                index_status = 'indexed', \
+                index_error = NULL, \
+                indexed_at = NOW(), \
+                last_seen_at = NOW(), \
+                deleted_at = NULL, \
+                updated_at = NOW() \
+          WHERE source_key = $1",
+    )
+    .bind(&source.source_key)
+    .bind(source.source_kind.as_str())
+    .bind(source.session_uuid)
+    .bind(source.byte_offset)
+    .bind(source.block_ord)
+    .bind(source.turn_id)
+    .bind(source.operation_ord)
+    .bind(source.repo_name.as_deref())
+    .bind(&source.content_hash)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
+}
+
+async fn mark_source_failed(
+    state: &RetrievalState,
+    source_key: &str,
+    error: &str,
+) -> Result<(), RetrievalError> {
+    sqlx::query(
+        "UPDATE retrieval_embedding_sources \
+            SET index_status = 'failed', \
+                index_error = $2, \
+                updated_at = NOW() \
+          WHERE source_key = $1",
+    )
+    .bind(source_key)
+    .bind(error)
+    .execute(&state.pool)
+    .await?;
     Ok(())
 }
 

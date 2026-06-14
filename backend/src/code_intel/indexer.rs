@@ -19,6 +19,8 @@ use super::CodeIntelState;
 use crate::db::Pool;
 
 const INDEXER_VERSION: i32 = 2;
+const INDEX_BATCH_LIMIT: i64 = 128;
+const BACKGROUND_BUSY_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodeRootKind {
@@ -89,19 +91,87 @@ pub struct IndexStats {
     pub symbols_indexed: usize,
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct RefreshStats {
+    pub files_seen: usize,
+    pub files_marked_pending: usize,
+    pub files_deleted: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiscoveryMode {
+    DetectChanges,
+    ForcePending,
+}
+
 pub async fn run_background_indexer(state: Arc<CodeIntelState>, interval: Duration) {
     loop {
         let options = IndexOptions {
             trigger: IndexTrigger::Background,
             ..IndexOptions::default()
         };
-        if let Err(err) =
-            index_allowed_roots(&state.pool, &state.config.allowed_roots, &options).await
-        {
-            tracing::warn!(%err, "code-intel background index failed");
-        }
-        tokio::time::sleep(interval).await;
+        let delay = {
+            let _guard = state.index_lock.lock().await;
+            match index_pending_allowed_roots(&state.pool, &state.config.allowed_roots, &options)
+                .await
+            {
+                Ok(stats) if stats_has_indexing_work(&stats) => BACKGROUND_BUSY_DELAY,
+                Ok(_) => interval,
+                Err(err) => {
+                    tracing::warn!(%err, "code-intel background index failed");
+                    interval
+                }
+            }
+        };
+        tokio::time::sleep(delay).await;
     }
+}
+
+pub async fn run_startup_and_background_indexer(state: Arc<CodeIntelState>, interval: Duration) {
+    if let Err(err) = run_startup_indexer_once(state.clone()).await {
+        tracing::warn!(%err, "code-intel startup index failed");
+    }
+    run_background_indexer(state, interval).await;
+}
+
+pub async fn run_startup_indexer_once(state: Arc<CodeIntelState>) -> anyhow::Result<IndexStats> {
+    let options = IndexOptions {
+        trigger: IndexTrigger::Startup,
+        ..IndexOptions::default()
+    };
+    let _guard = state.index_lock.lock().await;
+    let stats = index_allowed_roots(&state.pool, &state.config.allowed_roots, &options).await?;
+    tracing::info!(
+        files_seen = stats.files_seen,
+        files_indexed = stats.files_indexed,
+        files_skipped_unchanged = stats.files_skipped_unchanged,
+        files_deleted = stats.files_deleted,
+        files_failed = stats.files_failed,
+        symbols_indexed = stats.symbols_indexed,
+        "code-intel startup index pass complete"
+    );
+    Ok(stats)
+}
+
+fn stats_has_indexing_work(stats: &IndexStats) -> bool {
+    stats.files_seen > 0
+        || stats.files_indexed > 0
+        || stats.files_skipped_unchanged > 0
+        || stats.files_failed > 0
+}
+
+pub async fn cancel_orphaned_running_jobs(pool: &Pool) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE code_index_jobs \
+            SET status = 'cancelled', \
+                finished_at = NOW(), \
+                updated_at = NOW(), \
+                error = COALESCE(error, 'service restarted before index job finished') \
+          WHERE status = 'running'",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 pub async fn index_allowed_roots(
@@ -112,29 +182,47 @@ pub async fn index_allowed_roots(
     let roots = discover_allowed_root_specs(allowed_roots)?;
     let mut total = IndexStats::default();
     for root in roots {
-        total += index_root(pool, &root, options).await?;
+        mark_root_dirty_inner(pool, &root, options, DiscoveryMode::DetectChanges).await?;
+        total += index_pending_root(pool, &root, options, INDEX_BATCH_LIMIT).await?;
     }
     Ok(total)
 }
 
-pub async fn index_root(
+pub async fn index_pending_allowed_roots(
+    pool: &Pool,
+    allowed_roots: &[PathBuf],
+    options: &IndexOptions,
+) -> anyhow::Result<IndexStats> {
+    let roots = discover_allowed_root_specs(allowed_roots)?;
+    let mut total = IndexStats::default();
+    for root in roots {
+        total += index_pending_root(pool, &root, options, INDEX_BATCH_LIMIT).await?;
+    }
+    Ok(total)
+}
+
+pub async fn mark_root_dirty(
     pool: &Pool,
     root: &CodeRootSpec,
     options: &IndexOptions,
-) -> anyhow::Result<IndexStats> {
+) -> anyhow::Result<RefreshStats> {
     let root_id = upsert_root(pool, root).await?;
-    let job_id = start_job(pool, root_id, options.trigger, None).await?;
-    let result = index_root_inner(pool, root_id, root, options, IndexScope::Root).await;
-    finish_job(pool, job_id, &result).await?;
-    result
+    mark_dirty_inner(
+        pool,
+        root_id,
+        root,
+        options,
+        IndexScope::Root,
+        DiscoveryMode::ForcePending,
+    )
+    .await
 }
-
-pub async fn index_path(
+pub async fn mark_path_dirty(
     pool: &Pool,
     root: &CodeRootSpec,
     absolute_path: &Path,
     options: &IndexOptions,
-) -> anyhow::Result<IndexStats> {
+) -> anyhow::Result<RefreshStats> {
     if !absolute_path.starts_with(&root.path) {
         anyhow::bail!(
             "{} is outside code root {}",
@@ -143,20 +231,15 @@ pub async fn index_path(
         );
     }
     let root_id = upsert_root(pool, root).await?;
-    let job_path = relative_path(&root.path, absolute_path)
-        .ok()
-        .filter(|path| !path.is_empty());
-    let job_id = start_job(pool, root_id, options.trigger, job_path.as_deref()).await?;
-    let result = index_root_inner(
+    mark_dirty_inner(
         pool,
         root_id,
         root,
         options,
         IndexScope::Path(absolute_path.to_path_buf()),
+        DiscoveryMode::ForcePending,
     )
-    .await;
-    finish_job(pool, job_id, &result).await?;
-    result
+    .await
 }
 
 enum IndexScope {
@@ -164,32 +247,76 @@ enum IndexScope {
     Path(PathBuf),
 }
 
-async fn index_root_inner(
+async fn mark_root_dirty_inner(
+    pool: &Pool,
+    root: &CodeRootSpec,
+    options: &IndexOptions,
+    mode: DiscoveryMode,
+) -> anyhow::Result<RefreshStats> {
+    let root_id = upsert_root(pool, root).await?;
+    mark_dirty_inner(pool, root_id, root, options, IndexScope::Root, mode).await
+}
+
+async fn mark_dirty_inner(
     pool: &Pool,
     root_id: Uuid,
     root: &CodeRootSpec,
     options: &IndexOptions,
     scope: IndexScope,
-) -> anyhow::Result<IndexStats> {
+    mode: DiscoveryMode,
+) -> anyhow::Result<RefreshStats> {
     let (candidates, deletion_scope) = discover_scope_candidates(root, &options.walk, scope)?;
-    let mut parser = SourceParser::default();
-    let mut stats = IndexStats {
+    let mut stats = RefreshStats {
         files_seen: candidates.len(),
-        ..IndexStats::default()
+        ..RefreshStats::default()
     };
     let mut seen_paths = HashSet::new();
     for candidate in candidates {
         let relative_path = relative_path(&root.path, &candidate.path)?;
         seen_paths.insert(relative_path.clone());
-        match index_file(
-            pool,
-            root_id,
-            root,
-            &candidate.path,
-            &relative_path,
-            &mut parser,
-        )
-        .await
+        if mark_candidate_pending(pool, root_id, &relative_path, &candidate, mode).await? {
+            stats.files_marked_pending += 1;
+        }
+    }
+    stats.files_deleted = mark_deleted_files(pool, root_id, &seen_paths, deletion_scope).await?;
+    sqlx::query("UPDATE code_roots SET last_scan_at = NOW(), updated_at = NOW() WHERE id = $1")
+        .bind(root_id)
+        .execute(pool)
+        .await?;
+    Ok(stats)
+}
+
+pub async fn index_pending_root(
+    pool: &Pool,
+    root: &CodeRootSpec,
+    options: &IndexOptions,
+    limit: i64,
+) -> anyhow::Result<IndexStats> {
+    let root_id = upsert_root(pool, root).await?;
+    let pending = load_pending_files(pool, root_id, limit).await?;
+    if pending.is_empty() {
+        return Ok(IndexStats::default());
+    }
+    let job_id = start_job(pool, root_id, options.trigger, None).await?;
+    let result = index_pending_files(pool, root_id, root, &options.walk, pending).await;
+    finish_job(pool, job_id, &result).await?;
+    result
+}
+
+async fn index_pending_files(
+    pool: &Pool,
+    root_id: Uuid,
+    root: &CodeRootSpec,
+    walk: &SourceWalkOptions,
+    pending: Vec<PendingFile>,
+) -> anyhow::Result<IndexStats> {
+    let mut parser = SourceParser::default();
+    let mut stats = IndexStats {
+        files_seen: pending.len(),
+        ..IndexStats::default()
+    };
+    for file in pending {
+        match index_pending_file(pool, root_id, root, walk, file.id, &file.path, &mut parser).await
         {
             Ok(FileIndexOutcome::Indexed { symbols }) => {
                 stats.files_indexed += 1;
@@ -199,17 +326,12 @@ async fn index_root_inner(
                 stats.files_skipped_unchanged += 1;
             }
             Err(err) => {
-                tracing::warn!(path = %candidate.path.display(), %err, "code-intel file index failed");
+                tracing::warn!(path = %file.path, %err, "code-intel file index failed");
                 stats.files_failed += 1;
-                mark_file_failed(pool, root_id, &relative_path, err.to_string()).await?;
+                mark_file_failed(pool, root_id, &file.path, err.to_string()).await?;
             }
         }
     }
-    stats.files_deleted = mark_deleted_files(pool, root_id, &seen_paths, deletion_scope).await?;
-    sqlx::query("UPDATE code_roots SET last_scan_at = NOW(), updated_at = NOW() WHERE id = $1")
-        .bind(root_id)
-        .execute(pool)
-        .await?;
     Ok(stats)
 }
 
@@ -260,27 +382,62 @@ enum FileIndexOutcome {
     SkippedUnchanged,
 }
 
-async fn index_file(
+struct PendingFile {
+    id: Uuid,
+    path: String,
+}
+
+async fn load_pending_files(
+    pool: &Pool,
+    root_id: Uuid,
+    limit: i64,
+) -> anyhow::Result<Vec<PendingFile>> {
+    let rows = sqlx::query(
+        "SELECT id, path \
+           FROM code_files \
+          WHERE root_id = $1 \
+            AND deleted_at IS NULL \
+            AND parse_status = 'pending' \
+          ORDER BY updated_at ASC, path ASC \
+          LIMIT $2",
+    )
+    .bind(root_id)
+    .bind(limit.max(1))
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| PendingFile {
+            id: row.get("id"),
+            path: row.get("path"),
+        })
+        .collect())
+}
+
+async fn index_pending_file(
     pool: &Pool,
     root_id: Uuid,
     root: &CodeRootSpec,
-    absolute_path: &Path,
+    walk: &SourceWalkOptions,
+    file_id: Uuid,
     relative_path: &str,
     parser: &mut SourceParser,
 ) -> anyhow::Result<FileIndexOutcome> {
-    let source = fs::read_to_string(absolute_path)
-        .with_context(|| format!("read {}", absolute_path.display()))?;
-    let content_hash = hash_bytes(source.as_bytes());
-    if existing_hash(pool, root_id, relative_path)
-        .await?
-        .as_deref()
-        == Some(content_hash.as_str())
-    {
+    let absolute_path = root.path.join(relative_path);
+    if !absolute_path.is_file() {
+        mark_file_deleted(pool, file_id).await?;
         return Ok(FileIndexOutcome::SkippedUnchanged);
     }
-    let language = super::parser::language_required(absolute_path)?;
-    let metadata =
-        fs::metadata(absolute_path).with_context(|| format!("stat {}", absolute_path.display()))?;
+    let Some(candidate) = source_file_candidate(&absolute_path, walk)? else {
+        mark_file_unsupported(pool, file_id).await?;
+        return Ok(FileIndexOutcome::SkippedUnchanged);
+    };
+    let source = fs::read_to_string(&absolute_path)
+        .with_context(|| format!("read {}", absolute_path.display()))?;
+    let content_hash = hash_bytes(source.as_bytes());
+    let language = candidate.language;
+    let metadata = fs::metadata(&absolute_path)
+        .with_context(|| format!("stat {}", absolute_path.display()))?;
     let parsed = parser.parse(language, &source)?;
     let symbols = extract_symbols(&parsed, &source, &root.path, relative_path);
     let references = extract_references(&parsed, &source, &symbols);
@@ -430,6 +587,83 @@ async fn upsert_root(pool: &Pool, root: &CodeRootSpec) -> anyhow::Result<Uuid> {
     Ok(row.get("id"))
 }
 
+async fn mark_candidate_pending(
+    pool: &Pool,
+    root_id: Uuid,
+    relative_path: &str,
+    candidate: &SourceFileCandidate,
+    mode: DiscoveryMode,
+) -> anyhow::Result<bool> {
+    let metadata = fs::metadata(&candidate.path)
+        .with_context(|| format!("stat {}", candidate.path.display()))?;
+    let mtime = metadata.modified().ok().map(DateTime::<Utc>::from);
+    let size_bytes = candidate.size_bytes as i64;
+    let language = candidate.language.as_str();
+    let row = match mode {
+        DiscoveryMode::ForcePending => {
+            sqlx::query(
+                "INSERT INTO code_files \
+                 (root_id, path, language, size_bytes, mtime, parse_status, \
+                  parse_error_count, metadata, deleted_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, 'pending', 0, \
+                         jsonb_build_object('indexer_version', $6::int), NULL, NOW()) \
+                 ON CONFLICT (root_id, path) DO UPDATE SET \
+                   language = EXCLUDED.language, \
+                   size_bytes = EXCLUDED.size_bytes, \
+                   mtime = EXCLUDED.mtime, \
+                   parse_status = 'pending', \
+                   parse_error_count = 0, \
+                   metadata = code_files.metadata || jsonb_build_object('indexer_version', $6::int), \
+                   deleted_at = NULL, \
+                   updated_at = NOW() \
+                 RETURNING id",
+            )
+            .bind(root_id)
+            .bind(relative_path)
+            .bind(language)
+            .bind(size_bytes)
+            .bind(mtime)
+            .bind(INDEXER_VERSION)
+            .fetch_optional(pool)
+            .await?
+        }
+        DiscoveryMode::DetectChanges => {
+            sqlx::query(
+                "INSERT INTO code_files \
+                 (root_id, path, language, size_bytes, mtime, parse_status, \
+                  parse_error_count, metadata, deleted_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, 'pending', 0, \
+                         jsonb_build_object('indexer_version', $6::int), NULL, NOW()) \
+                 ON CONFLICT (root_id, path) DO UPDATE SET \
+                   language = EXCLUDED.language, \
+                   size_bytes = EXCLUDED.size_bytes, \
+                   mtime = EXCLUDED.mtime, \
+                   parse_status = 'pending', \
+                   parse_error_count = 0, \
+                   metadata = code_files.metadata || jsonb_build_object('indexer_version', $6::int), \
+                   deleted_at = NULL, \
+                   updated_at = NOW() \
+                 WHERE code_files.deleted_at IS NOT NULL \
+                    OR code_files.parse_status = 'unsupported' \
+                    OR code_files.language IS DISTINCT FROM EXCLUDED.language \
+                    OR code_files.size_bytes IS DISTINCT FROM EXCLUDED.size_bytes \
+                    OR code_files.mtime IS DISTINCT FROM EXCLUDED.mtime \
+                    OR code_files.metadata->>'indexer_version' IS DISTINCT FROM $6::text \
+                 RETURNING id",
+            )
+            .bind(root_id)
+            .bind(relative_path)
+            .bind(language)
+            .bind(size_bytes)
+            .bind(mtime)
+            .bind(INDEXER_VERSION)
+            .fetch_optional(pool)
+            .await?
+        }
+    };
+    Ok(row.is_some())
+}
+
 async fn start_job(
     pool: &Pool,
     root_id: Uuid,
@@ -481,24 +715,6 @@ async fn finish_job(
         }
     }
     Ok(())
-}
-
-async fn existing_hash(
-    pool: &Pool,
-    root_id: Uuid,
-    relative_path: &str,
-) -> anyhow::Result<Option<String>> {
-    let row = sqlx::query(
-        "SELECT content_hash FROM code_files \
-         WHERE root_id = $1 AND path = $2 AND deleted_at IS NULL \
-           AND metadata->>'indexer_version' = $3",
-    )
-    .bind(root_id)
-    .bind(relative_path)
-    .bind(INDEXER_VERSION.to_string())
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.and_then(|row| row.get("content_hash")))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -557,6 +773,17 @@ async fn replace_symbols(
     symbols: &[ExtractedSymbol],
     references: &[ExtractedReference],
 ) -> anyhow::Result<()> {
+    clear_file_facts(pool, file_id).await?;
+    for symbol in symbols {
+        insert_symbol(pool, root_id, file_id, symbol).await?;
+    }
+    for reference in references {
+        insert_reference(pool, root_id, file_id, reference).await?;
+    }
+    Ok(())
+}
+
+async fn clear_file_facts(pool: &Pool, file_id: Uuid) -> anyhow::Result<()> {
     sqlx::query("DELETE FROM code_imports WHERE file_id = $1")
         .bind(file_id)
         .execute(pool)
@@ -569,12 +796,6 @@ async fn replace_symbols(
         .bind(file_id)
         .execute(pool)
         .await?;
-    for symbol in symbols {
-        insert_symbol(pool, root_id, file_id, symbol).await?;
-    }
-    for reference in references {
-        insert_reference(pool, root_id, file_id, reference).await?;
-    }
     Ok(())
 }
 
@@ -653,6 +874,15 @@ async fn mark_file_failed(
     relative_path: &str,
     error: String,
 ) -> anyhow::Result<()> {
+    if let Some(file_id) =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM code_files WHERE root_id = $1 AND path = $2")
+            .bind(root_id)
+            .bind(relative_path)
+            .fetch_optional(pool)
+            .await?
+    {
+        clear_file_facts(pool, file_id).await?;
+    }
     sqlx::query(
         "INSERT INTO code_files \
          (root_id, path, parse_status, parse_error_count, metadata, indexed_at, updated_at) \
@@ -670,6 +900,35 @@ async fn mark_file_failed(
     .bind(relative_path)
     .bind(error)
     .bind(INDEXER_VERSION)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn mark_file_deleted(pool: &Pool, file_id: Uuid) -> anyhow::Result<()> {
+    clear_file_facts(pool, file_id).await?;
+    sqlx::query(
+        "UPDATE code_files SET parse_status = 'deleted', deleted_at = NOW(), updated_at = NOW() \
+         WHERE id = $1",
+    )
+    .bind(file_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn mark_file_unsupported(pool: &Pool, file_id: Uuid) -> anyhow::Result<()> {
+    clear_file_facts(pool, file_id).await?;
+    sqlx::query(
+        "UPDATE code_files SET \
+           parse_status = 'unsupported', \
+           parse_error_count = 0, \
+           indexed_at = NOW(), \
+           deleted_at = NULL, \
+           updated_at = NOW() \
+         WHERE id = $1",
+    )
+    .bind(file_id)
     .execute(pool)
     .await?;
     Ok(())
@@ -704,25 +963,7 @@ async fn mark_deleted_files(
         if seen_paths.contains(&path) {
             continue;
         }
-        sqlx::query("DELETE FROM code_imports WHERE file_id = $1")
-            .bind(file_id)
-            .execute(pool)
-            .await?;
-        sqlx::query("DELETE FROM code_references WHERE file_id = $1")
-            .bind(file_id)
-            .execute(pool)
-            .await?;
-        sqlx::query("DELETE FROM code_symbols WHERE file_id = $1")
-            .bind(file_id)
-            .execute(pool)
-            .await?;
-        sqlx::query(
-            "UPDATE code_files SET parse_status = 'deleted', deleted_at = NOW(), updated_at = NOW() \
-             WHERE id = $1",
-        )
-        .bind(file_id)
-        .execute(pool)
-        .await?;
+        mark_file_deleted(pool, file_id).await?;
         deleted += 1;
     }
     Ok(deleted)

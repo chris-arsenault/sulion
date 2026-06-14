@@ -189,12 +189,14 @@ describe("api client", () => {
     stubFetch(async (url, init) => {
       expect(url).toBe("/api/admin/retrieval/reindex");
       expect(init?.method).toBe("POST");
-      expect(init?.body).toBe(JSON.stringify({ repo: "sulion", limit: 25 }));
+      expect(init?.body).toBe(JSON.stringify({ repo: "sulion" }));
       return jsonResponse({
-        embedded: 9,
-        skipped: 1,
-        batches: 2,
-        complete: true,
+        generation: 4,
+        backfills_started: 3,
+        sources_seen: 9,
+        sources_marked_pending: 7,
+        sources_deleted: 1,
+        pending_sources: 7,
         vector: {
           extension_installed: true,
           column_exists: true,
@@ -204,9 +206,11 @@ describe("api client", () => {
         embedding_dimensions: 768,
       });
     });
-    const resp = await triggerRetrievalBackfill({ repo: "sulion", limit: 25 });
-    expect(resp.embedded).toBe(9);
-    expect(resp.complete).toBe(true);
+    const resp = await triggerRetrievalBackfill({ repo: "sulion" });
+    expect(resp.generation).toBe(4);
+    expect(resp.backfills_started).toBe(3);
+    expect(resp.sources_marked_pending).toBe(7);
+    expect(resp.pending_sources).toBe(7);
     expect(resp.vector.column_exists).toBe(true);
   });
 

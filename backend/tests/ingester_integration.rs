@@ -21,7 +21,8 @@ async fn fresh_pool() -> db::Pool {
     let url = test_db_url().expect("SULION_TEST_DB");
     let pool = db::connect(&url).await.expect("connect");
     sqlx::query(
-        "TRUNCATE events, ingester_state, claude_sessions, pty_sessions, repos, \
+        "TRUNCATE retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, \
+         events, ingester_state, claude_sessions, pty_sessions, repos, \
          workspaces, workspace_dirty_paths RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
@@ -211,6 +212,21 @@ async fn ingests_a_codex_rollout_event_from_codex_sessions_dir() {
     .unwrap();
     assert_eq!(block.0, "text");
     assert_eq!(block.1, "hello from codex");
+
+    let source: (String, String, String) = sqlx::query_as(
+        "SELECT source_family, source_kind, index_status \
+           FROM retrieval_embedding_sources \
+          WHERE session_uuid = $1 \
+          ORDER BY source_key \
+          LIMIT 1",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(source.0, "event_block");
+    assert_eq!(source.1, "assistant_text");
+    assert_eq!(source.2, "pending");
 }
 
 #[tokio::test]
@@ -446,6 +462,33 @@ async fn claude_edit_tool_result_payload_is_persisted_canonically() {
     assert_eq!(result_payload["path"], "src/lib.rs");
     assert_eq!(result_payload["old_text"], "fn old() {}\n");
     assert_eq!(result_payload["new_text"], "fn new() {}\n");
+
+    let sources: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT source_family, source_kind, index_status \
+           FROM retrieval_embedding_sources \
+          WHERE session_uuid = $1 \
+            AND source_family LIKE 'operation_%' \
+          ORDER BY source_family, source_kind",
+    )
+    .bind(fx.session_uuid)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        sources,
+        vec![
+            (
+                "operation_call".to_string(),
+                "tool_call".to_string(),
+                "pending".to_string(),
+            ),
+            (
+                "operation_result".to_string(),
+                "tool_result".to_string(),
+                "pending".to_string(),
+            ),
+        ]
+    );
 }
 
 #[tokio::test]

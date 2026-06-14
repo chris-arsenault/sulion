@@ -11,6 +11,8 @@ TEST_TARGETS=(
   correlate_integration
   rest_integration
   retrieval_integration
+  code_intel_integration
+  device_integration
   workspace_integration
   pty_integration
   ws_integration

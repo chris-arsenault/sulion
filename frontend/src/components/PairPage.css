@@ -1,0 +1,98 @@
+.pair-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background:
+    radial-gradient(circle at top left, rgba(90, 166, 255, 0.18), transparent 30%),
+    linear-gradient(180deg, #0b0d12 0%, #11161d 100%);
+  color: var(--text);
+}
+
+.pair-card {
+  width: min(440px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 24px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-2);
+  background: color-mix(in oklab, var(--canvas-2) 94%, black);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+}
+
+.pair-card__eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-hi);
+}
+
+.pair-card__title {
+  margin: 0;
+  font-size: var(--t-splash);
+  font-weight: var(--w-600);
+}
+
+.pair-card__copy {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: var(--t-body);
+  line-height: var(--lh-prose);
+}
+
+.pair-card__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--t-ui);
+}
+
+.pair-card__field span {
+  color: var(--text-lo);
+}
+
+.pair-card__code {
+  background: var(--canvas-1);
+  border: 1px solid var(--canvas-3);
+  color: var(--text);
+  border-radius: var(--r-1);
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: var(--t-splash);
+  letter-spacing: 0.18em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.pair-card__code:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.pair-card__submit {
+  margin-top: 4px;
+  background: var(--accent-lo);
+  color: var(--accent-hi);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-1);
+  padding: 10px 12px;
+  font: inherit;
+  font-weight: var(--w-600);
+  cursor: pointer;
+}
+
+.pair-card__submit:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.pair-card__error {
+  background: var(--crit-bg);
+  color: var(--crit-fg);
+  border: 1px solid var(--crit-mark);
+  border-radius: var(--r-1);
+  padding: 10px 12px;
+  font-size: var(--t-ui);
+}

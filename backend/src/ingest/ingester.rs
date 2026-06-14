@@ -22,11 +22,13 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use ring::digest;
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::db::Pool;
 
+use super::canonical::{BlockKind, Speaker};
 use super::file_scan::{dirty_transcript_files, DirtyTranscriptFile};
 
 /// Heartbeat interval for the "I'm alive, here's what I've done" log.
@@ -667,9 +669,15 @@ async fn insert_event(
 
     let inserted = result.rows_affected() > 0;
     if inserted && !parsed.blocks.is_empty() {
-        insert_blocks(&mut tx, session_uuid, byte_offset, &parsed.blocks)
-            .await
-            .map_err(InsertError::Db)?;
+        insert_blocks(
+            &mut tx,
+            session_uuid,
+            byte_offset,
+            parsed.speaker,
+            &parsed.blocks,
+        )
+        .await
+        .map_err(InsertError::Db)?;
     }
 
     tx.commit().await.map_err(InsertError::Db)?;
@@ -899,6 +907,7 @@ async fn insert_blocks(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     session_uuid: Uuid,
     byte_offset: i64,
+    speaker: Speaker,
     blocks: &[super::canonical::Block],
 ) -> sqlx::Result<()> {
     for b in blocks {
@@ -932,8 +941,99 @@ async fn insert_blocks(
         .bind(b.raw.as_ref())
         .execute(&mut **tx)
         .await?;
+        enqueue_event_embedding_source(tx, session_uuid, byte_offset, speaker, b).await?;
     }
     Ok(())
+}
+
+async fn enqueue_event_embedding_source(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    session_uuid: Uuid,
+    byte_offset: i64,
+    speaker: Speaker,
+    block: &super::canonical::Block,
+) -> sqlx::Result<()> {
+    let source_key = format!("event:{session_uuid}:{byte_offset}:{}", block.ord);
+    let Some((source_kind, text)) = event_embedding_source(speaker, block) else {
+        mark_embedding_source_deleted(tx, &source_key).await?;
+        return Ok(());
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        mark_embedding_source_deleted(tx, &source_key).await?;
+        return Ok(());
+    }
+    sqlx::query(
+        "INSERT INTO retrieval_embedding_sources \
+            (source_family, source_kind, source_key, session_uuid, byte_offset, block_ord, \
+             content_hash, index_status, index_error, last_seen_at, dirty_at, deleted_at, updated_at) \
+         VALUES ('event_block', $1, $2, $3, $4, $5, $6, 'pending', NULL, NOW(), NOW(), NULL, NOW()) \
+         ON CONFLICT (source_key) DO UPDATE SET \
+             source_family = 'event_block', \
+             source_kind = EXCLUDED.source_kind, \
+             session_uuid = EXCLUDED.session_uuid, \
+             byte_offset = EXCLUDED.byte_offset, \
+             block_ord = EXCLUDED.block_ord, \
+             turn_id = NULL, \
+             operation_ord = NULL, \
+             content_hash = EXCLUDED.content_hash, \
+             index_status = 'pending', \
+             index_error = NULL, \
+             dirty_at = NOW(), \
+             deleted_at = NULL, \
+             updated_at = NOW()",
+    )
+    .bind(source_kind)
+    .bind(&source_key)
+    .bind(session_uuid)
+    .bind(byte_offset)
+    .bind(block.ord)
+    .bind(hash_text(text))
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+fn event_embedding_source(
+    speaker: Speaker,
+    block: &super::canonical::Block,
+) -> Option<(&'static str, &str)> {
+    match (speaker, block.kind) {
+        (Speaker::Assistant, BlockKind::Text) => Some(("assistant_text", block.text.as_deref()?)),
+        (Speaker::User, BlockKind::Text) => Some(("user_prompt", block.text.as_deref()?)),
+        (Speaker::Summary, BlockKind::Text) => Some(("summary", block.text.as_deref()?)),
+        (_, BlockKind::ToolResult) if block.is_error.unwrap_or(false) => {
+            Some(("tool_error", block.text.as_deref()?))
+        }
+        _ => None,
+    }
+}
+
+async fn mark_embedding_source_deleted(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    source_key: &str,
+) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM retrieval_embeddings WHERE source_key = $1")
+        .bind(source_key)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query(
+        "UPDATE retrieval_embedding_sources \
+            SET index_status = 'deleted', deleted_at = NOW(), updated_at = NOW() \
+          WHERE source_key = $1",
+    )
+    .bind(source_key)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+fn hash_text(text: &str) -> String {
+    let hash = digest::digest(&digest::SHA256, text.as_bytes());
+    hash.as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 async fn rewrite_canonical_event(
@@ -962,7 +1062,14 @@ async fn rewrite_canonical_event(
     .bind(parsed.search_text())
     .execute(&mut *tx)
     .await?;
-    insert_blocks(&mut tx, session_uuid, byte_offset, &parsed.blocks).await?;
+    insert_blocks(
+        &mut tx,
+        session_uuid,
+        byte_offset,
+        parsed.speaker,
+        &parsed.blocks,
+    )
+    .await?;
     tx.commit().await?;
     Ok(())
 }

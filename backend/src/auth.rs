@@ -124,6 +124,21 @@ pub struct AuthenticatedUser {
     pub token_use: String,
 }
 
+impl AuthenticatedUser {
+    /// Synthetic principal used when JWT auth is disabled (local dev, most
+    /// unit/integration tests). Handlers that record "who did this" — like
+    /// device-pairing approval — get a stable identity instead of failing to
+    /// extract one.
+    pub fn dev() -> Self {
+        Self {
+            sub: "dev".to_string(),
+            username: Some("dev".to_string()),
+            email: None,
+            token_use: "dev".to_string(),
+        }
+    }
+}
+
 struct JwksCache {
     loaded_at: Instant,
     keys: HashMap<String, DecodingKey>,
@@ -166,6 +181,9 @@ pub async fn require_http_auth(
     next: Next,
 ) -> Response {
     let Some(auth_state) = state.auth.clone() else {
+        // Auth disabled: still surface a principal so handlers that read the
+        // authenticated user (e.g. device-pairing approval) work in dev/tests.
+        req.extensions_mut().insert(AuthenticatedUser::dev());
         return next.run(req).await;
     };
 

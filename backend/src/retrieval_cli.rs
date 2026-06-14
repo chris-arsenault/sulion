@@ -49,6 +49,16 @@ pub async fn run(args: &[OsString]) -> anyhow::Result<i32> {
         "file-history" => file_history(&client, &env, &args[1..]).await,
         "turn" => turn(&client, &env, &args[1..]).await,
         "reindex" => reindex(&client, &env, &args[1..]).await,
+        "index-status" => {
+            get_json(
+                &client,
+                &env,
+                "/v1/index/status",
+                &[],
+                wants_json(&args[1..]),
+            )
+            .await
+        }
         "-h" | "--help" | "help" => {
             print_usage();
             Ok(0)
@@ -233,9 +243,6 @@ async fn reindex(
             }
             "agent_session_uuid" => {
                 body.insert("agent_session_uuid".to_string(), json!(value));
-            }
-            "limit" => {
-                body.insert("limit".to_string(), json!(value.parse::<i64>()?));
             }
             _ => {}
         }
@@ -465,7 +472,8 @@ fn print_usage() {
   sulion retrieve turn <agent_session_uuid> <turn_id>
   sulion retrieve sessions [--repo repo]
   sulion retrieve facets [--repo repo]
-  sulion retrieve reindex [--repo repo] [--limit n]
+  sulion retrieve index-status
+  sulion retrieve reindex [--repo repo]
 
 options: --json --scope repo|session|all --session uuid --tool-category category --tool-name name --file path --errors-only"
     );

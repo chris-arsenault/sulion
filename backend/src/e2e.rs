@@ -156,7 +156,8 @@ pub fn mock_terminal_script_path(repos_root: &Path) -> PathBuf {
 
 async fn reset_database(pool: &db::Pool) -> anyhow::Result<()> {
     sqlx::query(
-        "TRUNCATE events, event_blocks, timeline_turns, ingester_state, \
+        "TRUNCATE retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, \
+         events, event_blocks, timeline_turns, ingester_state, \
          claude_sessions, pty_sessions, repos RESTART IDENTITY CASCADE",
     )
     .execute(pool)

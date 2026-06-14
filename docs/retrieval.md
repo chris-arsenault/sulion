@@ -16,7 +16,8 @@ sulion-retrieve search "what did we decide about retrieval" --limit 5
 sulion-retrieve search "exec_command" --tools --tool-category utility
 sulion-retrieve file-history backend/src/retrieval/search.rs
 sulion-retrieve turn <agent-session-uuid> <turn-id>
-sulion-retrieve reindex --repo sulion --limit 500
+sulion-retrieve reindex --repo sulion
+sulion-retrieve index-status
 ```
 
 The CLI adds auth and context headers from the PTY environment:
@@ -75,24 +76,34 @@ Results include:
 ```json
 {
   "repo": "sulion",
-  "agent_session_uuid": null,
-  "limit": 500
+  "agent_session_uuid": null
 }
 ```
 
-The service embeds assistant/user/summary text and opt-in tool call/result
-sources through the local embedding service at
+This starts durable cursor backfills for matching assistant/user/summary text
+and tool call/result sources. It does not scan transcripts or call the
+embedding service in the request path. The background retrieval indexer advances
+those backfills in keyset batches, marks changed or missing source keys pending,
+and drains pending sources through the local embedding service at
 `SULION_RETRIEVAL_EMBEDDING_URL`, defaulting to
 `http://192.168.66.3:5361`.
+
+On startup, if the semantic source-state tables are empty, the retrieval service
+automatically schedules the initial repo-wide cursor backfills. The worker runs
+continuously while backfills or pending sources exist, then falls back to the
+idle interval configured by `SULION_RETRIEVAL_INDEX_SECONDS` (default 300s).
+
+`GET /v1/index/status` reports pending, indexed, failed, and deleted semantic
+source counts, running/failed backfill counts, cumulative backfill rows seen,
+and the embedding count for the active model.
 
 The current local model is `nomic-ai/nomic-embed-text-v1.5` with 768 dimensions.
 When `pgvector` is installed in the `sulion` database, the retrieval service
 creates `embedding_vector vector(768)` and a non-blocking HNSW index. Without
 pgvector, semantic search exact-scans the stored `REAL[]` vectors.
 
-The browser UI exposes the same backfill path from the sidebar admin controls.
+The browser UI exposes the same backfill scheduling path from the sidebar admin controls.
 That action calls the authenticated backend endpoint
-`POST /api/admin/retrieval/reindex`; the backend loops over retrieval-service
-batches until no pending sources remain or the requested batch cap is reached.
-The backend proxies with `SULION_RETRIEVAL_TOKEN`, so the static retrieval token
-is never sent to the browser.
+`POST /api/admin/retrieval/reindex`; the backend proxies the scheduling
+request once with `SULION_RETRIEVAL_TOKEN`, so the static retrieval token is
+never sent to the browser.
