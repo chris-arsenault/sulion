@@ -136,7 +136,6 @@ async fn lexical_search(
                   WHEN e.speaker = 'assistant' AND b.kind = 'text' THEN 'assistant_text' \
                   WHEN e.speaker = 'user' AND b.kind = 'text' THEN 'user_prompt' \
                   WHEN e.speaker = 'summary' AND b.kind = 'text' THEN 'summary' \
-                  WHEN b.kind = 'tool_result' AND COALESCE(b.is_error, FALSE) THEN 'tool_error' \
                   ELSE NULL \
                 END AS source_kind, \
                 e.session_uuid, e.byte_offset, b.ord AS block_ord, e.timestamp, \
@@ -162,14 +161,9 @@ async fn lexical_search(
                  ORDER BY tt.duration_ms ASC, tt.turn_id ASC \
                  LIMIT 1 \
              ) tt ON TRUE \
-             WHERE b.text IS NOT NULL \
-               AND ( \
-                   b.text ILIKE '%' || $1 || '%' \
-                   OR CASE WHEN octet_length(b.text) <= 1000000 \
-                           THEN to_tsvector('simple', b.text) @@ plainto_tsquery('simple', $1) \
-                           ELSE FALSE \
-                      END \
-               ) \
+             WHERE b.kind = 'text' \
+               AND b.text IS NOT NULL \
+               AND b.text ILIKE '%' || $1 || '%' \
                AND ($2::UUID IS NULL OR e.session_uuid = $2) \
                AND ($3::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $3) \
                AND ($4::TEXT IS NULL OR cs.agent = $4) \
@@ -295,13 +289,7 @@ async fn lexical_tool_search(
                  END)::REAL AS lexical_score \
                FROM tool_sources \
               WHERE length(trim(text)) > 0 \
-                AND ( \
-                    text ILIKE '%' || $1 || '%' \
-                    OR CASE WHEN octet_length(text) <= 1000000 \
-                            THEN to_tsvector('simple', text) @@ plainto_tsquery('simple', $1) \
-                            ELSE FALSE \
-                       END \
-                ) \
+                AND text ILIKE '%' || $1 || '%' \
                 AND source_kind = ANY($2) \
                 AND ($3::UUID IS NULL OR session_uuid = $3) \
                 AND ($4::TEXT IS NULL OR COALESCE(pty_repo, CASE WHEN cwd LIKE '/home/dev/repos/%' THEN split_part(substr(cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $4) \
