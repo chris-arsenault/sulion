@@ -74,6 +74,7 @@ struct StartPairingResponse {
 
 async fn start_pairing(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(body): Json<StartPairingRequest>,
 ) -> ApiResult<Json<StartPairingResponse>> {
     let client = body
@@ -102,7 +103,7 @@ async fn start_pairing(
 
         match res {
             Ok(_) => {
-                let base = public_base_url();
+                let base = public_base_url(&headers);
                 let verification_uri = format!("{base}/pair");
                 let verification_uri_complete = format!("{base}/pair?code={user_code}");
                 return Ok(Json(StartPairingResponse {
@@ -378,12 +379,55 @@ fn generate_user_code() -> String {
     )
 }
 
-fn public_base_url() -> String {
-    std::env::var("SULION_PUBLIC_URL")
-        .ok()
-        .map(|v| v.trim().trim_end_matches('/').to_string())
+/// Public origin the browser-facing `/pair` link should point at. The pairing
+/// request reaches us through nginx, which forwards the real `Host`, so we can
+/// derive it instead of hard-coding a host. Precedence: explicit
+/// `SULION_PUBLIC_URL` override → request headers (`X-Forwarded-Host`/`Host`,
+/// `X-Forwarded-Proto` or https for a non-local host) → localhost only as a
+/// last resort when there is no Host at all (a raw client, never a browser).
+fn public_base_url(headers: &HeaderMap) -> String {
+    derive_base_url(headers, std::env::var("SULION_PUBLIC_URL").ok().as_deref())
+}
+
+fn derive_base_url(headers: &HeaderMap, env_override: Option<&str>) -> String {
+    if let Some(base) = env_override
+        .map(|v| v.trim().trim_end_matches('/'))
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| DEFAULT_PUBLIC_URL.to_string())
+    {
+        return base.to_string();
+    }
+
+    let host = forwarded(headers, "x-forwarded-host")
+        .or_else(|| header_value(headers, header::HOST.as_str()));
+    match host {
+        Some(host) => {
+            let scheme = forwarded(headers, "x-forwarded-proto")
+                .unwrap_or(if is_local_host(host) { "http" } else { "https" });
+            format!("{scheme}://{host}")
+        }
+        None => DEFAULT_PUBLIC_URL.to_string(),
+    }
+}
+
+/// First value of a (possibly comma-listed) forwarded header, trimmed; None if empty.
+fn forwarded<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    let raw = header_value(headers, name)?;
+    let first = raw.split(',').next().unwrap_or(raw).trim();
+    (!first.is_empty()).then_some(first)
+}
+
+fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(name)?
+        .to_str()
+        .ok()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+}
+
+fn is_local_host(host: &str) -> bool {
+    let h = host.split(':').next().unwrap_or(host);
+    h == "localhost" || h == "127.0.0.1" || h == "::1" || h.ends_with(".local")
 }
 
 fn is_unique_violation(err: &sqlx::Error) -> bool {
@@ -409,4 +453,72 @@ fn gone(msg: &str) -> Response {
 
 fn unauthorized() -> Response {
     json_status(StatusCode::UNAUTHORIZED, json!({ "error": "unauthorized" }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::derive_base_url;
+    use axum::http::{HeaderMap, HeaderName, HeaderValue};
+
+    fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(
+                HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                HeaderValue::from_str(v).unwrap(),
+            );
+        }
+        h
+    }
+
+    #[test]
+    fn explicit_override_wins() {
+        let h = headers(&[("host", "ignored.example.com")]);
+        assert_eq!(
+            derive_base_url(&h, Some("https://sulion.example.com/")),
+            "https://sulion.example.com",
+        );
+    }
+
+    #[test]
+    fn derives_https_from_host_for_real_deployments() {
+        let h = headers(&[("host", "sulion.ahara.dev")]);
+        assert_eq!(derive_base_url(&h, None), "https://sulion.ahara.dev");
+    }
+
+    #[test]
+    fn local_host_stays_http() {
+        let h = headers(&[("host", "127.0.0.1:8080")]);
+        assert_eq!(derive_base_url(&h, None), "http://127.0.0.1:8080");
+    }
+
+    #[test]
+    fn honors_forwarded_proto_and_host() {
+        let h = headers(&[
+            ("host", "internal-backend"),
+            ("x-forwarded-host", "sulion.ahara.dev"),
+            ("x-forwarded-proto", "https"),
+        ]);
+        assert_eq!(derive_base_url(&h, None), "https://sulion.ahara.dev");
+    }
+
+    #[test]
+    fn forwarded_takes_first_of_a_list() {
+        let h = headers(&[("x-forwarded-host", "sulion.ahara.dev, proxy.internal")]);
+        assert_eq!(derive_base_url(&h, None), "https://sulion.ahara.dev");
+    }
+
+    #[test]
+    fn blank_override_falls_through_to_headers() {
+        let h = headers(&[("host", "sulion.ahara.dev")]);
+        assert_eq!(derive_base_url(&h, Some("   ")), "https://sulion.ahara.dev");
+    }
+
+    #[test]
+    fn no_host_falls_back_to_default() {
+        assert_eq!(
+            derive_base_url(&HeaderMap::new(), None),
+            super::DEFAULT_PUBLIC_URL
+        );
+    }
 }
