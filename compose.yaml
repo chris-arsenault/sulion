@@ -10,6 +10,9 @@ services:
       # in ahara-infra/infrastructure/terraform/services/db-migrate-truenas.tf.
       SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@192.168.66.3:5432/sulion"
       SULION_LISTEN: "0.0.0.0:8080"
+      # Public browser-facing origin. Used to build the device-pairing /pair
+      # approval link returned by POST /api/devices/pair.
+      SULION_PUBLIC_URL: "https://sulion.local.ahara.io"
       SULION_REPOS_ROOT: "/home/dev/repos"
       SULION_WORKSPACES_ROOT: "/home/dev/workspaces"
       SULION_CLAUDE_PROJECTS: "/home/dev/.claude/projects"
