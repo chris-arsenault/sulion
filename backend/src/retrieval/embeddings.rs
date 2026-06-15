@@ -1143,6 +1143,14 @@ pub(super) struct EmbeddingClient {
     pub(super) dimensions: i32,
 }
 
+/// Embedding servers cap the number of inputs per request — text-embeddings-
+/// inference defaults to `--max-client-batch-size 32` and returns HTTP 422
+/// ("batch size N > maximum allowed batch size 32") above it. The indexer's
+/// logical `embedding_batch_size` is a DB-processing granularity that may be
+/// larger, so each embedding call is split into HTTP sub-batches no larger than
+/// this. 32 is TEI's default and a safe lower bound for other servers.
+const EMBEDDING_HTTP_MAX_BATCH: usize = 32;
+
 impl EmbeddingClient {
     pub(super) async fn embed_one(&self, text: &str) -> Result<Vec<f32>, RetrievalError> {
         let mut embeddings = self.embed_batch(&[text.to_string()]).await?;
@@ -1155,6 +1163,17 @@ impl EmbeddingClient {
         &self,
         input: &[String],
     ) -> Result<Vec<Vec<f32>>, RetrievalError> {
+        let mut out = Vec::with_capacity(input.len());
+        for chunk in input.chunks(EMBEDDING_HTTP_MAX_BATCH) {
+            out.extend(self.embed_http_batch(chunk).await?);
+        }
+        Ok(out)
+    }
+
+    /// One embedding request for an input batch already within the server's
+    /// per-request limit (see [`EMBEDDING_HTTP_MAX_BATCH`]). Retries transient
+    /// failures up to three times.
+    async fn embed_http_batch(&self, input: &[String]) -> Result<Vec<Vec<f32>>, RetrievalError> {
         if input.is_empty() {
             return Ok(Vec::new());
         }
