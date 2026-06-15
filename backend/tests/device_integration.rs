@@ -153,7 +153,34 @@ async fn pairing_then_ingest_writes_file_to_repo() {
     let written = std::fs::read(h.repos_root.join("atlas").join("clips/verse.mid")).unwrap();
     assert_eq!(written, content);
 
-    // Path traversal is rejected.
+    // Read it back via the device-authed raw download — bytes round-trip.
+    let raw = h
+        .client
+        .get(h.url("/api/repos/atlas/raw?path=clips/verse.mid"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(raw.status(), 200);
+    assert_eq!(
+        raw.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("application/octet-stream"),
+    );
+    assert_eq!(raw.bytes().await.unwrap().as_ref(), content);
+
+    // Missing file → 404.
+    let missing = h
+        .client
+        .get(h.url("/api/repos/atlas/raw?path=clips/nope.mid"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+
+    // Path traversal is rejected on both write and read.
     let escape = h
         .client
         .post(h.url("/api/repos/atlas/ingest?path=../escape.txt"))
@@ -163,6 +190,15 @@ async fn pairing_then_ingest_writes_file_to_repo() {
         .await
         .unwrap();
     assert_eq!(escape.status(), 400);
+
+    let escape_read = h
+        .client
+        .get(h.url("/api/repos/atlas/raw?path=../../etc/passwd"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(escape_read.status(), 400);
 }
 
 #[tokio::test]
@@ -190,6 +226,15 @@ async fn ingest_rejects_missing_and_bad_tokens() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 401);
+
+    // The raw download is behind the same device-token layer.
+    let no_token = h
+        .client
+        .get(h.url("/api/repos/atlas/raw?path=x.txt"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(no_token.status(), 401);
 }
 
 #[tokio::test]

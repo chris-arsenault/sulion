@@ -50,6 +50,7 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             "/api/repos/:name/ingest",
             post(repo_routes::post_repo_ingest),
         )
+        .route("/api/repos/:name/raw", get(repo_routes::get_repo_raw))
         .route_layer(middleware::from_fn_with_state(
             state,
             device_routes::require_device_token,

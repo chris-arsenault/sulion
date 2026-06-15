@@ -4,9 +4,10 @@
 
 use std::sync::Arc;
 
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{Multipart, Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
+use axum::response::Response;
 use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -477,4 +478,46 @@ pub(super) async fn post_repo_ingest(
         "repo content ingested",
     );
     Ok(Json(IngestResponse { path: rel, bytes }))
+}
+
+#[derive(Deserialize)]
+pub(super) struct RawQuery {
+    /// Repo-relative source path, e.g. `clips/verse.mid`. Required.
+    path: String,
+}
+
+/// Device-token-authenticated raw file read: return the bytes at `path` under
+/// repo `name` as `application/octet-stream`. The counterpart to
+/// `post_repo_ingest`, for pulling content (e.g. a generated `.mid`) back out
+/// to an external tool. `GET /api/repos/:name/file` can't serve this — it's
+/// Cognito-only and nulls binary content. Path-safety (no `..`/absolute/symlink
+/// escape) via `workspace::resolve_in_repo`.
+pub(super) async fn get_repo_raw(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Query(q): Query<RawQuery>,
+    Extension(_principal): Extension<DevicePrincipal>,
+) -> ApiResult<Response> {
+    let root = repo_path(&state, &name)?;
+    let rel = q.path.trim().trim_start_matches('/').to_string();
+    if rel.is_empty() {
+        return Err(ApiError::BadRequest("path is required".into()));
+    }
+    let (abs, _) =
+        workspace::resolve_in_repo(&root, &rel).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    let meta = match tokio::fs::metadata(&abs).await {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Err(ApiError::NotFound),
+        Err(err) => return Err(ApiError::Io(err)),
+    };
+    if !meta.is_file() {
+        return Err(ApiError::NotFound);
+    }
+    let bytes = tokio::fs::read(&abs).await?;
+
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .body(Body::from(bytes))
+        .expect("octet-stream response is always valid"))
 }
