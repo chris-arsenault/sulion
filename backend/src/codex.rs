@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -190,11 +190,39 @@ fn detect_rollout_session_uuid_in_pid(pid: u32, sessions_dir: &Path) -> Option<U
         if !target.starts_with(sessions_dir) {
             continue;
         }
+        // Codex opens *its own* session's rollout for writing (append), but its
+        // resume/history picker opens *other* projects' rollouts read-only. The
+        // sessions dir is shared across every project, so a read-only peek at an
+        // unrelated session must not become this PTY's binding. Only the
+        // writable fd identifies the session Codex is actually recording.
+        if !fd_is_writable(pid, &entry.file_name()) {
+            continue;
+        }
         if let Some(uuid) = crate::ingest::parse_codex_session_uuid(&target) {
             return Some(uuid);
         }
     }
     None
+}
+
+/// Whether `/proc/<pid>/fd/<fd>` was opened with write access (O_WRONLY or
+/// O_RDWR), read from the `flags:` line of `/proc/<pid>/fdinfo/<fd>` (octal).
+fn fd_is_writable(pid: u32, fd_name: &OsStr) -> bool {
+    let Some(fd) = fd_name.to_str() else {
+        return false;
+    };
+    let Ok(info) = std::fs::read_to_string(format!("/proc/{pid}/fdinfo/{fd}")) else {
+        return false;
+    };
+    for line in info.lines() {
+        if let Some(rest) = line.strip_prefix("flags:") {
+            // O_ACCMODE = 0o3: O_RDONLY=0, O_WRONLY=1, O_RDWR=2.
+            return i64::from_str_radix(rest.trim(), 8)
+                .map(|flags| flags & 0o3 != 0)
+                .unwrap_or(false);
+        }
+    }
+    false
 }
 
 fn process_has_launch_id(pid: u32, launch_id: Uuid) -> bool {
@@ -401,6 +429,36 @@ sleep 5
         kill_children(child.id());
         let _ = child.kill();
         let _ = child.wait();
+    }
+
+    #[test]
+    fn skips_readonly_peeked_rollout_and_picks_writable_active() {
+        // Reproduces the cross-project mis-bind: Codex's resume/history picker
+        // holds a *read-only* fd to another project's rollout while its own
+        // session's rollout is open for *append*. Detection must return the
+        // active (writable) session, never the peeked one.
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions_dir = tmp.path().join("sessions");
+        let day_dir = sessions_dir.join("2026").join("06").join("15");
+        std::fs::create_dir_all(&day_dir).unwrap();
+
+        let peeked_uuid = Uuid::new_v4();
+        let active_uuid = Uuid::new_v4();
+        let peeked = day_dir.join(format!("rollout-2026-06-15T00-00-00-{peeked_uuid}.jsonl"));
+        let active = day_dir.join(format!("rollout-2026-06-15T00-00-01-{active_uuid}.jsonl"));
+        std::fs::write(&peeked, "").unwrap();
+        std::fs::write(&active, "").unwrap();
+
+        // Open peeked read-only first (lower fd number) so the unfiltered scan
+        // would have returned it; the writable filter must skip past it.
+        let _ro = std::fs::File::open(&peeked).unwrap();
+        let _rw = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&active)
+            .unwrap();
+
+        let detected = detect_rollout_session_uuid_in_pid(std::process::id(), &sessions_dir);
+        assert_eq!(detected, Some(active_uuid));
     }
 
     fn make_executable(path: &Path) {
