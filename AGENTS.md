@@ -2,6 +2,15 @@
 
 Session broker for Claude Code and Codex terminal sessions. Rust backend + React frontend + Postgres, deployed to TrueNAS via Komodo.
 
+## ⛔ Never `git push` without the user's explicit say-so
+
+A push to `main` triggers a Komodo **redeployment of Sulion, which kills every
+active agent session — including your own.** This is the single most destructive
+thing you can do here. Commit when asked; **push only when the user expressly
+tells you to push _this_ change.** A "push" in an earlier turn is never standing
+permission. When in doubt, stop and ask. Never force-push to undo a push without
+explicit approval.
+
 Read these before editing:
 
 - [docs/architecture.md](docs/architecture.md) — shape, session model, **invariants**
