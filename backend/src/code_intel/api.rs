@@ -427,19 +427,32 @@ async fn load_index_summary(
     root: &CodeRootSpec,
 ) -> Result<IndexSummary, CodeIntelError> {
     let row = sqlx::query(
+        // Aggregate code_files and code_symbols independently (LATERAL per table)
+        // rather than joining both to the root, which would fan out to
+        // files × symbols rows and force COUNT(DISTINCT) over that product —
+        // O(files·symbols) and the cause of multi-second status calls.
         "SELECT cr.id, cr.last_scan_at, \
-                MAX(f.indexed_at) FILTER (WHERE f.deleted_at IS NULL) AS latest_indexed_at, \
-                COUNT(DISTINCT f.id) FILTER (WHERE f.deleted_at IS NULL) AS file_count, \
-                COUNT(DISTINCT f.id) FILTER (WHERE f.deleted_at IS NULL AND f.parse_status = 'pending') AS pending_file_count, \
-                COUNT(DISTINCT f.id) FILTER (WHERE f.deleted_at IS NOT NULL OR f.parse_status = 'deleted') AS deleted_file_count, \
-                COUNT(DISTINCT s.id) AS symbol_count, \
-                COUNT(DISTINCT f.id) FILTER (WHERE f.deleted_at IS NULL AND f.parse_status = 'partial') AS partial_file_count, \
-                COUNT(DISTINCT f.id) FILTER (WHERE f.deleted_at IS NULL AND f.parse_status = 'failed') AS failed_file_count \
+                f.latest_indexed_at, \
+                f.file_count, \
+                f.pending_file_count, \
+                f.deleted_file_count, \
+                s.symbol_count, \
+                f.partial_file_count, \
+                f.failed_file_count \
            FROM code_roots cr \
-           LEFT JOIN code_files f ON f.root_id = cr.id \
-           LEFT JOIN code_symbols s ON s.root_id = cr.id \
-          WHERE cr.path = $1 AND cr.deleted_at IS NULL \
-          GROUP BY cr.id",
+           LEFT JOIN LATERAL ( \
+                SELECT MAX(indexed_at) FILTER (WHERE deleted_at IS NULL) AS latest_indexed_at, \
+                       COUNT(*) FILTER (WHERE deleted_at IS NULL) AS file_count, \
+                       COUNT(*) FILTER (WHERE deleted_at IS NULL AND parse_status = 'pending') AS pending_file_count, \
+                       COUNT(*) FILTER (WHERE deleted_at IS NOT NULL OR parse_status = 'deleted') AS deleted_file_count, \
+                       COUNT(*) FILTER (WHERE deleted_at IS NULL AND parse_status = 'partial') AS partial_file_count, \
+                       COUNT(*) FILTER (WHERE deleted_at IS NULL AND parse_status = 'failed') AS failed_file_count \
+                  FROM code_files WHERE root_id = cr.id \
+           ) f ON TRUE \
+           LEFT JOIN LATERAL ( \
+                SELECT COUNT(*) AS symbol_count FROM code_symbols WHERE root_id = cr.id \
+           ) s ON TRUE \
+          WHERE cr.path = $1 AND cr.deleted_at IS NULL",
     )
     .bind(root.path.to_string_lossy().as_ref())
     .fetch_optional(pool)
