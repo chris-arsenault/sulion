@@ -116,9 +116,17 @@ files pending and records deleted files, and the background worker incrementally
 drains pending rows and writes symbols/references.
 
 The service uses Tree-sitter for syntactic parsing, ast-grep for structural
-search and diff-only patch generation, and language servers for best-effort
-semantic `def`/`refs` escalation. Semantic fallback and language-server health
-are visible through `sulion-code status`.
+search and diff-only patch generation, and persistent language servers for
+semantic `def`/`refs` resolution for recently active roots. Rust uses one
+rust-analyzer per active root; TypeScript, TSX, JavaScript, and JSX share one
+TypeScript-family server per active root. Servers start lazily, expire after
+`SULION_CODE_INTEL_LSP_IDLE_SECONDS` (default 1200), and are bounded by
+`SULION_CODE_INTEL_LSP_MAX_SERVERS` (default 6). The code-intel image includes
+Node, typescript-language-server, and a Rust toolchain with rust-analyzer so
+Rust semantic navigation can load real cargo workspaces. Rust analyzer writes
+build artifacts to the service cache through `CARGO_TARGET_DIR`; repo and
+workspace mounts remain read-only. Fallback and language-server health are
+visible through `sulion-code status`.
 
 The PTY helper is `sulion-code`; the full command contract is in
 [`docs/code-intel.md`](code-intel.md), and the durable design decision is in

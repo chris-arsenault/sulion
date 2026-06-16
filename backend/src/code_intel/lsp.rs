@@ -1,37 +1,92 @@
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::{oneshot, Mutex as AsyncMutex};
+use tokio::task::JoinHandle;
 use url::Url;
 
 use super::indexer::CodeRootSpec;
 use super::parser::SourceLanguage;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(750);
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_WARMUP_TIMEOUT: Duration = Duration::from_secs(120);
+const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+const DEFAULT_MAX_ACTIVE_SERVERS: usize = 6;
+const LSP_REQUEST_SECONDS_ENV: &str = "SULION_CODE_INTEL_LSP_REQUEST_SECONDS";
+const LSP_WARMUP_SECONDS_ENV: &str = "SULION_CODE_INTEL_LSP_WARMUP_SECONDS";
+const LSP_IDLE_SECONDS_ENV: &str = "SULION_CODE_INTEL_LSP_IDLE_SECONDS";
+const LSP_MAX_SERVERS_ENV: &str = "SULION_CODE_INTEL_LSP_MAX_SERVERS";
+const CODE_INTEL_CACHE_ENV: &str = "SULION_CODE_INTEL_CACHE_DIR";
+const DEFAULT_CACHE_DIR: &str = "/var/lib/sulion-code-intel/cache";
 
 #[derive(Clone)]
 pub struct LspManager {
-    timeout: Duration,
+    inner: Arc<LspManagerInner>,
+}
+
+struct LspManagerInner {
+    request_timeout: Duration,
+    warmup_timeout: Duration,
+    idle_timeout: Duration,
+    max_active_servers: usize,
+    clients: AsyncMutex<HashMap<LspClientKey, Arc<LspClientSlot>>>,
+    health: StdMutex<HashMap<LspClientKey, LspRuntimeRecord>>,
 }
 
 impl Default for LspManager {
     fn default() -> Self {
         Self {
-            timeout: DEFAULT_TIMEOUT,
+            inner: Arc::new(LspManagerInner {
+                request_timeout: env_duration(
+                    LSP_REQUEST_SECONDS_ENV,
+                    DEFAULT_REQUEST_TIMEOUT,
+                    Duration::from_secs(1),
+                    Duration::from_secs(60),
+                ),
+                warmup_timeout: env_duration(
+                    LSP_WARMUP_SECONDS_ENV,
+                    DEFAULT_WARMUP_TIMEOUT,
+                    Duration::from_secs(10),
+                    Duration::from_secs(10 * 60),
+                ),
+                idle_timeout: env_duration(
+                    LSP_IDLE_SECONDS_ENV,
+                    DEFAULT_IDLE_TIMEOUT,
+                    Duration::from_secs(60),
+                    Duration::from_secs(24 * 60 * 60),
+                ),
+                max_active_servers: env_usize(
+                    LSP_MAX_SERVERS_ENV,
+                    DEFAULT_MAX_ACTIVE_SERVERS,
+                    1,
+                    32,
+                ),
+                clients: AsyncMutex::new(HashMap::new()),
+                health: StdMutex::new(HashMap::new()),
+            }),
         }
     }
 }
 
 impl LspManager {
     pub fn status(&self) -> SemanticRuntimeStatus {
+        let health = self.inner.health.lock().unwrap();
+        let active_servers = health
+            .values()
+            .filter(|record| record.state.is_active())
+            .count();
         let languages = ServerSpec::all()
             .into_iter()
-            .map(|spec| spec.status())
+            .map(|spec| spec.status(&health))
             .collect::<Vec<_>>();
         let available = languages.iter().any(|language| language.available);
         SemanticRuntimeStatus {
@@ -40,10 +95,14 @@ impl LspManager {
             reason: if available {
                 None
             } else {
-                Some("no semantic language servers are available on PATH".to_string())
+                Some("no complete semantic language-server runtime is available".to_string())
             },
-            timeout_ms: self.timeout.as_millis() as u64,
-            fallback: "def and refs fall back to syntactic index results",
+            timeout_ms: self.inner.request_timeout.as_millis() as u64,
+            warmup_timeout_ms: self.inner.warmup_timeout.as_millis() as u64,
+            idle_timeout_ms: self.inner.idle_timeout.as_millis() as u64,
+            active_servers,
+            max_active_servers: self.inner.max_active_servers,
+            fallback: "syntactic fallback is explicit when semantic resolution is unavailable",
         }
     }
 
@@ -86,10 +145,12 @@ impl LspManager {
                 language.as_str()
             ));
         };
-        if !command_available(spec.command) {
+        let missing = spec.missing_commands();
+        if !missing.is_empty() {
             return SemanticResponse::unavailable(format!(
-                "{} is not installed or not on PATH",
-                spec.command
+                "{} semantic runtime is missing required command(s): {}",
+                spec.language,
+                missing.join(", ")
             ));
         }
         if line < 1 || col < 1 {
@@ -104,23 +165,241 @@ impl LspManager {
                 ));
             }
         };
-        let root = root.clone();
-        let file_path = file_path.to_path_buf();
-        match tokio::time::timeout(
-            self.timeout,
-            run_semantic_request(spec, root, file_path, source, line, col, kind),
+
+        let key = LspClientKey::new(root, spec);
+        let client = match self.client_for(key.clone(), spec, root).await {
+            Ok(client) => client,
+            Err(err) => return SemanticResponse::failed(err.to_string()),
+        };
+
+        let result = {
+            let mut server = client.lock().await;
+            server
+                .request_locations(
+                    file_path,
+                    &source,
+                    line,
+                    col,
+                    kind,
+                    self.inner.request_timeout,
+                    self.inner.warmup_timeout,
+                )
+                .await
+        };
+
+        match result {
+            Ok(locations) if locations.is_empty() => SemanticResponse::Empty,
+            Ok(locations) => {
+                self.inner.set_health(&key, LspRuntimeState::Ready, None);
+                SemanticResponse::Results(locations)
+            }
+            Err(err) => {
+                let reason = err.to_string();
+                self.inner
+                    .set_health(&key, LspRuntimeState::Failed, Some(reason.clone()));
+                self.inner.reset_client(&key).await;
+                SemanticResponse::failed(reason)
+            }
+        }
+    }
+
+    async fn client_for(
+        &self,
+        key: LspClientKey,
+        spec: ServerSpec,
+        root: &CodeRootSpec,
+    ) -> anyhow::Result<Arc<AsyncMutex<RootLanguageServer>>> {
+        if let Some(slot) = self.inner.client_slot(&key).await {
+            let client = slot.client.lock().await;
+            if let Some(client) = client.as_ref() {
+                slot.touch();
+                return Ok(client.clone());
+            }
+        }
+
+        self.inner.ensure_capacity_for(&key).await?;
+        let slot = self.inner.client_slot_or_insert(key.clone()).await;
+        let mut client = slot.client.lock().await;
+        if let Some(client) = client.as_ref() {
+            slot.touch();
+            return Ok(client.clone());
+        }
+        self.inner.set_health(&key, LspRuntimeState::Warming, None);
+        let server = match tokio::time::timeout(
+            self.inner.warmup_timeout,
+            RootLanguageServer::spawn(spec, root, self.inner.warmup_timeout),
         )
         .await
         {
-            Ok(Ok(locations)) if locations.is_empty() => SemanticResponse::Empty,
-            Ok(Ok(locations)) => SemanticResponse::Results(locations),
-            Ok(Err(err)) => SemanticResponse::failed(err.to_string()),
-            Err(_) => SemanticResponse::failed(format!(
-                "{} semantic request timed out after {}ms",
-                spec.language,
-                self.timeout.as_millis()
-            )),
+            Ok(Ok(server)) => server,
+            Ok(Err(err)) => {
+                let reason = err.to_string();
+                self.inner
+                    .set_health(&key, LspRuntimeState::Failed, Some(reason.clone()));
+                drop(client);
+                self.inner.reset_client(&key).await;
+                return Err(anyhow!(reason));
+            }
+            Err(_) => {
+                let reason = format!(
+                    "{} semantic server warmup timed out after {}ms",
+                    spec.language,
+                    self.inner.warmup_timeout.as_millis()
+                );
+                self.inner
+                    .set_health(&key, LspRuntimeState::Failed, Some(reason.clone()));
+                drop(client);
+                self.inner.reset_client(&key).await;
+                return Err(anyhow!(reason));
+            }
+        };
+        let server = Arc::new(AsyncMutex::new(server));
+        *client = Some(server.clone());
+        slot.touch();
+        self.inner.set_health(&key, LspRuntimeState::Ready, None);
+        Ok(server)
+    }
+}
+
+impl LspManagerInner {
+    async fn client_slot(&self, key: &LspClientKey) -> Option<Arc<LspClientSlot>> {
+        self.clients.lock().await.get(key).cloned()
+    }
+
+    async fn client_slot_or_insert(&self, key: LspClientKey) -> Arc<LspClientSlot> {
+        let mut clients = self.clients.lock().await;
+        clients
+            .entry(key)
+            .or_insert_with(|| Arc::new(LspClientSlot::new()))
+            .clone()
+    }
+
+    async fn ensure_capacity_for(&self, key: &LspClientKey) -> anyhow::Result<()> {
+        self.evict_expired_clients(Some(key)).await;
+        loop {
+            let at_capacity = {
+                let clients = self.clients.lock().await;
+                !clients.contains_key(key) && clients.len() >= self.max_active_servers
+            };
+            if !at_capacity {
+                return Ok(());
+            }
+            if !self.evict_oldest_client(Some(key)).await {
+                anyhow::bail!(
+                    "semantic runtime capacity reached: {} active server(s), max {}; retry after an active request finishes or increase {}",
+                    self.active_server_count(),
+                    self.max_active_servers,
+                    LSP_MAX_SERVERS_ENV
+                );
+            }
         }
+    }
+
+    async fn evict_expired_clients(&self, protected: Option<&LspClientKey>) {
+        let now = Instant::now();
+        let keys = {
+            let clients = self.clients.lock().await;
+            clients
+                .iter()
+                .filter(|(key, slot)| {
+                    protected != Some(*key)
+                        && slot.eviction_score().is_some_and(|last_used| {
+                            now.duration_since(last_used) >= self.idle_timeout
+                        })
+                })
+                .map(|(key, _)| key.clone())
+                .collect::<Vec<_>>()
+        };
+        self.remove_clients(keys).await;
+    }
+
+    async fn evict_oldest_client(&self, protected: Option<&LspClientKey>) -> bool {
+        let key = {
+            let clients = self.clients.lock().await;
+            clients
+                .iter()
+                .filter(|(key, _)| protected != Some(*key))
+                .filter_map(|(key, slot)| {
+                    slot.eviction_score()
+                        .map(|last_used| (key.clone(), last_used))
+                })
+                .min_by_key(|(_, last_used)| *last_used)
+                .map(|(key, _)| key)
+        };
+        match key {
+            Some(key) => {
+                self.remove_clients(vec![key]).await;
+                true
+            }
+            None => false,
+        }
+    }
+
+    async fn remove_clients(&self, keys: Vec<LspClientKey>) {
+        if keys.is_empty() {
+            return;
+        }
+        let removed = {
+            let mut clients = self.clients.lock().await;
+            keys.into_iter()
+                .filter_map(|key| clients.remove(&key).map(|slot| (key, slot)))
+                .collect::<Vec<_>>()
+        };
+        for (key, slot) in removed {
+            slot.clear().await;
+            self.health.lock().unwrap().remove(&key);
+        }
+    }
+
+    fn active_server_count(&self) -> usize {
+        self.health
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|record| record.state.is_active())
+            .count()
+    }
+
+    fn set_health(&self, key: &LspClientKey, state: LspRuntimeState, last_error: Option<String>) {
+        self.health
+            .lock()
+            .unwrap()
+            .insert(key.clone(), LspRuntimeRecord { state, last_error });
+    }
+
+    async fn reset_client(&self, key: &LspClientKey) {
+        let slot = self.clients.lock().await.remove(key);
+        if let Some(slot) = slot {
+            slot.clear().await;
+        }
+    }
+}
+
+struct LspClientSlot {
+    client: AsyncMutex<Option<Arc<AsyncMutex<RootLanguageServer>>>>,
+    last_used: StdMutex<Instant>,
+}
+
+impl LspClientSlot {
+    fn new() -> Self {
+        Self {
+            client: AsyncMutex::new(None),
+            last_used: StdMutex::new(Instant::now()),
+        }
+    }
+
+    fn touch(&self) {
+        *self.last_used.lock().unwrap() = Instant::now();
+    }
+
+    fn eviction_score(&self) -> Option<Instant> {
+        let client = self.client.try_lock().ok()?;
+        client.as_ref()?;
+        Some(*self.last_used.lock().unwrap())
+    }
+
+    async fn clear(&self) {
+        *self.client.lock().await = None;
     }
 }
 
@@ -130,6 +409,10 @@ pub struct SemanticRuntimeStatus {
     pub languages: Vec<SemanticLanguageRuntimeStatus>,
     pub reason: Option<String>,
     pub timeout_ms: u64,
+    pub warmup_timeout_ms: u64,
+    pub idle_timeout_ms: u64,
+    pub active_servers: usize,
+    pub max_active_servers: usize,
     pub fallback: &'static str,
 }
 
@@ -138,8 +421,9 @@ pub struct SemanticLanguageRuntimeStatus {
     pub language: &'static str,
     pub command: String,
     pub available: bool,
-    pub health: &'static str,
+    pub health: String,
     pub startup: &'static str,
+    pub active_roots: usize,
     pub last_error: Option<String>,
 }
 
@@ -194,9 +478,11 @@ pub struct LspLocation {
 #[derive(Clone, Copy)]
 struct ServerSpec {
     language: &'static str,
+    server_family: &'static str,
     source_languages: &'static [SourceLanguage],
     command: &'static str,
     args: &'static [&'static str],
+    required_commands: &'static [&'static str],
     language_id: &'static str,
 }
 
@@ -205,24 +491,39 @@ impl ServerSpec {
         vec![
             Self {
                 language: "rust",
+                server_family: "rust",
                 source_languages: &[SourceLanguage::Rust],
                 command: "rust-analyzer",
                 args: &[],
+                required_commands: &["cargo", "rustc"],
                 language_id: "rust",
             },
             Self {
                 language: "typescript",
+                server_family: "typescript",
                 source_languages: &[SourceLanguage::TypeScript],
                 command: "typescript-language-server",
                 args: &["--stdio"],
+                required_commands: &["node"],
                 language_id: "typescript",
             },
             Self {
                 language: "tsx",
+                server_family: "typescript",
                 source_languages: &[SourceLanguage::Tsx],
                 command: "typescript-language-server",
                 args: &["--stdio"],
+                required_commands: &["node"],
                 language_id: "typescriptreact",
+            },
+            Self {
+                language: "javascript",
+                server_family: "typescript",
+                source_languages: &[SourceLanguage::JavaScript],
+                command: "typescript-language-server",
+                args: &["--stdio"],
+                required_commands: &["node"],
+                language_id: "javascript",
             },
         ]
     }
@@ -233,19 +534,72 @@ impl ServerSpec {
             .find(|spec| spec.source_languages.contains(&language))
     }
 
-    fn status(self) -> SemanticLanguageRuntimeStatus {
-        let available = command_available(self.command);
+    fn missing_commands(self) -> Vec<&'static str> {
+        std::iter::once(self.command)
+            .chain(self.required_commands.iter().copied())
+            .filter(|command| !command_available(command))
+            .collect()
+    }
+
+    fn status(
+        self,
+        records: &HashMap<LspClientKey, LspRuntimeRecord>,
+    ) -> SemanticLanguageRuntimeStatus {
+        let missing = self.missing_commands();
+        if !missing.is_empty() {
+            return SemanticLanguageRuntimeStatus {
+                language: self.language,
+                command: self.command_line(),
+                available: false,
+                health: "missing".to_string(),
+                startup: "lazy_persistent",
+                active_roots: 0,
+                last_error: Some(format!(
+                    "missing required semantic runtime command(s): {}",
+                    missing.join(", ")
+                )),
+            };
+        }
+
+        let matching = records
+            .iter()
+            .filter(|(key, _)| key.server_family == self.server_family)
+            .map(|(_, record)| record)
+            .collect::<Vec<_>>();
+        let active_roots = matching
+            .iter()
+            .filter(|record| record.state.is_active())
+            .count();
+        let health = if matching
+            .iter()
+            .any(|record| record.state == LspRuntimeState::Ready)
+        {
+            "ready"
+        } else if matching
+            .iter()
+            .any(|record| record.state == LspRuntimeState::Warming)
+        {
+            "warming"
+        } else if matching
+            .iter()
+            .any(|record| record.state == LspRuntimeState::Failed)
+        {
+            "failed"
+        } else {
+            "available"
+        };
+        let last_error = matching
+            .iter()
+            .filter_map(|record| record.last_error.clone())
+            .last();
         SemanticLanguageRuntimeStatus {
             language: self.language,
             command: self.command_line(),
-            available,
-            health: if available { "available" } else { "missing" },
-            startup: "on_demand",
-            last_error: if available {
-                None
-            } else {
-                Some(format!("{} is not installed or not on PATH", self.command))
-            },
+            available: true,
+            health: health.to_string(),
+            startup: "lazy_persistent",
+            active_roots,
+            last_error,
         }
     }
 
@@ -255,6 +609,57 @@ impl ServerSpec {
             .collect::<Vec<_>>()
             .join(" ")
     }
+
+    fn language_id_for_path(self, path: &Path) -> &'static str {
+        if self.server_family != "typescript" {
+            return self.language_id;
+        }
+        match path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("tsx") => "typescriptreact",
+            Some("jsx") => "javascriptreact",
+            Some("js" | "mjs" | "cjs") => "javascript",
+            _ => "typescript",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct LspClientKey {
+    root: PathBuf,
+    server_family: &'static str,
+}
+
+impl LspClientKey {
+    fn new(root: &CodeRootSpec, spec: ServerSpec) -> Self {
+        Self {
+            root: root.path.clone(),
+            server_family: spec.server_family,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LspRuntimeState {
+    Warming,
+    Ready,
+    Failed,
+}
+
+impl LspRuntimeState {
+    fn is_active(self) -> bool {
+        matches!(self, Self::Warming | Self::Ready)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct LspRuntimeRecord {
+    state: LspRuntimeState,
+    last_error: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -263,91 +668,190 @@ enum LspRequestKind {
     References,
 }
 
-async fn run_semantic_request(
+struct RootLanguageServer {
     spec: ServerSpec,
-    root: CodeRootSpec,
-    file_path: PathBuf,
-    source: String,
-    line: i32,
-    col: i32,
-    kind: LspRequestKind,
-) -> anyhow::Result<Vec<LspLocation>> {
-    let mut client = LspClient::spawn(spec, &root.path).await?;
-    let root_uri = file_url(&root.path)?;
-    let file_uri = file_url(&file_path)?;
-    let initialize = json!({
-        "processId": null,
-        "rootUri": root_uri,
-        "rootPath": root.path.to_string_lossy(),
-        "capabilities": {
-            "textDocument": {
-                "definition": { "linkSupport": true },
-                "references": {}
-            },
-            "workspace": {
-                "configuration": true,
-                "workspaceFolders": true
-            }
-        },
-        "workspaceFolders": [{
-            "uri": root_uri,
-            "name": root.name
-        }]
-    });
-    client.request("initialize", initialize).await?;
-    client.notify("initialized", json!({})).await?;
-    client
-        .notify(
-            "textDocument/didOpen",
-            json!({
+    root: PathBuf,
+    transport: LspTransport,
+    open_documents: HashMap<String, OpenDocument>,
+    semantic_request_count: u64,
+}
+
+impl RootLanguageServer {
+    async fn spawn(
+        spec: ServerSpec,
+        root: &CodeRootSpec,
+        warmup_timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        let transport = LspTransport::spawn(spec, &root.path).await?;
+        let root_uri = file_url(&root.path)?;
+        let initialize = json!({
+            "processId": null,
+            "rootUri": root_uri,
+            "rootPath": root.path.to_string_lossy(),
+            "capabilities": {
                 "textDocument": {
-                    "uri": file_uri,
-                    "languageId": spec.language_id,
-                    "version": 1,
-                    "text": source
+                    "definition": { "linkSupport": true },
+                    "references": {},
+                    "synchronization": {
+                        "dynamicRegistration": false,
+                        "didSave": false,
+                        "willSave": false,
+                        "willSaveWaitUntil": false
+                    }
+                },
+                "workspace": {
+                    "configuration": true,
+                    "workspaceFolders": true,
+                    "didChangeConfiguration": { "dynamicRegistration": false },
+                    "didChangeWatchedFiles": { "dynamicRegistration": false },
+                    "symbol": { "dynamicRegistration": false }
+                },
+                "window": {
+                    "workDoneProgress": true
                 }
+            },
+            "initializationOptions": initialization_options(spec),
+            "workspaceFolders": [{
+                "uri": root_uri,
+                "name": root.name
+            }]
+        });
+        transport
+            .request("initialize", initialize, warmup_timeout)
+            .await?;
+        transport.notify("initialized", json!({})).await?;
+        Ok(Self {
+            spec,
+            root: root.path.clone(),
+            transport,
+            open_documents: HashMap::new(),
+            semantic_request_count: 0,
+        })
+    }
+
+    async fn request_locations(
+        &mut self,
+        file_path: &Path,
+        source: &str,
+        line: i32,
+        col: i32,
+        kind: LspRequestKind,
+        request_timeout: Duration,
+        warmup_timeout: Duration,
+    ) -> anyhow::Result<Vec<LspLocation>> {
+        let file_uri = file_url(file_path)?;
+        self.sync_document(file_path, &file_uri, source).await?;
+        let position = lsp_position(source, line, col);
+        let params = match kind {
+            LspRequestKind::Definition => json!({
+                "textDocument": { "uri": file_uri },
+                "position": position
             }),
-        )
-        .await?;
+            LspRequestKind::References => json!({
+                "textDocument": { "uri": file_uri },
+                "position": position,
+                "context": { "includeDeclaration": true }
+            }),
+        };
+        let method = match kind {
+            LspRequestKind::Definition => "textDocument/definition",
+            LspRequestKind::References => "textDocument/references",
+        };
+        let timeout = if self.semantic_request_count == 0 {
+            warmup_timeout
+        } else {
+            request_timeout
+        };
+        let result = self.transport.request(method, params, timeout).await?;
+        self.semantic_request_count += 1;
+        let locations = match kind {
+            LspRequestKind::Definition => definition_locations(&result),
+            LspRequestKind::References => reference_locations(&result),
+        };
+        Ok(resolve_locations(&self.root, locations))
+    }
 
-    let params = match kind {
-        LspRequestKind::Definition => json!({
-            "textDocument": { "uri": file_uri },
-            "position": lsp_position(line, col)
+    async fn sync_document(
+        &mut self,
+        file_path: &Path,
+        file_uri: &str,
+        source: &str,
+    ) -> anyhow::Result<()> {
+        let fingerprint = source_fingerprint(source);
+        match self.open_documents.get_mut(file_uri) {
+            Some(document) if document.fingerprint == fingerprint => Ok(()),
+            Some(document) => {
+                document.version += 1;
+                document.fingerprint = fingerprint;
+                self.transport
+                    .notify(
+                        "textDocument/didChange",
+                        json!({
+                            "textDocument": {
+                                "uri": file_uri,
+                                "version": document.version
+                            },
+                            "contentChanges": [{ "text": source }]
+                        }),
+                    )
+                    .await
+            }
+            None => {
+                self.transport
+                    .notify(
+                        "textDocument/didOpen",
+                        json!({
+                            "textDocument": {
+                                "uri": file_uri,
+                                "languageId": self.spec.language_id_for_path(file_path),
+                                "version": 1,
+                                "text": source
+                            }
+                        }),
+                    )
+                    .await?;
+                self.open_documents.insert(
+                    file_uri.to_string(),
+                    OpenDocument {
+                        version: 1,
+                        fingerprint,
+                    },
+                );
+                Ok(())
+            }
+        }
+    }
+}
+
+struct OpenDocument {
+    version: i32,
+    fingerprint: u64,
+}
+
+fn initialization_options(spec: ServerSpec) -> Value {
+    match spec.server_family {
+        "rust" => json!({
+            "cargo": {
+                "allFeatures": true,
+                "buildScripts": { "enable": true }
+            },
+            "procMacro": { "enable": true },
+            "checkOnSave": true,
+            "check": { "command": "check", "allTargets": true }
         }),
-        LspRequestKind::References => json!({
-            "textDocument": { "uri": file_uri },
-            "position": lsp_position(line, col),
-            "context": { "includeDeclaration": true }
-        }),
-    };
-    let result = match kind {
-        LspRequestKind::Definition => client.request("textDocument/definition", params).await?,
-        LspRequestKind::References => client.request("textDocument/references", params).await?,
-    };
-    client.shutdown().await;
-    let locations = match kind {
-        LspRequestKind::Definition => definition_locations(&result),
-        LspRequestKind::References => reference_locations(&result),
-    };
-    Ok(resolve_locations(&root.path, locations))
+        _ => Value::Null,
+    }
 }
 
-fn lsp_position(line: i32, col: i32) -> Value {
-    json!({
-        "line": line.saturating_sub(1),
-        "character": col.saturating_sub(1)
-    })
+struct LspTransport {
+    stdin: Arc<AsyncMutex<ChildStdin>>,
+    pending: Arc<AsyncMutex<HashMap<i64, oneshot::Sender<anyhow::Result<Value>>>>>,
+    next_id: AtomicI64,
+    _child: Child,
+    _reader: JoinHandle<()>,
 }
 
-struct LspClient {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
-    next_id: i64,
-}
-
-impl LspClient {
+impl LspTransport {
     async fn spawn(spec: ServerSpec, root: &Path) -> anyhow::Result<Self> {
         let mut command = Command::new(spec.command);
         command
@@ -357,6 +861,7 @@ impl LspClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        apply_runtime_environment(&mut command, spec, root)?;
         let mut child = command
             .spawn()
             .with_context(|| format!("start {}", spec.command_line()))?;
@@ -374,113 +879,228 @@ impl LspClient {
             .stdout
             .take()
             .ok_or_else(|| anyhow!("{} stdout unavailable", spec.command))?;
+        let stdin = Arc::new(AsyncMutex::new(stdin));
+        let pending = Arc::new(AsyncMutex::new(HashMap::new()));
+        let reader = tokio::spawn(read_loop(
+            BufReader::new(stdout),
+            stdin.clone(),
+            pending.clone(),
+        ));
         Ok(Self {
-            child,
             stdin,
-            stdout: BufReader::new(stdout),
-            next_id: 1,
+            pending,
+            next_id: AtomicI64::new(1),
+            _child: child,
+            _reader: reader,
         })
     }
 
-    async fn request(&mut self, method: &str, params: Value) -> anyhow::Result<Value> {
-        let id = self.next_id;
-        self.next_id += 1;
-        self.send(json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params
-        }))
-        .await?;
-        loop {
-            let message = self.read_message().await?;
-            if message.get("id").is_some_and(|value| id_matches(value, id)) {
-                if let Some(error) = message.get("error") {
-                    return Err(anyhow!("LSP {method} error: {error}"));
-                }
-                return Ok(message.get("result").cloned().unwrap_or(Value::Null));
-            }
-            if is_server_request(&message) {
-                self.respond_to_server_request(&message).await?;
-            }
+    async fn request(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> anyhow::Result<Value> {
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(id, tx);
+        let send_result = send_message(
+            &self.stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": method,
+                "params": params
+            }),
+        )
+        .await;
+        if let Err(err) = send_result {
+            self.pending.lock().await.remove(&id);
+            return Err(err);
         }
-    }
-
-    async fn notify(&mut self, method: &str, params: Value) -> anyhow::Result<()> {
-        self.send(json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params
-        }))
-        .await
-    }
-
-    async fn shutdown(mut self) {
-        let _ = self.request("shutdown", Value::Null).await;
-        let _ = self.notify("exit", Value::Null).await;
-        match tokio::time::timeout(SHUTDOWN_TIMEOUT, self.child.wait()).await {
-            Ok(_) => {}
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(anyhow!(
+                "language server closed response channel for {method}"
+            )),
             Err(_) => {
-                let _ = self.child.kill().await;
+                self.pending.lock().await.remove(&id);
+                Err(anyhow!(
+                    "{method} timed out after {}ms",
+                    timeout.as_millis()
+                ))
             }
         }
     }
 
-    async fn send(&mut self, message: Value) -> anyhow::Result<()> {
-        let body = serde_json::to_vec(&message)?;
-        let header = format!("Content-Length: {}\r\n\r\n", body.len());
-        self.stdin.write_all(header.as_bytes()).await?;
-        self.stdin.write_all(&body).await?;
-        self.stdin.flush().await?;
-        Ok(())
-    }
-
-    async fn read_message(&mut self) -> anyhow::Result<Value> {
-        let mut content_length = None;
-        loop {
-            let mut line = Vec::new();
-            let read = self.stdout.read_until(b'\n', &mut line).await?;
-            if read == 0 {
-                return Err(anyhow!("language server closed stdout"));
-            }
-            let line = String::from_utf8_lossy(&line);
-            let header = line.trim_end_matches(&['\r', '\n'][..]);
-            if header.is_empty() {
-                break;
-            }
-            if let Some(value) = header.strip_prefix("Content-Length:") {
-                content_length = Some(value.trim().parse::<usize>()?);
-            }
-        }
-        let len = content_length.ok_or_else(|| anyhow!("missing LSP Content-Length header"))?;
-        let mut body = vec![0; len];
-        self.stdout.read_exact(&mut body).await?;
-        Ok(serde_json::from_slice(&body)?)
-    }
-
-    async fn respond_to_server_request(&mut self, message: &Value) -> anyhow::Result<()> {
-        let Some(id) = message.get("id").cloned() else {
-            return Ok(());
-        };
-        let result = match message.get("method").and_then(Value::as_str) {
-            Some("workspace/configuration") => json!([]),
-            _ => Value::Null,
-        };
-        self.send(json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": result
-        }))
+    async fn notify(&self, method: &str, params: Value) -> anyhow::Result<()> {
+        send_message(
+            &self.stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "method": method,
+                "params": params
+            }),
+        )
         .await
     }
 }
 
-fn id_matches(value: &Value, id: i64) -> bool {
-    value.as_i64() == Some(id)
+async fn read_loop(
+    mut stdout: BufReader<ChildStdout>,
+    stdin: Arc<AsyncMutex<ChildStdin>>,
+    pending: Arc<AsyncMutex<HashMap<i64, oneshot::Sender<anyhow::Result<Value>>>>>,
+) {
+    loop {
+        let message = match read_message(&mut stdout).await {
+            Ok(message) => message,
+            Err(err) => {
+                fail_all_pending(&pending, err).await;
+                return;
+            }
+        };
+        if is_server_request(&message) {
+            let _ = respond_to_server_request(&stdin, &message).await;
+            continue;
+        }
+        let Some(id) = message.get("id").and_then(Value::as_i64) else {
+            continue;
+        };
+        if let Some(tx) = pending.lock().await.remove(&id) {
+            let result = if let Some(error) = message.get("error") {
+                Err(anyhow!("LSP request {id} error: {error}"))
+            } else {
+                Ok(message.get("result").cloned().unwrap_or(Value::Null))
+            };
+            let _ = tx.send(result);
+        }
+    }
+}
+
+async fn fail_all_pending(
+    pending: &Arc<AsyncMutex<HashMap<i64, oneshot::Sender<anyhow::Result<Value>>>>>,
+    err: anyhow::Error,
+) {
+    let reason = format!("language server output closed: {err}");
+    let mut pending = pending.lock().await;
+    for (_, tx) in pending.drain() {
+        let _ = tx.send(Err(anyhow!(reason.clone())));
+    }
+}
+
+async fn respond_to_server_request(
+    stdin: &Arc<AsyncMutex<ChildStdin>>,
+    message: &Value,
+) -> anyhow::Result<()> {
+    let Some(id) = message.get("id").cloned() else {
+        return Ok(());
+    };
+    let result = match message.get("method").and_then(Value::as_str) {
+        Some("workspace/configuration") => workspace_configuration_result(message),
+        Some("workspace/applyEdit") => json!({ "applied": false }),
+        _ => Value::Null,
+    };
+    send_message(
+        stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result
+        }),
+    )
+    .await
+}
+
+fn workspace_configuration_result(message: &Value) -> Value {
+    let count = message
+        .pointer("/params/items")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    Value::Array((0..count).map(|_| json!({})).collect())
+}
+
+async fn send_message(stdin: &Arc<AsyncMutex<ChildStdin>>, message: Value) -> anyhow::Result<()> {
+    let body = serde_json::to_vec(&message)?;
+    let header = format!("Content-Length: {}\r\n\r\n", body.len());
+    let mut stdin = stdin.lock().await;
+    stdin.write_all(header.as_bytes()).await?;
+    stdin.write_all(&body).await?;
+    stdin.flush().await?;
+    Ok(())
+}
+
+async fn read_message(stdout: &mut BufReader<ChildStdout>) -> anyhow::Result<Value> {
+    let mut content_length = None;
+    loop {
+        let mut line = Vec::new();
+        let read = stdout.read_until(b'\n', &mut line).await?;
+        if read == 0 {
+            return Err(anyhow!("language server closed stdout"));
+        }
+        let line = String::from_utf8_lossy(&line);
+        let header = line.trim_end_matches(&['\r', '\n'][..]);
+        if header.is_empty() {
+            break;
+        }
+        if let Some(value) = header.strip_prefix("Content-Length:") {
+            content_length = Some(value.trim().parse::<usize>()?);
+        }
+    }
+    let len = content_length.ok_or_else(|| anyhow!("missing LSP Content-Length header"))?;
+    let mut body = vec![0; len];
+    stdout.read_exact(&mut body).await?;
+    Ok(serde_json::from_slice(&body)?)
 }
 
 fn is_server_request(message: &Value) -> bool {
     message.get("id").is_some() && message.get("method").is_some()
+}
+
+fn lsp_position(source: &str, line: i32, col: i32) -> Value {
+    json!({
+        "line": line.saturating_sub(1),
+        "character": utf16_character_for_one_based_byte_col(source, line, col)
+    })
+}
+
+fn utf16_character_for_one_based_byte_col(source: &str, line: i32, col: i32) -> usize {
+    if line < 1 || col < 1 {
+        return 0;
+    }
+    let Some(line_text) = line_text(source, line as usize) else {
+        return col.saturating_sub(1) as usize;
+    };
+    let target = (col - 1) as usize;
+    let target = target.min(line_text.len());
+    let boundary = if line_text.is_char_boundary(target) {
+        target
+    } else {
+        (0..target)
+            .rev()
+            .find(|idx| line_text.is_char_boundary(*idx))
+            .unwrap_or(0)
+    };
+    line_text[..boundary].encode_utf16().count()
+}
+
+fn line_text(source: &str, target_line: usize) -> Option<&str> {
+    let mut line = 1;
+    let mut start = 0;
+    for (idx, byte) in source.bytes().enumerate() {
+        if line == target_line && byte == b'\n' {
+            return Some(&source[start..idx]);
+        }
+        if byte == b'\n' {
+            line += 1;
+            start = idx + 1;
+        }
+    }
+    if line == target_line {
+        Some(&source[start..])
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -577,6 +1197,56 @@ fn file_url(path: &Path) -> anyhow::Result<String> {
         .map(|url| url.to_string())
 }
 
+fn apply_runtime_environment(
+    command: &mut Command,
+    spec: ServerSpec,
+    root: &Path,
+) -> anyhow::Result<()> {
+    if spec.server_family == "rust" {
+        let cache_dir = cache_dir_for_root(root, spec.server_family);
+        std::fs::create_dir_all(&cache_dir)
+            .with_context(|| format!("create {}", cache_dir.display()))?;
+        command.env("CARGO_TARGET_DIR", cache_dir.join("target"));
+    }
+    Ok(())
+}
+
+fn cache_dir_for_root(root: &Path, language: &str) -> PathBuf {
+    let base = std::env::var_os(CODE_INTEL_CACHE_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_CACHE_DIR));
+    base.join(language).join(stable_path_hash(root))
+}
+
+fn stable_path_hash(root: &Path) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    root.to_string_lossy().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn source_fingerprint(source: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn env_duration(key: &str, default: Duration, min: Duration, max: Duration) -> Duration {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(default)
+        .clamp(min, max)
+}
+
+fn env_usize(key: &str, default: usize, min: usize, max: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(default)
+        .clamp(min, max)
+}
+
 fn command_available(command: &str) -> bool {
     if command.contains('/') {
         return is_executable_file(Path::new(command));
@@ -615,6 +1285,38 @@ fn is_executable_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const FAKE_LSP_SCRIPT: &str = r#"
+starts="$(pwd)/.fake_lsp_starts"
+count="$(cat "$starts" 2>/dev/null || echo 0)"
+count=$((count + 1))
+printf '%s\n' "$count" > "$starts"
+send() {
+  body="$1"
+  len="$(printf '%s' "$body" | wc -c | tr -d ' ')"
+  printf 'Content-Length: %s\r\n\r\n%s' "$len" "$body"
+}
+while IFS= read -r header; do
+  len="$(printf '%s' "$header" | tr -dc '0-9')"
+  IFS= read -r blank || exit 0
+  body="$(dd bs=1 count="$len" 2>/dev/null)"
+  id="$(printf '%s' "$body" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')"
+  case "$body" in
+    *'"method":"initialize"'*)
+      send "{\"jsonrpc\":\"2.0\",\"id\":${id:-1},\"result\":{\"capabilities\":{}}}"
+      ;;
+    *'"method":"textDocument/definition"'*)
+      send "{\"jsonrpc\":\"2.0\",\"id\":${id:-1},\"result\":{\"uri\":\"file://$(pwd)/src/main.ts\",\"range\":{\"start\":{\"line\":0,\"character\":6},\"end\":{\"line\":0,\"character\":11}}}}"
+      ;;
+    *'"method":"textDocument/references"'*)
+      send "{\"jsonrpc\":\"2.0\",\"id\":${id:-1},\"result\":[{\"uri\":\"file://$(pwd)/src/main.ts\",\"range\":{\"start\":{\"line\":0,\"character\":6},\"end\":{\"line\":0,\"character\":11}}}]}"
+      ;;
+    *'"id":'*)
+      send "{\"jsonrpc\":\"2.0\",\"id\":${id:-1},\"result\":null}"
+      ;;
+  esac
+done
+"#;
 
     #[test]
     fn parses_location_and_location_link_results() {
@@ -707,5 +1409,155 @@ mod tests {
             "typescript-language-server",
             &[temp.path().to_path_buf()]
         ));
+    }
+
+    #[test]
+    fn converts_one_based_byte_column_to_lsp_utf16_character() {
+        let source = "fn main() {}\nlet name = \"value\";\nlet emoji = \"🚀\";\n";
+
+        assert_eq!(
+            utf16_character_for_one_based_byte_col(source, 2, 5),
+            4,
+            "ASCII column maps directly"
+        );
+        assert_eq!(
+            utf16_character_for_one_based_byte_col(source, 3, 14),
+            13,
+            "columns before non-BMP text are unaffected"
+        );
+        assert_eq!(
+            utf16_character_for_one_based_byte_col("let café_value = 1;\n", 1, 10),
+            8,
+            "multi-byte UTF-8 before the cursor is counted as UTF-16"
+        );
+    }
+
+    #[test]
+    fn workspace_configuration_response_matches_requested_item_count() {
+        let response = workspace_configuration_result(&json!({
+            "params": {
+                "items": [{ "section": "rust-analyzer" }, { "section": "typescript" }]
+            }
+        }));
+        assert_eq!(response, json!([{}, {}]));
+    }
+
+    #[test]
+    fn javascript_language_id_distinguishes_jsx_files() {
+        let spec = ServerSpec::for_language(SourceLanguage::JavaScript).unwrap();
+
+        assert_eq!(
+            spec.language_id_for_path(Path::new("src/app.ts")),
+            "typescript"
+        );
+        assert_eq!(
+            spec.language_id_for_path(Path::new("src/app.tsx")),
+            "typescriptreact"
+        );
+        assert_eq!(
+            spec.language_id_for_path(Path::new("src/app.js")),
+            "javascript"
+        );
+        assert_eq!(
+            spec.language_id_for_path(Path::new("src/app.jsx")),
+            "javascriptreact"
+        );
+    }
+
+    #[test]
+    fn typescript_family_shares_one_server_key_per_root() {
+        let root = CodeRootSpec {
+            kind: super::super::indexer::CodeRootKind::Repo,
+            name: "repo".to_string(),
+            path: PathBuf::from("/repo"),
+            repo_name: Some("repo".to_string()),
+            workspace_id: None,
+            git_head: None,
+        };
+
+        let ts_key = LspClientKey::new(
+            &root,
+            ServerSpec::for_language(SourceLanguage::TypeScript).unwrap(),
+        );
+        let tsx_key = LspClientKey::new(
+            &root,
+            ServerSpec::for_language(SourceLanguage::Tsx).unwrap(),
+        );
+        let js_key = LspClientKey::new(
+            &root,
+            ServerSpec::for_language(SourceLanguage::JavaScript).unwrap(),
+        );
+        let rust_key = LspClientKey::new(
+            &root,
+            ServerSpec::for_language(SourceLanguage::Rust).unwrap(),
+        );
+
+        assert_eq!(ts_key, tsx_key);
+        assert_eq!(ts_key, js_key);
+        assert_ne!(ts_key, rust_key);
+    }
+
+    #[tokio::test]
+    async fn root_language_server_reuses_one_process_for_repeated_requests() {
+        let temp = tempfile::tempdir().unwrap();
+        let root_path = temp.path();
+        std::fs::create_dir(root_path.join("src")).unwrap();
+        let file_path = root_path.join("src/main.ts");
+        let source = "const value = 1;\n";
+        std::fs::write(&file_path, source).unwrap();
+        let root = CodeRootSpec {
+            kind: super::super::indexer::CodeRootKind::Repo,
+            name: "repo".to_string(),
+            path: root_path.to_path_buf(),
+            repo_name: Some("repo".to_string()),
+            workspace_id: None,
+            git_head: None,
+        };
+        let spec = ServerSpec {
+            language: "typescript",
+            server_family: "typescript",
+            source_languages: &[SourceLanguage::TypeScript],
+            command: "/bin/sh",
+            args: &["-c", FAKE_LSP_SCRIPT],
+            required_commands: &[],
+            language_id: "typescript",
+        };
+        let mut server = RootLanguageServer::spawn(spec, &root, Duration::from_secs(1))
+            .await
+            .unwrap();
+
+        let first = server
+            .request_locations(
+                &file_path,
+                source,
+                1,
+                7,
+                LspRequestKind::Definition,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+        let second = server
+            .request_locations(
+                &file_path,
+                source,
+                1,
+                7,
+                LspRequestKind::Definition,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(first[0].path, "src/main.ts");
+        assert_eq!(
+            std::fs::read_to_string(root_path.join(".fake_lsp_starts"))
+                .unwrap()
+                .trim(),
+            "1"
+        );
     }
 }

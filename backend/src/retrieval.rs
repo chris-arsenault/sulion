@@ -41,6 +41,10 @@ const DEFAULT_EMBEDDING_MODEL: &str = "nomic-ai/nomic-embed-text-v1.5";
 const DEFAULT_EMBEDDING_DIMENSIONS: i32 = 768;
 const DEFAULT_BATCH_SIZE: usize = 64;
 const DEFAULT_EMBEDDING_MAX_CHARS: usize = 6000;
+/// Minimum cosine similarity (0..1) a semantic hit must clear to be returned.
+/// Below this we'd be surfacing the nearest neighbor regardless of relevance, so
+/// semantic mode returns nothing rather than noise. Tune via env.
+const DEFAULT_SEMANTIC_MIN_SCORE: f32 = 0.5;
 const MAX_BATCH_SIZE: usize = 256;
 const MAX_EMBEDDING_MAX_CHARS: usize = 20000;
 const DEFAULT_REINDEX_LIMIT: i64 = 500;
@@ -59,6 +63,7 @@ pub struct RetrievalConfig {
     pub embedding_dimensions: i32,
     pub embedding_batch_size: usize,
     pub embedding_max_chars: usize,
+    pub semantic_min_score: f32,
     pub background_index_seconds: Option<u64>,
 }
 
@@ -96,12 +101,22 @@ impl RetrievalConfig {
             .context("invalid SULION_RETRIEVAL_EMBEDDING_MAX_CHARS")?
             .unwrap_or(DEFAULT_EMBEDDING_MAX_CHARS)
             .clamp(256, MAX_EMBEDDING_MAX_CHARS);
+        let semantic_min_score = env_optional("SULION_RETRIEVAL_SEMANTIC_MIN_SCORE")
+            .map(|value| value.parse::<f32>())
+            .transpose()
+            .context("invalid SULION_RETRIEVAL_SEMANTIC_MIN_SCORE")?
+            .unwrap_or(DEFAULT_SEMANTIC_MIN_SCORE)
+            .clamp(0.0, 1.0);
         let background_index_seconds = env_optional("SULION_RETRIEVAL_INDEX_SECONDS")
             .or_else(|| env_optional("SULION_RETRIEVAL_REINDEX_SECONDS"))
             .map(|value| value.parse::<u64>())
             .transpose()
             .context("invalid SULION_RETRIEVAL_INDEX_SECONDS")?
-            .or(Some(BACKGROUND_INDEX_SECONDS));
+            .or(Some(BACKGROUND_INDEX_SECONDS))
+            // `0` disables the background indexer entirely: no worker is spawned
+            // (see the `if let Some(seconds)` guard at startup). Unset falls back
+            // to the default interval; any positive value is the loop cadence.
+            .filter(|seconds| *seconds > 0);
         Ok(Self {
             listen,
             db_url,
@@ -111,6 +126,7 @@ impl RetrievalConfig {
             embedding_dimensions,
             embedding_batch_size,
             embedding_max_chars,
+            semantic_min_score,
             background_index_seconds,
         })
     }
@@ -173,6 +189,7 @@ impl RetrievalState {
                 embedding_dimensions: DEFAULT_EMBEDDING_DIMENSIONS,
                 embedding_batch_size: DEFAULT_BATCH_SIZE,
                 embedding_max_chars: DEFAULT_EMBEDDING_MAX_CHARS,
+                semantic_min_score: DEFAULT_SEMANTIC_MIN_SCORE,
                 background_index_seconds: None,
             },
         )

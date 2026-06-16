@@ -1,11 +1,17 @@
 FROM docker.io/library/debian:trixie-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    build-essential \
     ca-certificates \
     curl \
+    git \
     gnupg \
     gzip \
+    libssl-dev \
+    pkg-config \
     tini \
+    xz-utils \
   && rm -rf /var/lib/apt/lists/*
 
 # Language servers for semantic code intelligence (def/refs). Without these the
@@ -22,10 +28,16 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
 RUN npm install -g typescript-language-server@^4 typescript@^5 \
   && npm cache clean --force
 
-# rust-analyzer LSP binary (spawned as `rust-analyzer`), onto /usr/local/bin.
-RUN curl -fsSL https://github.com/rust-lang/rust-analyzer/releases/latest/download/rust-analyzer-x86_64-unknown-linux-gnu.gz \
-      | gunzip -c > /usr/local/bin/rust-analyzer \
-  && chmod +x /usr/local/bin/rust-analyzer
+# Rust semantic navigation needs the real toolchain, not just the
+# rust-analyzer binary. rust-analyzer shells out to cargo/rustc for workspace
+# metadata, build scripts, proc macros, and standard-library sources.
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable \
+  && rustup component add rust-src rust-analyzer \
+  && chmod -R a+rwX /usr/local/rustup /usr/local/cargo \
+  && find /usr/local/cargo/bin -maxdepth 1 -type f -exec ln -sf {} /usr/local/bin/ \;
 
 # Run as the dev user/group (7321) that owns the repos/workspaces datasets, so
 # the indexer can read them. The roots are NFSv4-ACL ZFS datasets where only

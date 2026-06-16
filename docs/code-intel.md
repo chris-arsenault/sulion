@@ -8,8 +8,12 @@ Status: this document defines the canonical contract. The service skeleton,
 parser, indexer, real CLI, and `/v1/help`, `/v1/status`, `/v1/index/status`,
 `/v1/refresh`, `/v1/outline`, `/v1/find`, `/v1/def`, `/v1/refs`,
 `/v1/search`, `/v1/patch`, and `/v1/pack` service routes exist. Semantic
-`def`/`refs` escalation is attempted when a configured language server is
-available.
+`def`/`refs` resolution is the primary path for Rust, TypeScript, TSX, and
+JavaScript: the service keeps persistent language servers for recently active
+roots and labels any syntactic fallback explicitly. TypeScript, TSX,
+JavaScript, and JSX share one TypeScript-family language server per root.
+Semantic servers start lazily, expire after an idle timeout, and are bounded by
+a global active-server cap.
 
 Durable design decisions live in
 [`adrs/0001-code-intelligence-agent-tool.md`](adrs/0001-code-intelligence-agent-tool.md).
@@ -74,8 +78,9 @@ sulion-code help
 ### status
 
 Shows the inferred root, index freshness, supported languages, semantic
-availability, language-server health, timeout behavior, fallback behavior, and
-three useful next commands.
+availability, language-server health, active warmed roots, steady-state timeout,
+first-use warmup timeout, idle eviction timeout, active server count, server
+cap, fallback behavior, and three useful next commands.
 
 Example:
 
@@ -139,8 +144,13 @@ sulion-code find RetrievalState
 
 ### def
 
-Finds the definition for a file position or symbol id. The service attempts
-semantic resolution where available and falls back to syntactic index results.
+Finds the definition for a file position or symbol id. For Rust, TypeScript,
+TSX, and JavaScript, the service uses the persistent semantic language-server
+runtime. The first semantic request for a root/language may wait for workspace
+warmup; later requests reuse the same active server until it expires idle or is
+evicted by the global cap. If semantic resolution is unavailable or returns no
+in-root location, the response includes an explicit fallback warning before
+returning syntactic index results.
 
 Examples:
 
@@ -151,8 +161,11 @@ sulion-code def sym_01J...
 
 ### refs
 
-Finds references for a file position or symbol id. Results carry confidence so
-agents can tell semantic references from syntax-based approximations.
+Finds references for a file position or symbol id through the persistent
+semantic runtime for Rust, TypeScript, TSX, and JavaScript. Results carry
+confidence so agents can tell semantic references from syntax-based
+approximations. Syntactic fallback is visible in `warnings` and never presented
+as semantic certainty.
 
 Example:
 
@@ -306,9 +319,21 @@ Syntactic results must not be presented as semantic certainty.
 - If `sulion-code` reports `SULION_CODE_INTEL_URL` or
   `SULION_CODE_INTEL_TOKEN` is missing, the shell is not running with Sulion PTY
   code-intelligence environment forwarding.
+- If `status` reports a semantic language as `missing`, install or package the
+  full runtime named in `last_error` (for Rust this means `rust-analyzer`,
+  `cargo`, and `rustc`, not just the analyzer binary).
+- If `status` reports a semantic language as `warming`, the first request for
+  that root/language is still loading workspace state. Subsequent requests reuse
+  the warmed server until it expires idle or is evicted by the active-server
+  cap.
+- If `status.semantic.active_servers` is at `max_active_servers`, the next
+  semantic request may evict the least-recently-used idle server. If all active
+  servers are busy, the command returns explicit syntactic fallback instead of
+  spawning beyond the cap.
 - If `status` reports a stale index, run `sulion-code refresh`, then check
   `sulion-code index-status` until the pending count drains.
 - If a file has parse errors, `outline`, `find`, and `search` may still return
   partial results; check the confidence and warnings fields.
 - If `def` or `refs` returns syntactic confidence, check `status.semantic` for
-  the missing server, startup, health, timeout, or fallback reason.
+  the missing runtime dependency, startup mode, health, timeout, or fallback
+  reason.

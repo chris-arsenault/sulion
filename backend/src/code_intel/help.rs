@@ -21,7 +21,7 @@ Commands:
 Rules:
   scope is inferred from cwd; cd to change root
   patch returns a unified diff only
-  def/refs try semantic resolution, then syntactic fallback
+  def/refs use persistent semantic language servers; fallback is explicit
 
 Start:
   sulion-code help
@@ -34,7 +34,7 @@ pub const OPTIONS: &[&str] = &["--json", "--budget small|normal|large"];
 pub const RULES: &[&str] = &[
     "scope is inferred from cwd; cd to change root",
     "patch returns a unified diff only",
-    "def/refs try semantic resolution, then syntactic fallback",
+    "def/refs use persistent semantic language servers; fallback is explicit",
 ];
 
 pub const EXAMPLES: &[&str] = &[
@@ -78,12 +78,12 @@ pub const COMMANDS: &[HelpCommand] = &[
     HelpCommand {
         name: "def",
         usage: "sulion-code def <path:line[:col] | symbol-id>",
-        summary: "find a definition with semantic escalation where available",
+        summary: "find a definition through the persistent semantic runtime",
     },
     HelpCommand {
         name: "refs",
         usage: "sulion-code refs <path:line[:col] | symbol-id>",
-        summary: "find references with semantic escalation where available",
+        summary: "find references through the persistent semantic runtime",
     },
     HelpCommand {
         name: "search",

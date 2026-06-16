@@ -587,11 +587,32 @@ fn print_status(body: &Value) {
     print_index_summary(&body["index"]);
     let semantic = &body["semantic"];
     println!(
-        "semantic: available={} fallback={} timeout_ms={}",
+        "semantic: available={} active_servers={}/{} fallback={} timeout_ms={} warmup_timeout_ms={} idle_timeout_ms={}",
         bool_text(semantic, "available"),
+        number(semantic, "active_servers"),
+        number(semantic, "max_active_servers"),
         text(semantic, "fallback"),
-        number(semantic, "timeout_ms")
+        number(semantic, "timeout_ms"),
+        number(semantic, "warmup_timeout_ms"),
+        number(semantic, "idle_timeout_ms")
     );
+    if let Some(languages) = semantic["languages"].as_array() {
+        for language in languages {
+            let error = optional_text(language, "last_error")
+                .map(|value| format!(" error={}", compact(value)))
+                .unwrap_or_default();
+            println!(
+                "semantic-language: {} health={} available={} startup={} active_roots={} command={}{}",
+                text(language, "language"),
+                text(language, "health"),
+                bool_text(language, "available"),
+                text(language, "startup"),
+                number(language, "active_roots"),
+                text(language, "command"),
+                error
+            );
+        }
+    }
     print_string_list("languages", &body["supported_languages"]);
     print_string_list("next", &body["examples"]);
 }

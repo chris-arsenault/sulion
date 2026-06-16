@@ -171,6 +171,10 @@ pub(super) struct SemanticStatus {
     pub(super) languages: Vec<SemanticLanguageStatus>,
     pub(super) reason: Option<String>,
     pub(super) timeout_ms: u64,
+    pub(super) warmup_timeout_ms: u64,
+    pub(super) idle_timeout_ms: u64,
+    pub(super) active_servers: usize,
+    pub(super) max_active_servers: usize,
     pub(super) fallback: &'static str,
 }
 
@@ -187,11 +191,16 @@ impl SemanticStatus {
                     available: language.available,
                     health: language.health,
                     startup: language.startup,
+                    active_roots: language.active_roots,
                     last_error: language.last_error,
                 })
                 .collect(),
             reason: status.reason,
             timeout_ms: status.timeout_ms,
+            warmup_timeout_ms: status.warmup_timeout_ms,
+            idle_timeout_ms: status.idle_timeout_ms,
+            active_servers: status.active_servers,
+            max_active_servers: status.max_active_servers,
             fallback: status.fallback,
         }
     }
@@ -202,8 +211,9 @@ pub(super) struct SemanticLanguageStatus {
     language: &'static str,
     command: String,
     available: bool,
-    health: &'static str,
+    health: String,
     startup: &'static str,
+    active_roots: usize,
     last_error: Option<String>,
 }
 

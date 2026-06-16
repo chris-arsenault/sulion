@@ -481,7 +481,13 @@ async fn semantic_search(
     if capabilities.column_exists {
         semantic_search_pgvector(state, query_embedding, filters).await
     } else {
-        semantic_search_exact(&state.pool, query_embedding, filters).await
+        semantic_search_exact(
+            &state.pool,
+            query_embedding,
+            filters,
+            state.config.semantic_min_score,
+        )
+        .await
     }
 }
 
@@ -507,6 +513,7 @@ async fn semantic_search_pgvector(
                 AND re.source_kind = ANY($4) \
                 AND ($5::UUID IS NULL OR re.session_uuid = $5) \
                 AND ($6::TEXT IS NULL OR re.repo_name = $6) \
+                AND (1.0 - (re.embedding_vector <=> $1::vector)) >= $17 \
               ORDER BY re.embedding_vector <=> $1::vector \
               LIMIT $7 \
         ) \
@@ -599,6 +606,7 @@ async fn semantic_search_pgvector(
     .bind(filters.tool_category.as_deref())
     .bind(filters.tool_name.as_deref())
     .bind(filters.limit)
+    .bind(state.config.semantic_min_score)
     .fetch_all(&state.pool)
     .await?;
 
@@ -612,6 +620,7 @@ async fn semantic_search_exact(
     pool: &Pool,
     query_embedding: &[f32],
     filters: &SearchFilters,
+    min_score: f32,
 ) -> Result<Vec<SearchResult>, RetrievalError> {
     let include = filters
         .include
@@ -714,6 +723,9 @@ async fn semantic_search_exact(
     for row in rows {
         let embedding: Vec<f32> = row.try_get("embedding").unwrap_or_default();
         let semantic_score = cosine_similarity(query_embedding, &embedding);
+        if semantic_score < min_score {
+            continue;
+        }
         let mut result = match row_to_any_search_result(row, None) {
             Some(result) => result,
             None => continue,
