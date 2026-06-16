@@ -175,15 +175,15 @@ impl LspManager {
         let result = {
             let mut server = client.lock().await;
             server
-                .request_locations(
+                .request_locations(LspLocationRequest {
                     file_path,
-                    &source,
+                    source: &source,
                     line,
                     col,
                     kind,
-                    self.inner.request_timeout,
-                    self.inner.warmup_timeout,
-                )
+                    request_timeout: self.inner.request_timeout,
+                    warmup_timeout: self.inner.warmup_timeout,
+                })
                 .await
         };
 
@@ -591,7 +591,7 @@ impl ServerSpec {
         let last_error = matching
             .iter()
             .filter_map(|record| record.last_error.clone())
-            .last();
+            .next_back();
         SemanticLanguageRuntimeStatus {
             language: self.language,
             command: self.command_line(),
@@ -668,6 +668,16 @@ enum LspRequestKind {
     References,
 }
 
+struct LspLocationRequest<'a> {
+    file_path: &'a Path,
+    source: &'a str,
+    line: i32,
+    col: i32,
+    kind: LspRequestKind,
+    request_timeout: Duration,
+    warmup_timeout: Duration,
+}
+
 struct RootLanguageServer {
     spec: ServerSpec,
     root: PathBuf,
@@ -731,18 +741,13 @@ impl RootLanguageServer {
 
     async fn request_locations(
         &mut self,
-        file_path: &Path,
-        source: &str,
-        line: i32,
-        col: i32,
-        kind: LspRequestKind,
-        request_timeout: Duration,
-        warmup_timeout: Duration,
+        request: LspLocationRequest<'_>,
     ) -> anyhow::Result<Vec<LspLocation>> {
-        let file_uri = file_url(file_path)?;
-        self.sync_document(file_path, &file_uri, source).await?;
-        let position = lsp_position(source, line, col);
-        let params = match kind {
+        let file_uri = file_url(request.file_path)?;
+        self.sync_document(request.file_path, &file_uri, request.source)
+            .await?;
+        let position = lsp_position(request.source, request.line, request.col);
+        let params = match request.kind {
             LspRequestKind::Definition => json!({
                 "textDocument": { "uri": file_uri },
                 "position": position
@@ -753,18 +758,18 @@ impl RootLanguageServer {
                 "context": { "includeDeclaration": true }
             }),
         };
-        let method = match kind {
+        let method = match request.kind {
             LspRequestKind::Definition => "textDocument/definition",
             LspRequestKind::References => "textDocument/references",
         };
         let timeout = if self.semantic_request_count == 0 {
-            warmup_timeout
+            request.warmup_timeout
         } else {
-            request_timeout
+            request.request_timeout
         };
         let result = self.transport.request(method, params, timeout).await?;
         self.semantic_request_count += 1;
-        let locations = match kind {
+        let locations = match request.kind {
             LspRequestKind::Definition => definition_locations(&result),
             LspRequestKind::References => reference_locations(&result),
         };
@@ -845,11 +850,14 @@ fn initialization_options(spec: ServerSpec) -> Value {
 
 struct LspTransport {
     stdin: Arc<AsyncMutex<ChildStdin>>,
-    pending: Arc<AsyncMutex<HashMap<i64, oneshot::Sender<anyhow::Result<Value>>>>>,
+    pending: PendingResponses,
     next_id: AtomicI64,
     _child: Child,
     _reader: JoinHandle<()>,
 }
+
+type PendingResponse = oneshot::Sender<anyhow::Result<Value>>;
+type PendingResponses = Arc<AsyncMutex<HashMap<i64, PendingResponse>>>;
 
 impl LspTransport {
     async fn spawn(spec: ServerSpec, root: &Path) -> anyhow::Result<Self> {
@@ -949,7 +957,7 @@ impl LspTransport {
 async fn read_loop(
     mut stdout: BufReader<ChildStdout>,
     stdin: Arc<AsyncMutex<ChildStdin>>,
-    pending: Arc<AsyncMutex<HashMap<i64, oneshot::Sender<anyhow::Result<Value>>>>>,
+    pending: PendingResponses,
 ) {
     loop {
         let message = match read_message(&mut stdout).await {
@@ -977,10 +985,7 @@ async fn read_loop(
     }
 }
 
-async fn fail_all_pending(
-    pending: &Arc<AsyncMutex<HashMap<i64, oneshot::Sender<anyhow::Result<Value>>>>>,
-    err: anyhow::Error,
-) {
+async fn fail_all_pending(pending: &PendingResponses, err: anyhow::Error) {
     let reason = format!("language server output closed: {err}");
     let mut pending = pending.lock().await;
     for (_, tx) in pending.drain() {
@@ -1527,27 +1532,27 @@ done
             .unwrap();
 
         let first = server
-            .request_locations(
-                &file_path,
+            .request_locations(LspLocationRequest {
+                file_path: &file_path,
                 source,
-                1,
-                7,
-                LspRequestKind::Definition,
-                Duration::from_secs(1),
-                Duration::from_secs(1),
-            )
+                line: 1,
+                col: 7,
+                kind: LspRequestKind::Definition,
+                request_timeout: Duration::from_secs(1),
+                warmup_timeout: Duration::from_secs(1),
+            })
             .await
             .unwrap();
         let second = server
-            .request_locations(
-                &file_path,
+            .request_locations(LspLocationRequest {
+                file_path: &file_path,
                 source,
-                1,
-                7,
-                LspRequestKind::Definition,
-                Duration::from_secs(1),
-                Duration::from_secs(1),
-            )
+                line: 1,
+                col: 7,
+                kind: LspRequestKind::Definition,
+                request_timeout: Duration::from_secs(1),
+                warmup_timeout: Duration::from_secs(1),
+            })
             .await
             .unwrap();
 
