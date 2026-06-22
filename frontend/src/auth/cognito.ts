@@ -84,34 +84,80 @@ export function signOut(): void {
   getCurrentUser()?.signOut();
 }
 
-export function signIn(username: string, password: string): Promise<SessionSnapshot> {
+// The shared Ahara Cognito pool runs with software-token (TOTP) MFA required
+// (see ahara INTEGRATION.md "Required OTP/MFA handling"). Authenticator
+// enrollment (the Cognito MFA_SETUP challenge) is centralized in ahara-business
+// and intentionally NOT implemented here: this app only completes the
+// SOFTWARE_TOKEN_MFA login challenge for already-enrolled users, and sends
+// un-enrolled users to ahara-business to enroll.
+const ENROLL_VIA_AHARA_BUSINESS =
+  "Multi-factor authentication isn't set up for this account. Enroll an " +
+  "authenticator in the Ahara account portal (ahara-business), then sign in here.";
+
+export type SignInChallenge = {
+  // Cognito SOFTWARE_TOKEN_MFA: an enrolled user enters their current 6-digit code.
+  kind: "softwareTokenMfa";
+  submitCode: (code: string) => Promise<SignInResult>;
+};
+
+export type SignInResult =
+  | { kind: "authenticated"; session: SessionSnapshot }
+  | { kind: "challenge"; challenge: SignInChallenge };
+
+export function signIn(username: string, password: string): Promise<SignInResult> {
   const pool = getPool();
   if (!pool) return Promise.reject(new Error("Cognito auth is not configured"));
 
-  const user = new CognitoUser({
-    Username: username,
-    Pool: pool,
-  });
-  const details = new AuthenticationDetails({
-    Username: username,
-    Password: password,
-  });
+  const user = new CognitoUser({ Username: username, Pool: pool });
+  const details = new AuthenticationDetails({ Username: username, Password: password });
 
-  return new Promise((resolve, reject) => {
-    user.authenticateUser(details, {
-      onSuccess: async () => {
-        try {
-          const snapshot = await getSessionSnapshot();
-          if (!snapshot) throw new Error("session missing after login");
-          resolve(snapshot);
-        } catch (err) {
-          reject(err);
-        }
-      },
-      onFailure: (err: Error) => reject(err),
-      newPasswordRequired: () => reject(new Error("new password required")),
-    });
+  return new Promise<SignInResult>((resolve, reject) => {
+    user.authenticateUser(details, buildAuthCallbacks(user, resolve, reject));
   });
+}
+
+function buildAuthCallbacks(
+  user: CognitoUser,
+  resolve: (result: SignInResult) => void,
+  reject: (err: Error) => void,
+) {
+  return {
+    onSuccess: () => resolveAuthenticated(resolve, reject),
+    onFailure: (err: Error) => reject(err),
+    newPasswordRequired: () => reject(new Error("new password required")),
+    // Enrolled user: prompt for the current authenticator code.
+    totpRequired: () => {
+      resolve({
+        kind: "challenge",
+        challenge: {
+          kind: "softwareTokenMfa",
+          submitCode: (code: string) =>
+            new Promise<SignInResult>((res, rej) => {
+              user.sendMFACode(
+                code.trim(),
+                buildAuthCallbacks(user, res, rej),
+                "SOFTWARE_TOKEN_MFA",
+              );
+            }),
+        },
+      });
+    },
+    // Not enrolled. Enrollment is centralized in ahara-business, so we do not run
+    // associateSoftwareToken/verifySoftwareToken here — direct the user there.
+    mfaSetup: () => reject(new Error(ENROLL_VIA_AHARA_BUSINESS)),
+  };
+}
+
+function resolveAuthenticated(
+  resolve: (result: SignInResult) => void,
+  reject: (err: Error) => void,
+): void {
+  getSessionSnapshot()
+    .then((snapshot) => {
+      if (!snapshot) throw new Error("session missing after login");
+      resolve({ kind: "authenticated", session: snapshot });
+    })
+    .catch((err) => reject(err instanceof Error ? err : new Error(String(err))));
 }
 
 function readString(value: unknown): string | null {
