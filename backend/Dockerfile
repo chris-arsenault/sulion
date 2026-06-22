@@ -188,6 +188,38 @@ RUN dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.rep
   && dnf clean all \
   && rm -rf /var/cache/dnf
 
+# Ruby via RVM for PTYs working on Ruby projects. Installed multi-user under
+# /usr/local/rvm so the toolchain is shared; the `dev` user joins the `rvm`
+# group below so it can install gems/rubies and `rvm use` other versions
+# (RVM's shell integration loads from /etc/profile.d/rvm.sh in login shells).
+# The default ruby/gem/bundle wrappers are symlinked into /usr/local/bin so
+# they stay on PATH even when /etc/profile resets it, matching the cargo and
+# dotnet handling above. Build deps for compiling Ruby from source are
+# installed explicitly ("Development Tools" + openssl-devel already came in
+# with the Rust block).
+ARG RUBY_VERSION=3.4.4
+RUN dnf install -y --setopt=install_weak_deps=False \
+      readline-devel \
+      zlib-devel \
+      libyaml-devel \
+      libffi-devel \
+      gdbm-devel \
+      ncurses-devel \
+      bzip2 \
+  && dnf clean all \
+  && rm -rf /var/cache/dnf \
+  && curl -sSL https://rvm.io/mpapis.asc | gpg2 --import - \
+  && curl -sSL https://rvm.io/pkuczynski.asc | gpg2 --import - \
+  && curl -sSL https://get.rvm.io | bash -s stable \
+  && source /etc/profile.d/rvm.sh \
+  && rvm install "${RUBY_VERSION}" \
+  && rvm --default use "${RUBY_VERSION}" \
+  && rvm cleanup all \
+  && for w in ruby gem bundle bundler irb rake; do \
+       ln -sf "/usr/local/rvm/wrappers/default/$w" "/usr/local/bin/$w"; \
+     done \
+  && chmod -R g+rwX /usr/local/rvm
+
 # Agent CLIs pre-installed system-wide so a fresh PTY can
 # `claude login` / `codex login` without any bootstrap. Users who
 # want a different version override locally via `npm i -g …` (prefix
@@ -201,6 +233,7 @@ ARG DEV_UID=7321
 ARG DEV_GID=7321
 RUN groupadd --gid ${DEV_GID} dev \
   && useradd --uid ${DEV_UID} --gid ${DEV_GID} --shell /bin/bash --home-dir /home/dev dev \
+  && usermod -aG rvm dev \
   && mkdir -p /home/dev \
   && mkdir -p /run/sulion /opt/sulion/hooks /opt/sulion/bin /opt/sulion/docs \
   && echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev \
