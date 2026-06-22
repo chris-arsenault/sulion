@@ -277,9 +277,7 @@ pub(super) async fn index_pending_embeddings(
     let refs: Vec<(usize, i32)> = chunked
         .iter()
         .enumerate()
-        .flat_map(|(source_idx, chunks)| {
-            (0..chunks.len()).map(move |ord| (source_idx, ord as i32))
-        })
+        .flat_map(|(source_idx, chunks)| (0..chunks.len()).map(move |ord| (source_idx, ord as i32)))
         .collect();
     let texts: Vec<&str> = refs
         .iter()
