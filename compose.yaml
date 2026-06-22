@@ -79,9 +79,8 @@ services:
       SULION_RETRIEVAL_EMBEDDING_URL: "http://192.168.66.3:5361"
       SULION_RETRIEVAL_EMBEDDING_MODEL: "nomic-ai/nomic-embed-text-v1.5"
       SULION_RETRIEVAL_EMBEDDING_DIMENSIONS: "768"
-      # Temporarily disabled (0 = no background indexer) while we investigate the
-      # embedding service pegging all cores. Restore "300" to resume indexing.
-      SULION_RETRIEVAL_INDEX_SECONDS: "0"
+      # Idle cadence for the semantic indexing worker; backlog drains continuously.
+      SULION_RETRIEVAL_INDEX_SECONDS: "300"
     networks:
       - sulion
 

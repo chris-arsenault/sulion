@@ -666,7 +666,10 @@ fn print_symbol_results(body: &Value) {
         if !result["body_range"].is_null() {
             println!("  body: {}", format_range(&result["body_range"]));
         }
-        println!("  next: sulion-code pack {}", text(result, "id"));
+        println!(
+            "  next: sulion-code pack {}",
+            pack_target_for_result(result)
+        );
     }
 }
 
@@ -810,6 +813,24 @@ fn format_range(value: &Value) -> String {
     format!("{path}:{start_line}:{start_col}-{end_line}:{end_col}")
 }
 
+fn pack_target_for_result(result: &Value) -> String {
+    let id = text(result, "id");
+    if id.starts_with("sym_") && !id.contains(':') {
+        return id.to_string();
+    }
+    pack_range_target(&result["range"]).unwrap_or_else(|| id.to_string())
+}
+
+fn pack_range_target(value: &Value) -> Option<String> {
+    let path = optional_text(value, "path")?;
+    let start_line = value.get("start_line").and_then(Value::as_i64)?;
+    let end_line = value.get("end_line").and_then(Value::as_i64)?;
+    if path.trim().is_empty() || start_line < 1 || end_line < 1 {
+        return None;
+    }
+    Some(format!("{path}:{start_line}-{end_line}"))
+}
+
 fn print_string_list(label: &str, value: &Value) {
     let items = value
         .as_array()
@@ -931,6 +952,41 @@ mod tests {
 
         assert!(parsed.json);
         assert_eq!(parsed.command, CodeCommand::Help);
+    }
+
+    #[test]
+    fn pack_hint_uses_symbol_id_when_pack_accepts_it() {
+        let result = json!({
+            "id": "sym_abc123",
+            "range": {
+                "path": "backend/src/lib.rs",
+                "start_line": 7,
+                "start_col": 1,
+                "end_line": 9,
+                "end_col": 2
+            }
+        });
+
+        assert_eq!(pack_target_for_result(&result), "sym_abc123");
+    }
+
+    #[test]
+    fn pack_hint_uses_range_for_semantic_result_ids() {
+        let result = json!({
+            "id": "semantic:frontend/src/components/Sidebar.tsx:59:17",
+            "range": {
+                "path": "frontend/src/components/Sidebar.tsx",
+                "start_line": 59,
+                "start_col": 17,
+                "end_line": 59,
+                "end_col": 24
+            }
+        });
+
+        assert_eq!(
+            pack_target_for_result(&result),
+            "frontend/src/components/Sidebar.tsx:59-59"
+        );
     }
 
     #[test]

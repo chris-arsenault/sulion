@@ -15,17 +15,27 @@ pub async fn run(args: &[OsString]) -> anyhow::Result<i32> {
                 .ok_or_else(|| anyhow!("retrieve arguments must be valid UTF-8"))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
+    let (leading_options, args) = split_leading_options(args)?;
     let Some(command) = args.first().map(String::as_str) else {
         print_usage();
         return Ok(64);
     };
+    if matches!(command, "-h" | "--help" | "help") {
+        print_usage();
+        return Ok(0);
+    }
+    let command_args = leading_options
+        .iter()
+        .chain(args[1..].iter())
+        .cloned()
+        .collect::<Vec<_>>();
     let env = RetrievalCliEnv::from_env()?;
     let client = reqwest::Client::new();
     match command {
-        "search" => search(&client, &env, &args[1..]).await,
-        "context" => get_json(&client, &env, "/v1/context", &[], wants_json(&args[1..])).await,
+        "search" => search(&client, &env, &command_args).await,
+        "context" => get_json(&client, &env, "/v1/context", &[], wants_json(&command_args)).await,
         "sessions" => {
-            let options = parse_options(&args[1..])?;
+            let options = parse_options(&command_args)?;
             get_json(
                 &client,
                 &env,
@@ -36,7 +46,7 @@ pub async fn run(args: &[OsString]) -> anyhow::Result<i32> {
             .await
         }
         "facets" => {
-            let options = parse_options(&args[1..])?;
+            let options = parse_options(&command_args)?;
             get_json(
                 &client,
                 &env,
@@ -46,23 +56,19 @@ pub async fn run(args: &[OsString]) -> anyhow::Result<i32> {
             )
             .await
         }
-        "file-history" => file_history(&client, &env, &args[1..]).await,
-        "turn" => turn(&client, &env, &args[1..]).await,
-        "reindex" => reindex(&client, &env, &args[1..]).await,
-        "reset" => reset(&client, &env, &args[1..]).await,
+        "file-history" => file_history(&client, &env, &command_args).await,
+        "turn" => turn(&client, &env, &command_args).await,
+        "reindex" => reindex(&client, &env, &command_args).await,
+        "reset" => reset(&client, &env, &command_args).await,
         "index-status" => {
             get_json(
                 &client,
                 &env,
                 "/v1/index/status",
                 &[],
-                wants_json(&args[1..]),
+                wants_json(&command_args),
             )
             .await
-        }
-        "-h" | "--help" | "help" => {
-            print_usage();
-            Ok(0)
         }
         other => Err(anyhow!("unknown retrieve command: {other}")),
     }
@@ -390,6 +396,60 @@ fn parse_options(args: &[String]) -> anyhow::Result<CliOptions> {
     Ok(out)
 }
 
+fn split_leading_options(args: Vec<String>) -> anyhow::Result<(Vec<String>, Vec<String>)> {
+    let mut leading = Vec::new();
+    let mut rest = Vec::new();
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        if option_takes_value(&arg) {
+            leading.push(arg.clone());
+            let value = iter
+                .next()
+                .ok_or_else(|| anyhow!("{} requires a value", arg))?;
+            leading.push(value);
+        } else if is_flag_option(&arg) {
+            leading.push(arg);
+        } else if arg.starts_with("--") {
+            return Err(anyhow!("unknown option: {arg}"));
+        } else {
+            rest.push(arg);
+            rest.extend(iter);
+            break;
+        }
+    }
+    Ok((leading, rest))
+}
+
+fn option_takes_value(value: &str) -> bool {
+    matches!(
+        value,
+        "--repo"
+            | "--scope"
+            | "--session"
+            | "--agent-session"
+            | "--agent-session-uuid"
+            | "--include"
+            | "--mode"
+            | "--search-mode"
+            | "--limit"
+            | "--file"
+            | "--path"
+            | "--tool-category"
+            | "--tool-name"
+            | "--agent"
+            | "--model"
+            | "--since"
+            | "--until"
+    )
+}
+
+fn is_flag_option(value: &str) -> bool {
+    matches!(
+        value,
+        "--json" | "--errors-only" | "--all" | "--tools" | "--confirm" | "--no-reschedule"
+    )
+}
+
 fn push_value(
     args: &[String],
     idx: &mut usize,
@@ -418,6 +478,10 @@ fn print_search(body: &Value) {
         print_json(body);
         return;
     };
+    if results.is_empty() {
+        println!("results: none");
+        return;
+    }
     for (idx, result) in results.iter().enumerate() {
         let source = result["source_kind"].as_str().unwrap_or("unknown");
         let score = result["score"].as_f64().unwrap_or_default();
@@ -542,6 +606,28 @@ mod tests {
             .query_pairs
             .contains(&("include", "tools".to_string())));
         assert!(parsed.query_pairs.contains(&("limit", "3".to_string())));
+    }
+
+    #[test]
+    fn forwards_leading_options_to_command_args() {
+        let (leading, rest) = split_leading_options(vec![
+            "--json".to_string(),
+            "--repo".to_string(),
+            "sulion".to_string(),
+            "search".to_string(),
+            "code-intel".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            leading,
+            vec![
+                "--json".to_string(),
+                "--repo".to_string(),
+                "sulion".to_string()
+            ]
+        );
+        assert_eq!(rest, vec!["search".to_string(), "code-intel".to_string()]);
     }
 
     #[test]

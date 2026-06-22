@@ -153,6 +153,9 @@ fn parse_pack_target(value: &str) -> Result<PackTarget, String> {
     if value.starts_with("sym_") && !value.contains(':') {
         return Ok(PackTarget::SymbolId(value.to_string()));
     }
+    if let Some(target) = parse_semantic_pack_target(value)? {
+        return Ok(target);
+    }
     let Some((path, range)) = value.rsplit_once(':') else {
         return Err("pack target must be a symbol id or path:line-line".to_string());
     };
@@ -173,6 +176,29 @@ fn parse_pack_target(value: &str) -> Result<PackTarget, String> {
         start_line,
         end_line,
     })
+}
+
+fn parse_semantic_pack_target(value: &str) -> Result<Option<PackTarget>, String> {
+    let Some(rest) = value.strip_prefix("semantic:") else {
+        return Ok(None);
+    };
+    let Some((path_and_line, column)) = rest.rsplit_once(':') else {
+        return Err("pack semantic target must use semantic:path:line:col".to_string());
+    };
+    parse_positive_line(column, "semantic column")?;
+    let Some((path, line)) = path_and_line.rsplit_once(':') else {
+        return Err("pack semantic target must use semantic:path:line:col".to_string());
+    };
+    let line = parse_positive_line(line, "semantic line")?;
+    let path = path.trim();
+    if path.is_empty() {
+        return Err("pack semantic path must not be empty".to_string());
+    }
+    Ok(Some(PackTarget::Range {
+        path: path.to_string(),
+        start_line: line,
+        end_line: line,
+    }))
 }
 
 fn parse_positive_line(value: &str, label: &str) -> Result<i32, String> {
@@ -532,6 +558,19 @@ mod tests {
         );
         assert!(parse_pack_target("backend/src/lib.rs:20-10").is_err());
         assert!(parse_pack_target("backend/src/lib.rs:20").is_err());
+    }
+
+    #[test]
+    fn parses_semantic_pack_targets_as_one_line_ranges() {
+        assert_eq!(
+            parse_pack_target("semantic:frontend/src/components/Sidebar.tsx:59:17").unwrap(),
+            PackTarget::Range {
+                path: "frontend/src/components/Sidebar.tsx".to_string(),
+                start_line: 59,
+                end_line: 59,
+            }
+        );
+        assert!(parse_pack_target("semantic:frontend/src/components/Sidebar.tsx:59").is_err());
     }
 
     #[test]
