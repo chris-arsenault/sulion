@@ -17,6 +17,7 @@ sulion-retrieve search "exec_command" --tools --tool-category utility
 sulion-retrieve file-history backend/src/retrieval/search.rs
 sulion-retrieve turn <agent-session-uuid> <turn-id>
 sulion-retrieve reindex --repo sulion
+sulion-retrieve reset --confirm
 sulion-retrieve index-status
 ```
 
@@ -96,6 +97,34 @@ idle interval configured by `SULION_RETRIEVAL_INDEX_SECONDS` (default 300s).
 `GET /v1/index/status` reports pending, indexed, failed, and deleted semantic
 source counts, running/failed backfill counts, cumulative backfill rows seen,
 and the embedding count for the active model.
+
+`POST /v1/index/reset` (body `{"confirm": true, "reschedule": true}`) drops all
+embeddings and the backfill/source queue, then reschedules a full rebuild under
+the current source-selection and chunking rules. It is the supported way to
+rebuild from scratch: it runs under the same indexer lock as the background
+crawler, so it never truncates tables out from under an in-flight backfill, and
+the service — not a raw SQL wipe — orchestrates the restart. `confirm` is
+required; pass `"reschedule": false` to wipe without scheduling a rebuild.
+Transcript text is untouched; only the derived embedding state is reset. The
+embedding service should be capped/idle before a large rebuild.
+
+## Chunking
+
+Long sources (assistant/user/summary text and `agent` subagent finals) are split
+into `SULION_RETRIEVAL_EMBEDDING_MAX_CHARS`-sized chunks, up to
+`SULION_RETRIEVAL_EMBEDDING_CHUNK_MAX` (default 10) per source; the tail beyond
+the cap is dropped. Each chunk is one row in `retrieval_embeddings`, keyed by
+`(embedding_model, source_key, chunk_ord)`; `retrieval_embedding_sources` stays
+one row per source, so index status and source counts remain source-based while
+`embedding_count` counts chunks. Search collapses multiple chunk hits of one
+source to its best-scoring chunk.
+
+Most tool output is not embedded: only natural-language reasoning and short
+intent are indexed. `tool_call` keeps the tool name plus a capped `input`
+(intent, not the file body/diff), `tool_error` keeps a capped message, and among
+results only `agent` finals are embedded in full. Command output, file reads,
+writes, diffs, image payloads, and MCP state dumps are dropped — they are
+redundant with the code index and dilute semantic search.
 
 The current local model is `nomic-ai/nomic-embed-text-v1.5` with 768 dimensions.
 When `pgvector` is installed in the `sulion` database, the retrieval service

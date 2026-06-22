@@ -362,6 +362,8 @@ async fn startup_schedules_initial_backfill_when_source_state_is_empty() {
         embedding_dimensions: 3,
         embedding_batch_size: 8,
         embedding_max_chars: 6000,
+        embedding_chunk_max: 10,
+        semantic_min_score: 0.0,
         background_index_seconds: None,
     };
     let _state = retrieval::RetrievalState::from_config(config.clone())
@@ -409,6 +411,8 @@ async fn reindex_marks_pending_and_worker_refreshes_stale_hashes() {
             embedding_dimensions: 3,
             embedding_batch_size: 8,
             embedding_max_chars: 6000,
+            embedding_chunk_max: 10,
+            semantic_min_score: 0.0,
             background_index_seconds: None,
         },
     )
@@ -462,7 +466,9 @@ async fn reindex_marks_pending_and_worker_refreshes_stale_hashes() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert!(indexed_count >= 3);
+    // assistant_text + tool_call. The exec_command tool_result is no longer
+    // embedded (only failures and `agent` finals are kept among tool results).
+    assert_eq!(indexed_count, 2);
 
     let status: serde_json::Value = h
         .auth(h.client.get(format!("{}/v1/index/status", h.base)))
@@ -521,6 +527,103 @@ async fn reindex_marks_pending_and_worker_refreshes_stale_hashes() {
     let results = semantic["results"].as_array().unwrap();
     assert_eq!(results.len(), 1, "{semantic:#}");
     assert_eq!(results[0]["agent_session_uuid"], session_uuid.to_string());
+}
+
+#[tokio::test]
+async fn reset_endpoint_wipes_index_and_reschedules_backfill() {
+    let Some(_) = test_db_url() else {
+        eprintln!("skipping: SULION_TEST_DB not set");
+        return;
+    };
+    let embedding_url = start_embedding_server().await;
+    let pool = fresh_pool().await;
+    seed_retrieval_fixture(&pool).await;
+    let h = Harness::new_with_config(
+        pool.clone(),
+        retrieval::RetrievalConfig {
+            listen: "127.0.0.1:0".parse().unwrap(),
+            db_url: String::new(),
+            token: "test-token".to_string(),
+            embedding_service_url: embedding_url,
+            embedding_model: "test-embed".to_string(),
+            embedding_dimensions: 3,
+            embedding_batch_size: 8,
+            embedding_max_chars: 6000,
+            embedding_chunk_max: 10,
+            semantic_min_score: 0.0,
+            background_index_seconds: None,
+        },
+    )
+    .await;
+
+    // Build an index: assistant_text + tool_call.
+    h.auth(
+        h.client
+            .post(format!("{}/v1/reindex", h.base))
+            .json(&json!({ "repo": "sulion" })),
+    )
+    .send()
+    .await
+    .unwrap()
+    .error_for_status()
+    .unwrap();
+    retrieval::run_indexer_once_for_tests(&h.state, 10)
+        .await
+        .unwrap();
+    let before = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM retrieval_embeddings")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(before, 2);
+
+    // Reset is refused without confirmation.
+    let unconfirmed = h
+        .auth(
+            h.client
+                .post(format!("{}/v1/index/reset", h.base))
+                .json(&json!({})),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unconfirmed.status(), StatusCode::BAD_REQUEST);
+
+    // Confirmed reset wipes the index and reschedules a fresh backfill.
+    let body: serde_json::Value = h
+        .auth(
+            h.client
+                .post(format!("{}/v1/index/reset", h.base))
+                .json(&json!({ "confirm": true })),
+        )
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["embeddings_deleted"], 2, "{body:#}");
+    assert_eq!(body["backfills_started"], 3, "{body:#}");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM retrieval_embeddings")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+
+    // The rescheduled backfill rebuilds under the same rules.
+    retrieval::run_indexer_once_for_tests(&h.state, 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM retrieval_embeddings")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        2
+    );
 }
 
 #[tokio::test]

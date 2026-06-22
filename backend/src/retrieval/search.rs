@@ -503,9 +503,9 @@ async fn semantic_search_pgvector(
         .collect::<Vec<_>>();
     let vector = vector_literal(query_embedding);
     let rows = sqlx::query(
-        "WITH ranked AS ( \
-             SELECT re.source_kind, re.session_uuid, re.byte_offset, re.block_ord, re.turn_id, re.operation_ord, \
-                    re.repo_name, (1.0 - (re.embedding_vector <=> $1::vector))::REAL AS semantic_score \
+        "WITH cand AS ( \
+             SELECT re.source_key, re.source_kind, re.session_uuid, re.byte_offset, re.block_ord, re.turn_id, re.operation_ord, \
+                    re.repo_name, (re.embedding_vector <=> $1::vector) AS dist \
                FROM retrieval_embeddings re \
               WHERE re.embedding_model = $2 \
                 AND re.embedding_dimensions = $3 \
@@ -516,6 +516,12 @@ async fn semantic_search_pgvector(
                 AND (1.0 - (re.embedding_vector <=> $1::vector)) >= $17 \
               ORDER BY re.embedding_vector <=> $1::vector \
               LIMIT $7 \
+        ), \
+        ranked AS ( \
+             SELECT DISTINCT ON (source_key) source_kind, session_uuid, byte_offset, block_ord, turn_id, operation_ord, \
+                    repo_name, (1.0 - dist)::REAL AS semantic_score \
+               FROM cand \
+              ORDER BY source_key, dist \
         ) \
         SELECT r.source_kind, r.session_uuid, r.byte_offset, r.block_ord, r.turn_id, r.operation_ord, \
                COALESCE(e.timestamp, tt.end_timestamp) AS timestamp, cs.agent, cs.pty_session_id, ps.repo AS pty_repo, asm.cwd, asm.model, \
@@ -628,7 +634,7 @@ async fn semantic_search_exact(
         .map(|kind| kind.as_str().to_string())
         .collect::<Vec<_>>();
     let rows = sqlx::query(
-        "SELECT re.source_kind, re.session_uuid, re.byte_offset, re.block_ord, re.turn_id, re.operation_ord, \
+        "SELECT re.source_key, re.source_kind, re.session_uuid, re.byte_offset, re.block_ord, re.turn_id, re.operation_ord, \
                 re.embedding, COALESCE(e.timestamp, tt.end_timestamp) AS timestamp, cs.agent, cs.pty_session_id, ps.repo AS pty_repo, \
                 asm.cwd, asm.model, \
                 CASE \
@@ -719,21 +725,29 @@ async fn semantic_search_exact(
     .fetch_all(pool)
     .await?;
 
-    let mut scored = Vec::new();
+    // One source can have several chunk rows; keep only its best-scoring chunk.
+    let mut best: HashMap<String, SearchResult> = HashMap::new();
     for row in rows {
         let embedding: Vec<f32> = row.try_get("embedding").unwrap_or_default();
         let semantic_score = cosine_similarity(query_embedding, &embedding);
         if semantic_score < min_score {
             continue;
         }
+        let source_key: String = row.try_get("source_key").unwrap_or_default();
         let mut result = match row_to_any_search_result(row, None) {
             Some(result) => result,
             None => continue,
         };
         result.semantic_score = Some(semantic_score);
         result.score = combined_score(None, Some(semantic_score));
-        scored.push(result);
+        match best.get(&source_key) {
+            Some(existing) if existing.score >= result.score => {}
+            _ => {
+                best.insert(source_key, result);
+            }
+        }
     }
+    let mut scored: Vec<SearchResult> = best.into_values().collect();
     scored.sort_by(|left, right| {
         right
             .score

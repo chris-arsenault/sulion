@@ -30,7 +30,7 @@ use context::{
     clean_opt, context_route, infer_repo_from_cwd, resolve_context, ContextQuery, ResolvedContext,
 };
 use embeddings::{
-    bootstrap_index_if_empty, index_has_work, index_status_route, reindex_route,
+    bootstrap_index_if_empty, index_has_work, index_status_route, reindex_route, reset_route,
     run_retrieval_indexer_once, EmbeddingClient,
 };
 use routes_extra::{facets_route, file_history_route, sessions_route, turn_route};
@@ -41,6 +41,11 @@ const DEFAULT_EMBEDDING_MODEL: &str = "nomic-ai/nomic-embed-text-v1.5";
 const DEFAULT_EMBEDDING_DIMENSIONS: i32 = 768;
 const DEFAULT_BATCH_SIZE: usize = 64;
 const DEFAULT_EMBEDDING_MAX_CHARS: usize = 6000;
+/// Max chunks a single source can produce. Long prose (assistant/user/summary
+/// text and subagent finals) is split into `embedding_max_chars`-sized chunks up
+/// to this many; the tail beyond it is dropped so one pathological source can't
+/// flood the index.
+const DEFAULT_EMBEDDING_CHUNK_MAX: usize = 10;
 /// Minimum cosine similarity (0..1) a semantic hit must clear to be returned.
 /// Below this we'd be surfacing the nearest neighbor regardless of relevance, so
 /// semantic mode returns nothing rather than noise. Tune via env.
@@ -63,6 +68,7 @@ pub struct RetrievalConfig {
     pub embedding_dimensions: i32,
     pub embedding_batch_size: usize,
     pub embedding_max_chars: usize,
+    pub embedding_chunk_max: usize,
     pub semantic_min_score: f32,
     pub background_index_seconds: Option<u64>,
 }
@@ -101,6 +107,12 @@ impl RetrievalConfig {
             .context("invalid SULION_RETRIEVAL_EMBEDDING_MAX_CHARS")?
             .unwrap_or(DEFAULT_EMBEDDING_MAX_CHARS)
             .clamp(256, MAX_EMBEDDING_MAX_CHARS);
+        let embedding_chunk_max = env_optional("SULION_RETRIEVAL_EMBEDDING_CHUNK_MAX")
+            .map(|value| value.parse::<usize>())
+            .transpose()
+            .context("invalid SULION_RETRIEVAL_EMBEDDING_CHUNK_MAX")?
+            .unwrap_or(DEFAULT_EMBEDDING_CHUNK_MAX)
+            .max(1);
         let semantic_min_score = env_optional("SULION_RETRIEVAL_SEMANTIC_MIN_SCORE")
             .map(|value| value.parse::<f32>())
             .transpose()
@@ -126,6 +138,7 @@ impl RetrievalConfig {
             embedding_dimensions,
             embedding_batch_size,
             embedding_max_chars,
+            embedding_chunk_max,
             semantic_min_score,
             background_index_seconds,
         })
@@ -189,6 +202,7 @@ impl RetrievalState {
                 embedding_dimensions: DEFAULT_EMBEDDING_DIMENSIONS,
                 embedding_batch_size: DEFAULT_BATCH_SIZE,
                 embedding_max_chars: DEFAULT_EMBEDDING_MAX_CHARS,
+                embedding_chunk_max: DEFAULT_EMBEDDING_CHUNK_MAX,
                 semantic_min_score: DEFAULT_SEMANTIC_MIN_SCORE,
                 background_index_seconds: None,
             },
@@ -337,6 +351,7 @@ pub fn app(state: Arc<RetrievalState>) -> Router {
         .route("/v1/turns", get(turn_route))
         .route("/v1/reindex", post(reindex_route))
         .route("/v1/index/status", get(index_status_route))
+        .route("/v1/index/reset", post(reset_route))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             require_retrieval_auth,

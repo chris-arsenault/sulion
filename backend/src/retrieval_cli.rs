@@ -49,6 +49,7 @@ pub async fn run(args: &[OsString]) -> anyhow::Result<i32> {
         "file-history" => file_history(&client, &env, &args[1..]).await,
         "turn" => turn(&client, &env, &args[1..]).await,
         "reindex" => reindex(&client, &env, &args[1..]).await,
+        "reset" => reset(&client, &env, &args[1..]).await,
         "index-status" => {
             get_json(
                 &client,
@@ -265,6 +266,43 @@ async fn reindex(
     Ok(0)
 }
 
+async fn reset(
+    client: &reqwest::Client,
+    env: &RetrievalCliEnv,
+    args: &[String],
+) -> anyhow::Result<i32> {
+    let options = parse_options(args)?;
+    let mut confirm = false;
+    let mut body = serde_json::Map::new();
+    for (key, value) in &options.query_pairs {
+        match *key {
+            "confirm" => confirm = value != "false",
+            "reschedule" => {
+                body.insert("reschedule".to_string(), json!(value != "false"));
+            }
+            _ => {}
+        }
+    }
+    if !confirm {
+        return Err(anyhow!(
+            "refusing to reset the semantic index without --confirm \
+             (this drops all embeddings and triggers a full rebuild)"
+        ));
+    }
+    body.insert("confirm".to_string(), json!(true));
+    let response = request_json(
+        client,
+        env,
+        "POST",
+        "/v1/index/reset",
+        &[],
+        Some(Value::Object(body)),
+    )
+    .await?;
+    print_json(&response);
+    Ok(0)
+}
+
 async fn get_json(
     client: &reqwest::Client,
     env: &RetrievalCliEnv,
@@ -323,6 +361,8 @@ fn parse_options(args: &[String]) -> anyhow::Result<CliOptions> {
             "--errors-only" => out.query_pairs.push(("errors_only", "true".to_string())),
             "--all" => out.query_pairs.push(("scope", "all".to_string())),
             "--tools" => out.query_pairs.push(("include", "tools".to_string())),
+            "--confirm" => out.query_pairs.push(("confirm", "true".to_string())),
+            "--no-reschedule" => out.query_pairs.push(("reschedule", "false".to_string())),
             "--repo" => push_value(args, &mut idx, &mut out, "repo")?,
             "--scope" => push_value(args, &mut idx, &mut out, "scope")?,
             "--session" | "--agent-session" | "--agent-session-uuid" => {
@@ -474,6 +514,7 @@ fn print_usage() {
   sulion retrieve facets [--repo repo]
   sulion retrieve index-status
   sulion retrieve reindex [--repo repo]
+  sulion retrieve reset --confirm [--no-reschedule]
 
 options: --json --scope repo|session|all --session uuid --tool-category category --tool-name name --file path --errors-only"
     );

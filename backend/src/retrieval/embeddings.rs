@@ -19,6 +19,26 @@ pub(super) struct ReindexResponse {
     embedding_dimensions: i32,
 }
 
+#[derive(Debug, Deserialize)]
+pub(super) struct ResetRequest {
+    #[serde(default)]
+    pub(super) confirm: bool,
+    pub(super) reschedule: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct ResetResponse {
+    embeddings_deleted: i64,
+    sources_deleted: i64,
+    backfills_deleted: i64,
+    generation: Option<i64>,
+    backfills_started: usize,
+    pending_sources: i64,
+    vector: VectorCapabilities,
+    embedding_model: String,
+    embedding_dimensions: i32,
+}
+
 #[derive(Debug, Serialize)]
 pub(super) struct IndexStatusResponse {
     pending_sources: i64,
@@ -75,6 +95,84 @@ pub(super) async fn reindex_inner(
         sources_seen: 0,
         sources_marked_pending: 0,
         sources_deleted: 0,
+        pending_sources: status.pending_sources,
+        vector,
+        embedding_model: state.config.embedding_model.clone(),
+        embedding_dimensions: state.config.embedding_dimensions,
+    })
+}
+
+pub(super) async fn reset_route(
+    State(state): State<Arc<RetrievalState>>,
+    Json(request): Json<ResetRequest>,
+) -> Result<Json<ResetResponse>, RetrievalError> {
+    Ok(Json(reset_inner(&state, request).await?))
+}
+
+/// Wipe the derived semantic-index state and (by default) reschedule a full
+/// rebuild. Runs under `index_lock` so it serializes with the background indexer
+/// rather than truncating tables out from under an in-flight backfill. Transcript
+/// text is untouched; only embeddings and the backfill/source queue are reset.
+pub(super) async fn reset_inner(
+    state: &RetrievalState,
+    request: ResetRequest,
+) -> Result<ResetResponse, RetrievalError> {
+    if !request.confirm {
+        return Err(RetrievalError::bad_request(
+            "index reset requires {\"confirm\": true}",
+        ));
+    }
+    let vector = state.refresh_vector_capabilities().await?;
+    // Serialize against the crawler: the background indexer holds this same lock
+    // while advancing backfills, so the wipe waits for an in-flight pass to finish
+    // and blocks the next one until the rebuild is scheduled.
+    let _guard = state.index_lock.lock().await;
+
+    let embeddings_deleted: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM retrieval_embeddings")
+        .fetch_one(&state.pool)
+        .await?;
+    let sources_deleted: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM retrieval_embedding_sources")
+            .fetch_one(&state.pool)
+            .await?;
+    let backfills_deleted: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM retrieval_embedding_backfills")
+            .fetch_one(&state.pool)
+            .await?;
+    sqlx::query(
+        "TRUNCATE retrieval_embeddings, retrieval_embedding_sources, \
+                  retrieval_embedding_backfills RESTART IDENTITY",
+    )
+    .execute(&state.pool)
+    .await?;
+
+    let (generation, backfills_started) = if request.reschedule.unwrap_or(true) {
+        let generation = next_backfill_generation(state).await?;
+        let started = start_backfill_runs(state, generation, None, None, false).await?;
+        tracing::info!(
+            generation,
+            backfills_started = started,
+            embeddings_deleted,
+            sources_deleted,
+            "reset retrieval semantic index and rescheduled full backfill"
+        );
+        (Some(generation), started)
+    } else {
+        tracing::info!(
+            embeddings_deleted,
+            sources_deleted,
+            "reset retrieval semantic index without rescheduling"
+        );
+        (None, 0)
+    };
+
+    let status = load_index_status_inner(state, vector).await?;
+    Ok(ResetResponse {
+        embeddings_deleted,
+        sources_deleted,
+        backfills_deleted,
+        generation,
+        backfills_started,
         pending_sources: status.pending_sources,
         vector,
         embedding_model: state.config.embedding_model.clone(),
@@ -162,31 +260,77 @@ pub(super) async fn index_pending_embeddings(
         sources_seen: sources.len(),
         ..EmbeddingIndexStats::default()
     };
-    for chunk in sources.chunks(state.config.embedding_batch_size) {
-        let texts = chunk
-            .iter()
-            .map(|source| embedding_text(&source.text, state.config.embedding_max_chars))
-            .collect::<Vec<_>>();
-        let vectors = embedder.embed_batch(&texts).await?;
-        for (source, embedding) in chunk.iter().zip(vectors) {
-            if embedding.len() != state.config.embedding_dimensions as usize {
-                let err = format!(
-                    "embedding dimensions mismatch: expected {}, got {}",
-                    state.config.embedding_dimensions,
-                    embedding.len()
-                );
-                mark_source_failed(state, &source.source_key, &err).await?;
-                stats.failed += 1;
-                continue;
-            }
-            if source.text.trim().is_empty() {
-                stats.skipped += 1;
-                continue;
-            }
-            upsert_embedding(state, source, &embedding, vector.column_exists).await?;
-            mark_source_indexed(state, source).await?;
-            stats.embedded += 1;
+
+    // Split every source into chunks and flatten to a single (source, chunk_ord)
+    // list so the embedding HTTP batches stay full regardless of how chunks are
+    // distributed across sources.
+    let chunked: Vec<Vec<String>> = sources
+        .iter()
+        .map(|source| {
+            chunk_text(
+                &source.text,
+                state.config.embedding_max_chars,
+                state.config.embedding_chunk_max,
+            )
+        })
+        .collect();
+    let refs: Vec<(usize, i32)> = chunked
+        .iter()
+        .enumerate()
+        .flat_map(|(source_idx, chunks)| {
+            (0..chunks.len()).map(move |ord| (source_idx, ord as i32))
+        })
+        .collect();
+    let texts: Vec<&str> = refs
+        .iter()
+        .map(|&(source_idx, ord)| chunked[source_idx][ord as usize].as_str())
+        .collect();
+
+    // Embed the flattened chunks; `embed_batch` re-splits to the server's HTTP
+    // batch limit internally.
+    let mut vectors = Vec::with_capacity(texts.len());
+    for batch in texts.chunks(state.config.embedding_batch_size) {
+        let owned: Vec<String> = batch.iter().map(|t| t.to_string()).collect();
+        vectors.extend(embedder.embed_batch(&owned).await?);
+    }
+
+    // Write each chunk, tracking per-source failures so a bad chunk fails its
+    // whole source rather than leaving a half-indexed source marked done.
+    let mut failed = vec![false; sources.len()];
+    for (&(source_idx, chunk_ord), embedding) in refs.iter().zip(vectors.iter()) {
+        if failed[source_idx] {
+            continue;
         }
+        let source = &sources[source_idx];
+        if embedding.len() != state.config.embedding_dimensions as usize {
+            let err = format!(
+                "embedding dimensions mismatch: expected {}, got {}",
+                state.config.embedding_dimensions,
+                embedding.len()
+            );
+            mark_source_failed(state, &source.source_key, &err).await?;
+            failed[source_idx] = true;
+            stats.failed += 1;
+            continue;
+        }
+        upsert_embedding(state, source, chunk_ord, embedding, vector.column_exists).await?;
+        stats.embedded += 1;
+    }
+
+    // Finalize each source: drop any stale chunks left over from a longer prior
+    // version, then mark it indexed.
+    for (source_idx, source) in sources.iter().enumerate() {
+        if failed[source_idx] {
+            continue;
+        }
+        let chunk_count = chunked[source_idx].len();
+        if chunk_count == 0 {
+            // No embeddable text (blank after normalization): clear any chunks
+            // and mark indexed so it does not stay pending forever.
+            stats.skipped += 1;
+        }
+        delete_chunks_at_or_above(state, &source.source_key, chunk_count as i32).await?;
+        mark_source_indexed(state, source).await?;
     }
     Ok(stats)
 }
@@ -511,7 +655,7 @@ async fn load_event_backfill_sources(
             ('event:' || e.session_uuid::TEXT || ':' || e.byte_offset::TEXT || ':' || b.ord::TEXT) AS source_key, \
             e.session_uuid, e.byte_offset, b.ord AS block_ord, tt.turn_id, NULL::INT AS operation_ord, \
             COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
-            b.text \
+            CASE WHEN b.kind = 'tool_result' THEN left(b.text, 1000) ELSE b.text END AS text \
            FROM event_blocks b \
            JOIN events e ON e.session_uuid = b.session_uuid AND e.byte_offset = b.byte_offset \
            JOIN claude_sessions cs ON cs.session_uuid = e.session_uuid \
@@ -567,13 +711,16 @@ async fn load_operation_backfill_sources(
             ('operation:' || o.session_uuid::TEXT || ':' || o.turn_id::TEXT || ':' || o.operation_ord::TEXT || ':result') AS source_key, \
             o.session_uuid, NULL::BIGINT AS byte_offset, NULL::INT AS block_ord, o.turn_id, o.operation_ord, \
             COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
-            concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT) AS text \
+            CASE WHEN o.result_is_error OR o.is_error \
+                 THEN left(concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT), 1000) \
+                 ELSE concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT) END AS text \
            FROM timeline_operations o \
            JOIN claude_sessions cs ON cs.session_uuid = o.session_uuid \
            LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
            LEFT JOIN agent_session_metadata asm ON asm.session_uuid = cs.session_uuid \
           WHERE (o.result_content IS NOT NULL OR o.result_payload IS NOT NULL OR o.result_is_error OR o.is_error) \
             AND length(trim(concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT))) > 0 \
+            AND (o.result_is_error OR o.is_error OR o.name = 'agent') \
             AND ($1::UUID IS NULL OR o.session_uuid = $1) \
             AND ($2::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $2) \
             AND ( \
@@ -590,7 +737,7 @@ async fn load_operation_backfill_sources(
             ('operation:' || o.session_uuid::TEXT || ':' || o.turn_id::TEXT || ':' || o.operation_ord::TEXT || ':call') AS source_key, \
             o.session_uuid, NULL::BIGINT AS byte_offset, NULL::INT AS block_ord, o.turn_id, o.operation_ord, \
             COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
-            concat_ws(' ', o.name, o.raw_name, o.operation_type, o.operation_category, o.input::TEXT) AS text \
+            concat_ws(' ', o.name, o.raw_name, o.operation_type, o.operation_category, left(o.input::TEXT, 300)) AS text \
            FROM timeline_operations o \
            JOIN claude_sessions cs ON cs.session_uuid = o.session_uuid \
            LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
@@ -884,7 +1031,7 @@ async fn load_current_event_source(
             ('event:' || e.session_uuid::TEXT || ':' || e.byte_offset::TEXT || ':' || b.ord::TEXT) AS source_key, \
             e.session_uuid, e.byte_offset, b.ord AS block_ord, tt.turn_id, NULL::INT AS operation_ord, \
             COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
-            b.text \
+            CASE WHEN b.kind = 'tool_result' THEN left(b.text, 1000) ELSE b.text END AS text \
            FROM event_blocks b \
            JOIN events e ON e.session_uuid = b.session_uuid AND e.byte_offset = b.byte_offset \
            JOIN claude_sessions cs ON cs.session_uuid = e.session_uuid \
@@ -936,7 +1083,9 @@ async fn load_current_operation_source(
             ('operation:' || o.session_uuid::TEXT || ':' || o.turn_id::TEXT || ':' || o.operation_ord::TEXT || ':result') AS source_key, \
             o.session_uuid, NULL::BIGINT AS byte_offset, NULL::INT AS block_ord, o.turn_id, o.operation_ord, \
             COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
-            concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT) AS text \
+            CASE WHEN o.result_is_error OR o.is_error \
+                 THEN left(concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT), 1000) \
+                 ELSE concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT) END AS text \
            FROM timeline_operations o \
            JOIN claude_sessions cs ON cs.session_uuid = o.session_uuid \
            LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
@@ -945,14 +1094,15 @@ async fn load_current_operation_source(
             AND o.turn_id = $2 \
             AND o.operation_ord = $3 \
             AND (o.result_content IS NOT NULL OR o.result_payload IS NOT NULL OR o.result_is_error OR o.is_error) \
-            AND length(trim(concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT))) > 0"
+            AND length(trim(concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT))) > 0 \
+            AND (o.result_is_error OR o.is_error OR o.name = 'agent')"
     } else {
         "SELECT \
             'tool_call' AS source_kind, \
             ('operation:' || o.session_uuid::TEXT || ':' || o.turn_id::TEXT || ':' || o.operation_ord::TEXT || ':call') AS source_key, \
             o.session_uuid, NULL::BIGINT AS byte_offset, NULL::INT AS block_ord, o.turn_id, o.operation_ord, \
             COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
-            concat_ws(' ', o.name, o.raw_name, o.operation_type, o.operation_category, o.input::TEXT) AS text \
+            concat_ws(' ', o.name, o.raw_name, o.operation_type, o.operation_category, left(o.input::TEXT, 300)) AS text \
            FROM timeline_operations o \
            JOIN claude_sessions cs ON cs.session_uuid = o.session_uuid \
            LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
@@ -1001,6 +1151,7 @@ async fn mark_source_deleted(
 async fn upsert_embedding(
     state: &RetrievalState,
     source: &EmbeddingSource,
+    chunk_ord: i32,
     embedding: &[f32],
     vector_column_exists: bool,
 ) -> Result<(), RetrievalError> {
@@ -1008,9 +1159,9 @@ async fn upsert_embedding(
         sqlx::query(
             "INSERT INTO retrieval_embeddings \
                 (source_kind, source_key, session_uuid, byte_offset, block_ord, turn_id, operation_ord, repo_name, \
-                 content_hash, embedding_model, embedding_dimensions, embedding, embedding_vector, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::vector, NOW()) \
-             ON CONFLICT (embedding_model, source_key) DO UPDATE SET \
+                 content_hash, embedding_model, embedding_dimensions, embedding, embedding_vector, chunk_ord, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::vector, $14, NOW()) \
+             ON CONFLICT (embedding_model, source_key, chunk_ord) DO UPDATE SET \
                  content_hash = EXCLUDED.content_hash, \
                  embedding_dimensions = EXCLUDED.embedding_dimensions, \
                  embedding = EXCLUDED.embedding, \
@@ -1031,15 +1182,16 @@ async fn upsert_embedding(
         .bind(state.config.embedding_dimensions)
         .bind(embedding)
         .bind(vector_literal(embedding))
+        .bind(chunk_ord)
         .execute(&state.pool)
         .await?;
     } else {
         sqlx::query(
             "INSERT INTO retrieval_embeddings \
                 (source_kind, source_key, session_uuid, byte_offset, block_ord, turn_id, operation_ord, repo_name, \
-                 content_hash, embedding_model, embedding_dimensions, embedding, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW()) \
-             ON CONFLICT (embedding_model, source_key) DO UPDATE SET \
+                 content_hash, embedding_model, embedding_dimensions, embedding, chunk_ord, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW()) \
+             ON CONFLICT (embedding_model, source_key, chunk_ord) DO UPDATE SET \
                  content_hash = EXCLUDED.content_hash, \
                  embedding_dimensions = EXCLUDED.embedding_dimensions, \
                  embedding = EXCLUDED.embedding, \
@@ -1058,9 +1210,30 @@ async fn upsert_embedding(
         .bind(&state.config.embedding_model)
         .bind(state.config.embedding_dimensions)
         .bind(embedding)
+        .bind(chunk_ord)
         .execute(&state.pool)
         .await?;
     }
+    Ok(())
+}
+
+/// Remove embedding rows for a source at or above `keep_below`. Used after a
+/// re-index to drop chunks left over when a source's text got shorter (fewer
+/// chunks than before).
+async fn delete_chunks_at_or_above(
+    state: &RetrievalState,
+    source_key: &str,
+    keep_below: i32,
+) -> Result<(), RetrievalError> {
+    sqlx::query(
+        "DELETE FROM retrieval_embeddings \
+          WHERE embedding_model = $1 AND source_key = $2 AND chunk_ord >= $3",
+    )
+    .bind(&state.config.embedding_model)
+    .bind(source_key)
+    .bind(keep_below)
+    .execute(&state.pool)
+    .await?;
     Ok(())
 }
 
@@ -1127,12 +1300,25 @@ fn hash_text(text: &str) -> String {
         .collect()
 }
 
-fn embedding_text(text: &str, max_chars: usize) -> String {
+/// Split a source's text into embeddable chunks. Whitespace is collapsed, then
+/// the text is cut into `max_chars`-sized chunks, capped at `max_chunks` (the
+/// tail beyond the cap is dropped). Short sources (the common case, including the
+/// capped tool_call/tool_error inputs) yield a single chunk. Returns an empty
+/// vec for blank text.
+fn chunk_text(text: &str, max_chars: usize, max_chunks: usize) -> Vec<String> {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.chars().count() <= max_chars {
-        return normalized;
+    if normalized.is_empty() {
+        return Vec::new();
     }
-    normalized.chars().take(max_chars).collect()
+    let chars: Vec<char> = normalized.chars().collect();
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < chars.len() && chunks.len() < max_chunks {
+        let end = (start + max_chars).min(chars.len());
+        chunks.push(chars[start..end].iter().collect());
+        start = end;
+    }
+    chunks
 }
 
 #[derive(Clone)]
