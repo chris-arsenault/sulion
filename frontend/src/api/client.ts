@@ -18,6 +18,7 @@ import type {
   LibraryKind,
   MonitorTimelineRequest,
   MonitorTimelineResponse,
+  RenameRepoRequest,
   RepoDirtyPathsResponse,
   RepoView,
   SaveLibraryInput,
@@ -276,6 +277,28 @@ export function createRepo(body: CreateRepoRequest): Promise<RepoView> {
   return request<RepoView>("/api/repos", {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+export function renameRepo(
+  name: string,
+  body: RenameRepoRequest,
+): Promise<RepoView> {
+  return request<RepoView>(`/api/repos/${encodeURIComponent(name)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteRepo(
+  name: string,
+  opts: { force?: boolean } = {},
+): Promise<void> {
+  const qs = new URLSearchParams();
+  if (opts.force) qs.set("force", "true");
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return request<void>(`/api/repos/${encodeURIComponent(name)}${suffix}`, {
+    method: "DELETE",
   });
 }
 

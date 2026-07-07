@@ -35,6 +35,8 @@ interface MockState {
   grantsBySession: Record<string, Array<Record<string, unknown>>>;
   createSessionCalls: Array<unknown>;
   createRepoCalls: Array<unknown>;
+  renameRepoCalls: Array<{ name: string; body: unknown }>;
+  deletedRepoRequests: Array<{ name: string; query: string }>;
   deletedIds: string[];
   deletedWorkspaceRequests: Array<{ id: string; query: string }>;
   patches: Array<{ id: string; body: unknown }>;
@@ -51,6 +53,8 @@ function installFetchMock(): MockState {
     grantsBySession: {},
     createSessionCalls: [],
     createRepoCalls: [],
+    renameRepoCalls: [],
+    deletedRepoRequests: [],
     deletedIds: [],
     deletedWorkspaceRequests: [],
     patches: [],
@@ -121,6 +125,31 @@ function installFetchMock(): MockState {
         const r = { name: body.name, path: `/tmp/${body.name}` };
         state.repos.push(r);
         return jsonResp(r, 201);
+      }
+      if (url.match(/^\/api\/repos\/[^/?]+(?:\?.*)?$/) && method === "PATCH") {
+        const name = decodeURIComponent(url.split("?")[0].split("/").pop()!);
+        const body = JSON.parse(init!.body as string);
+        const nextName = body.name;
+        state.renameRepoCalls.push({ name, body });
+        state.repos = state.repos.map((repo) =>
+          repo.name === name ? { ...repo, name: nextName, path: `/tmp/${nextName}` } : repo,
+        );
+        state.sessions = state.sessions.map((session) =>
+          session.repo === name ? { ...session, repo: nextName } : session,
+        );
+        state.workspaces = state.workspaces.map((workspace) =>
+          workspace.repo_name === name
+            ? { ...workspace, repo_name: nextName }
+            : workspace,
+        );
+        return jsonResp({ name: nextName, path: `/tmp/${nextName}` });
+      }
+      if (url.match(/^\/api\/repos\/[^/?]+(?:\?.*)?$/) && method === "DELETE") {
+        const [path, query = ""] = url.split("?");
+        const name = decodeURIComponent(path.split("/").pop()!);
+        state.repos = state.repos.filter((repo) => repo.name !== name);
+        state.deletedRepoRequests.push({ name, query });
+        return new Response(null, { status: 204 });
       }
       if (url.match(/^\/api\/repos\/[^/]+\/files/) && method === "GET") {
         return jsonResp({ path: "", entries: [] });
@@ -658,6 +687,52 @@ describe("Sidebar", () => {
       (item) => item.kind === "timeline" && item.repo === REPO_ALPHA,
     );
     expect(tab).toBeDefined();
+  });
+
+  it("renames a repo from the repo context menu", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    setup();
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText(REPO_ALPHA)).toBeDefined());
+    await openRepoContextMenu(user, REPO_ALPHA);
+    await user.click(screen.getByRole("menuitem", { name: "Rename repo" }));
+
+    const input = screen.getByLabelText("Repo name");
+    await user.clear(input);
+    await user.type(input, "omega{enter}");
+
+    await waitFor(() => expect(state.renameRepoCalls).toHaveLength(1));
+    expect(state.renameRepoCalls[0]).toEqual({
+      name: REPO_ALPHA,
+      body: { name: "omega" },
+    });
+    await waitFor(() => expect(screen.getByText("omega")).toBeDefined());
+    expect(screen.queryByText(REPO_ALPHA)).toBeNull();
+  });
+
+  it("deletes a repo from the repo context menu after typing its name", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    setup();
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText(REPO_ALPHA)).toBeDefined());
+    await openRepoContextMenu(user, REPO_ALPHA);
+    await user.click(screen.getByRole("menuitem", { name: "Delete repo" }));
+
+    const confirm = await screen.findByRole("button", { name: "Delete" });
+    expect(confirm).toHaveProperty("disabled", true);
+    await user.type(screen.getByLabelText(`Type ${REPO_ALPHA} to confirm`), REPO_ALPHA);
+    await user.click(confirm);
+
+    await waitFor(() =>
+      expect(state.deletedRepoRequests).toEqual([
+        { name: REPO_ALPHA, query: "" },
+      ]),
+    );
+    expect(screen.queryByText(REPO_ALPHA)).toBeNull();
   });
 
   it("dispatches the future-prompts command from the session context menu", async () => {

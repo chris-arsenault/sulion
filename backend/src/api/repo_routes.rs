@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::device_routes::DevicePrincipal;
-use super::routes::{repo_path, repos_root, ApiError, ApiResult};
+use super::routes::{repo_path, repos_root, validate_repo_name, ApiError, ApiResult};
 use crate::{git, ingest, repo_state, workspace, AppState};
 
 #[derive(Serialize)]
@@ -34,9 +34,7 @@ pub(super) async fn create_repo(
     Json(req): Json<CreateRepoReq>,
 ) -> ApiResult<(StatusCode, Json<RepoView>)> {
     let name = req.name.trim().to_string();
-    if name.is_empty() || name.contains('/') || name.starts_with('.') {
-        return Err(ApiError::BadRequest("invalid repo name".into()));
-    }
+    validate_repo_name(&name)?;
     let root = repos_root(&state)?;
     tokio::fs::create_dir_all(&root).await?;
     let dest = root.join(&name);

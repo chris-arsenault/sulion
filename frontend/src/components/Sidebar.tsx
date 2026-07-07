@@ -65,9 +65,11 @@ export function Sidebar() {
     selectSession,
     createSession,
     deleteSession,
+    deleteRepo,
     deleteWorkspace,
     updateSession,
     createRepo,
+    renameRepo,
     isUnread,
     repoExpansion,
     setRepoExpanded,
@@ -81,9 +83,11 @@ export function Sidebar() {
       selectSession: store.selectSession,
       createSession: store.createSession,
       deleteSession: store.deleteSession,
+      deleteRepo: store.deleteRepo,
       deleteWorkspace: store.deleteWorkspace,
       updateSession: store.updateSession,
       createRepo: store.createRepo,
+      renameRepo: store.renameRepo,
       isUnread: store.isUnread,
       repoExpansion: store.repoExpansion,
       setRepoExpanded: store.setRepoExpanded,
@@ -140,7 +144,12 @@ export function Sidebar() {
   }, [expandedByRepo, grouped]);
   const [newRepoOpen, setNewRepoOpen] = useState(false);
   const [newSessionFor, setNewSessionFor] = useState<string | null>(null);
+  const [renamingRepoName, setRenamingRepoName] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [pendingRepoDelete, setPendingRepoDelete] = useState<{
+    group: RepoGroupData;
+    force: boolean;
+  } | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [pendingWorkspaceDelete, setPendingWorkspaceDelete] = useState<{
     workspace: WorkspaceView;
@@ -198,6 +207,60 @@ export function Sidebar() {
       }
     },
     [createRepo],
+  );
+
+  const requestRepoRename = useCallback((name: string) => {
+    setFormError(null);
+    setRenamingRepoName(name);
+    setNewRepoOpen(false);
+    setNewSessionFor(null);
+  }, []);
+  const cancelRepoRename = useCallback(() => setRenamingRepoName(null), []);
+  const onRenameRepo = useCallback(
+    async (name: string, nextName: string) => {
+      const trimmed = nextName.trim();
+      if (!trimmed || trimmed === name) {
+        setRenamingRepoName(null);
+        return;
+      }
+      setFormError(null);
+      try {
+        await renameRepo(name, trimmed);
+        setRenamingRepoName(null);
+      } catch (err) {
+        setFormError(messageOf(err));
+      }
+    },
+    [renameRepo],
+  );
+  const requestRepoDelete = useCallback(
+    (group: RepoGroupData, force = false) =>
+      setPendingRepoDelete({ group, force }),
+    [],
+  );
+  const deletePendingRepo = useCallback(
+    async (force?: boolean) => {
+      const pending = pendingRepoDelete;
+      if (!pending) return;
+      setPendingRepoDelete(null);
+      setFormError(null);
+      try {
+        await deleteRepo(pending.group.name, { force: force ?? pending.force });
+      } catch (err) {
+        setFormError(messageOf(err));
+      }
+    },
+    [deleteRepo, pendingRepoDelete],
+  );
+  const confirmRepoDelete = useCallback(async () => {
+    await deletePendingRepo();
+  }, [deletePendingRepo]);
+  const confirmRepoForceDelete = useCallback(async () => {
+    await deletePendingRepo(true);
+  }, [deletePendingRepo]);
+  const cancelPendingRepoDelete = useCallback(
+    () => setPendingRepoDelete(null),
+    [],
   );
 
   const onCreateSession = useCallback(
@@ -305,6 +368,7 @@ export function Sidebar() {
   const toggleNewRepoOpen = useCallback(() => {
     setNewRepoOpen((v) => !v);
     setNewSessionFor(null);
+    setRenamingRepoName(null);
   }, []);
   const closeNewRepo = useCallback(() => setNewRepoOpen(false), []);
 
@@ -341,6 +405,15 @@ export function Sidebar() {
       onRequestDeleteWorkspace: requestWorkspaceDelete,
     }),
     [requestWorkspaceDelete, resumeWorkspace],
+  );
+  const repoGroupRepoOps = useMemo<RepoGroupRepoOps>(
+    () => ({
+      onRequestRenameRepo: requestRepoRename,
+      onRenameRepo,
+      onCancelRenameRepo: cancelRepoRename,
+      onRequestDeleteRepo: requestRepoDelete,
+    }),
+    [cancelRepoRename, onRenameRepo, requestRepoDelete, requestRepoRename],
   );
 
   return (
@@ -390,8 +463,10 @@ export function Sidebar() {
               group={group}
               expanded={expandedByRepo[group.name] ?? defaultRepoExpanded(group)}
               newSessionRepoName={newSessionFor}
+              renamingRepoName={renamingRepoName}
               handlers={repoGroupHandlers}
               selection={repoGroupSelection}
+              repoOps={repoGroupRepoOps}
               sessionOps={repoGroupSessionOps}
               workspaceOps={repoGroupWorkspaceOps}
               isUnread={isUnread}
@@ -403,6 +478,30 @@ export function Sidebar() {
           ))}
         </ul>
       </div>
+      {pendingRepoDelete && (
+        <ConfirmDialog
+          title={
+            pendingRepoDelete.force ? "Force delete repo?" : "Delete repo?"
+          }
+          message={
+            pendingRepoDelete.force
+              ? "This removes the checkout directory and discards uncommitted changes. Existing ended sessions stay in history."
+              : "This removes the checkout directory. Existing ended sessions stay in history; live sessions and active isolated workspaces must be cleared first."
+          }
+          confirmLabel={pendingRepoDelete.force ? "Force delete" : "Delete"}
+          secondaryConfirmLabel={
+            pendingRepoDelete.force ? undefined : "Force delete"
+          }
+          destructive={pendingRepoDelete.force}
+          secondaryDestructive
+          requireText={pendingRepoDelete.group.name}
+          onConfirm={confirmRepoDelete}
+          onSecondaryConfirm={
+            pendingRepoDelete.force ? undefined : confirmRepoForceDelete
+          }
+          onCancel={cancelPendingRepoDelete}
+        />
+      )}
       {pendingDeleteId && (
         <ConfirmDialog
           title="Delete session?"
@@ -449,6 +548,7 @@ export function Sidebar() {
 
 interface RepoGroupData {
   name: string;
+  path: string | null;
   exists: boolean;
   git: RepoGitSummary | null;
   timelineRevision: number;
@@ -465,6 +565,7 @@ function groupByRepo(
   for (const r of repos) {
     byName.set(r.name, {
       name: r.name,
+      path: r.path,
       exists: r.exists ?? true,
       git: r.git ?? null,
       timelineRevision: r.timeline_revision ?? 0,
@@ -476,6 +577,7 @@ function groupByRepo(
     if (!byName.has(s.repo)) {
       byName.set(s.repo, {
         name: s.repo,
+        path: null,
         exists: false,
         git: null,
         timelineRevision: 0,
@@ -490,6 +592,7 @@ function groupByRepo(
     if (!byName.has(workspace.repo_name)) {
       byName.set(workspace.repo_name, {
         name: workspace.repo_name,
+        path: null,
         exists: false,
         git: null,
         timelineRevision: 0,
@@ -543,6 +646,13 @@ interface RepoGroupSessionOps {
   ) => void | Promise<void>;
 }
 
+interface RepoGroupRepoOps {
+  onRequestRenameRepo: (name: string) => void;
+  onRenameRepo: (name: string, nextName: string) => void | Promise<void>;
+  onCancelRenameRepo: () => void;
+  onRequestDeleteRepo: (group: RepoGroupData, force?: boolean) => void;
+}
+
 interface RepoGroupWorkspaceOps {
   onResumeWorkspace: (workspace: WorkspaceView) => void | Promise<void>;
   onRequestDeleteWorkspace: (
@@ -568,8 +678,10 @@ interface RepoGroupProps {
   group: RepoGroupData;
   expanded: boolean;
   newSessionRepoName: string | null;
+  renamingRepoName: string | null;
   handlers: RepoGroupBaseHandlers;
   selection: RepoGroupSelection;
+  repoOps: RepoGroupRepoOps;
   sessionOps: RepoGroupSessionOps;
   workspaceOps: RepoGroupWorkspaceOps;
   isUnread: (sessionId: string, lastEventAt: string | null) => boolean;
@@ -581,8 +693,10 @@ function RepoGroup({
   group,
   expanded,
   newSessionRepoName,
+  renamingRepoName,
   handlers,
   selection,
+  repoOps,
   sessionOps,
   workspaceOps,
   isUnread,
@@ -592,6 +706,12 @@ function RepoGroup({
   const openTab = useTabs((store) => store.openTab);
   const openCtx = useContextMenu((store) => store.open);
   const { selectedSessionId, onSelectSession } = selection;
+  const {
+    onRequestRenameRepo,
+    onRenameRepo,
+    onCancelRenameRepo,
+    onRequestDeleteRepo,
+  } = repoOps;
   const { onRequestDelete, onUpdateSession } = sessionOps;
   const { onResumeWorkspace, onRequestDeleteWorkspace } = workspaceOps;
   const { toggleRepo, setNewSessionFor, createSession, registerAnchor } =
@@ -619,6 +739,19 @@ function RepoGroup({
   const newSessionOnCancel = useCallback(
     () => setNewSessionFor(() => null),
     [setNewSessionFor],
+  );
+  const repoRenameOpen = renamingRepoName === group.name;
+  const startRepoRename = useCallback(
+    () => onRequestRenameRepo(group.name),
+    [group.name, onRequestRenameRepo],
+  );
+  const submitRepoRename = useCallback(
+    (value: string) => onRenameRepo(group.name, value),
+    [group.name, onRenameRepo],
+  );
+  const requestRepoDelete = useCallback(
+    () => onRequestDeleteRepo(group, false),
+    [group, onRequestDeleteRepo],
   );
   const newSessionOnStartClick = useCallback(
     (e: React.MouseEvent) => {
@@ -692,31 +825,57 @@ function RepoGroup({
             appCommands.closeDrawer();
           },
         },
+        { kind: "separator" as const },
+        {
+          kind: "item" as const,
+          id: "rename-repo",
+          label: "Rename repo",
+          disabled: !group.exists,
+          onSelect: startRepoRename,
+        },
+        {
+          kind: "item" as const,
+          id: "delete-repo",
+          label: "Delete repo",
+          disabled: !group.exists,
+          destructive: true,
+          onSelect: requestRepoDelete,
+        },
       ]),
-    [openCtx, openTab, group.name],
+    [openCtx, openTab, group.name, group.exists, requestRepoDelete, startRepoRename],
   );
 
   return (
     <li className="sidebar__group" ref={anchorRef} data-repo-name={group.name}>
       <div className="sidebar__group-header">
-        <button
-          type="button"
-          className="sidebar__group-toggle"
-          onClick={onToggle}
-          onContextMenu={onRepoContextMenu}
-        >
-          <span
-            className={
-              expanded
-                ? "sidebar__chevron sidebar__chevron--open"
-                : "sidebar__chevron"
-            }
+        {repoRenameOpen ? (
+          <RenameInput
+            initial={group.name}
+            onSubmit={submitRepoRename}
+            onCancel={onCancelRenameRepo}
+            placeholder="Repo name"
+            ariaLabel="Repo name"
+          />
+        ) : (
+          <button
+            type="button"
+            className="sidebar__group-toggle"
+            onClick={onToggle}
+            onContextMenu={onRepoContextMenu}
           >
-            <Icon name="chevron-right" size={12} />
-          </span>
-          <span className="sidebar__group-name">{group.name}</span>
-          {git && <RepoBadge git={git} staleness={staleness} />}
-        </button>
+            <span
+              className={
+                expanded
+                  ? "sidebar__chevron sidebar__chevron--open"
+                  : "sidebar__chevron"
+              }
+            >
+              <Icon name="chevron-right" size={12} />
+            </span>
+            <span className="sidebar__group-name">{group.name}</span>
+            {git && <RepoBadge git={git} staleness={staleness} />}
+          </button>
+        )}
       </div>
 
       {expanded && (
@@ -1861,10 +2020,14 @@ function RenameInput({
   initial,
   onSubmit,
   onCancel,
+  placeholder = "Session name (empty to clear)",
+  ariaLabel = "Session name",
 }: {
   initial: string;
   onSubmit: (value: string) => void;
   onCancel: () => void;
+  placeholder?: string;
+  ariaLabel?: string;
 }) {
   const [value, setValue] = useState(initial);
   const onFormSubmit = useCallback(
@@ -1897,8 +2060,8 @@ function RenameInput({
         onChange={onInputChange}
         autoFocus
         maxLength={100}
-        placeholder="Session name (empty to clear)"
-        aria-label="Session name"
+        placeholder={placeholder}
+        aria-label={ariaLabel}
         onKeyDown={onInputKeyDown}
         onBlur={onInputBlur}
       />

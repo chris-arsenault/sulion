@@ -170,6 +170,10 @@ export interface CreateRepoRequest {
   git_url?: string;
 }
 
+export interface RenameRepoRequest {
+  name: string;
+}
+
 export type OperationCategory =
   | "create_content"
   | "inspect"

@@ -976,6 +976,88 @@ async fn create_repo_rejects_duplicate_and_invalid_names() {
 }
 
 #[tokio::test]
+async fn rename_repo_moves_checkout_and_updates_session_records() {
+    let h = Harness::new().await;
+    let old_path = h.repos_root().join("oldrepo");
+    std::fs::create_dir_all(old_path.join("src")).unwrap();
+    h.state
+        .repo_state
+        .upsert_repo("oldrepo", &old_path)
+        .await
+        .unwrap();
+    let pty_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pty_sessions (id, repo, working_dir, state, created_at) \
+         VALUES ($1, 'oldrepo', $2, 'dead', NOW())",
+    )
+    .bind(pty_id)
+    .bind(old_path.join("src").to_string_lossy().as_ref())
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+
+    let resp = h
+        .client
+        .patch(format!("{}/api/repos/oldrepo", h.base))
+        .json(&json!({ "name": "newrepo" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["name"], "newrepo");
+    assert!(!h.repos_root().join("oldrepo").exists());
+    assert!(h.repos_root().join("newrepo/src").is_dir());
+
+    let (repo, working_dir): (String, String) =
+        sqlx::query_as("SELECT repo, working_dir FROM pty_sessions WHERE id = $1")
+            .bind(pty_id)
+            .fetch_one(&h.state.pool)
+            .await
+            .unwrap();
+    assert_eq!(repo, "newrepo");
+    assert_eq!(
+        working_dir,
+        h.repos_root()
+            .join("newrepo/src")
+            .to_string_lossy()
+            .into_owned()
+    );
+}
+
+#[tokio::test]
+async fn delete_repo_requires_force_for_dirty_checkout() {
+    let h = Harness::new().await;
+    let resp = h
+        .client
+        .post(format!("{}/api/repos", h.base))
+        .json(&json!({ "name": "dirtyrepo" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    std::fs::write(h.repos_root().join("dirtyrepo/notes.txt"), "dirty\n").unwrap();
+
+    let resp = h
+        .client
+        .delete(format!("{}/api/repos/dirtyrepo", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    assert!(h.repos_root().join("dirtyrepo").is_dir());
+
+    let resp = h
+        .client
+        .delete(format!("{}/api/repos/dirtyrepo?force=true", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 204);
+    assert!(!h.repos_root().join("dirtyrepo").exists());
+}
+
+#[tokio::test]
 async fn health_endpoint_reports_ok_when_db_reachable() {
     let h = Harness::new().await;
     let resp = h

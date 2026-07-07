@@ -5,9 +5,11 @@ import {
   ApiError,
   createRepo as apiCreateRepo,
   createSession as apiCreateSession,
+  deleteRepo as apiDeleteRepo,
   deleteSession as apiDeleteSession,
   deleteWorkspace as apiDeleteWorkspace,
   getAppState,
+  renameRepo as apiRenameRepo,
   updateSession as apiUpdateSession,
 } from "../api/client";
 import type {
@@ -52,6 +54,8 @@ export interface SessionStore {
   ) => Promise<void>;
   updateSession: (id: string, patch: UpdateSessionRequest) => Promise<void>;
   createRepo: (req: CreateRepoRequest) => Promise<RepoView>;
+  renameRepo: (name: string, nextName: string) => Promise<RepoView>;
+  deleteRepo: (name: string, opts?: { force?: boolean }) => Promise<void>;
   refresh: () => Promise<void>;
   isUnread: (sessionId: string, lastEventAt: string | null) => boolean;
   loadAppState: () => Promise<void>;
@@ -199,6 +203,63 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
     return created;
   },
 
+  async renameRepo(name, nextName) {
+    const existing = get().repos.find((repo) => repo.name === name);
+    const renamed = await apiRenameRepo(name, { name: nextName });
+    set((state) => {
+      const repoExpansion = migrateRepoExpansion(
+        state.repoExpansion,
+        name,
+        renamed.name,
+      );
+      const oldPath = existing?.path ?? "";
+      const newPath = renamed.path;
+      return {
+        repos: [
+          ...state.repos.filter(
+            (repo) => repo.name !== name && repo.name !== renamed.name,
+          ),
+          renamed,
+        ].sort((a, b) => a.name.localeCompare(b.name)),
+        sessions: state.sessions.map((session) =>
+          session.repo === name
+            ? {
+                ...session,
+                repo: renamed.name,
+                working_dir: replacePathPrefix(session.working_dir, oldPath, newPath),
+                workspace:
+                  session.workspace?.repo_name === name
+                    ? {
+                        ...session.workspace,
+                        repo_name: renamed.name,
+                        path: replacePathPrefix(session.workspace.path, oldPath, newPath),
+                      }
+                    : session.workspace,
+              }
+            : session,
+        ),
+        workspaces: state.workspaces.map((workspace) =>
+          workspace.repo_name === name
+            ? {
+                ...workspace,
+                repo_name: renamed.name,
+                path: replacePathPrefix(workspace.path, oldPath, newPath),
+              }
+            : workspace,
+        ),
+        repoExpansion,
+      };
+    });
+    return renamed;
+  },
+
+  async deleteRepo(name, opts) {
+    await apiDeleteRepo(name, opts);
+    set((state) => ({
+      repos: state.repos.filter((repo) => repo.name !== name),
+    }));
+  },
+
   async refresh() {
     await get().loadAppState();
   },
@@ -335,6 +396,28 @@ function saveRepoExpansionMap(map: RepoExpansionMap) {
   } catch {
     /* ignore */
   }
+}
+
+function migrateRepoExpansion(
+  map: RepoExpansionMap,
+  from: string,
+  to: string,
+): RepoExpansionMap {
+  if (from === to || !Object.prototype.hasOwnProperty.call(map, from)) return map;
+  const next = { ...map, [to]: map[from] };
+  delete next[from];
+  saveRepoExpansionMap(next);
+  return next;
+}
+
+function replacePathPrefix(value: string, fromPrefix: string, toPrefix: string): string {
+  if (!fromPrefix || !toPrefix) return value;
+  if (value === fromPrefix) return toPrefix;
+  const prefix = `${fromPrefix}/`;
+  if (value.startsWith(prefix)) {
+    return `${toPrefix}${value.slice(fromPrefix.length)}`;
+  }
+  return value;
 }
 
 function clearRepoExpansionStorage() {

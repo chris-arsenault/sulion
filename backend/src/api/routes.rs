@@ -16,13 +16,13 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 
 use super::{
-    admin_routes, future_prompt_routes, library_routes, repo_routes, session_routes,
-    timeline_routes, workspace_routes,
+    admin_routes, future_prompt_routes, library_routes, repo_lifecycle_routes, repo_routes,
+    session_routes, timeline_routes, workspace_routes,
 };
 use crate::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
-    use axum::routing::{delete, get, post};
+    use axum::routing::{delete, get, patch, post};
     Router::new()
         .route("/api/sessions", post(session_routes::create_session))
         .route(
@@ -68,6 +68,10 @@ pub fn router() -> Router<Arc<AppState>> {
                 .patch(future_prompt_routes::update_future_prompt),
         )
         .route("/api/repos", post(repo_routes::create_repo))
+        .route(
+            "/api/repos/:name",
+            patch(repo_lifecycle_routes::patch_repo).delete(repo_lifecycle_routes::delete_repo),
+        )
         .route(
             "/api/repos/:name/timeline",
             get(timeline_routes::repo_timeline),
@@ -209,15 +213,20 @@ pub(super) type ApiResult<T> = Result<T, ApiError>;
 // ─── shared helpers ──────────────────────────────────────────────────
 
 pub(super) fn repo_path(state: &AppState, name: &str) -> ApiResult<PathBuf> {
-    if name.is_empty() || name.contains('/') || name.starts_with('.') {
-        return Err(ApiError::BadRequest("invalid repo name".into()));
-    }
+    validate_repo_name(name)?;
     let root = repos_root(state)?;
     let p = root.join(name);
     if !p.is_dir() {
         return Err(ApiError::NotFound);
     }
     Ok(p)
+}
+
+pub(super) fn validate_repo_name(name: &str) -> ApiResult<()> {
+    if name.is_empty() || name.contains('/') || name.starts_with('.') {
+        return Err(ApiError::BadRequest("invalid repo name".into()));
+    }
+    Ok(())
 }
 
 pub(super) fn repos_root(state: &AppState) -> ApiResult<PathBuf> {
