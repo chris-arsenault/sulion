@@ -5,6 +5,26 @@ mod types;
 pub(super) use types::EvidencePacket;
 use types::*;
 
+const LOW_VALUE_TOOL_NAMES: &[&str] = &[
+    "exec_command",
+    "bash",
+    "write_stdin",
+    "apply_patch",
+    "edit",
+    "write",
+    "read",
+    "glob",
+    "grep",
+    "view_image",
+];
+
+fn low_value_tool_names() -> Vec<String> {
+    LOW_VALUE_TOOL_NAMES
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
 pub(super) async fn search_route(
     State(state): State<Arc<RetrievalState>>,
     headers: HeaderMap,
@@ -52,6 +72,7 @@ async fn search_inner(
         file_path: clean_opt(query.file_path),
         tool_category,
         tool_name,
+        include_low_value: query.include_low_value.unwrap_or(false),
         agent: clean_opt(query.agent),
         model: clean_opt(query.model),
         errors_only: query.errors_only.unwrap_or(false),
@@ -82,7 +103,8 @@ async fn search_inner(
             Err(err) if search_mode == SearchMode::Hybrid => {
                 warnings.push(format!("semantic search skipped: {err}"));
                 let mut results = merged.into_values().collect::<Vec<_>>();
-                finalize_results(&state.pool, &mut results, limit).await?;
+                finalize_results(&state.pool, &mut results, limit, filters.include_low_value)
+                    .await?;
                 return Ok(SearchResponse {
                     context,
                     search_mode: search_mode.as_str().to_string(),
@@ -109,7 +131,7 @@ async fn search_inner(
     }
 
     let mut results = merged.into_values().collect::<Vec<_>>();
-    finalize_results(&state.pool, &mut results, limit).await?;
+    finalize_results(&state.pool, &mut results, limit, filters.include_low_value).await?;
     Ok(SearchResponse {
         context,
         search_mode: search_mode.as_str().to_string(),
@@ -242,6 +264,7 @@ async fn lexical_tool_search(
     q: &str,
     filters: &SearchFilters,
 ) -> Result<Vec<SearchResult>, RetrievalError> {
+    let low_value_tool_names = low_value_tool_names();
     let include = filters
         .include
         .iter()
@@ -306,6 +329,11 @@ async fn lexical_tool_search(
                 )) \
                 AND ($11::TEXT IS NULL OR operation_category = $11) \
                 AND ($12::TEXT IS NULL OR name = $12) \
+                AND ($14::BOOLEAN OR NOT ( \
+                     lower(COALESCE(name, '')) = ANY($15::TEXT[]) \
+                     OR lower(COALESCE(raw_name, '')) = ANY($15::TEXT[]) \
+                     OR lower(COALESCE(operation_type, '')) = ANY($15::TEXT[]) \
+                )) \
         ) \
         SELECT * FROM candidates \
          ORDER BY lexical_score DESC, timestamp DESC \
@@ -332,6 +360,8 @@ async fn lexical_tool_search(
     .bind(filters.tool_category.as_deref())
     .bind(filters.tool_name.as_deref())
     .bind(filters.limit)
+    .bind(filters.include_low_value)
+    .bind(&low_value_tool_names)
     .fetch_all(pool)
     .await?;
 
@@ -496,6 +526,7 @@ async fn semantic_search_pgvector(
     query_embedding: &[f32],
     filters: &SearchFilters,
 ) -> Result<Vec<SearchResult>, RetrievalError> {
+    let low_value_tool_names = low_value_tool_names();
     let include = filters
         .include
         .iter()
@@ -507,6 +538,7 @@ async fn semantic_search_pgvector(
              SELECT re.source_key, re.source_kind, re.session_uuid, re.byte_offset, re.block_ord, re.turn_id, re.operation_ord, \
                     re.repo_name, (re.embedding_vector <=> $1::vector) AS dist \
                FROM retrieval_embeddings re \
+               LEFT JOIN timeline_operations o_filter ON o_filter.session_uuid = re.session_uuid AND o_filter.turn_id = re.turn_id AND o_filter.operation_ord = re.operation_ord \
               WHERE re.embedding_model = $2 \
                 AND re.embedding_dimensions = $3 \
                 AND re.embedding_vector IS NOT NULL \
@@ -514,6 +546,14 @@ async fn semantic_search_pgvector(
                 AND ($5::UUID IS NULL OR re.session_uuid = $5) \
                 AND ($6::TEXT IS NULL OR re.repo_name = $6) \
                 AND (1.0 - (re.embedding_vector <=> $1::vector)) >= $17 \
+                AND ($18::BOOLEAN OR NOT ( \
+                     re.source_kind IN ('tool_call', 'tool_result', 'tool_error') \
+                     AND ( \
+                         lower(COALESCE(o_filter.name, '')) = ANY($19::TEXT[]) \
+                         OR lower(COALESCE(o_filter.raw_name, '')) = ANY($19::TEXT[]) \
+                         OR lower(COALESCE(o_filter.operation_type, '')) = ANY($19::TEXT[]) \
+                     ) \
+                )) \
               ORDER BY re.embedding_vector <=> $1::vector \
               LIMIT $7 \
         ), \
@@ -613,6 +653,8 @@ async fn semantic_search_pgvector(
     .bind(filters.tool_name.as_deref())
     .bind(filters.limit)
     .bind(state.config.semantic_min_score)
+    .bind(filters.include_low_value)
+    .bind(&low_value_tool_names)
     .fetch_all(&state.pool)
     .await?;
 
@@ -628,6 +670,7 @@ async fn semantic_search_exact(
     filters: &SearchFilters,
     min_score: f32,
 ) -> Result<Vec<SearchResult>, RetrievalError> {
+    let low_value_tool_names = low_value_tool_names();
     let include = filters
         .include
         .iter()
@@ -700,6 +743,14 @@ async fn semantic_search_exact(
                         AND ofilter.name = $11 \
                  ) \
             )) \
+            AND ($12::BOOLEAN OR NOT ( \
+                 re.source_kind IN ('tool_call', 'tool_result', 'tool_error') \
+                 AND ( \
+                     lower(COALESCE(o.name, '')) = ANY($13::TEXT[]) \
+                     OR lower(COALESCE(o.raw_name, '')) = ANY($13::TEXT[]) \
+                     OR lower(COALESCE(o.operation_type, '')) = ANY($13::TEXT[]) \
+                 ) \
+            )) \
           ORDER BY COALESCE(e.timestamp, tt.end_timestamp, NOW()) DESC \
           LIMIT 10000",
     )
@@ -722,6 +773,8 @@ async fn semantic_search_exact(
     .bind(filters.file_path.as_deref())
     .bind(filters.tool_category.as_deref())
     .bind(filters.tool_name.as_deref())
+    .bind(filters.include_low_value)
+    .bind(&low_value_tool_names)
     .fetch_all(pool)
     .await?;
 
@@ -781,6 +834,7 @@ async fn finalize_results(
     pool: &Pool,
     results: &mut Vec<SearchResult>,
     limit: i64,
+    include_low_value: bool,
 ) -> Result<(), RetrievalError> {
     results.sort_by(|left, right| {
         right
@@ -792,7 +846,8 @@ async fn finalize_results(
     results.truncate(limit as usize);
     for result in results {
         if let Some(turn_id) = result.turn_id {
-            result.evidence = load_evidence(pool, result.agent_session_uuid, turn_id).await?;
+            result.evidence =
+                load_evidence(pool, result.agent_session_uuid, turn_id, include_low_value).await?;
         }
     }
     Ok(())
@@ -802,7 +857,9 @@ pub(super) async fn load_evidence(
     pool: &Pool,
     session_uuid: Uuid,
     turn_id: i64,
+    include_low_value: bool,
 ) -> Result<Option<EvidencePacket>, RetrievalError> {
+    let low_value_tool_names = low_value_tool_names();
     let turn = sqlx::query(
         "SELECT preview, start_timestamp, end_timestamp \
            FROM timeline_turns \
@@ -819,11 +876,18 @@ pub(super) async fn load_evidence(
         "SELECT name, operation_category, operation_type, is_error, result_is_error \
            FROM timeline_operations \
           WHERE session_uuid = $1 AND turn_id = $2 \
+            AND ($3::BOOLEAN OR NOT ( \
+                 lower(COALESCE(name, '')) = ANY($4::TEXT[]) \
+                 OR lower(COALESCE(raw_name, '')) = ANY($4::TEXT[]) \
+                 OR lower(COALESCE(operation_type, '')) = ANY($4::TEXT[]) \
+            )) \
           ORDER BY operation_ord ASC \
           LIMIT 24",
     )
     .bind(session_uuid)
     .bind(turn_id)
+    .bind(include_low_value)
+    .bind(&low_value_tool_names)
     .fetch_all(pool)
     .await?;
     let file_rows = sqlx::query(

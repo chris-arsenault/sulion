@@ -13,7 +13,7 @@ loaded from `event_blocks` and timeline tables at query time.
 
 ```sh
 sulion-retrieve search "what did we decide about retrieval" --limit 5
-sulion-retrieve search "exec_command" --tools --tool-category utility
+sulion-retrieve search "exec_command" --tools --include-low-value --tool-category utility
 sulion-retrieve file-history backend/src/retrieval/search.rs
 sulion-retrieve turn <agent-session-uuid> <turn-id>
 sulion-retrieve reindex --repo sulion
@@ -50,6 +50,7 @@ Common query parameters:
 - `repo`
 - `agent_session_uuid`
 - `include=assistant,user,summary,tool_call,tool_result,tool_error,tools`
+- `include_low_value=true`
 - `search_mode=hybrid|lexical|semantic`, default `hybrid`
 - `tool_category`
 - `tool_name`
@@ -60,7 +61,12 @@ Common query parameters:
 
 Default `include` is `assistant`. Tool usage is excluded unless explicitly
 requested with `include=...` or implicitly requested by passing
-`tool_category` / `tool_name`.
+`tool_category` / `tool_name`. Low-value tool mechanics stay excluded even when
+tools are included; pass `include_low_value=true` to search them as a single
+coarse group. The low-value group covers shell/session mechanics
+(`exec_command`, `bash`, `write_stdin`), edit payload mechanics
+(`apply_patch`, `edit`, `write`), and inspection call mechanics
+(`read`, `glob`, `grep`, `view_image`).
 
 Results include:
 

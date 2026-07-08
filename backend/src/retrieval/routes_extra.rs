@@ -232,6 +232,6 @@ pub(super) async fn turn_route(
         turn_id: query.turn_id,
         preview: row.try_get("preview").unwrap_or_default(),
         markdown: row.try_get("markdown").unwrap_or_default(),
-        evidence: load_evidence(&state.pool, query.agent_session_uuid, query.turn_id).await?,
+        evidence: load_evidence(&state.pool, query.agent_session_uuid, query.turn_id, true).await?,
     }))
 }

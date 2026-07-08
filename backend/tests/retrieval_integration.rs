@@ -191,6 +191,14 @@ async fn lexical_search_returns_assistant_evidence_in_current_repo() {
         results[0]["evidence"]["file_touches"][0]["path"],
         "backend/src/retrieval.rs"
     );
+    assert_eq!(
+        results[0]["evidence"]["operations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0,
+        "{body:#}"
+    );
 }
 
 #[tokio::test]
@@ -220,6 +228,34 @@ async fn default_search_excludes_tools_until_opted_in() {
         .unwrap();
     assert_eq!(default_body["results"].as_array().unwrap().len(), 0);
 
+    let tool_body_without_low_value: serde_json::Value = h
+        .auth(
+            h.client
+                .get(format!("{}/v1/search", h.base))
+                .query(&[
+                    ("q", "command output"),
+                    ("search_mode", "lexical"),
+                    ("include", "tool_result"),
+                ])
+                .header("x-sulion-repo", "sulion"),
+        )
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        tool_body_without_low_value["results"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0,
+        "{tool_body_without_low_value:#}"
+    );
+
     let tool_body: serde_json::Value = h
         .auth(
             h.client
@@ -228,6 +264,7 @@ async fn default_search_excludes_tools_until_opted_in() {
                     ("q", "command output"),
                     ("search_mode", "lexical"),
                     ("include", "tool_result"),
+                    ("include_low_value", "true"),
                 ])
                 .header("x-sulion-repo", "sulion"),
         )
@@ -311,7 +348,7 @@ async fn lexical_search_handles_oversized_text_without_vectorizing_it() {
 }
 
 #[tokio::test]
-async fn tool_category_filter_opts_into_tool_results() {
+async fn tool_category_filter_requires_low_value_opt_in_for_exec() {
     let Some(_) = test_db_url() else {
         eprintln!("skipping: SULION_TEST_DB not set");
         return;
@@ -319,6 +356,31 @@ async fn tool_category_filter_opts_into_tool_results() {
     let pool = fresh_pool().await;
     seed_retrieval_fixture(&pool).await;
     let h = Harness::new(pool).await;
+
+    let default_body: serde_json::Value = h
+        .auth(
+            h.client
+                .get(format!("{}/v1/search", h.base))
+                .query(&[
+                    ("q", "rg semantic"),
+                    ("search_mode", "lexical"),
+                    ("tool_category", "utility"),
+                ])
+                .header("x-sulion-repo", "sulion"),
+        )
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        default_body["results"].as_array().unwrap().len(),
+        0,
+        "{default_body:#}"
+    );
 
     let body: serde_json::Value = h
         .auth(
@@ -328,6 +390,7 @@ async fn tool_category_filter_opts_into_tool_results() {
                     ("q", "rg semantic"),
                     ("search_mode", "lexical"),
                     ("tool_category", "utility"),
+                    ("include_low_value", "true"),
                 ])
                 .header("x-sulion-repo", "sulion"),
         )
@@ -469,6 +532,60 @@ async fn reindex_marks_pending_and_worker_refreshes_stale_hashes() {
     // assistant_text + tool_call. The exec_command tool_result is no longer
     // embedded (only failures and `agent` finals are kept among tool results).
     assert_eq!(indexed_count, 2);
+
+    let hidden_tool_semantic: serde_json::Value = h
+        .auth(
+            h.client
+                .get(format!("{}/v1/search", h.base))
+                .query(&[
+                    ("q", "semantic retrieval"),
+                    ("search_mode", "semantic"),
+                    ("include", "tool_call"),
+                ])
+                .header("x-sulion-repo", "sulion"),
+        )
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        hidden_tool_semantic["results"].as_array().unwrap().len(),
+        0,
+        "{hidden_tool_semantic:#}"
+    );
+
+    let low_value_tool_semantic: serde_json::Value = h
+        .auth(
+            h.client
+                .get(format!("{}/v1/search", h.base))
+                .query(&[
+                    ("q", "semantic retrieval"),
+                    ("search_mode", "semantic"),
+                    ("include", "tool_call"),
+                    ("include_low_value", "true"),
+                ])
+                .header("x-sulion-repo", "sulion"),
+        )
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let low_value_tool_results = low_value_tool_semantic["results"].as_array().unwrap();
+    assert_eq!(
+        low_value_tool_results.len(),
+        1,
+        "{low_value_tool_semantic:#}"
+    );
+    assert_eq!(low_value_tool_results[0]["source_kind"], "tool_call");
+    assert_eq!(low_value_tool_results[0]["tool"]["name"], "exec_command");
 
     let status: serde_json::Value = h
         .auth(h.client.get(format!("{}/v1/index/status", h.base)))

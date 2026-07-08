@@ -11,7 +11,8 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use super::parser::{
-    discover_source_files, source_file_candidate, ParseStatus, SourceFileCandidate, SourceParser,
+    discover_source_files, is_ignored_dir_name, is_ignored_path_in_root,
+    source_file_candidate_in_root, ParseStatus, SourceFileCandidate, SourceParser,
     SourceWalkOptions,
 };
 use super::symbols::{extract_references, extract_symbols, ExtractedReference, ExtractedSymbol};
@@ -347,6 +348,11 @@ fn discover_scope_candidates(
     walk: &SourceWalkOptions,
     scope: IndexScope,
 ) -> anyhow::Result<(Vec<SourceFileCandidate>, DeletionScope)> {
+    if let IndexScope::Path(path) = &scope {
+        if is_ignored_path_in_root(&root.path, path)? {
+            return Ok((Vec::new(), deletion_scope_for_path(&root.path, path)?));
+        }
+    }
     match scope {
         IndexScope::Root => Ok((
             discover_source_files(&root.path, walk)?,
@@ -367,13 +373,33 @@ fn discover_scope_candidates(
         }
         IndexScope::Path(path) if path.is_file() => {
             let relative = relative_path(&root.path, &path)?;
-            let candidates = source_file_candidate(&path, walk)?.into_iter().collect();
+            let candidates = source_file_candidate_in_root(&root.path, &path, walk)?
+                .into_iter()
+                .collect();
             Ok((candidates, DeletionScope::Exact(relative)))
         }
         IndexScope::Path(path) => {
             let relative = relative_path(&root.path, &path)?;
             Ok((Vec::new(), DeletionScope::MissingPath(relative)))
         }
+    }
+}
+
+fn deletion_scope_for_path(root: &Path, path: &Path) -> anyhow::Result<DeletionScope> {
+    let relative = relative_path(root, path)?;
+    if path.is_file() {
+        Ok(DeletionScope::Exact(relative))
+    } else if path.is_dir() {
+        if relative.is_empty() {
+            Ok(DeletionScope::Root)
+        } else {
+            Ok(DeletionScope::Prefix(format!(
+                "{}/",
+                relative.trim_end_matches('/')
+            )))
+        }
+    } else {
+        Ok(DeletionScope::MissingPath(relative))
     }
 }
 
@@ -428,7 +454,7 @@ async fn index_pending_file(
         mark_file_deleted(pool, file_id).await?;
         return Ok(FileIndexOutcome::SkippedUnchanged);
     }
-    let Some(candidate) = source_file_candidate(&absolute_path, walk)? else {
+    let Some(candidate) = source_file_candidate_in_root(&root.path, &absolute_path, walk)? else {
         mark_file_unsupported(pool, file_id).await?;
         return Ok(FileIndexOutcome::SkippedUnchanged);
     };
@@ -556,10 +582,9 @@ pub fn resolve_current_root(allowed_roots: &[PathBuf]) -> anyhow::Result<CodeRoo
 }
 
 fn is_generated_dir(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(|name| name.to_str()),
-        Some(".git" | "target" | "node_modules" | "dist")
-    )
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(is_ignored_dir_name)
 }
 
 async fn upsert_root(pool: &Pool, root: &CodeRootSpec) -> anyhow::Result<Uuid> {

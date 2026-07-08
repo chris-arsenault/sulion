@@ -7,6 +7,28 @@ use tree_sitter::{Language as TsLanguage, Parser, Point, Tree};
 
 const DEFAULT_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const BINARY_PROBE_BYTES: usize = 8192;
+const IGNORED_DIR_NAMES: &[&str] = &[
+    ".git",
+    ".cache",
+    ".next",
+    ".nuxt",
+    ".parcel-cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".svelte-kit",
+    ".tox",
+    ".turbo",
+    ".venv",
+    "build",
+    "coverage",
+    "dist",
+    "node_modules",
+    "out",
+    "storybook-static",
+    "target",
+    "venv",
+    "__pycache__",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceLanguage {
@@ -237,9 +259,11 @@ pub fn discover_source_files(
     options: &SourceWalkOptions,
 ) -> anyhow::Result<Vec<SourceFileCandidate>> {
     let mut files = Vec::new();
-    let walker = WalkBuilder::new(root)
-        .filter_entry(|entry| should_descend(entry.path()))
-        .build();
+    let mut builder = WalkBuilder::new(root);
+    builder
+        .require_git(false)
+        .filter_entry(|entry| should_descend(entry.path()));
+    let walker = builder.build();
     for entry in walker {
         let entry = entry.with_context(|| format!("walk {}", root.display()))?;
         if !entry
@@ -278,11 +302,38 @@ pub fn source_file_candidate(
     }))
 }
 
+pub fn source_file_candidate_in_root(
+    root: &Path,
+    path: &Path,
+    options: &SourceWalkOptions,
+) -> anyhow::Result<Option<SourceFileCandidate>> {
+    if is_ignored_path_in_root(root, path)? {
+        return Ok(None);
+    }
+    source_file_candidate(path, options)
+}
+
 fn should_descend(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return true;
     };
-    !matches!(name, ".git" | "target" | "node_modules" | "dist")
+    !is_ignored_dir_name(name)
+}
+
+pub(super) fn is_ignored_dir_name(name: &str) -> bool {
+    IGNORED_DIR_NAMES.contains(&name)
+}
+
+pub(super) fn is_ignored_path_in_root(root: &Path, path: &Path) -> anyhow::Result<bool> {
+    let relative = path
+        .strip_prefix(root)
+        .with_context(|| format!("{} is outside {}", path.display(), root.display()))?;
+    Ok(relative.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(is_ignored_dir_name)
+    }))
 }
 
 fn looks_binary(path: &Path) -> anyhow::Result<bool> {
@@ -374,6 +425,19 @@ mod tests {
         fs::write(root.join("blob.rs"), b"fn main() {}\0").unwrap();
         fs::write(root.join("large.rs"), "012345678901234567890").unwrap();
         fs::write(root.join("notes.txt"), "ignore me\n").unwrap();
+        fs::write(root.join(".gitignore"), "ignored-output/\n").unwrap();
+        fs::create_dir(root.join("ignored-output")).unwrap();
+        fs::write(
+            root.join("ignored-output").join("generated.rs"),
+            "fn generated() {}\n",
+        )
+        .unwrap();
+        fs::create_dir(root.join("build")).unwrap();
+        fs::write(
+            root.join("build").join("generated.rs"),
+            "fn generated() {}\n",
+        )
+        .unwrap();
         fs::create_dir(root.join("target")).unwrap();
         fs::write(
             root.join("target").join("generated.rs"),
@@ -391,5 +455,19 @@ mod tests {
                 size_bytes: 13,
             }]
         );
+    }
+
+    #[test]
+    fn direct_candidate_skips_common_generated_dirs() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        fs::create_dir(root.join("build")).unwrap();
+        let path = root.join("build").join("generated.rs");
+        fs::write(&path, "fn generated() {}\n").unwrap();
+
+        let candidate =
+            source_file_candidate_in_root(root, &path, &SourceWalkOptions::default()).unwrap();
+
+        assert_eq!(candidate, None);
     }
 }

@@ -11,7 +11,8 @@ use serde::Serialize;
 use similar::TextDiff;
 
 use super::parser::{
-    discover_source_files, source_file_candidate, LineIndex, SourceLanguage, SourceWalkOptions,
+    discover_source_files, is_ignored_path_in_root, source_file_candidate_in_root, LineIndex,
+    SourceLanguage, SourceWalkOptions,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,8 +190,13 @@ pub fn discover_structural_files(
     language: StructuralLanguage,
     walk: &SourceWalkOptions,
 ) -> anyhow::Result<Vec<StructuralFile>> {
+    if is_ignored_path_in_root(root, target)? {
+        return Ok(Vec::new());
+    }
     let candidates = if target.is_file() {
-        source_file_candidate(target, walk)?.into_iter().collect()
+        source_file_candidate_in_root(root, target, walk)?
+            .into_iter()
+            .collect()
     } else {
         discover_source_files(target, walk)?
     };
@@ -545,6 +551,33 @@ mod tests {
 
         assert!(output.truncated);
         assert_eq!(output.results.len(), 1);
+    }
+
+    #[test]
+    fn structural_search_respects_gitignore_and_generated_dirs() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        fs::write(root.join(".gitignore"), "ignored-output/\n").unwrap();
+        fs::write(root.join("lib.rs"), "fn main() { foo(1); }\n").unwrap();
+        fs::create_dir(root.join("ignored-output")).unwrap();
+        fs::write(
+            root.join("ignored-output").join("generated.rs"),
+            "fn generated() { foo(2); }\n",
+        )
+        .unwrap();
+        fs::create_dir(root.join("build")).unwrap();
+        fs::write(
+            root.join("build").join("generated.rs"),
+            "fn generated() { foo(3); }\n",
+        )
+        .unwrap();
+        let language = StructuralLanguage::parse("rust").unwrap();
+
+        let output = search_files(&structural_files(root, language), language, "foo($A)", 10);
+
+        assert_eq!(output.results.len(), 1);
+        assert_eq!(output.results[0].range.path, "lib.rs");
+        assert_eq!(output.results[0].captures[0].text, "1");
     }
 
     #[test]

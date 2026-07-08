@@ -113,17 +113,19 @@ ensure_test_db() {
   export SULION_TEST_DB="postgres://postgres:testpass@${DOCKER_DB_HOST}:${DOCKER_DB_PORT}/sulion"
 }
 
-run_target() {
-  local target="$1"
-  echo "==> cargo test --release --features ${INTEGRATION_FEATURE} --test ${target} -- --test-threads=1"
+run_targets() {
+  local cargo_target_args=()
+  local target
+  for target in "${TEST_TARGETS[@]}"; do
+    cargo_target_args+=(--test "${target}")
+  done
+
+  echo "==> cargo test --release --features ${INTEGRATION_FEATURE} ${cargo_target_args[*]} -- --test-threads=1"
   (
     cd "${BACKEND_DIR}"
-    cargo test --release --features "${INTEGRATION_FEATURE}" --test "${target}" -- --test-threads=1
+    cargo test --release --features "${INTEGRATION_FEATURE}" "${cargo_target_args[@]}" -- --test-threads=1
   )
 }
 
 ensure_test_db
-
-for target in "${TEST_TARGETS[@]}"; do
-  run_target "${target}"
-done
+run_targets

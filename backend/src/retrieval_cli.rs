@@ -162,7 +162,7 @@ async fn search(
     let q = options.positionals.join(" ");
     if q.trim().is_empty() {
         return Err(anyhow!(
-            "usage: sulion retrieve search <query> [--include assistant|tools]"
+            "usage: sulion retrieve search <query> [--include assistant|tools] [--include-low-value]"
         ));
     }
     let mut pairs = options.query_pairs;
@@ -367,6 +367,9 @@ fn parse_options(args: &[String]) -> anyhow::Result<CliOptions> {
             "--errors-only" => out.query_pairs.push(("errors_only", "true".to_string())),
             "--all" => out.query_pairs.push(("scope", "all".to_string())),
             "--tools" => out.query_pairs.push(("include", "tools".to_string())),
+            "--include-low-value" => out
+                .query_pairs
+                .push(("include_low_value", "true".to_string())),
             "--confirm" => out.query_pairs.push(("confirm", "true".to_string())),
             "--no-reschedule" => out.query_pairs.push(("reschedule", "false".to_string())),
             "--repo" => push_value(args, &mut idx, &mut out, "repo")?,
@@ -446,7 +449,13 @@ fn option_takes_value(value: &str) -> bool {
 fn is_flag_option(value: &str) -> bool {
     matches!(
         value,
-        "--json" | "--errors-only" | "--all" | "--tools" | "--confirm" | "--no-reschedule"
+        "--json"
+            | "--errors-only"
+            | "--all"
+            | "--tools"
+            | "--include-low-value"
+            | "--confirm"
+            | "--no-reschedule"
     )
 }
 
@@ -571,7 +580,7 @@ fn infer_repo(cwd: &str) -> Option<String> {
 fn print_usage() {
     eprintln!(
         "usage:
-  sulion retrieve search <query> [--mode hybrid|lexical|semantic] [--include assistant|tools] [--repo repo] [--limit n]
+  sulion retrieve search <query> [--mode hybrid|lexical|semantic] [--include assistant|tools] [--include-low-value] [--repo repo] [--limit n]
   sulion retrieve file-history <repo/path> [--repo repo]
   sulion retrieve turn <agent_session_uuid> <turn_id>
   sulion retrieve sessions [--repo repo]
@@ -580,7 +589,7 @@ fn print_usage() {
   sulion retrieve reindex [--repo repo]
   sulion retrieve reset --confirm [--no-reschedule]
 
-options: --json --scope repo|session|all --session uuid --tool-category category --tool-name name --file path --errors-only"
+options: --json --scope repo|session|all --session uuid --tool-category category --tool-name name --file path --errors-only --include-low-value"
     );
 }
 
@@ -597,6 +606,7 @@ mod tests {
             "tools".to_string(),
             "--limit".to_string(),
             "3".to_string(),
+            "--include-low-value".to_string(),
             "--json".to_string(),
         ];
         let parsed = parse_options(&args).unwrap();
@@ -606,6 +616,9 @@ mod tests {
             .query_pairs
             .contains(&("include", "tools".to_string())));
         assert!(parsed.query_pairs.contains(&("limit", "3".to_string())));
+        assert!(parsed
+            .query_pairs
+            .contains(&("include_low_value", "true".to_string())));
     }
 
     #[test]
