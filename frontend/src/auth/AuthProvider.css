@@ -119,30 +119,40 @@
 }
 
 .auth-app {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100vh;
   min-height: 100vh;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--canvas-0);
 }
 
 .auth-app__status {
-  position: fixed;
-  top: 10px;
-  right: 12px;
-  z-index: var(--z-overlay);
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
-  padding: 4px 8px;
-  background: color-mix(in oklab, var(--canvas-2) 92%, transparent);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-1);
+  min-width: 0;
+  min-height: 32px;
+  padding: 4px 12px;
+  background: var(--canvas-2);
+  border-bottom: 1px solid var(--hairline);
   font-family: var(--font-mono);
   font-size: var(--t-meta);
 }
 
 .auth-app__user {
+  min-width: 0;
+  max-width: min(36vw, 340px);
+  overflow: hidden;
   color: var(--text-lo);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .auth-app__logout {
+  flex: 0 0 auto;
   background: transparent;
   color: var(--accent-hi);
   border: 1px solid var(--canvas-3);
@@ -150,4 +160,9 @@
   padding: 2px 8px;
   font: inherit;
   cursor: pointer;
+}
+
+.auth-app > .layout {
+  height: 100%;
+  min-height: 0;
 }
