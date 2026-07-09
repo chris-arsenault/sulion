@@ -2,6 +2,81 @@
 
 All notable user-visible changes to Sulion are recorded here.
 
+## v1.5.0 - 2026-07-09
+
+### Device pairing and external ingest
+
+- Added OAuth-style device-authorization pairing (`POST /api/devices/pair`,
+  `/pair/token`, browser `/pair` approval page) so external tools can obtain a
+  Sulion device token. Only secret hashes are stored, and approval happens
+  inside the existing authenticated UI.
+- Added device-token-authed repo file write via
+  `POST /api/repos/:name/ingest?path=<repo-relative>` — the HTTP analogue of
+  paste-as-file. Raw request bytes are written through the existing
+  path-safety layer (no traversal, symlink escape, or absolute paths). The
+  first consumer is the Ableton "Send to Sulion" extension; an earlier
+  MIDI-specific ingest table was replaced by this generic contract.
+- Added device-token-authed raw file download via
+  `GET /api/repos/:name/raw?path=<repo-relative>` so paired tools can read
+  binary repo content back (e.g. pulling clips into Ableton Live).
+- Fixed the pairing `verification_uri` to derive from the request's forwarded
+  host headers instead of a hard-coded localhost default, with
+  `SULION_PUBLIC_URL` pinned in compose as the deterministic override.
+
+### Repo management and login
+
+- Added repo rename and delete actions to the sidebar repo context menu,
+  backed by new repo lifecycle API routes with live-session protection.
+- Added Cognito software-token (TOTP) MFA support to the login form. Sign-in
+  now completes the `SOFTWARE_TOKEN_MFA` challenge with a code-entry screen;
+  un-enrolled users are directed to the central enrollment app.
+- Fixed terminal pane control and auth bar layout issues.
+
+### Retrieval
+
+- Changed semantic indexing to embed only natural-language content —
+  assistant/user/summary text, subagent finals, capped tool-call inputs, and
+  tool errors — chunked instead of truncated. Command output, file
+  reads/writes, diffs, and image payloads are no longer embedded, roughly
+  halving embedding volume; search dedups to the best chunk per source.
+- Excluded low-value tool operations (bash, file edits/reads, grep, etc.)
+  from search results by default, with an `--include-low-value` override.
+- Added `POST /v1/index/reset` and `sulion-retrieve reset --confirm` to
+  rebuild the semantic index from scratch without touching transcript text.
+- Fixed semantic indexing stalls by splitting embedding requests to the
+  embedding server's maximum client batch size.
+- Fixed lexical search to hit the partial trigram index instead of
+  seq-scanning `event_blocks` (~49s to ~200ms for scope=all queries).
+- Made the background semantic indexer disableable via
+  `SULION_RETRIEVAL_INDEX_SECONDS=0` to protect the shared embedding server.
+
+### Code intelligence
+
+- Added persistent LSP sessions with rust-analyzer and
+  typescript-language-server installed in the code-intel image, so `def`/`refs`
+  resolve semantically instead of falling back to the syntactic index.
+- Fixed the code-intel container to run as the data-owner uid so the indexer
+  can read the repos/workspaces datasets under their NFSv4 ACLs.
+- Changed indexing and structural search to respect `.gitignore` and skip
+  common generated/vendor directories (build, dist, caches, venvs).
+- Fixed the O(files×symbols) status query (~3s to ~2ms) and corrected
+  `sulion-code` pack hints for semantic search result ids.
+
+### Codex session correlation
+
+- Fixed Codex PTY binding to only consider rollout files the process has open
+  for writing, so browsing resume/history no longer rebinds a PTY to an
+  unrelated repo's session.
+- Fixed agent runtime "running" updates to retry when they race PTY session
+  creation.
+
+### PTY toolchain and testing
+
+- Added `sulion postgres -- <command>`: a managed, workspace-scoped
+  Postgres 16 test container with `DATABASE_URL`/`PG*` injection, reused
+  across runs, plus `--restart` and `--temp` modes.
+- Added Ruby via RVM to the PTY base image and bumped Node from 20 to 24.
+
 ## v1.4.0 - 2026-06-01
 
 ### Agent retrieval
