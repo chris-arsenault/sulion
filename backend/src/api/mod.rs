@@ -27,13 +27,14 @@ mod ws;
 
 pub use routes::ApiError;
 pub use stats::{run_stats_sampler, sample_stats_once, StatsCache, StatsProbe};
+pub use ws::WsTicketStore;
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     // Cognito-authenticated surface. Device-pairing *approval* lives here so the
     // approving user's identity is captured.
     let protected = Router::new()
         .route("/api/app-state", get(app_state_routes::app_state))
-        .route("/ws/sessions/:id", get(ws::attach))
+        .route("/api/ws-tickets", post(ws::issue_ticket))
         .merge(routes::router())
         .merge(device_routes::approve_router())
         .route_layer(middleware::from_fn_with_state(
@@ -59,6 +60,7 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
 
     Router::new()
         .route("/health", get(health))
+        .route("/ws/sessions/:id", get(ws::attach))
         .merge(protected)
         .merge(device_public)
         .merge(device_authed)

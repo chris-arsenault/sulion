@@ -11,6 +11,9 @@ use futures::{SinkExt, StreamExt};
 use sulion::pty::{PtyManager, SpawnParams};
 use sulion::{app, db, AppState};
 use tokio::net::TcpListener;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
+use tokio_tungstenite::tungstenite::http::Request;
 use tokio_tungstenite::tungstenite::Message;
 
 fn test_db_url() -> Option<String> {
@@ -47,6 +50,29 @@ async fn start_server(pool: db::Pool) -> (String, std::sync::Arc<AppState>) {
         let _ = axum::serve(listener, router).await;
     });
     (format!("ws://{addr}"), state)
+}
+
+async fn ticketed_request(base: &str, session_id: uuid::Uuid) -> Request<()> {
+    let http_base = base.replacen("ws://", "http://", 1);
+    let response = reqwest::Client::new()
+        .post(format!("{http_base}/api/ws-tickets"))
+        .json(&serde_json::json!({ "session_id": session_id }))
+        .send()
+        .await
+        .expect("issue websocket ticket");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = response.json().await.expect("ticket response");
+    let ticket = body["ticket"].as_str().expect("ticket");
+    let mut request = format!("{base}/ws/sessions/{session_id}")
+        .into_client_request()
+        .expect("websocket request");
+    request.headers_mut().insert(
+        SEC_WEBSOCKET_PROTOCOL,
+        format!("sulion.v1, sulion.ticket.{ticket}")
+            .parse()
+            .expect("protocol header"),
+    );
+    request
 }
 
 /// Read frames from the socket with a timeout; return whatever we got
@@ -99,8 +125,8 @@ async fn connect_receives_snapshot_then_ready_then_live_bytes() {
     // Give the shell a beat to produce the sentinel before we connect.
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let url = format!("{base}/ws/sessions/{}", meta.id);
-    let (mut socket, _resp) = tokio_tungstenite::connect_async(&url)
+    let request = ticketed_request(&base, meta.id).await;
+    let (mut socket, _resp) = tokio_tungstenite::connect_async(request)
         .await
         .expect("ws connect");
 
@@ -152,8 +178,8 @@ async fn resize_message_is_accepted() {
         .await
         .expect("spawn");
 
-    let url = format!("{base}/ws/sessions/{}", meta.id);
-    let (mut socket, _) = tokio_tungstenite::connect_async(&url)
+    let request = ticketed_request(&base, meta.id).await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(request)
         .await
         .expect("connect");
 
@@ -175,6 +201,19 @@ async fn resize_message_is_accepted() {
         .send(Message::Text(r#"{"t":"garbage"}"#.into()))
         .await
         .expect("send garbage");
+
+    socket
+        .send(Message::Text(r#"{"t":"ping"}"#.into()))
+        .await
+        .expect("send application ping");
+
+    let heartbeat_frames = collect_for(&mut socket, Duration::from_millis(500)).await;
+    assert!(
+        heartbeat_frames
+            .iter()
+            .any(|frame| matches!(frame, Message::Text(text) if text.contains("pong"))),
+        "expected application pong, got {heartbeat_frames:?}"
+    );
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -205,8 +244,8 @@ async fn input_sent_to_shell_appears_in_output() {
         .await
         .expect("spawn");
 
-    let url = format!("{base}/ws/sessions/{}", meta.id);
-    let (mut socket, _) = tokio_tungstenite::connect_async(&url)
+    let request = ticketed_request(&base, meta.id).await;
+    let (mut socket, _) = tokio_tungstenite::connect_async(request)
         .await
         .expect("connect");
 
@@ -238,12 +277,48 @@ async fn input_sent_to_shell_appears_in_output() {
 }
 
 #[tokio::test]
-async fn unknown_session_id_returns_404() {
+async fn websocket_requires_a_ticket() {
     let pool = fresh_pool().await;
     let (base, _state) = start_server(pool.clone()).await;
     let bogus = uuid::Uuid::new_v4();
     let url = format!("{base}/ws/sessions/{bogus}");
     // tokio-tungstenite returns Err on non-101 responses.
     let res = tokio_tungstenite::connect_async(&url).await;
-    assert!(res.is_err(), "expected connect to fail with 404");
+    assert!(res.is_err(), "expected connect without a ticket to fail");
+}
+
+#[tokio::test]
+async fn ticket_is_single_use() {
+    let pool = fresh_pool().await;
+    let (base, state) = start_server(pool.clone()).await;
+    let meta = state
+        .pty
+        .spawn(SpawnParams {
+            repo: "r".into(),
+            working_dir: PathBuf::from("/tmp"),
+            shell: PathBuf::from("/bin/sh"),
+            args: vec!["-c".into(), "while :; do sleep 1; done".into()],
+            ..Default::default()
+        })
+        .await
+        .expect("spawn");
+
+    let request = ticketed_request(&base, meta.id).await;
+    let mut replay = request
+        .uri()
+        .to_string()
+        .into_client_request()
+        .expect("replay request");
+    replay.headers_mut().insert(
+        SEC_WEBSOCKET_PROTOCOL,
+        request.headers()[SEC_WEBSOCKET_PROTOCOL].clone(),
+    );
+    let (mut socket, _) = tokio_tungstenite::connect_async(request)
+        .await
+        .expect("first use succeeds");
+    let _ = socket.close(None).await;
+
+    let second = tokio_tungstenite::connect_async(replay).await;
+    assert!(second.is_err(), "reusing a websocket ticket must fail");
+    state.pty.delete(meta.id).await.expect("delete");
 }

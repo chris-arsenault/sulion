@@ -197,8 +197,7 @@ function LoginScreen({
         <div className="auth-card__eyebrow">sulion</div>
         <h1 className="auth-card__title">Authenticate to continue</h1>
         <p className="auth-card__copy">
-          The UI stays LAN-only, but the frontend, REST API, and PTY websocket now require a
-          shared Ahara Cognito session.
+          The frontend, REST API, and PTY websocket require a shared Ahara Cognito session.
         </p>
         {!configured && (
           <div className="auth-card__error">

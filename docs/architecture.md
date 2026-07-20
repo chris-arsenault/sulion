@@ -20,6 +20,11 @@ browser UI ──► frontend ──► backend ──► PTY runtime
 PTY helpers ──► retrieval/code-intel/runner services ──► Postgres or mounts
 ```
 
+The public browser path is `sulion.services.ahara.io` → shared Ahara ALB/WAF →
+EC2 nginx → WireGuard → the TrueNAS-published frontend port. The frontend
+container remains the same-origin boundary for static assets, `/api`, `/ws`,
+and `/broker`; it is not split onto CloudFront.
+
 The live pane shows "now." All review happens in the structured timeline, sourced from the ingested transcript, not the terminal buffer.
 
 The broker exists to keep secret storage and unlock state out of the PTY runtime and out of the main backend. General app data lives in the main `sulion` database; encrypted secret bundles and grant state live in the separate `sulion_broker` database.
@@ -104,7 +109,13 @@ Deleting an isolated workspace removes the Git worktree registration, optionally
 deletes its Sulion branch, and marks the workspace row deleted; main workspaces
 are not deletable.
 
-WebSocket attach sends a snapshot rendered from the shadow `vt100` emulator on connect, then live-streams bytes. Inbound: keystrokes and `TIOCSWINSZ` resize. Multi-viewer is mirrored; inbound is last-writer-wins (single-user LAN tool).
+WebSocket attach sends a snapshot rendered from the shadow `vt100` emulator on
+connect, then live-streams bytes. The browser first exchanges its Cognito JWT
+for a 30-second, single-use ticket and carries that ticket in the WebSocket
+subprotocol header, keeping credentials out of request URLs and access logs. An
+application ping/pong keeps idle terminals alive through the ALB. Inbound:
+keystrokes and `TIOCSWINSZ` resize. Multi-viewer is mirrored; inbound is
+last-writer-wins (single-user tool).
 
 The backend also launches PTYs with Sulion-managed wrapper tools on `PATH`:
 
@@ -188,7 +199,9 @@ Docker Compose, orchestrated by Komodo, on TrueNAS. Six images (`backend`,
 Postgres at `192.168.66.3:5432`, backend state under `/mnt/apps/apps/sulion`,
 canonical repos under `/mnt/apps/apps/sulion/repos`, isolated worktrees under
 `/mnt/apps/apps/sulion/workspaces`, and broker key material under
-`/mnt/apps/apps/sulion-broker`. Full setup in [`deploy.md`](deploy.md).
+`/mnt/apps/apps/sulion-broker`. Project Terraform owns the public ALB listener
+rules, certificate, and DNS; Ahara Infra owns the VPN reverse-proxy upstream and
+scoped WireGuard ingress. Full setup in [`deploy.md`](deploy.md).
 
 ## Historical reasoning
 

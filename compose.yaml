@@ -12,7 +12,7 @@ services:
       SULION_LISTEN: "0.0.0.0:8080"
       # Public browser-facing origin. Used to build the device-pairing /pair
       # approval link returned by POST /api/devices/pair.
-      SULION_PUBLIC_URL: "https://sulion.local.ahara.io"
+      SULION_PUBLIC_URL: "https://sulion.services.ahara.io"
       SULION_REPOS_ROOT: "/home/dev/repos"
       SULION_WORKSPACES_ROOT: "/home/dev/workspaces"
       SULION_CLAUDE_PROJECTS: "/home/dev/.claude/projects"

@@ -10,6 +10,10 @@ output "cognito_user_pool_id" {
   value = module.ctx.cognito.user_pool_id
 }
 
+output "public_url" {
+  value = module.edge.url
+}
+
 output "secret_broker_registration_token_ssm_path" {
   value = aws_ssm_parameter.secret_broker_registration_token.name
 }

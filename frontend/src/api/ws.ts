@@ -2,7 +2,7 @@
 // exponential backoff. Callers get raw bytes (Uint8Array) for binary
 // frames and typed ServerMsg for JSON text frames.
 
-import { getAccessToken } from "../auth/cognito";
+import { authFetch } from "./client";
 
 export interface ServerReady {
   t: "ready";
@@ -37,6 +37,25 @@ export interface PtyConnection {
 
 const INITIAL_BACKOFF_MS = 250;
 const MAX_BACKOFF_MS = 10_000;
+const HEARTBEAT_INTERVAL_MS = 25_000;
+const WS_PROTOCOL = "sulion.v1";
+const WS_TICKET_PROTOCOL_PREFIX = "sulion.ticket.";
+
+type WsTicketResponse = {
+  ticket: string;
+  expires_in: number;
+};
+
+async function issueWsTicket(sessionId: string): Promise<string> {
+  const response = await authFetch("/api/ws-tickets", {
+    method: "POST",
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  if (!response.ok) throw new Error(`WebSocket ticket request failed: ${response.status}`);
+  const body = (await response.json()) as WsTicketResponse;
+  if (!body.ticket) throw new Error("WebSocket ticket response was empty");
+  return body.ticket;
+}
 
 /** Opens a connection to /ws/sessions/:id. Reconnects automatically until
  * `close()` is called. */
@@ -49,6 +68,7 @@ export function connectPty(
   let closed = false;
   let connectionState: ConnectionState = "connecting";
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let pendingResize: { cols: number; rows: number } | null = null;
 
   const setState = (s: ConnectionState) => {
@@ -62,18 +82,46 @@ export function connectPty(
     return `${proto}://${window.location.host}/ws/sessions/${sessionId}`;
   };
 
+  const stopHeartbeat = () => {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  };
+
+  const scheduleReconnect = () => {
+    if (closed || reconnectTimer) return;
+    setState("reconnecting");
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+      void open();
+    }, backoffMs);
+  };
+
   const open = async () => {
     if (closed) return;
     setState(connectionState === "closed" ? "connecting" : connectionState);
-    const token = await getAccessToken();
-    const wsUrl = new URL(url());
-    if (token) wsUrl.searchParams.set("access_token", token);
-    socket = new WebSocket(wsUrl.toString());
+    let ticket: string;
+    try {
+      ticket = await issueWsTicket(sessionId);
+    } catch {
+      scheduleReconnect();
+      return;
+    }
+    if (closed) return;
+    socket = new WebSocket(url(), [WS_PROTOCOL, `${WS_TICKET_PROTOCOL_PREFIX}${ticket}`]);
     socket.binaryType = "arraybuffer";
 
     socket.addEventListener("open", () => {
       backoffMs = INITIAL_BACKOFF_MS;
       setState("open");
+      stopHeartbeat();
+      heartbeatTimer = setInterval(() => {
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ t: "ping" }));
+        }
+      }, HEARTBEAT_INTERVAL_MS);
       if (pendingResize) {
         const { cols, rows } = pendingResize;
         pendingResize = null;
@@ -97,16 +145,12 @@ export function connectPty(
     });
 
     const onDisconnect = () => {
+      stopHeartbeat();
       if (closed) {
         setState("closed");
         return;
       }
-      setState("reconnecting");
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
-        void open();
-      }, backoffMs);
+      scheduleReconnect();
     };
     socket.addEventListener("close", onDisconnect);
     socket.addEventListener("error", () => {
@@ -135,6 +179,7 @@ export function connectPty(
 
   const close = () => {
     closed = true;
+    stopHeartbeat();
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;

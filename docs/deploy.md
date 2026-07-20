@@ -13,12 +13,13 @@ Sulion now has six services:
 
 ## One-time cross-repo registration
 
-Sulion now needs two cross-repo infra registrations:
+Sulion needs three cross-repo infra registrations in `ahara-infra`:
 
-- `infrastructure/terraform/control/project-sulion.tf` grants the deployer role enough IAM to create the Sulion Cognito app client, publish SSM parameters, and deploy the Komodo stack.
+- `infrastructure/terraform/control/project-sulion.tf` grants the deployer role enough IAM to create the Sulion Cognito app client, publish SSM parameters, manage the project-owned ALB listener/certificate/DNS, and deploy the Komodo stack.
 - `infrastructure/terraform/services/db-migrate-truenas.tf` needs a `sulion` entry in `truenas_db_stacks` with `app` and `broker` database registrations so the shared migration Lambda provisions both databases and publishes `/ahara/truenas-db/sulion/app/{username,password}` plus `/ahara/truenas-db/sulion/broker/{username,password}`.
+- `infrastructure/terraform/network/locals.tf` registers `sulion.services.ahara.io` as an `internal` reverse-proxy upstream at `192.168.66.3:30080`, with buffering disabled and WebSocket upgrades enabled. `internal` means Ahara Infra owns nginx and WireGuard ingress while Sulion Terraform owns the public ALB resources.
 
-Sulion also carries project-local Terraform under [`infrastructure/terraform/`](</home/dev/repos/sulion/infrastructure/terraform>) that creates the Cognito app client and publishes:
+Sulion also carries project-local Terraform under [`infrastructure/terraform/`](</home/dev/repos/sulion/infrastructure/terraform>) that creates its `sulion.services.ahara.io` ALB listener rules, ACM certificate, Route53 records, Cognito app client, and publishes:
 
 - `/ahara/cognito/clients/sulion-app`
 - `/ahara/auth-trigger/clients/sulion`
@@ -77,11 +78,16 @@ The broker container mounts this dataset read-only at `/var/lib/sulion-broker`. 
 Push to `main`. The shared ahara CI workflow builds all Sulion images, pushes to GHCR, and the `deploy-truenas` action:
 
 1. Invokes `ahara-db-migrate-truenas` with `stack_name: "sulion"` → creates every registered Sulion database and publishes `/ahara/truenas-db/sulion/app/{username,password}` plus `/ahara/truenas-db/sulion/broker/{username,password}` to SSM.
-2. Runs `terraform apply` in [`infrastructure/terraform/`](</home/dev/repos/sulion/infrastructure/terraform>) → creates the Sulion Cognito app client and publishes `/ahara/cognito/clients/sulion-app` plus `/ahara/auth-trigger/clients/sulion`.
+2. Runs `terraform apply` in [`infrastructure/terraform/`](</home/dev/repos/sulion/infrastructure/terraform>) → creates the Sulion edge listener rules/certificate/DNS and Cognito app client, then publishes `/ahara/cognito/clients/sulion-app` plus `/ahara/auth-trigger/clients/sulion`.
 3. Creates (or reuses) the `sulion` Komodo stack pointed at this repo's `compose.yaml`.
 4. Resolves the SSM paths declared in [`secret-paths.yml`](</home/dev/repos/sulion/secret-paths.yml>), sets them as Komodo stack env vars, and deploys.
 
 No manual Komodo UI setup. No manual SSM puts.
+
+Deploy `ahara-infra` before the first Sulion edge deployment so the internal
+nginx upstream, WireGuard ingress, and Sulion deployer permissions already
+exist. Run the Sulion deployment from outside a Sulion PTY: replacing the
+backend container terminates every active shell.
 
 The backend container owns the main `sulion` database migrations. Retrieval and
 code-intelligence do not run the shared SQLx migrations; they wait in-app for
@@ -148,13 +154,16 @@ Secrets are no longer intended to live in repo-local `.env` files. The broker st
 ```bash
 curl -sf http://192.168.66.3:30080/health
 # → {"status":"ok","db":"ok"}
+
+curl -sf https://sulion.services.ahara.io/health
+# → {"status":"ok","db":"ok"}
 ```
 
-UI at `http://192.168.66.3:30080/`. The frontend now blocks on Cognito sign-in and the backend requires a valid Sulion app token on API and websocket routes. After login, create a repo, spawn a session, run `claude`. The `SessionStart` hook correlates the agent session; the timeline populates from ingested JSONL.
+UI at `https://sulion.services.ahara.io/`. The frontend blocks on Cognito sign-in. REST and broker requests carry the Cognito token; PTY WebSockets use a short-lived, one-use ticket minted by an authenticated request. After login, create a repo, spawn a session, run `claude`. The `SessionStart` hook correlates the agent session; the timeline populates from ingested JSONL.
 
 ## Networking
 
-LAN-only via WireGuard, published on `192.168.66.3:30080`. The backend container also publishes PTY dev-server slots on `192.168.66.3:26000-26010`. A process in a Sulion PTY must bind `0.0.0.0` on one of those ports to be reachable from the LAN, for example:
+The public path is shared Ahara ALB/WAF → EC2 nginx → WireGuard → the frontend published on `192.168.66.3:30080`. The direct LAN URL remains available for operations and rollback. The backend container also publishes PTY dev-server slots on `192.168.66.3:26000-26010`. A process in a Sulion PTY must bind `0.0.0.0` on one of those ports to be reachable from the LAN, for example:
 
 ```bash
 npm run dev -- --host 0.0.0.0 --port 26000
@@ -162,4 +171,4 @@ npm run dev -- --host 0.0.0.0 --port 26000
 
 Those dev ports are direct LAN exposure and are not routed through Sulion auth.
 
-The stack also creates the internal Docker network `sulion`; runner-launched containers join that network automatically so PTY workflows can reach them by container name. No reverse-proxy route. When public exposure is wanted, add a `reverse_proxy_routes` entry in `ahara-network` with `auth = "jwt-validation"` — the code does not assume the ALB path anywhere.
+The stack also creates the internal Docker network `sulion`; runner-launched containers join that network automatically so PTY workflows can reach them by container name. Public listener rules apply ALB JWT validation to Cognito-protected HTTP routes, while the application remains authoritative for public pairing, device-token, and one-use WebSocket-ticket routes.

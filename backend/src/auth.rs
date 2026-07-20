@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
-use axum::extract::{Query, Request, State};
+use axum::extract::{Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -169,6 +169,9 @@ struct JwtClaims {
     cognito_username: Option<String>,
 }
 
+/// Query credential shape retained for non-browser service endpoints that
+/// explicitly support it. The main application auth middleware accepts only
+/// the Authorization header; WebSockets use one-time tickets.
 #[derive(Debug, Default, Deserialize)]
 pub struct AccessTokenQuery {
     pub access_token: Option<String>,
@@ -176,7 +179,6 @@ pub struct AccessTokenQuery {
 
 pub async fn require_http_auth(
     State(state): State<Arc<AppState>>,
-    query: Query<AccessTokenQuery>,
     mut req: Request,
     next: Next,
 ) -> Response {
@@ -187,7 +189,7 @@ pub async fn require_http_auth(
         return next.run(req).await;
     };
 
-    let token = bearer_from_request(req.headers(), query.access_token.as_deref());
+    let token = bearer_from_request(req.headers());
     let Some(token) = token else {
         return unauthorized();
     };
@@ -204,10 +206,7 @@ pub async fn require_http_auth(
     }
 }
 
-fn bearer_from_request<'a>(
-    headers: &'a axum::http::HeaderMap,
-    query_token: Option<&'a str>,
-) -> Option<&'a str> {
+fn bearer_from_request(headers: &axum::http::HeaderMap) -> Option<&str> {
     if let Some(value) = headers.get(header::AUTHORIZATION) {
         if let Ok(value) = value.to_str() {
             if let Some(token) = value.strip_prefix("Bearer ") {
@@ -217,7 +216,7 @@ fn bearer_from_request<'a>(
             }
         }
     }
-    query_token.filter(|token| !token.trim().is_empty())
+    None
 }
 
 fn unauthorized() -> Response {

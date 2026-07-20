@@ -74,6 +74,8 @@ pub struct AppState {
     pub stats_cache: Arc<api::StatsCache>,
     /// E2E-only hook that can ask active websocket attachers to close.
     pub ws_test_hooks: Arc<WsTestHooks>,
+    /// Short-lived, one-use credentials for browser WebSocket handshakes.
+    pub ws_tickets: Arc<api::WsTicketStore>,
     /// Optional JWT auth validator. Production wiring enables this;
     /// most unit tests keep it unset and exercise handlers directly.
     pub auth: Option<Arc<auth::AuthState>>,
@@ -125,6 +127,7 @@ impl AppState {
             stats_probe: Arc::new(api::StatsProbe::new()),
             stats_cache: Arc::new(api::StatsCache::new()),
             ws_test_hooks: Arc::new(WsTestHooks::default()),
+            ws_tickets: Arc::new(api::WsTicketStore::default()),
             auth,
         })
     }

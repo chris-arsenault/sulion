@@ -4,11 +4,11 @@
 
 *Quenya **súlë** (breath, spirit, emanation) bound to Aulë, Vala of craftsmanship — "vibe-forge."*
 
-Session broker for Claude Code and Codex terminal sessions. Persistent PTYs with structured timeline scrollback, served to any LAN device via web UI.
+Session broker for Claude Code and Codex terminal sessions. Persistent PTYs with structured timeline scrollback, served through the authenticated web UI at `https://sulion.services.ahara.io`.
 
 ## Motivation
 
-- **Terminals viewable from anywhere on the LAN.** A long-running agent session shouldn't be chained to one laptop. Sulion parks the PTY on a server and lets any LAN device — desktop, laptop, phone — attach, watch, and type into the same live shell with a snapshot-on-connect so you never land in an empty buffer.
+- **Terminals viewable from anywhere.** A long-running agent session shouldn't be chained to one laptop. Sulion parks the PTY on a server and lets an authenticated desktop, laptop, or phone attach, watch, and type into the same live shell with a snapshot-on-connect so you never land in an empty buffer.
 - **Non-linear workflows.** Real agent work isn't one prompt at a time — you queue follow-ups while a turn is running, review a past turn while another is in flight, and jump between sessions mid-thought. The tab system, future-prompt queue, and repo timeline exist so the UI doesn't force a single linear thread.
 - **Integrated Development Terminal.** An IDE is built around the editor; an IDT is built around the agent's terminal. File tree, git diff, file tabs, library, and timeline all sit alongside the live PTY so the agent's interactive shell is the product, not a panel bolted to something else.
 - **Agent timeline as source of information.** The JSONL transcript is authoritative — the terminal is ephemeral. Every turn, tool call, edit, and thought is projected into a structured, filterable timeline you can review, filter by file, trace references from, and share as markdown. Reviewability is a first-class feature, not a scrollback consolation prize.
