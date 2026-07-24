@@ -242,11 +242,23 @@ async fn projects_cache_aware_usage_without_double_counting_replayed_events() {
         r#"{"type":"assistant","timestamp":"2026-04-19T01:01:00Z","message":{"model":"claude-sonnet-4","content":[],"usage":{"input_tokens":200,"cache_creation_input_tokens":1000,"cache_read_input_tokens":8000,"output_tokens":800}}}"#,
     );
     claude.append("\n");
+    // One API response split across two content-block lines: identical
+    // message id + usage on both. Counted exactly once.
+    claude.append(
+        r#"{"type":"assistant","timestamp":"2026-04-19T01:02:00Z","message":{"id":"msg_dup","model":"claude-sonnet-4","content":[],"usage":{"input_tokens":50,"cache_read_input_tokens":500,"output_tokens":25}}}"#,
+    );
+    claude.append("\n");
+    claude.append(
+        r#"{"type":"assistant","timestamp":"2026-04-19T01:02:01Z","message":{"id":"msg_dup","model":"claude-sonnet-4","content":[],"usage":{"input_tokens":50,"cache_read_input_tokens":500,"output_tokens":25}}}"#,
+    );
+    claude.append("\n");
 
     let ingester = Ingester::new();
     ingester.tick(&pool, &claude.config()).await.unwrap();
     ingester.tick(&pool, &claude.config()).await.unwrap();
 
+    // Cache creation folds into fresh input; cached column carries reads
+    // only; the duplicated msg_dup line adds nothing.
     let claude_usage: (i64, i64, i64, i64, Option<i64>) = sqlx::query_as(
         "SELECT input_tokens, cached_input_tokens, output_tokens, total_tokens, context_tokens \
            FROM agent_session_usage WHERE session_uuid = $1",
@@ -255,7 +267,18 @@ async fn projects_cache_aware_usage_without_double_counting_replayed_events() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(claude_usage, (300, 18_000, 1_700, 20_000, Some(10_000)));
+    assert_eq!(claude_usage, (3_350, 15_500, 1_725, 20_575, Some(575)));
+
+    // The daily snapshot mirrors the session's cumulative totals.
+    let daily: (i64, i64) = sqlx::query_as(
+        "SELECT total_tokens, cached_input_tokens FROM agent_usage_daily \
+          WHERE session_uuid = $1 AND day = DATE '2026-04-19'",
+    )
+    .bind(claude.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(daily, (20_575, 15_500));
 
     let codex = CodexFixture::new();
     codex.append(

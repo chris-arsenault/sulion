@@ -75,6 +75,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(run_repo_state_manager(state.repo_state.clone()));
     tokio::spawn(run_workspace_manager(state.workspace_state.clone()));
     tokio::spawn(sulion::api::run_stats_sampler(state.clone()));
+    tokio::spawn(sulion::ingest::run_usage_backfill(pool.clone()));
 
     let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
     tracing::info!(listen = %cfg.listen, "api listener bound");

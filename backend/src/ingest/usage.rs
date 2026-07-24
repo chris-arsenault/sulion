@@ -14,6 +14,10 @@ enum UsageMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct UsageUpdate {
     mode: UsageMode,
+    /// API response id for Delta sources. Claude Code emits one JSONL line
+    /// per content block and repeats the identical usage object on each, so
+    /// deltas are counted once per message id, not once per line.
+    message_id: Option<String>,
     input_tokens: i64,
     cached_input_tokens: i64,
     output_tokens: i64,
@@ -39,31 +43,50 @@ pub(super) async fn upsert_from_event(
         "INSERT INTO agent_session_usage \
             (session_uuid, agent, input_tokens, cached_input_tokens, output_tokens, \
              reasoning_output_tokens, total_tokens, context_tokens, model_context_window, \
-             last_byte_offset, observed_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()) \
+             last_byte_offset, observed_at, last_usage_message_id, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $13, NOW()) \
          ON CONFLICT (session_uuid) DO UPDATE SET \
             agent = EXCLUDED.agent, \
-            input_tokens = CASE WHEN $12 \
-                THEN agent_session_usage.input_tokens + EXCLUDED.input_tokens \
-                ELSE EXCLUDED.input_tokens END, \
-            cached_input_tokens = CASE WHEN $12 \
-                THEN agent_session_usage.cached_input_tokens + EXCLUDED.cached_input_tokens \
-                ELSE EXCLUDED.cached_input_tokens END, \
-            output_tokens = CASE WHEN $12 \
-                THEN agent_session_usage.output_tokens + EXCLUDED.output_tokens \
-                ELSE EXCLUDED.output_tokens END, \
-            reasoning_output_tokens = CASE WHEN $12 \
-                THEN agent_session_usage.reasoning_output_tokens + EXCLUDED.reasoning_output_tokens \
-                ELSE EXCLUDED.reasoning_output_tokens END, \
-            total_tokens = CASE WHEN $12 \
-                THEN agent_session_usage.total_tokens + EXCLUDED.total_tokens \
-                ELSE EXCLUDED.total_tokens END, \
+            input_tokens = CASE \
+                WHEN NOT $12 THEN EXCLUDED.input_tokens \
+                WHEN $13::TEXT IS NOT NULL \
+                    AND $13 = agent_session_usage.last_usage_message_id \
+                    THEN agent_session_usage.input_tokens \
+                ELSE agent_session_usage.input_tokens + EXCLUDED.input_tokens END, \
+            cached_input_tokens = CASE \
+                WHEN NOT $12 THEN EXCLUDED.cached_input_tokens \
+                WHEN $13::TEXT IS NOT NULL \
+                    AND $13 = agent_session_usage.last_usage_message_id \
+                    THEN agent_session_usage.cached_input_tokens \
+                ELSE agent_session_usage.cached_input_tokens + EXCLUDED.cached_input_tokens END, \
+            output_tokens = CASE \
+                WHEN NOT $12 THEN EXCLUDED.output_tokens \
+                WHEN $13::TEXT IS NOT NULL \
+                    AND $13 = agent_session_usage.last_usage_message_id \
+                    THEN agent_session_usage.output_tokens \
+                ELSE agent_session_usage.output_tokens + EXCLUDED.output_tokens END, \
+            reasoning_output_tokens = CASE \
+                WHEN NOT $12 THEN EXCLUDED.reasoning_output_tokens \
+                WHEN $13::TEXT IS NOT NULL \
+                    AND $13 = agent_session_usage.last_usage_message_id \
+                    THEN agent_session_usage.reasoning_output_tokens \
+                ELSE agent_session_usage.reasoning_output_tokens \
+                    + EXCLUDED.reasoning_output_tokens END, \
+            total_tokens = CASE \
+                WHEN NOT $12 THEN EXCLUDED.total_tokens \
+                WHEN $13::TEXT IS NOT NULL \
+                    AND $13 = agent_session_usage.last_usage_message_id \
+                    THEN agent_session_usage.total_tokens \
+                ELSE agent_session_usage.total_tokens + EXCLUDED.total_tokens END, \
             context_tokens = COALESCE(EXCLUDED.context_tokens, agent_session_usage.context_tokens), \
             model_context_window = COALESCE( \
                 EXCLUDED.model_context_window, agent_session_usage.model_context_window \
             ), \
             last_byte_offset = EXCLUDED.last_byte_offset, \
             observed_at = EXCLUDED.observed_at, \
+            last_usage_message_id = COALESCE( \
+                EXCLUDED.last_usage_message_id, agent_session_usage.last_usage_message_id \
+            ), \
             updated_at = NOW() \
          WHERE EXCLUDED.last_byte_offset > agent_session_usage.last_byte_offset",
     )
@@ -79,6 +102,38 @@ pub(super) async fn upsert_from_event(
     .bind(byte_offset)
     .bind(observed_at)
     .bind(is_delta)
+    .bind(usage.message_id.as_deref())
+    .execute(&mut **tx)
+    .await?;
+    snapshot_daily(tx, session_uuid, observed_at).await
+}
+
+/// End-of-day cumulative snapshot: copy the session's current totals into
+/// the (day, session) row. Daily deltas are derived at read time from
+/// consecutive snapshots, keeping the hot path free of delta bookkeeping.
+async fn snapshot_daily(
+    tx: &mut Transaction<'_, Postgres>,
+    session_uuid: Uuid,
+    observed_at: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO agent_usage_daily \
+            (day, session_uuid, agent, input_tokens, cached_input_tokens, output_tokens, \
+             reasoning_output_tokens, total_tokens, updated_at) \
+         SELECT $2::DATE, session_uuid, agent, input_tokens, cached_input_tokens, \
+                output_tokens, reasoning_output_tokens, total_tokens, NOW() \
+         FROM agent_session_usage WHERE session_uuid = $1 \
+         ON CONFLICT (day, session_uuid) DO UPDATE SET \
+            agent = EXCLUDED.agent, \
+            input_tokens = EXCLUDED.input_tokens, \
+            cached_input_tokens = EXCLUDED.cached_input_tokens, \
+            output_tokens = EXCLUDED.output_tokens, \
+            reasoning_output_tokens = EXCLUDED.reasoning_output_tokens, \
+            total_tokens = EXCLUDED.total_tokens, \
+            updated_at = NOW()",
+    )
+    .bind(session_uuid)
+    .bind(observed_at.date_naive())
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -109,6 +164,7 @@ fn extract_codex_usage(value: &Value) -> Option<UsageUpdate> {
     let last_reasoning = last.map_or(0, |usage| token_at(usage, "reasoning_output_tokens"));
     Some(UsageUpdate {
         mode: UsageMode::Cumulative,
+        message_id: None,
         input_tokens: token_at(total, "input_tokens"),
         cached_input_tokens: token_at(total, "cached_input_tokens"),
         output_tokens: token_at(total, "output_tokens"),
@@ -119,28 +175,37 @@ fn extract_codex_usage(value: &Value) -> Option<UsageUpdate> {
     })
 }
 
+/// Claude usage normalization. `cached_input_tokens` means "served from
+/// cache" (reads only) so `total - cached` is comparable fresh work across
+/// agents; cache *creation* is genuinely new prompt work and folds into
+/// `input_tokens`.
 fn extract_claude_usage(value: &Value) -> Option<UsageUpdate> {
     if string_at(value, &["type"]) != Some("assistant") {
         return None;
     }
-    let usage = value
-        .get("message")
+    let message = value.get("message");
+    let usage = message
         .and_then(|message| message.get("usage"))
         .or_else(|| value.get("usage"))?;
     if !usage.is_object() {
         return None;
     }
-    let input_tokens = token_at(usage, "input_tokens");
+    let message_id = message
+        .and_then(|message| message.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let cache_creation = token_at(usage, "cache_creation_input_tokens");
+    let cache_read = token_at(usage, "cache_read_input_tokens");
+    let input_tokens = token_at(usage, "input_tokens").saturating_add(cache_creation);
     let output_tokens = token_at(usage, "output_tokens");
-    let cached_input_tokens = token_at(usage, "cache_creation_input_tokens")
-        .saturating_add(token_at(usage, "cache_read_input_tokens"));
     let total_tokens = input_tokens
-        .saturating_add(cached_input_tokens)
+        .saturating_add(cache_read)
         .saturating_add(output_tokens);
     Some(UsageUpdate {
         mode: UsageMode::Delta,
+        message_id,
         input_tokens,
-        cached_input_tokens,
+        cached_input_tokens: cache_read,
         output_tokens,
         reasoning_output_tokens: 0,
         total_tokens,
@@ -213,6 +278,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(usage.mode, UsageMode::Cumulative);
+        assert_eq!(usage.message_id, None);
         assert_eq!(usage.total_tokens, 32_000);
         assert_eq!(usage.cached_input_tokens, 20_000);
         assert_eq!(usage.context_tokens, Some(19_200));
@@ -220,10 +286,11 @@ mod tests {
     }
 
     #[test]
-    fn extracts_claude_cache_aware_delta_and_context() {
+    fn claude_splits_cache_reads_from_fresh_input() {
         let usage = extract_claude_usage(&json!({
             "type": "assistant",
             "message": {
+                "id": "msg_abc",
                 "usage": {
                     "input_tokens": 100,
                     "cache_creation_input_tokens": 2_000,
@@ -235,10 +302,33 @@ mod tests {
         .unwrap();
 
         assert_eq!(usage.mode, UsageMode::Delta);
-        assert_eq!(usage.input_tokens, 100);
-        assert_eq!(usage.cached_input_tokens, 9_000);
+        assert_eq!(usage.message_id.as_deref(), Some("msg_abc"));
+        // cache creation folds into fresh input; cached means reads only.
+        assert_eq!(usage.input_tokens, 2_100);
+        assert_eq!(usage.cached_input_tokens, 7_000);
         assert_eq!(usage.output_tokens, 900);
         assert_eq!(usage.total_tokens, 10_000);
         assert_eq!(usage.context_tokens, Some(10_000));
+    }
+
+    #[test]
+    fn duplicate_content_block_lines_share_one_message_id() {
+        let line = json!({
+            "type": "assistant",
+            "message": {
+                "id": "msg_dup",
+                "usage": {
+                    "input_tokens": 10,
+                    "cache_read_input_tokens": 90,
+                    "output_tokens": 5
+                }
+            }
+        });
+        let first = extract_claude_usage(&line).unwrap();
+        let second = extract_claude_usage(&line).unwrap();
+        // Identical extraction — the SQL layer skips the second add because
+        // the message id matches the stored last_usage_message_id.
+        assert_eq!(first, second);
+        assert_eq!(first.message_id.as_deref(), Some("msg_dup"));
     }
 }

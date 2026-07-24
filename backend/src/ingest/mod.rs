@@ -8,6 +8,7 @@ mod projection;
 mod reset;
 pub mod timeline;
 mod usage;
+mod usage_backfill;
 
 pub use ingester::{backfill_canonical_blocks, parse_codex_session_uuid, Ingester, IngesterConfig};
 pub use maintenance::{
@@ -21,3 +22,4 @@ pub use projection::{
     rebuild_session_projection, RepoFileTraceTouch, TimelineSessionMeta,
 };
 pub use reset::{rebuild_ingest_derivatives, ReindexStats};
+pub use usage_backfill::run_usage_backfill;
