@@ -60,6 +60,41 @@ An isolated workspace is a real Git worktree. Use normal Git commands inside it.
 From the canonical checkout, `git worktree list` shows active Sulion worktrees
 and their branches for merge/fast-forward work.
 
+## Published plans and activity
+
+Sulion published plans are durable, repo-scoped phase summaries for the user.
+They do not replace your detailed internal plan. Use them when work should
+remain visible across turns or terminals:
+
+```sh
+sulion plan start "Feature name" \
+  --summary "Short purpose" \
+  --phase "Backend|Schema and commands" \
+  --phase "Frontend|Workspace and overview" \
+  --phase "Verify|Tests and docs"
+sulion plan phase set 1 completed --note "API complete"
+sulion plan phase set 2 in_progress
+sulion plan current
+sulion plan close --completed
+```
+
+The new plan attaches to the current PTY. Most later commands infer that
+attachment. Run `sulion plan help` for attach/detach, pause, history, explicit
+plan ids, and JSON output.
+
+Operational activity is separate from plan progress. Lifecycle hooks report
+routine working/awaiting state automatically. Publish explicit attention only
+when useful:
+
+```sh
+sulion activity working "Implementing the frontend"
+sulion activity waiting --reason "Need a user decision"
+sulion activity blocked --reason "External dependency unavailable"
+sulion activity clear
+```
+
+Explicit waiting/blocked states stay visible until a later explicit transition.
+
 ## Retrieval
 
 Sulion PTYs include an authenticated retrieval helper:

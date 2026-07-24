@@ -252,8 +252,9 @@ COPY bin/sulion-retrieve /opt/sulion/bin/sulion-retrieve
 COPY bin/sulion-code /opt/sulion/bin/sulion-code
 COPY docs/toolset.md /opt/sulion/docs/toolset.md
 COPY hooks/session-start.sh /opt/sulion/hooks/session-start.sh
+COPY hooks/activity-hook.sh /opt/sulion/hooks/activity-hook.sh
 COPY entrypoint.sh /opt/sulion/entrypoint.sh
-RUN chmod +x /usr/local/bin/sulion /opt/sulion/bin/sulion-agent /opt/sulion/bin/cl /opt/sulion/bin/co /opt/sulion/bin/docker /opt/sulion/bin/docker-compose /opt/sulion/bin/aws /opt/sulion/bin/with-cred /opt/sulion/bin/sulion-retrieve /opt/sulion/bin/sulion-code /opt/sulion/hooks/session-start.sh /opt/sulion/entrypoint.sh
+RUN chmod +x /usr/local/bin/sulion /opt/sulion/bin/sulion-agent /opt/sulion/bin/cl /opt/sulion/bin/co /opt/sulion/bin/docker /opt/sulion/bin/docker-compose /opt/sulion/bin/aws /opt/sulion/bin/with-cred /opt/sulion/bin/sulion-retrieve /opt/sulion/bin/sulion-code /opt/sulion/hooks/session-start.sh /opt/sulion/hooks/activity-hook.sh /opt/sulion/entrypoint.sh
 USER dev
 WORKDIR /home/dev
 

@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import { getRepoDirtyPaths, getRepoFiles, refreshRepoState } from "../api/client";
 import type { DirListing, GitStatus, RepoGitSummary } from "../api/types";
+import type { Maybe } from "../lib/types";
 
 export interface RepoState {
   git: GitStatus | null;
@@ -21,7 +22,7 @@ export interface RepoState {
 
 export interface RepoStore {
   repos: Record<string, RepoState>;
-  loadDirty: (repo: string, summary: RepoGitSummary | null | undefined) => void;
+  loadDirty: (repo: string, summary: Maybe<RepoGitSummary | null>) => void;
   toggleDir: (repo: string, path: string, currentlyExpanded: boolean) => void;
   expandPath: (repo: string, path: string) => void;
   refresh: (repo: string) => void;

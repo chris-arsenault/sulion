@@ -17,6 +17,7 @@ import type {
   AgentLaunchType,
   DirEntryView,
   GitCommit,
+  PlanSummaryView,
   RepoGitSummary,
   RepoView,
   SecretGrantMetadata,
@@ -60,6 +61,7 @@ export function Sidebar() {
   const {
     sessions,
     repos,
+    plans,
     selectedSessionId,
     workspaces,
     selectSession,
@@ -78,6 +80,7 @@ export function Sidebar() {
     useShallow((store) => ({
       sessions: store.sessions,
       repos: store.repos,
+      plans: store.plans,
       selectedSessionId: store.selectedSessionId,
       workspaces: store.workspaces,
       selectSession: store.selectSession,
@@ -98,8 +101,8 @@ export function Sidebar() {
   const openTab = useTabs((store) => store.openTab);
 
   const grouped = useMemo(
-    () => groupByRepo(sessions, repos, workspaces),
-    [sessions, repos, workspaces],
+    () => groupByRepo(sessions, repos, workspaces, plans),
+    [sessions, repos, workspaces, plans],
   );
 
   // Opening a session's work area: terminal top + timeline bottom.
@@ -554,12 +557,14 @@ interface RepoGroupData {
   timelineRevision: number;
   sessions: SessionView[];
   workspaces: WorkspaceView[];
+  plans: PlanSummaryView[];
 }
 
 function groupByRepo(
   sessions: SessionView[],
   repos: RepoView[],
   workspaces: WorkspaceView[],
+  plans: PlanSummaryView[],
 ): RepoGroupData[] {
   const byName = new Map<string, RepoGroupData>();
   for (const r of repos) {
@@ -571,6 +576,7 @@ function groupByRepo(
       timelineRevision: r.timeline_revision ?? 0,
       sessions: [],
       workspaces: [],
+      plans: [],
     });
   }
   for (const s of sessions) {
@@ -583,6 +589,7 @@ function groupByRepo(
         timelineRevision: 0,
         sessions: [],
         workspaces: [],
+        plans: [],
       });
     }
     byName.get(s.repo)!.sessions.push(s);
@@ -598,19 +605,36 @@ function groupByRepo(
         timelineRevision: 0,
         sessions: [],
         workspaces: [],
+        plans: [],
       });
     }
     byName.get(workspace.repo_name)!.workspaces.push(workspace);
   }
+  for (const plan of plans) {
+    if (!byName.has(plan.repo_name)) {
+      byName.set(plan.repo_name, {
+        name: plan.repo_name,
+        path: null,
+        exists: false,
+        git: null,
+        timelineRevision: 0,
+        sessions: [],
+        workspaces: [],
+        plans: [],
+      });
+    }
+    byName.get(plan.repo_name)!.plans.push(plan);
+  }
   for (const g of byName.values()) {
     g.sessions.sort(sessionCompare);
     g.workspaces.sort(workspaceCompare);
+    g.plans.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
   }
   return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function defaultRepoExpanded(group: RepoGroupData): boolean {
-  return group.sessions.length > 0 || group.workspaces.length > 0;
+  return group.sessions.length > 0 || group.workspaces.length > 0 || group.plans.length > 0;
 }
 
 function sessionCompare(a: SessionView, b: SessionView): number {
@@ -760,9 +784,28 @@ function RepoGroup({
     },
     [newSessionOnStart],
   );
+  const openPlans = useCallback(
+    (planId?: string) => {
+      openTab({ kind: "plan", repo: group.name, planId });
+      appCommands.closeDrawer();
+    },
+    [group.name, openTab],
+  );
+  const openPlansClick = useCallback(() => openPlans(), [openPlans]);
+  const openPlansButtonClick = useCallback(
+    (event: React.MouseEvent) => {
+      event.stopPropagation();
+      openPlans();
+    },
+    [openPlans],
+  );
 
   const toggleSessionsSub = useCallback(
     () => setSubOpen((p) => ({ ...p, sessions: !p.sessions })),
+    [],
+  );
+  const togglePlansSub = useCallback(
+    () => setSubOpen((p) => ({ ...p, plans: !p.plans })),
     [],
   );
   const toggleFilesSub = useCallback(
@@ -775,6 +818,7 @@ function RepoGroup({
   );
   const git = group.git;
   const [subOpen, setSubOpen] = useState({
+    plans: true,
     sessions: true,
     workspaces: true,
     files: false,
@@ -807,6 +851,15 @@ function RepoGroup({
   const onRepoContextMenu = useMemo(
     () =>
       contextMenuHandler(openCtx, () => [
+        {
+          kind: "item" as const,
+          id: "open-repo-plans",
+          label: "Open published plans",
+          onSelect: () => {
+            openTab({ kind: "plan", repo: group.name });
+            appCommands.closeDrawer();
+          },
+        },
         {
           kind: "item" as const,
           id: "open-repo-timeline",
@@ -880,6 +933,42 @@ function RepoGroup({
 
       {expanded && (
         <div className="sidebar__repo-body">
+          <Subsection
+            label="Plans"
+            open={subOpen.plans}
+            onToggle={togglePlansSub}
+            count={group.plans.length}
+            rightSlot={
+              <Tooltip label={`Open plans for ${group.name}`}>
+                <button
+                  type="button"
+                  className="sidebar__icon-button"
+                  aria-label={`Open plans for ${group.name}`}
+                  onClick={openPlansButtonClick}
+                >
+                  <Icon name="plus" size={14} />
+                </button>
+              </Tooltip>
+            }
+          >
+            {group.plans.length === 0 ? (
+              <button
+                type="button"
+                className="sidebar__plan-empty"
+                onClick={openPlansClick}
+              >
+                — start a published plan —
+              </button>
+            ) : null}
+            {group.plans.map((plan) => (
+              <PlanRow
+                key={plan.id}
+                plan={plan}
+                onOpen={openPlans}
+              />
+            ))}
+          </Subsection>
+
           <Subsection
             label="Sessions"
             open={subOpen.sessions}
@@ -963,6 +1052,45 @@ function RepoGroup({
         </div>
       )}
     </li>
+  );
+}
+
+function PlanRow({
+  plan,
+  onOpen,
+}: {
+  plan: PlanSummaryView;
+  onOpen: (planId: string) => void;
+}) {
+  const total = Math.max(plan.total_phases, 1);
+  const progress = Math.round((plan.completed_phases / total) * 100);
+  const open = useCallback(() => onOpen(plan.id), [onOpen, plan.id]);
+  const progressStyle = useMemo(() => ({ width: `${progress}%` }), [progress]);
+  return (
+    <button
+      type="button"
+      className={`sidebar__plan sidebar__plan--${plan.status}`}
+      onClick={open}
+      title={plan.summary || plan.title}
+    >
+      <span className="sidebar__plan-main">
+        <span className="sidebar__plan-title">{plan.title}</span>
+        <span className="sidebar__plan-count">
+          {plan.completed_phases}/{plan.total_phases}
+        </span>
+      </span>
+      <span className="sidebar__plan-progress">
+        <i
+          // eslint-disable-next-line local/no-inline-styles -- plan progress is data-driven
+          style={progressStyle}
+        />
+      </span>
+      <span className="sidebar__plan-phase">
+        {plan.blocked_phases > 0
+          ? `${plan.blocked_phases} blocked`
+          : plan.current_phase_title ?? plan.status}
+      </span>
+    </button>
   );
 }
 

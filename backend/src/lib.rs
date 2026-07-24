@@ -5,6 +5,7 @@ use axum::Router;
 use tokio::sync::{broadcast, RwLock};
 use uuid::Uuid;
 
+pub mod activity;
 pub mod agent;
 pub mod api;
 pub mod auth;
@@ -22,6 +23,8 @@ pub mod future_prompts;
 pub mod git;
 pub mod ingest;
 pub mod library;
+pub mod plan_cli;
+pub mod plans;
 pub mod pty;
 pub mod repo_state;
 pub mod retrieval;

@@ -20,7 +20,9 @@ async fn fresh_pool() -> db::Pool {
     let pool = db::connect(&url).await.expect("connect");
     db::run_migrations(&pool).await.expect("migrate");
     sqlx::query(
-        "TRUNCATE retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, events, event_blocks, timeline_turns, \
+        "TRUNCATE retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, \
+         plan_events, plan_attachments, plan_phases, plans, session_activity_state, \
+         events, event_blocks, timeline_turns, \
          timeline_operations, timeline_file_touches, timeline_activity_signals, \
          timeline_session_state, claude_sessions, pty_sessions, workspaces \
          RESTART IDENTITY CASCADE",

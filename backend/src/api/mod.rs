@@ -16,6 +16,7 @@ mod app_state_routes;
 mod device_routes;
 mod future_prompt_routes;
 mod library_routes;
+mod plan_routes;
 mod repo_lifecycle_routes;
 mod repo_routes;
 mod routes;

@@ -526,6 +526,17 @@ pub(super) async fn send_session_prompt(
         }
         state.pty.send_input(id, chunk).await?;
     }
+    crate::activity::set(
+        &state.pool,
+        id,
+        crate::activity::ActivityState::Working,
+        Some(&req.text),
+        None,
+        "user",
+        "explicit",
+    )
+    .await
+    .map_err(ApiError::Internal)?;
     Ok(StatusCode::ACCEPTED)
 }
 

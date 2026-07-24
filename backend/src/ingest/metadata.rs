@@ -108,6 +108,13 @@ fn extract_codex_metadata(value: &Value) -> MetadataPatch {
                 }),
             );
         }
+        "event_msg" if string_at(payload, &["type"]).as_deref() == Some("token_count") => {
+            patch.model_context_window = i64_at(payload, &["info", "model_context_window"]);
+            patch.raw.insert(
+                "token_count".to_string(),
+                json!({ "model_context_window": patch.model_context_window }),
+            );
+        }
         "event_msg"
             if string_at(payload, &["type"]).as_deref() == Some("collab_agent_spawn_end") =>
         {

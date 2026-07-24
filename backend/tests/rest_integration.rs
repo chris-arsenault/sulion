@@ -28,6 +28,7 @@ async fn fresh_pool() -> db::Pool {
     db::run_migrations(&pool).await.expect("migrate");
     sqlx::query(
         "TRUNCATE retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, \
+         plan_events, plan_attachments, plan_phases, plans, session_activity_state, \
          events, ingester_state, claude_sessions, pty_sessions, repos, \
          repo_runtime_state, repo_dirty_paths, timeline_session_state, \
          future_prompt_session_state, workspaces, workspace_dirty_paths RESTART IDENTITY CASCADE",
@@ -176,6 +177,66 @@ async fn sessions_crud_roundtrip() {
         !sessions.iter().any(|s| s["id"] == created["id"]),
         "deleted session must not reappear in list"
     );
+}
+
+#[tokio::test]
+async fn app_state_includes_agent_usage_health_metrics() {
+    let h = Harness::new().await;
+    let repo_path = h.repos_root().join("usage-repo");
+    std::fs::create_dir_all(&repo_path).unwrap();
+    let pty_id = insert_test_pty(&h.state.pool, "usage-repo", &repo_path).await;
+    let session_uuid = Uuid::new_v4();
+    sulion::correlate::apply(
+        &h.state.pool,
+        &sulion::correlate::CorrelateMsg {
+            pty_id,
+            session_uuid,
+            agent: "codex".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO agent_session_metadata \
+            (session_uuid, agent, model, model_context_window) \
+         VALUES ($1, 'codex', 'gpt-5.4', 100000)",
+    )
+    .bind(session_uuid)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO agent_session_usage \
+            (session_uuid, agent, input_tokens, cached_input_tokens, output_tokens, \
+             reasoning_output_tokens, total_tokens, context_tokens, model_context_window, \
+             last_byte_offset, observed_at) \
+         VALUES ($1, 'codex', 42000, 31000, 5000, 1800, 47000, 26000, NULL, 120, NOW())",
+    )
+    .bind(session_uuid)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+
+    let state: serde_json::Value = h
+        .client
+        .get(format!("{}/api/app-state", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let session = state["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["id"] == pty_id.to_string())
+        .unwrap();
+
+    assert_eq!(session["agent_usage"]["total_tokens"], 47_000);
+    assert_eq!(session["agent_usage"]["cached_input_tokens"], 31_000);
+    assert_eq!(session["agent_usage"]["context_tokens"], 26_000);
+    assert_eq!(session["agent_usage"]["model_context_window"], 100_000);
 }
 
 #[tokio::test]
@@ -1071,4 +1132,196 @@ async fn health_endpoint_reports_ok_when_db_reachable() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "ok");
     assert_eq!(body["db"], "ok");
+}
+
+#[tokio::test]
+async fn published_plan_lifecycle_projects_into_app_state() {
+    let h = Harness::new().await;
+    let repo_name = "planned";
+    let repo_path = h.repos_root().join(repo_name);
+    std::fs::create_dir_all(&repo_path).unwrap();
+    let pty_id = insert_test_pty(&h.state.pool, repo_name, &repo_path).await;
+    sqlx::query(
+        "UPDATE pty_sessions \
+            SET agent_runtime_agent = 'codex', agent_runtime_state = 'running', \
+                agent_runtime_started_at = NOW() \
+          WHERE id = $1",
+    )
+    .bind(pty_id)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+    sulion::activity::set(
+        &h.state.pool,
+        pty_id,
+        sulion::activity::ActivityState::Working,
+        Some("Implementing the API"),
+        None,
+        "agent",
+        "explicit",
+    )
+    .await
+    .unwrap();
+
+    let response = h
+        .client
+        .post(format!("{}/api/repos/{repo_name}/plans", h.base))
+        .json(&json!({
+            "title": "Native plans",
+            "summary": "Publish durable phases",
+            "attach_pty_id": pty_id,
+            "phases": [
+                { "title": "Backend", "description": "Schema and service" },
+                { "title": "Frontend", "description": "Plan workspace" }
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 201);
+    let created: serde_json::Value = response.json().await.unwrap();
+    let plan_id = created["id"].as_str().unwrap();
+    let first_phase_id = created["phases"][0]["id"].as_str().unwrap();
+    let second_phase_id = created["phases"][1]["id"].as_str().unwrap();
+    assert_eq!(created["phases"][0]["status"], "in_progress");
+    assert_eq!(created["phases"][1]["status"], "pending");
+    assert_eq!(
+        created["attachments"][0]["pty_session_id"],
+        pty_id.to_string()
+    );
+
+    let reordered: serde_json::Value = h
+        .client
+        .patch(format!(
+            "{}/api/plans/{plan_id}/phases/{second_phase_id}",
+            h.base
+        ))
+        .json(&json!({ "position": 1 }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reordered["phases"][0]["id"], second_phase_id);
+    assert_eq!(reordered["phases"][1]["id"], first_phase_id);
+
+    let other_pty = insert_test_pty(&h.state.pool, "other-repo", &repo_path).await;
+    let cross_repo = h
+        .client
+        .post(format!("{}/api/plans/{plan_id}/attachments", h.base))
+        .json(&json!({ "pty_session_id": other_pty }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross_repo.status(), 400);
+
+    let state: serde_json::Value = h
+        .client
+        .get(format!("{}/api/app-state", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let session = state["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["id"] == pty_id.to_string())
+        .unwrap();
+    assert_eq!(session["activity"]["state"], "working");
+    assert_eq!(session["activity"]["summary"], "Implementing the API");
+    assert_eq!(session["current_plan"]["id"], plan_id);
+    assert_eq!(session["current_plan"]["current_phase_title"], "Backend");
+    assert_eq!(state["plans"][0]["title"], "Native plans");
+
+    let premature = h
+        .client
+        .patch(format!("{}/api/plans/{plan_id}", h.base))
+        .json(&json!({ "status": "completed" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(premature.status(), 400);
+
+    for phase_id in [first_phase_id, second_phase_id] {
+        let response = h
+            .client
+            .patch(format!("{}/api/plans/{plan_id}/phases/{phase_id}", h.base))
+            .json(&json!({ "status": "completed", "status_note": "done" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+    }
+
+    let response = h
+        .client
+        .patch(format!("{}/api/plans/{plan_id}", h.base))
+        .json(&json!({ "status": "completed", "note": "shipped" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let closed: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(closed["status"], "completed");
+    assert_eq!(closed["attachments"], json!([]));
+
+    let open: serde_json::Value = h
+        .client
+        .get(format!("{}/api/repos/{repo_name}/plans", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(open, json!([]));
+    let all: serde_json::Value = h
+        .client
+        .get(format!(
+            "{}/api/repos/{repo_name}/plans?include_closed=true",
+            h.base
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(all[0]["status"], "completed");
+
+    let history: serde_json::Value = h
+        .client
+        .get(format!("{}/api/plans/{plan_id}/events", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        history.as_array().unwrap().len() >= 6,
+        "plan transitions should be auditable"
+    );
+
+    let final_state: serde_json::Value = h
+        .client
+        .get(format!("{}/api/app-state", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(final_state["plans"], json!([]));
+    let final_session = final_state["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["id"] == pty_id.to_string())
+        .unwrap();
+    assert!(final_session["current_plan"].is_null());
 }

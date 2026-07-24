@@ -41,6 +41,9 @@ Full list in [docs/architecture.md](docs/architecture.md#invariants--do-not-brea
 - Git staleness, invariants, and the dataset layout live in docs/; don't re-explain them in comments or commit messages.
 - Codex and Claude share the same canonical event schema. When editing ingest code, assume both agents flow through it.
 - In Sulion PTYs, run `sulion-code help` before structural code navigation.
+- `sulion plan` publishes a durable user-facing phase summary when useful; it
+  complements rather than replaces an agent's detailed internal plan. See
+  `docs/plans.md`.
 
 ## Companion doc
 

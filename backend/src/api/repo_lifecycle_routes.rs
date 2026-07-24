@@ -325,6 +325,15 @@ async fn rename_repo_session_workspace_records(
         .bind(new_name)
         .execute(&mut **tx)
         .await?;
+    sqlx::query(
+        "UPDATE plans \
+            SET repo_name = $2, revision = revision + 1, updated_at = NOW() \
+          WHERE repo_name = $1",
+    )
+    .bind(old_name)
+    .bind(new_name)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 

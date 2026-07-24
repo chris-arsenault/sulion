@@ -1,4 +1,5 @@
 import {
+  type ChangeEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -175,6 +176,10 @@ export function FuturePromptsModal({
       // Clipboard permissions may be unavailable.
     }
   }, []);
+  const onDraftChange = useCallback(
+    (event: ChangeEvent<HTMLTextAreaElement>) => setDraft(event.target.value),
+    [],
+  );
 
   const pending = useMemo(
     () => prompts.filter((entry) => entry.state === "pending"),
@@ -223,7 +228,7 @@ export function FuturePromptsModal({
                 : "This terminal has no correlated invocation yet."
             }
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={onDraftChange}
             disabled={!sessionUuid || session?.state !== "live" || createBusy}
             rows={4}
           />
@@ -231,7 +236,7 @@ export function FuturePromptsModal({
             <button
               type="button"
               className="fp__button fp__button--primary"
-              onClick={() => void createOne()}
+              onClick={createOne}
               disabled={!canCreate || createBusy}
             >
               Add
@@ -258,10 +263,10 @@ export function FuturePromptsModal({
               onEditText={setEditingText}
               onStartEdit={startEdit}
               onCancelEdit={cancelEdit}
-              onSaveEdit={() => void saveEdit()}
-              onSend={(entry) => void sendPrompt(entry)}
-              onCopy={(entry) => void copyPrompt(entry)}
-              onDelete={(entry) => void removePrompt(entry)}
+              onSaveEdit={saveEdit}
+              onSend={sendPrompt}
+              onCopy={copyPrompt}
+              onDelete={removePrompt}
             />
             <PromptSection
               title="Sent"
@@ -274,10 +279,10 @@ export function FuturePromptsModal({
               onEditText={setEditingText}
               onStartEdit={startEdit}
               onCancelEdit={cancelEdit}
-              onSaveEdit={() => void saveEdit()}
-              onSend={() => {}}
-              onCopy={(entry) => void copyPrompt(entry)}
-              onDelete={(entry) => void removePrompt(entry)}
+              onSaveEdit={saveEdit}
+              onSend={ignorePrompt}
+              onCopy={copyPrompt}
+              onDelete={removePrompt}
             />
           </div>
         )}
@@ -327,97 +332,146 @@ function PromptSection({
         <div className="fp__section-empty">{empty}</div>
       ) : (
         <ul className="fp__list">
-          {entries.map((entry) => {
-            const editing = editingId === entry.id;
-            const busy = busyId === entry.id;
-            return (
-              <li key={entry.id} className="fp__item">
-                <div className="fp__item-meta">
-                  <span className={`fp__state fp__state--${entry.state}`}>
-                    {entry.state}
-                  </span>
-                  <span className="fp__timestamp">
-                    {formatTimestamp(entry.updated_at ?? entry.created_at)}
-                  </span>
-                </div>
-                {editing ? (
-                  <textarea
-                    className="fp__edit-input"
-                    value={editingText}
-                    onChange={(e) => onEditText(e.target.value)}
-                    rows={4}
-                    disabled={busy}
-                  />
-                ) : (
-                  <pre className="fp__item-text">{entry.text}</pre>
-                )}
-                <div className="fp__item-actions">
-                  {editing ? (
-                    <>
-                      <button
-                        type="button"
-                        className="fp__button fp__button--primary"
-                        onClick={onSaveEdit}
-                        disabled={busy || editingText.trim().length === 0}
-                      >
-                        Save
-                      </button>
-                      <button
-                        type="button"
-                        className="fp__button"
-                        onClick={onCancelEdit}
-                        disabled={busy}
-                      >
-                        Cancel
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      {entry.state === "pending" && (
-                        <button
-                          type="button"
-                          className="fp__button fp__button--primary"
-                          onClick={() => onSend(entry)}
-                          disabled={!canSend || busy}
-                        >
-                          Send
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="fp__button"
-                        onClick={() => onCopy(entry)}
-                        disabled={busy}
-                      >
-                        Copy
-                      </button>
-                      <button
-                        type="button"
-                        className="fp__button"
-                        onClick={() => onStartEdit(entry)}
-                        disabled={busy}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        className="fp__button fp__button--danger"
-                        onClick={() => onDelete(entry)}
-                        disabled={busy}
-                      >
-                        Delete
-                      </button>
-                    </>
-                  )}
-                </div>
-              </li>
-            );
-          })}
+          {entries.map((entry) => (
+            <PromptRow
+              key={entry.id}
+              entry={entry}
+              editing={editingId === entry.id}
+              editingText={editingText}
+              busy={busyId === entry.id}
+              canSend={canSend}
+              onEditText={onEditText}
+              onStartEdit={onStartEdit}
+              onCancelEdit={onCancelEdit}
+              onSaveEdit={onSaveEdit}
+              onSend={onSend}
+              onCopy={onCopy}
+              onDelete={onDelete}
+            />
+          ))}
         </ul>
       )}
     </section>
   );
 }
+
+function PromptRow({
+  entry,
+  editing,
+  editingText,
+  busy,
+  canSend,
+  onEditText,
+  onStartEdit,
+  onCancelEdit,
+  onSaveEdit,
+  onSend,
+  onCopy,
+  onDelete,
+}: {
+  entry: FuturePromptEntry;
+  editing: boolean;
+  editingText: string;
+  busy: boolean;
+  canSend: boolean;
+  onEditText: (value: string) => void;
+  onStartEdit: (entry: FuturePromptEntry) => void;
+  onCancelEdit: () => void;
+  onSaveEdit: () => void;
+  onSend: (entry: FuturePromptEntry) => void;
+  onCopy: (entry: FuturePromptEntry) => void;
+  onDelete: (entry: FuturePromptEntry) => void;
+}) {
+  const editText = useCallback(
+    (event: ChangeEvent<HTMLTextAreaElement>) =>
+      onEditText(event.target.value),
+    [onEditText],
+  );
+  const send = useCallback(() => onSend(entry), [entry, onSend]);
+  const copy = useCallback(() => onCopy(entry), [entry, onCopy]);
+  const startEdit = useCallback(
+    () => onStartEdit(entry),
+    [entry, onStartEdit],
+  );
+  const remove = useCallback(() => onDelete(entry), [entry, onDelete]);
+  return (
+    <li className="fp__item">
+      <div className="fp__item-meta">
+        <span className={`fp__state fp__state--${entry.state}`}>{entry.state}</span>
+        <span className="fp__timestamp">
+          {formatTimestamp(entry.updated_at ?? entry.created_at)}
+        </span>
+      </div>
+      {editing ? (
+        <textarea
+          className="fp__edit-input"
+          value={editingText}
+          onChange={editText}
+          rows={4}
+          disabled={busy}
+        />
+      ) : (
+        <pre className="fp__item-text">{entry.text}</pre>
+      )}
+      <div className="fp__item-actions">
+        {editing ? (
+          <>
+            <button
+              type="button"
+              className="fp__button fp__button--primary"
+              onClick={onSaveEdit}
+              disabled={busy || editingText.trim().length === 0}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              className="fp__button"
+              onClick={onCancelEdit}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            {entry.state === "pending" && (
+              <button
+                type="button"
+                className="fp__button fp__button--primary"
+                onClick={send}
+                disabled={!canSend || busy}
+              >
+                Send
+              </button>
+            )}
+            <button type="button" className="fp__button" onClick={copy} disabled={busy}>
+              Copy
+            </button>
+            <button
+              type="button"
+              className="fp__button"
+              onClick={startEdit}
+              disabled={busy}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              className="fp__button fp__button--danger"
+              onClick={remove}
+              disabled={busy}
+            >
+              Delete
+            </button>
+          </>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function ignorePrompt(_entry: FuturePromptEntry): void {}
 
 function sortPrompts(entries: FuturePromptEntry[]): FuturePromptEntry[] {
   const next = [...entries];

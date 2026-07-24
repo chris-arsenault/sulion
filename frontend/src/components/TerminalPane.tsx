@@ -80,6 +80,8 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
   repoRef.current = repoName;
   const exposeTerminalMirror = import.meta.env.VITE_SULION_E2E === "1";
   const [terminalFontSize, setTerminalFontSize] = useTerminalFontSize();
+  const terminalFontSizeRef = useRef(terminalFontSize);
+  terminalFontSizeRef.current = terminalFontSize;
 
   const appendToMirror = useCallback((text: Uint8Array | string) => {
     if (!exposeTerminalMirror || !mirrorRef.current) return;
@@ -108,7 +110,7 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
       cursorBlink: true,
       fontFamily:
         "'IBM Plex Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace",
-      fontSize: terminalFontSize,
+      fontSize: terminalFontSizeRef.current,
       // Palette mirrors the IDT token canvas so the terminal reads as
       // one surface with the app shell. xterm can't consume CSS vars —
       // it rasterises into a canvas — so we duplicate the hex values
@@ -442,7 +444,7 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
           }
           confirmLabel="Save as file"
           cancelLabel="Paste inline"
-          onConfirm={() => void acceptLargePasteAsFile()}
+          onConfirm={acceptLargePasteAsFile}
           onCancel={acceptLargePasteInline}
         />
       )}

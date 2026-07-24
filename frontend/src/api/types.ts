@@ -4,6 +4,14 @@
 export type SessionState = "live" | "dead" | "deleted" | "orphaned";
 export type AgentLaunchType = "claude" | "codex";
 export type AgentRuntimeState = "none" | "starting" | "running" | "exited";
+export type SessionActivityState =
+  | "shell"
+  | "starting"
+  | "working"
+  | "awaiting_prompt"
+  | "needs_input"
+  | "blocked"
+  | "unknown";
 
 export interface AgentRuntimeMetadata {
   agent: AgentLaunchType | string | null;
@@ -22,6 +30,40 @@ export interface AgentSessionMetadata {
   cwd: string | null;
   model_context_window: number | null;
   updated_at: string;
+}
+
+export interface AgentSessionUsage {
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  reasoning_output_tokens: number;
+  total_tokens: number;
+  /** Estimated token footprint of the latest model call. */
+  context_tokens: number | null;
+  model_context_window: number | null;
+  observed_at: string;
+  updated_at: string;
+}
+
+export interface SessionActivity {
+  state: SessionActivityState;
+  summary: string | null;
+  reason: string | null;
+  source: "launcher" | "hook" | "ingester" | "agent" | "user" | string;
+  confidence: "explicit" | "derived" | "unknown" | string;
+  updated_at: string | null;
+}
+
+export interface CurrentPlanView {
+  id: string;
+  title: string;
+  status: PlanStatus;
+  revision: number;
+  total_phases: number;
+  completed_phases: number;
+  current_phase_id: string | null;
+  current_phase_title: string | null;
+  current_phase_status: PlanPhaseStatus | null;
 }
 
 export interface SessionView {
@@ -51,6 +93,12 @@ export interface SessionView {
   agent_runtime?: AgentRuntimeMetadata;
   /** Transcript-derived agent metadata for the currently correlated session. */
   agent_metadata?: AgentSessionMetadata | null;
+  /** Transcript-reported cumulative spend and latest context pressure. */
+  agent_usage?: AgentSessionUsage | null;
+  /** Backend-owned operational state for the live PTY/agent process. */
+  activity?: SessionActivity;
+  /** Published plan currently attached to this PTY, if any. */
+  current_plan?: CurrentPlanView | null;
   /** Count of queued `pending` future prompts for the session's
    * currently correlated transcript session. Drives the sidebar
    * future-prompts badge. 0 when there's no correlated session. */
@@ -123,7 +171,113 @@ export interface AppStateResponse {
   sessions: SessionView[];
   repos: RepoView[];
   workspaces?: WorkspaceView[];
+  plans?: PlanSummaryView[];
   stats: StatsResponse;
+}
+
+export type PlanStatus = "active" | "paused" | "completed" | "canceled";
+export type PlanPhaseStatus =
+  | "pending"
+  | "in_progress"
+  | "blocked"
+  | "completed"
+  | "skipped";
+
+export interface PlanPhaseView {
+  id: string;
+  plan_id: string;
+  position: number;
+  title: string;
+  description: string;
+  status: PlanPhaseStatus;
+  status_note: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlanAttachmentView {
+  pty_session_id: string;
+  agent_session_uuid: string | null;
+  attached_at: string;
+}
+
+export interface PlanView {
+  id: string;
+  repo_name: string;
+  title: string;
+  summary: string;
+  status: PlanStatus;
+  revision: number;
+  created_by_pty_id: string | null;
+  created_by_agent_session_uuid: string | null;
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+  phases: PlanPhaseView[];
+  attachments: PlanAttachmentView[];
+}
+
+export interface PlanSummaryView {
+  id: string;
+  repo_name: string;
+  title: string;
+  summary: string;
+  status: PlanStatus;
+  revision: number;
+  total_phases: number;
+  completed_phases: number;
+  blocked_phases: number;
+  current_phase_id: string | null;
+  current_phase_title: string | null;
+  current_phase_status: PlanPhaseStatus | null;
+  attached_pty_ids: string[];
+  updated_at: string;
+}
+
+export interface PlanEventView {
+  id: number;
+  plan_id: string;
+  phase_id: string | null;
+  event_type: string;
+  actor_kind: "agent" | "user" | "system";
+  pty_session_id: string | null;
+  agent_session_uuid: string | null;
+  from_status: string | null;
+  to_status: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+export interface NewPlanPhaseInput {
+  title: string;
+  description?: string;
+  status?: PlanPhaseStatus;
+}
+
+export interface CreatePlanInput {
+  title: string;
+  summary?: string;
+  phases: NewPlanPhaseInput[];
+  all_pending?: boolean;
+  attach_pty_id?: string;
+}
+
+export interface UpdatePlanInput {
+  title?: string;
+  summary?: string;
+  status?: PlanStatus;
+  note?: string;
+  skip_remaining?: boolean;
+}
+
+export interface UpdatePlanPhaseInput {
+  title?: string;
+  description?: string;
+  status?: PlanPhaseStatus;
+  status_note?: string;
+  position?: number;
 }
 
 export interface WorkspaceView {

@@ -1,4 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  type ChangeEvent,
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
 
 import {
   deleteSecret,
@@ -125,6 +130,47 @@ export function SecretsTab() {
       setError(err instanceof Error ? err.message : "secret delete failed");
     }
   }, [draftId, loadSecrets, refreshSecretStore]);
+  const selectSecret = useCallback((id: string) => setSelectedId(id), []);
+  const onDraftIdChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => setDraftId(event.target.value),
+    [],
+  );
+  const onDescriptionChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) =>
+      setDraft((prev) => ({ ...prev, description: event.target.value })),
+    [],
+  );
+  const onScopeChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) =>
+      setDraft((prev) => ({ ...prev, scope: event.target.value })),
+    [],
+  );
+  const onRepoChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) =>
+      setDraft((prev) => ({
+        ...prev,
+        repo: event.target.value.trim() ? event.target.value : null,
+      })),
+    [],
+  );
+  const addEnvPair = useCallback(() => {
+    setDraft((prev) => {
+      const key = nextEnvKey(prev.env);
+      return { ...prev, env: { ...prev.env, [key]: "" } };
+    });
+  }, []);
+  const renameEnv = useCallback((key: string, nextKey: string) => {
+    setDraft((prev) => ({
+      ...prev,
+      env: renameEnvKey(prev.env, key, nextKey),
+    }));
+  }, []);
+  const updateEnv = useCallback((key: string, value: string) => {
+    setDraft((prev) => ({ ...prev, env: { ...prev.env, [key]: value } }));
+  }, []);
+  const removeEnv = useCallback((key: string) => {
+    setDraft((prev) => ({ ...prev, env: removeEnvKey(prev.env, key) }));
+  }, []);
 
   return (
     <div className="secrets-tab">
@@ -146,21 +192,12 @@ export function SecretsTab() {
         ) : (
           <ul className="secrets-tab__list">
             {secrets.map((secret) => (
-              <li key={secret.id}>
-                <button
-                  type="button"
-                  className={
-                    "secrets-tab__list-item" + (secret.id === draftId ? " is-active" : "")
-                  }
-                  onClick={() => setSelectedId(secret.id)}
-                >
-                  <span className="secrets-tab__list-title">{secret.id}</span>
-                  <span className="secrets-tab__list-meta">{secret.description || secret.scope}</span>
-                  <span className="secrets-tab__list-keys">
-                    {secret.env_keys.join(", ")}
-                  </span>
-                </button>
-              </li>
+              <SecretListItem
+                key={secret.id}
+                secret={secret}
+                active={secret.id === draftId}
+                onSelect={selectSecret}
+              />
             ))}
           </ul>
         )}
@@ -183,7 +220,7 @@ export function SecretsTab() {
             <span>ID</span>
             <input
               value={draftId}
-              onChange={(e) => setDraftId(e.target.value)}
+              onChange={onDraftIdChange}
               placeholder="claude-api"
               disabled={selectedId != null}
             />
@@ -192,7 +229,7 @@ export function SecretsTab() {
             <span>Description</span>
             <input
               value={draft.description}
-              onChange={(e) => setDraft((prev) => ({ ...prev, description: e.target.value }))}
+              onChange={onDescriptionChange}
               placeholder="Anthropic API key"
             />
           </label>
@@ -201,7 +238,7 @@ export function SecretsTab() {
               <span>Scope</span>
               <input
                 value={draft.scope}
-                onChange={(e) => setDraft((prev) => ({ ...prev, scope: e.target.value }))}
+                onChange={onScopeChange}
                 placeholder="global"
               />
             </label>
@@ -209,12 +246,7 @@ export function SecretsTab() {
               <span>Repo</span>
               <input
                 value={draft.repo ?? ""}
-                onChange={(e) =>
-                  setDraft((prev) => ({
-                    ...prev,
-                    repo: e.target.value.trim() ? e.target.value : null,
-                  }))
-                }
+                onChange={onRepoChange}
                 placeholder="optional repo"
               />
             </label>
@@ -232,13 +264,7 @@ export function SecretsTab() {
             <button
               type="button"
               className="secrets-tab__button secrets-tab__button--ghost"
-              onClick={() => {
-                const key = nextEnvKey(draft.env);
-                setDraft((prev) => ({
-                  ...prev,
-                  env: { ...prev.env, [key]: "" },
-                }));
-              }}
+              onClick={addEnvPair}
             >
               <Icon name="plus" size={14} />
               <span>Add pair</span>
@@ -246,49 +272,22 @@ export function SecretsTab() {
           </div>
           <div className="secrets-tab__env-list">
             {Object.entries(draft.env).map(([key, value], index) => (
-              <div key={index} className="secrets-tab__env-row">
-                <input
-                  value={key}
-                  onChange={(e) => {
-                    const nextKey = e.target.value;
-                    setDraft((prev) => ({
-                      ...prev,
-                      env: renameEnvKey(prev.env, key, nextKey),
-                    }));
-                  }}
-                  placeholder="ANTHROPIC_API_KEY"
-                />
-                <input
-                  value={value}
-                  onChange={(e) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      env: { ...prev.env, [key]: e.target.value },
-                    }))
-                  }
-                  placeholder={selectedId ? "keep existing" : "value"}
-                />
-                <button
-                  type="button"
-                  className="secrets-tab__icon-button"
-                  aria-label={`Remove ${key}`}
-                  onClick={() =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      env: removeEnvKey(prev.env, key),
-                    }))
-                  }
-                >
-                  <Icon name="x" size={14} />
-                </button>
-              </div>
+              <EnvRow
+                key={index}
+                name={key}
+                value={value}
+                existing={selectedId != null}
+                onRename={renameEnv}
+                onChange={updateEnv}
+                onRemove={removeEnv}
+              />
             ))}
           </div>
           <div className="secrets-tab__actions">
             <button
               type="button"
               className="secrets-tab__button"
-              onClick={() => void saveSecret()}
+              onClick={saveSecret}
               disabled={saving || loadingDetail}
             >
               Save
@@ -297,7 +296,7 @@ export function SecretsTab() {
               <button
                 type="button"
                 className="secrets-tab__button secrets-tab__button--danger"
-                onClick={() => void removeSecret()}
+                onClick={removeSecret}
               >
                 Delete
               </button>
@@ -305,6 +304,83 @@ export function SecretsTab() {
           </div>
         </div>
       </section>
+    </div>
+  );
+}
+
+function SecretListItem({
+  secret,
+  active,
+  onSelect,
+}: {
+  secret: SecretMetadata;
+  active: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const select = useCallback(() => onSelect(secret.id), [onSelect, secret.id]);
+  return (
+    <li>
+      <button
+        type="button"
+        className={`secrets-tab__list-item${active ? " is-active" : ""}`}
+        onClick={select}
+      >
+        <span className="secrets-tab__list-title">{secret.id}</span>
+        <span className="secrets-tab__list-meta">
+          {secret.description || secret.scope}
+        </span>
+        <span className="secrets-tab__list-keys">
+          {secret.env_keys.join(", ")}
+        </span>
+      </button>
+    </li>
+  );
+}
+
+function EnvRow({
+  name,
+  value,
+  existing,
+  onRename,
+  onChange,
+  onRemove,
+}: {
+  name: string;
+  value: string;
+  existing: boolean;
+  onRename: (name: string, nextName: string) => void;
+  onChange: (name: string, value: string) => void;
+  onRemove: (name: string) => void;
+}) {
+  const rename = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => onRename(name, event.target.value),
+    [name, onRename],
+  );
+  const change = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => onChange(name, event.target.value),
+    [name, onChange],
+  );
+  const remove = useCallback(() => onRemove(name), [name, onRemove]);
+  return (
+    <div className="secrets-tab__env-row">
+      <input
+        value={name}
+        onChange={rename}
+        placeholder="ANTHROPIC_API_KEY"
+      />
+      <input
+        value={value}
+        onChange={change}
+        placeholder={existing ? "keep existing" : "value"}
+      />
+      <button
+        type="button"
+        className="secrets-tab__icon-button"
+        aria-label={`Remove ${name}`}
+        onClick={remove}
+      >
+        <Icon name="x" size={14} />
+      </button>
     </div>
   );
 }

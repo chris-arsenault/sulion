@@ -4,7 +4,13 @@
 // origins. Rule: no window.confirm / window.alert / window.prompt
 // anywhere in the app.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type ChangeEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 
 import "./ConfirmDialog.css";
@@ -55,6 +61,10 @@ export function ConfirmDialog({
     if (!canConfirm) return;
     onSecondaryConfirm?.();
   }, [canConfirm, onSecondaryConfirm]);
+  const handleTypedChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => setTyped(event.target.value),
+    [],
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -106,7 +116,7 @@ export function ConfirmDialog({
               type="text"
               className="cd__require-input"
               value={typed}
-              onChange={(e) => setTyped(e.target.value)}
+              onChange={handleTypedChange}
               aria-label={`Type ${requireText} to confirm`}
               autoComplete="off"
               spellCheck={false}

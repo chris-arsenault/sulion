@@ -47,13 +47,26 @@ either the canonical repo checkout (`main`) or a Sulion-created Git worktree on
 an isolated branch. PTYs run with their cwd inside the workspace and receive
 `SULION_WORKSPACE_*` metadata so agents can tell where they are.
 
+**Published plan** — a durable, repo-scoped user-facing phase summary. A plan
+can be attached to multiple live PTYs, while each PTY has at most one current
+plan. It is independent of an agent's detailed internal planning state and
+survives terminal exit. See [`plans.md`](plans.md).
+
 The UI's primary object is the PTY session. The timeline defaults to the current agent session within that PTY, and the repo timeline (#56) merges top-level correlated agent sessions in a repo into one chronological feed. Codex subagent child sessions stay nested under their parent turn instead of becoming first-class repo timeline sessions.
 
 ### Correlation
 
-The backend injects `SULION_PTY_ID=<pty_id>` into the PTY's environment. A `SessionStart` hook posts `{pty_id, agent_session_uuid}` to `/run/sulion/correlate.sock`; the backend records the association in Postgres and updates the current-agent-session pointer on every new invocation.
+The backend injects `SULION_PTY_ID=<pty_id>` into the PTY's environment. A
+`SessionStart` hook posts `{pty_id, agent_session_uuid}` to
+`/run/sulion/correlate.sock`; the backend records the association in Postgres
+and updates the current-agent-session pointer on every new invocation. The same
+socket accepts typed published-plan and activity commands from the `sulion`
+CLI; both socket and REST paths call shared services.
 
-Hook source: `backend/hooks/session-start.sh` (installed into the container at `/opt/sulion/hooks/session-start.sh`). Correlation is best-effort — hook failure is silent; the JSONL still ingests.
+Hook sources are `backend/hooks/session-start.sh` and
+`backend/hooks/activity-hook.sh` (installed under `/opt/sulion/hooks/`).
+Correlation and activity reporting are best-effort — hook failure is silent;
+the JSONL still ingests.
 
 ### Compaction
 
@@ -73,6 +86,7 @@ Code boundary:
 - `backend/src/ingest/canonical/` — source-specific (Claude, Codex) translation into the canonical event schema
 - `backend/src/ingest/timeline/` — app-shaped timeline projection
 - `backend/src/ingest/projection.rs` — materialization into `timeline_*` tables
+- `backend/src/ingest/usage.rs` — cache-aware session spend and latest context-pressure projection
 
 ## Invariants — do not break
 
@@ -87,8 +101,8 @@ Code boundary:
 
 Three surfaces, one work area.
 
-- **Rail + sidebar** — repos, PTY sessions, and isolated workspaces with resume/diff/delete actions. See `frontend/src/components/Sidebar.tsx`.
-- **Work area** — tab-strip over two horizontal panes. Each tab is its own subtree keyed by `(session_id, view_kind)`. Terminal, timeline, monitor, file, diff, reference, and secrets-management tabs all live here.
+- **Rail + sidebar** — repos, published plans, PTY sessions, and isolated workspaces with resume/diff/delete actions. See `frontend/src/components/Sidebar.tsx`.
+- **Work area** — tab-strip over two horizontal panes. Each tab is its own subtree keyed by its stable handle and view kind. Terminal, timeline, overview, plan, file, diff, reference, and secrets-management tabs all live here.
 - **Mobile** — single-pane with drawer below 768px.
 
 State management rules live in [`state-management.md`](state-management.md). Visual framework is in [`design.md`](design.md).
@@ -97,11 +111,21 @@ The **terminal pane** is the one React-opaque island: imperatively mounted `xter
 
 The **timeline pane** uses `react-virtuoso` — overnight sessions produce thousands of events; a non-virtualized list is unusable.
 
+The **overview pane** projects every live PTY from `/api/app-state`, sorted by
+operational activity, and enriches cards with the latest timeline turn. It does
+not depend on which terminal/timeline tabs happen to be open.
+
+The **plan pane** keeps fetched plan detail and edit state local. Open plan
+summaries are ambient app state because the sidebar, overview, command palette,
+and sessions all consume them.
+
 The **secrets tab** is the env-bundle setup surface. PTY-scoped grants with TTL live in terminal/session context menus, and the actual unlock and storage boundary lives in the broker. See [`secrets.md`](secrets.md).
 
 ## Backend surface
 
-REST management (`GET/POST/DELETE` on sessions, repos, timeline, library, git, stats) plus WebSocket attach for live PTY streaming and event push. See `backend/src/api/routes.rs` for the authoritative route table.
+REST management (`GET/POST/PATCH/DELETE` on sessions, repos, plans, timeline,
+library, git, stats) plus WebSocket attach for live PTY streaming and event
+push. See `backend/src/api/routes.rs` for the authoritative route table.
 
 Repo-scoped filesystem/git routes target the canonical checkout. Workspace-scoped
 routes under `/api/workspaces/:id/*` target the session-bound checkout/worktree.
@@ -122,6 +146,7 @@ The backend also launches PTYs with Sulion-managed wrapper tools on `PATH`:
 - `cl` / `co` for correlated Claude/Codex startup
 - `sulion-retrieve` for transcript/timeline retrieval
 - `sulion-code` for structural code navigation
+- `sulion plan` / `sulion activity` for published progress and operational state
 - `with-cred` for general env-bundle injection
 - `aws` as a wrapper over the real AWS CLI
 - `docker` as a constrained runner client

@@ -9,6 +9,8 @@ import { appStatePayload, jsonResponse } from "../test/appState";
 
 const SESSION_ID = "11111111-1111-1111-1111-111111111111";
 const SESSION_UUID = "22222222-2222-2222-2222-222222222222";
+const PROMPT_TIMESTAMP = "2026-04-20T01:00:00Z";
+const NOOP = () => undefined;
 
 function deferred<T>() {
   let resolveFn: ((value: T) => void) | null = null;
@@ -86,7 +88,7 @@ describe("FuturePromptsModal", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(
-      <FuturePromptsModal open sessionId={SESSION_ID} onClose={() => {}} />,
+      <FuturePromptsModal open sessionId={SESSION_ID} onClose={NOOP} />,
     );
 
     const user = userEvent.setup();
@@ -105,8 +107,8 @@ describe("FuturePromptsModal", () => {
       new Response(JSON.stringify({
         id: "fp-1",
         state: "pending",
-        created_at: "2026-04-20T01:00:00Z",
-        updated_at: "2026-04-20T01:00:00Z",
+        created_at: PROMPT_TIMESTAMP,
+        updated_at: PROMPT_TIMESTAMP,
         text: "ask about tests later",
       }), {
         status: 201,
@@ -143,8 +145,8 @@ describe("FuturePromptsModal", () => {
             {
               id: "fp-1",
               state: "pending",
-              created_at: "2026-04-20T01:00:00Z",
-              updated_at: "2026-04-20T01:00:00Z",
+              created_at: PROMPT_TIMESTAMP,
+              updated_at: PROMPT_TIMESTAMP,
               text: "follow up after this run",
             },
           ],
@@ -162,7 +164,7 @@ describe("FuturePromptsModal", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(
-      <FuturePromptsModal open sessionId={SESSION_ID} onClose={() => {}} />,
+      <FuturePromptsModal open sessionId={SESSION_ID} onClose={NOOP} />,
     );
 
     const user = userEvent.setup();
@@ -186,7 +188,7 @@ describe("FuturePromptsModal", () => {
       new Response(JSON.stringify({
         id: "fp-1",
         state: "sent",
-        created_at: "2026-04-20T01:00:00Z",
+        created_at: PROMPT_TIMESTAMP,
         updated_at: "2026-04-20T01:05:00Z",
         text: "follow up after this run",
       }), {
@@ -220,8 +222,8 @@ describe("FuturePromptsModal", () => {
             {
               id: "fp-close",
               state: "pending",
-              created_at: "2026-04-20T01:00:00Z",
-              updated_at: "2026-04-20T01:00:00Z",
+              created_at: PROMPT_TIMESTAMP,
+              updated_at: PROMPT_TIMESTAMP,
               text: "hand off to terminal",
             },
           ],
@@ -234,7 +236,7 @@ describe("FuturePromptsModal", () => {
         return new Response(JSON.stringify({
           id: "fp-close",
           state: "sent",
-          created_at: "2026-04-20T01:00:00Z",
+          created_at: PROMPT_TIMESTAMP,
           updated_at: "2026-04-20T01:05:00Z",
           text: "hand off to terminal",
         }), {

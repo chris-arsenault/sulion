@@ -1,3 +1,4 @@
+mod activity_projection;
 pub mod canonical;
 mod file_scan;
 mod ingester;
@@ -6,6 +7,7 @@ mod metadata;
 mod projection;
 mod reset;
 pub mod timeline;
+mod usage;
 
 pub use ingester::{backfill_canonical_blocks, parse_codex_session_uuid, Ingester, IngesterConfig};
 pub use maintenance::{

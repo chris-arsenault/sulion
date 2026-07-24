@@ -286,6 +286,76 @@
   padding: 2px 0 4px;
 }
 
+.sidebar__plan,
+.sidebar__plan-empty {
+  width: 100%;
+  border: 0;
+  border-left: 2px solid var(--accent);
+  border-radius: var(--r-1);
+  padding: 5px 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar__plan:hover,
+.sidebar__plan-empty:hover {
+  background: var(--canvas-3);
+}
+
+.sidebar__plan--paused {
+  border-left-color: var(--warn-mark);
+}
+
+.sidebar__plan-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.sidebar__plan-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-ui);
+  font-weight: 600;
+}
+
+.sidebar__plan-count,
+.sidebar__plan-phase,
+.sidebar__plan-empty {
+  color: var(--text-dis);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+}
+
+.sidebar__plan-phase {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__plan-progress {
+  display: block;
+  height: 2px;
+  margin-top: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--canvas-3);
+}
+
+.sidebar__plan-progress i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
 /* ─── File tree ──────────────────────────────────────────────────── */
 
 .sidebar__tree-body {

@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import type { SecretGrantMetadata, SessionView } from "../api/types";
+import type { Maybe } from "../lib/types";
 import type { PaneId, TabData } from "../state/TabStore";
 import {
   unassociatedTerminalTimelineTabIds,
@@ -34,6 +35,7 @@ import { FileTab } from "./FileTab";
 import { DiffTab } from "./DiffTab";
 import { RefTab } from "./RefTab";
 import { SecretsTab } from "./SecretsTab";
+import { PlanPane } from "./PlanPane";
 import "./WorkArea.css";
 
 const TAB_DRAG_MIME = "application/x-sulion-tab";
@@ -620,27 +622,47 @@ function TabHandle({
     },
     [closeThis],
   );
+  const tabHandleProps = useMemo(
+    () => ({
+      role: "tab",
+      "aria-selected": active,
+      tabIndex: active ? 0 : -1,
+      "data-kind": tab.kind,
+      "data-session-id": tab.sessionId,
+      "data-repo": tab.repo,
+      "data-workspace-id": tab.workspaceId,
+      "data-path": tab.path,
+      "data-slug": tab.slug,
+      draggable: true,
+      onDragStart,
+      onDragEnd,
+      onDragOver,
+      onClick: activateThis,
+      onKeyDown,
+      onContextMenu,
+    }),
+    [
+      active,
+      activateThis,
+      onContextMenu,
+      onDragEnd,
+      onDragOver,
+      onDragStart,
+      onKeyDown,
+      tab.kind,
+      tab.path,
+      tab.repo,
+      tab.sessionId,
+      tab.slug,
+      tab.workspaceId,
+    ],
+  );
 
   return (
     <Tooltip label={tabTitle(tab, label)}>
       <div
-        role="tab"
-        aria-selected={active}
-        tabIndex={active ? 0 : -1}
         className={active ? "wa__tab-handle wa__tab-handle--active" : "wa__tab-handle"}
-        data-kind={tab.kind}
-        data-session-id={tab.sessionId}
-        data-repo={tab.repo}
-        data-workspace-id={tab.workspaceId}
-        data-path={tab.path}
-        data-slug={tab.slug}
-        draggable
-        onDragStart={onDragStart}
-        onDragEnd={onDragEnd}
-        onDragOver={onDragOver}
-        onClick={activateThis}
-        onKeyDown={onKeyDown}
-        onContextMenu={onContextMenu}
+        {...tabHandleProps}
       >
         {bindingTone ? (
           <span
@@ -684,32 +706,57 @@ function liveLabel(
 ): string {
   const session =
     tab.sessionId ? sessions.find((s) => s.id === tab.sessionId) ?? null : null;
-  const sessionTag = session
-    ? session.label && session.label.length > 0
-      ? session.label
-      : session.id.slice(0, 8)
-    : null;
+  const sessionTag = session ? sessionLabel(session) : null;
   switch (tab.kind) {
     case "terminal":
-      return sessionTag ? `${sessionTag} · term` : "terminal";
+      return taggedLabel(sessionTag, "term", "terminal");
     case "timeline":
-      if (tab.repo) return `${tab.repo} · time`;
-      return sessionTag ? `${sessionTag} · time` : "timeline";
+      return taggedLabel(tab.repo ?? sessionTag, "time", "timeline");
     case "file":
-      return tab.path
-        ? `${tab.workspaceId ? "ws · " : ""}${basename(tab.path)}`
-        : "file";
+      return fileLabel(tab);
     case "diff":
-      return tab.path
-        ? `${tab.workspaceId ? "ws " : ""}diff: ${basename(tab.path)}`
-        : `${tab.workspaceId ? "ws " : ""}diff: ${tab.repo ?? ""}`;
+      return diffLabel(tab);
     case "ref":
       return tab.slug ? `ref: ${tab.slug}` : "ref";
     case "secrets":
-      return tab.sessionId ? `secrets · ${tab.sessionId.slice(0, 8)}` : "secrets";
+      return tab.sessionId
+        ? `secrets · ${tab.sessionId.slice(0, 8)}`
+        : "secrets";
+    case "plan":
+      return planLabel(tab);
     case "monitor":
-      return "monitor";
+      return "overview";
   }
+}
+
+function sessionLabel(session: SessionView): string {
+  return session.label?.trim() || session.id.slice(0, 8);
+}
+
+function taggedLabel(
+  value: Maybe<string | null>,
+  suffix: string,
+  fallback: string,
+): string {
+  return value ? `${value} · ${suffix}` : fallback;
+}
+
+function fileLabel(tab: TabData): string {
+  if (!tab.path) return "file";
+  return `${tab.workspaceId ? "ws · " : ""}${basename(tab.path)}`;
+}
+
+function diffLabel(tab: TabData): string {
+  const prefix = tab.workspaceId ? "ws " : "";
+  return tab.path
+    ? `${prefix}diff: ${basename(tab.path)}`
+    : `${prefix}diff: ${tab.repo ?? ""}`;
+}
+
+function planLabel(tab: TabData): string {
+  return tab.planId
+    ? `${tab.repo ?? "plan"} · plan`
+    : `${tab.repo ?? ""} · plans`;
 }
 
 function basename(p: string): string {
@@ -731,6 +778,8 @@ function tabIcon(tab: TabData): IconName {
       return "pin";
     case "secrets":
       return "settings";
+    case "plan":
+      return "list";
     case "monitor":
       return "activity";
   }
@@ -772,6 +821,8 @@ function TabContent({ tab, active }: { tab: TabData; active: boolean }) {
         return <RefTab slug={tab.slug!} />;
       case "secrets":
         return <SecretsTab />;
+      case "plan":
+        return <PlanPane repo={tab.repo!} planId={tab.planId} active={active} />;
       case "monitor":
         return <MonitorPane active={active} />;
     }

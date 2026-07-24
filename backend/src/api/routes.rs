@@ -1,5 +1,5 @@
 //! REST routing hub. The individual handlers live in sibling modules
-//! (`session_routes`, `repo_routes`, `library_routes`,
+//! (`session_routes`, `repo_routes`, `plan_routes`, `library_routes`,
 //! `timeline_routes`, `future_prompt_routes`); this file only wires
 //! the URL layout, owns the `ApiError` type shared across them, and
 //! carries a couple of helpers used by more than one module.
@@ -16,8 +16,8 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 
 use super::{
-    admin_routes, future_prompt_routes, library_routes, repo_lifecycle_routes, repo_routes,
-    session_routes, timeline_routes, workspace_routes,
+    admin_routes, future_prompt_routes, library_routes, plan_routes, repo_lifecycle_routes,
+    repo_routes, session_routes, timeline_routes, workspace_routes,
 };
 use crate::AppState;
 
@@ -80,6 +80,7 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/repos/:name/timeline/turns/:session_uuid/:turn_id",
             get(timeline_routes::repo_timeline_turn),
         )
+        .merge(plan_router())
         .route(
             "/api/monitor/timeline",
             post(timeline_routes::monitor_timeline),
@@ -159,6 +160,31 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/admin/retrieval/reindex",
             post(admin_routes::retrieval_reindex),
         )
+}
+
+fn plan_router() -> Router<Arc<AppState>> {
+    use axum::routing::{delete, get, patch, post};
+
+    Router::new()
+        .route(
+            "/api/repos/:name/plans",
+            get(plan_routes::list_repo_plans).post(plan_routes::create_repo_plan),
+        )
+        .route(
+            "/api/plans/:id",
+            get(plan_routes::get_plan).patch(plan_routes::patch_plan),
+        )
+        .route("/api/plans/:id/phases", post(plan_routes::add_plan_phase))
+        .route(
+            "/api/plans/:id/phases/:phase_id",
+            patch(plan_routes::patch_plan_phase),
+        )
+        .route("/api/plans/:id/attachments", post(plan_routes::attach_plan))
+        .route(
+            "/api/plans/:id/attachments/:pty_session_id",
+            delete(plan_routes::detach_plan),
+        )
+        .route("/api/plans/:id/events", get(plan_routes::plan_events))
 }
 
 // ─── error type ───────────────────────────────────────────────────────

@@ -8,9 +8,11 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use sulion::activity::ActivityState;
 use sulion::codex::{run_launcher, LauncherConfig};
-use sulion::correlate::{self, CorrelateMsg, RuntimeEvent, RuntimeMsg};
+use sulion::correlate::{self, ControlRequest, CorrelateMsg, RuntimeEvent, RuntimeMsg};
 use sulion::db;
+use sulion::plans::{NewPhase, UpdatePhaseInput};
 use sulion::pty::{PtyManager, SpawnParams};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -25,6 +27,7 @@ async fn fresh_pool() -> db::Pool {
     let pool = db::connect(&url).await.expect("connect");
     sqlx::query(
         "TRUNCATE retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, \
+         plan_events, plan_attachments, plan_phases, plans, session_activity_state, \
          events, ingester_state, claude_sessions, pty_sessions, repos, \
          workspaces, workspace_dirty_paths RESTART IDENTITY CASCADE",
     )
@@ -494,5 +497,122 @@ async fn codex_launcher_exits_when_correlation_ack_never_arrives() {
     assert!(payload.contains(&session_uuid.to_string()));
     assert!(payload.contains("\"agent\":\"codex\""));
 
+    let _ = std::fs::remove_file(&sock);
+}
+
+#[tokio::test]
+async fn control_socket_publishes_plans_and_preserves_explicit_attention() {
+    let pool = fresh_pool().await;
+    let pty_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pty_sessions (id, repo, working_dir, state, created_at) \
+         VALUES ($1, 'r', '/tmp', 'live', NOW())",
+    )
+    .bind(pty_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let sock = tmp_sock();
+    let socket_path = sock.clone();
+    let listener_pool = pool.clone();
+    let listener_task = tokio::spawn(async move {
+        let _ = correlate::run(listener_pool, socket_path).await;
+    });
+    wait_for_socket(&sock).await;
+
+    let started = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::PlanStart {
+            title: "Published work".to_string(),
+            summary: "Short durable progress".to_string(),
+            phases: vec![
+                NewPhase {
+                    title: "Build".to_string(),
+                    description: "Implement it".to_string(),
+                    status: None,
+                },
+                NewPhase {
+                    title: "Verify".to_string(),
+                    description: "Test it".to_string(),
+                    status: None,
+                },
+            ],
+            all_pending: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(started.ok, "{:?}", started.error);
+    let plan = started.data.unwrap();
+    assert_eq!(plan["title"], "Published work");
+    assert_eq!(plan["attachments"][0]["pty_session_id"], pty_id.to_string());
+    let plan_id = plan["id"].as_str().unwrap().parse::<Uuid>().unwrap();
+
+    let updated = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::PlanUpdatePhase {
+            plan_id: None,
+            phase_reference: "1".to_string(),
+            input: UpdatePhaseInput {
+                title: None,
+                description: None,
+                status: Some("completed".to_string()),
+                status_note: Some("done".to_string()),
+                position: None,
+            },
+        },
+    )
+    .await
+    .unwrap();
+    assert!(updated.ok, "{:?}", updated.error);
+    assert_eq!(updated.data.unwrap()["phases"][0]["status"], "completed");
+
+    let attention = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::ActivitySet {
+            state: ActivityState::NeedsInput,
+            summary: Some("Choose an API shape".to_string()),
+            reason: Some("Two durable options remain".to_string()),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(attention.ok, "{:?}", attention.error);
+    assert_eq!(attention.data.unwrap()["state"], "needs_input");
+
+    sulion::activity::set(
+        &pool,
+        pty_id,
+        ActivityState::AwaitingPrompt,
+        Some("automatic turn complete"),
+        None,
+        "ingester",
+        "explicit",
+    )
+    .await
+    .unwrap();
+    let current = correlate::send_control(&sock, pty_id, ControlRequest::ActivityGet)
+        .await
+        .unwrap();
+    assert!(current.ok, "{:?}", current.error);
+    assert_eq!(current.data.unwrap()["state"], "needs_input");
+
+    let history = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::PlanHistory {
+            plan_id: Some(plan_id),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(history.ok, "{:?}", history.error);
+    assert!(history.data.unwrap().as_array().unwrap().len() >= 4);
+
+    listener_task.abort();
     let _ = std::fs::remove_file(&sock);
 }

@@ -18,6 +18,7 @@ async fn fresh_pool() -> db::Pool {
     db::run_migrations(&pool).await.expect("migrate");
     sqlx::query(
         "TRUNCATE retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, \
+         plan_events, plan_attachments, plan_phases, plans, session_activity_state, \
          events, ingester_state, claude_sessions, pty_sessions, repos, \
          repo_runtime_state, repo_dirty_paths, timeline_session_state, \
          future_prompt_session_state, workspaces, workspace_dirty_paths RESTART IDENTITY CASCADE",

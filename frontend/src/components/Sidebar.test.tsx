@@ -157,38 +157,48 @@ function installFetchMock(): MockState {
       if ((url === "/api/library/references" || url === "/api/library/prompts") && method === "GET") {
         return jsonResp([]);
       }
-      if (url === "/broker/v1/secrets" && method === "GET") {
-        return jsonResp(state.secrets);
-      }
-      if (url.startsWith("/broker/v1/grants?") && method === "GET") {
-        const qs = new URLSearchParams(url.split("?")[1]);
-        return jsonResp(state.grantsBySession[qs.get("pty_session_id") ?? ""] ?? []);
-      }
-      if (url === "/broker/v1/grants" && method === "POST") {
-        const body = JSON.parse(init!.body as string);
-        state.unlocks.push(body);
-        const grant = {
-          secret_id: body.secret_id,
-          granted_by_sub: "user",
-          granted_by_username: null,
-          expires_at: new Date(Date.now() + body.ttl_seconds * 1000).toISOString(),
-        };
-        const current = state.grantsBySession[body.pty_session_id] ?? [];
-        state.grantsBySession[body.pty_session_id] = [...current, grant];
-        return new Response(null, { status: 201 });
-      }
-      if (url === "/broker/v1/grants" && method === "DELETE") {
-        const body = JSON.parse(init!.body as string);
-        state.revokes.push(body);
-        state.grantsBySession[body.pty_session_id] = (
-          state.grantsBySession[body.pty_session_id] ?? []
-        ).filter((grant) => grant.secret_id !== body.secret_id);
-        return new Response(null, { status: 204 });
+      if (url.startsWith("/broker/")) {
+        return handleBrokerRequest(state, url, method, init);
       }
       return new Response("", { status: 404 });
     }),
   );
   return state;
+}
+
+function handleBrokerRequest(
+  state: MockState,
+  url: string,
+  method: string,
+  init?: RequestInit,
+): Response {
+  if (url === "/broker/v1/secrets" && method === "GET") {
+    return jsonResponse(state.secrets);
+  }
+  if (url.startsWith("/broker/v1/grants?") && method === "GET") {
+    const qs = new URLSearchParams(url.split("?")[1]);
+    return jsonResponse(
+      state.grantsBySession[qs.get("pty_session_id") ?? ""] ?? [],
+    );
+  }
+  const body = JSON.parse(init?.body as string);
+  if (method === "POST") {
+    state.unlocks.push(body);
+    const grant = {
+      secret_id: body.secret_id,
+      granted_by_sub: "user",
+      granted_by_username: null,
+      expires_at: new Date(Date.now() + body.ttl_seconds * 1000).toISOString(),
+    };
+    const current = state.grantsBySession[body.pty_session_id] ?? [];
+    state.grantsBySession[body.pty_session_id] = [...current, grant];
+    return new Response(null, { status: 201 });
+  }
+  state.revokes.push(body);
+  state.grantsBySession[body.pty_session_id] = (
+    state.grantsBySession[body.pty_session_id] ?? []
+  ).filter((grant) => grant.secret_id !== body.secret_id);
+  return new Response(null, { status: 204 });
 }
 
 function workspaceFixture(overrides: Record<string, unknown> = {}) {
@@ -769,10 +779,11 @@ describe("Sidebar", () => {
 
   it("enables and revokes a secret grant from the session context menu", async () => {
     const sessionId = "88888888-8888-8888-8888-888888888888";
+    const secretId = "claude-api";
     const state = installFetchMock();
     state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
     state.secrets.push({
-      id: "claude-api",
+      id: secretId,
       description: "Claude",
       scope: "global",
       repo: null,
@@ -801,18 +812,18 @@ describe("Sidebar", () => {
     await openSessionContextMenu(user, /secret-session/);
     await hoverMenuItem(user, "Secrets");
     await hoverMenuItem(user, "Enable secret");
-    await hoverMenuItem(user, "claude-api");
+    await hoverMenuItem(user, secretId);
     await user.click(await screen.findByRole("menuitem", { name: "10m" }));
 
     await waitFor(() => expect(state.unlocks).toHaveLength(2));
     expect(state.unlocks).toEqual([{
       pty_session_id: sessionId,
-      secret_id: "claude-api",
+      secret_id: secretId,
       ttl_seconds: 600,
       tool: "with-cred",
     }, {
       pty_session_id: sessionId,
-      secret_id: "claude-api",
+      secret_id: secretId,
       ttl_seconds: 600,
       tool: "aws",
     }]);
@@ -820,16 +831,20 @@ describe("Sidebar", () => {
     await openSessionContextMenu(user, /secret-session/);
     await hoverMenuItem(user, "Secrets");
     await hoverMenuItem(user, "Active secrets");
-    await user.click(await screen.findByRole("menuitem", { name: /claude-api ·/ }));
+    await user.click(
+      await screen.findByRole("menuitem", {
+        name: new RegExp(`${secretId} ·`),
+      }),
+    );
 
     await waitFor(() => expect(state.revokes).toHaveLength(2));
     expect(state.revokes).toEqual([{
       pty_session_id: sessionId,
-      secret_id: "claude-api",
+      secret_id: secretId,
       tool: "with-cred",
     }, {
       pty_session_id: sessionId,
-      secret_id: "claude-api",
+      secret_id: secretId,
       tool: "aws",
     }]);
   });

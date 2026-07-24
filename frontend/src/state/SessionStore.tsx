@@ -15,6 +15,7 @@ import {
 import type {
   CreateRepoRequest,
   CreateSessionRequest,
+  PlanSummaryView,
   RepoView,
   SessionView,
   StatsResponse,
@@ -40,6 +41,7 @@ export interface SessionStore {
   repos: RepoView[];
   workspaces: WorkspaceView[];
   stats: StatsResponse | null;
+  plans: PlanSummaryView[];
   selectedSessionId: string | null;
   lastError: string | null;
   sessionsLoaded: boolean;
@@ -69,6 +71,7 @@ function initialState(): Pick<
   | "repos"
   | "workspaces"
   | "stats"
+  | "plans"
   | "selectedSessionId"
   | "lastError"
   | "sessionsLoaded"
@@ -80,6 +83,7 @@ function initialState(): Pick<
     repos: [],
     workspaces: [],
     stats: null,
+    plans: [],
     selectedSessionId: readSessionIdFromUrl(),
     lastError: null,
     sessionsLoaded: false,
@@ -98,16 +102,19 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
       const repos = Array.isArray(data.repos) ? data.repos : [];
       const workspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
       const stats = data.stats ?? null;
+      const plans = Array.isArray(data.plans) ? data.plans : [];
       set((state) => {
         const sameSessions = sameJson(state.sessions, sessions);
         const sameRepos = sameJson(state.repos, repos);
         const sameWorkspaces = sameJson(state.workspaces, workspaces);
         const sameStats = sameJson(state.stats, stats);
+        const samePlans = sameJson(state.plans, plans);
         if (
           sameSessions &&
           sameRepos &&
           sameWorkspaces &&
           sameStats &&
+          samePlans &&
           state.sessionsLoaded &&
           state.lastError == null
         ) {
@@ -118,6 +125,7 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
           repos: sameRepos ? state.repos : repos,
           workspaces: sameWorkspaces ? state.workspaces : workspaces,
           stats: sameStats ? state.stats : stats,
+          plans: samePlans ? state.plans : plans,
           lastError: null,
           sessionsLoaded: true,
         };

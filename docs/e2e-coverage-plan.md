@@ -32,7 +32,8 @@ Current specs:
 | Workspace isolation | Partial | High | Backend integration tests cover isolated worktree creation, main-worktree binding, workspace dirty-path queries, and session workspace metadata. Browser e2e does not yet create isolated sessions. | Add a create-session e2e path that selects isolated vs main workspace mode and verifies file/diff tabs stay workspace-scoped. |
 | Timeline inspection: Claude path | Covered | High | `02`, `04`, and `07` cover turn selection, prompt detail, thinking flyout, save actions, and a live mock roundtrip that emits Claude-shaped assistant/edit/websearch/subagent JSONL into ingest. | Add multi-turn behavior once seed data includes more than one meaningful Claude turn. |
 | Timeline inspection: Codex lineage path | Covered | High | `03` and `07` cover the Codex task row, subagent modal, lineage drill-down, and a live mock roundtrip that emits Codex-shaped assistant/edit/websearch/subagent JSONL into ingest. | Add a richer Codex sidechain scenario with multiple delegated tasks and parent/child switching. |
-| Monitor tab | Partial | Medium | Unit coverage verifies monitor cards and jump-to-session behavior. No real-stack browser spec opens the Monitor tab yet. | Add a monitor e2e scenario with two active sessions and verify card ordering plus jump-to-timeline. |
+| Overview tab | Partial | High | Unit coverage verifies that every live PTY appears without an open tab, attention and current-plan state render, and cards jump to timeline/plan tabs. No real-stack browser spec opens Overview yet. | Add an overview e2e scenario with two live sessions and verify attention ordering plus jumps to timeline and attached plan. |
+| Published plans | Partial | High | Postgres-backed integration tests cover create/update/complete/history/app-state projection; component tests cover browser creation and phase updates. | Add a real-stack browser scenario for sidebar creation, PTY attachment, phase completion, Overview projection, and closed history. |
 | Timeline filtering and faceting | Partial | High | `02` covers file-path filtering and recovery via `Show all`. | Add speaker/category/error/sidechain filter combinations and persistence of filter state. |
 | File browser and nested tree navigation | Covered | Medium | `01` and `02` cover nested path expansion and opening tree files into tabs. | Add directory collapse/re-expand and dirty-file-only navigation cases. |
 | File viewers | Partial | Medium | `02` covers JSON rendering and raw-mode toggle; `01` indirectly covers diff-open adjacency from a dirty file. | Add markdown, code-highlighted, ndjson, truncated, binary, and image viewer cases. |
@@ -60,7 +61,7 @@ Current specs:
 1. Add a `DiffTab` stage/unstage test. It covers a real workflow and would exercise a path that currently has no browser coverage.
 2. Add a session-creation test. That validates the UI path most likely to break when backend/session and workspace-mode wiring changes.
 3. Add a repo-creation test. That closes the last obvious top-level sidebar action gap.
-4. Add monitor-tab and timeline prompt-bar e2e coverage for the new review/input workflow.
+4. Add published-plan/overview and timeline prompt-bar e2e coverage for the new review/input workflow.
 5. Expand timeline filter coverage beyond file-path filtering to speaker/category/error combinations.
 6. Add file-viewer format coverage for markdown, ndjson, binary/truncated files, and image/svg behavior.
 

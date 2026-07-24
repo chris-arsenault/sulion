@@ -1,6 +1,6 @@
 import {
-  createContext,
-  useContext,
+  type ChangeEvent,
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -13,28 +13,15 @@ import {
   isAuthConfigured,
   signIn,
   signOut,
-  type SessionSnapshot,
-  type SignInChallenge,
   type SignInResult,
 } from "./cognito";
+import {
+  AuthContext,
+  type AuthContextValue,
+  type AuthState,
+  useAuth,
+} from "./context";
 import "./AuthProvider.css";
-
-type AuthState =
-  | { kind: "loading" }
-  | { kind: "disabled" }
-  | { kind: "anonymous"; error: string | null }
-  | { kind: "mfa"; challenge: SignInChallenge; error: string | null; pending: boolean }
-  | { kind: "authenticated"; session: SessionSnapshot };
-
-interface AuthContextValue {
-  state: AuthState;
-  login: (username: string, password: string) => Promise<void>;
-  submitMfaCode: (code: string) => Promise<void>;
-  cancelMfa: () => void;
-  logout: () => void;
-}
-
-const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ kind: "loading" });
@@ -114,12 +101,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-export function useAuth(): AuthContextValue {
-  const value = useContext(AuthContext);
-  if (!value) throw new Error("useAuth must be used inside AuthProvider");
-  return value;
-}
-
 export function AuthGate({ children }: { children: ReactNode }) {
   const { state, login, submitMfaCode, cancelMfa, logout } = useAuth();
   const runtime = getAuthRuntimeConfig();
@@ -181,15 +162,26 @@ function LoginScreen({
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const submit = async (ev: React.FormEvent<HTMLFormElement>) => {
-    ev.preventDefault();
-    setSubmitting(true);
-    try {
-      await onLogin(username, password);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  const submit = useCallback(
+    async (ev: React.FormEvent<HTMLFormElement>) => {
+      ev.preventDefault();
+      setSubmitting(true);
+      try {
+        await onLogin(username, password);
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [onLogin, password, username],
+  );
+  const onUsernameChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => setUsername(event.target.value),
+    [],
+  );
+  const onPasswordChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => setPassword(event.target.value),
+    [],
+  );
 
   return (
     <div className="auth-shell">
@@ -211,7 +203,7 @@ function LoginScreen({
             type="text"
             autoComplete="username"
             value={username}
-            onChange={(ev) => setUsername(ev.target.value)}
+            onChange={onUsernameChange}
             disabled={!configured || submitting}
           />
         </label>
@@ -221,7 +213,7 @@ function LoginScreen({
             type="password"
             autoComplete="current-password"
             value={password}
-            onChange={(ev) => setPassword(ev.target.value)}
+            onChange={onPasswordChange}
             disabled={!configured || submitting}
           />
         </label>
@@ -250,11 +242,19 @@ function MfaScreen({
 }) {
   const [code, setCode] = useState("");
 
-  const submit = async (ev: React.FormEvent<HTMLFormElement>) => {
-    ev.preventDefault();
-    await onSubmit(code);
-    setCode("");
-  };
+  const submit = useCallback(
+    async (ev: React.FormEvent<HTMLFormElement>) => {
+      ev.preventDefault();
+      await onSubmit(code);
+      setCode("");
+    },
+    [code, onSubmit],
+  );
+  const onCodeChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) =>
+      setCode(event.target.value.replace(/\D/g, "")),
+    [],
+  );
 
   return (
     <div className="auth-shell">
@@ -275,7 +275,7 @@ function MfaScreen({
             pattern="[0-9]*"
             maxLength={6}
             value={code}
-            onChange={(ev) => setCode(ev.target.value.replace(/\D/g, ""))}
+            onChange={onCodeChange}
             disabled={pending}
             autoFocus
           />

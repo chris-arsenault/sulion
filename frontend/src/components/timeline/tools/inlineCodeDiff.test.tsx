@@ -1,7 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { buildInlineCodeDiff, InlineCodeDiff } from "./inlineCodeDiff";
+import { InlineCodeDiff } from "./inlineCodeDiff";
+import { buildInlineCodeDiff } from "./inlineCodeDiffModel";
 
 function makeFunction(returnLine: string) {
   return [

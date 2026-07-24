@@ -18,6 +18,10 @@ import type {
   LibraryKind,
   MonitorTimelineRequest,
   MonitorTimelineResponse,
+  CreatePlanInput,
+  NewPlanPhaseInput,
+  PlanEventView,
+  PlanView,
   RenameRepoRequest,
   RepoDirtyPathsResponse,
   RepoView,
@@ -31,6 +35,8 @@ import type {
   TimelineTurnDetailResponse,
   UpdateSessionRequest,
   UpdateFuturePromptInput,
+  UpdatePlanInput,
+  UpdatePlanPhaseInput,
   AgentLaunchType,
   WorkspaceDirtyPathsResponse,
   WorkspaceView,
@@ -255,6 +261,93 @@ export function getMonitorTimeline(
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+export function listRepoPlans(
+  repo: string,
+  includeClosed = false,
+): Promise<PlanView[]> {
+  const query = includeClosed ? "?include_closed=true" : "";
+  return request<PlanView[]>(
+    `/api/repos/${encodeURIComponent(repo)}/plans${query}`,
+  );
+}
+
+export function createPlan(
+  repo: string,
+  body: CreatePlanInput,
+): Promise<PlanView> {
+  return request<PlanView>(`/api/repos/${encodeURIComponent(repo)}/plans`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function getPlan(id: string): Promise<PlanView> {
+  return request<PlanView>(`/api/plans/${encodeURIComponent(id)}`);
+}
+
+export function updatePlan(
+  id: string,
+  body: UpdatePlanInput,
+): Promise<PlanView> {
+  return request<PlanView>(`/api/plans/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function addPlanPhase(
+  id: string,
+  body: NewPlanPhaseInput,
+): Promise<PlanView> {
+  return request<PlanView>(`/api/plans/${encodeURIComponent(id)}/phases`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function updatePlanPhase(
+  planId: string,
+  phaseId: string,
+  body: UpdatePlanPhaseInput,
+): Promise<PlanView> {
+  return request<PlanView>(
+    `/api/plans/${encodeURIComponent(planId)}/phases/${encodeURIComponent(phaseId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export function attachPlan(
+  planId: string,
+  ptySessionId: string,
+): Promise<PlanView> {
+  return request<PlanView>(
+    `/api/plans/${encodeURIComponent(planId)}/attachments`,
+    {
+      method: "POST",
+      body: JSON.stringify({ pty_session_id: ptySessionId }),
+    },
+  );
+}
+
+export function detachPlan(
+  planId: string,
+  ptySessionId: string,
+): Promise<PlanView> {
+  return request<PlanView>(
+    `/api/plans/${encodeURIComponent(planId)}/attachments/${encodeURIComponent(ptySessionId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export function getPlanEvents(id: string): Promise<PlanEventView[]> {
+  return request<PlanEventView[]>(
+    `/api/plans/${encodeURIComponent(id)}/events`,
+  );
 }
 
 function appendTimelineFilterParams(

@@ -63,13 +63,12 @@ PS1='\[\e[36m\]\u@sulion\[\e[0m\]:\[\e[33m\]\w\[\e[0m\]\$ '
 EOF
 fi
 
-# Make sure the SessionStart hook is registered in .claude/settings.json.
-# Claude itself writes to this file during `claude login`, so a simple
-# "write if absent" race loses. Merge with jq instead: add our hook
-# command if no existing entry references it; otherwise no-op. Other
-# keys in the file (auth, user customisations) are preserved verbatim.
+# Make sure Sulion's correlation and activity hooks are registered in
+# .claude/settings.json. Claude itself writes to this file during `claude
+# login`, so merge idempotently and preserve all user customisations.
 SETTINGS="${HOME_DIR}/.claude/settings.json"
-HOOK_CMD="/opt/sulion/hooks/session-start.sh"
+SESSION_HOOK_CMD="/opt/sulion/hooks/session-start.sh"
+ACTIVITY_HOOK_CMD="/opt/sulion/hooks/activity-hook.sh"
 
 if [[ ! -f "${SETTINGS}" ]]; then
   cat > "${SETTINGS}" <<JSON
@@ -78,21 +77,58 @@ if [[ ! -f "${SETTINGS}" ]]; then
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "${HOOK_CMD}" }
+          { "type": "command", "command": "${SESSION_HOOK_CMD}" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${ACTIVITY_HOOK_CMD}" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${ACTIVITY_HOOK_CMD}" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${ACTIVITY_HOOK_CMD}" }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${ACTIVITY_HOOK_CMD}" }
         ]
       }
     ]
   }
 }
 JSON
-elif ! jq -e --arg cmd "${HOOK_CMD}" \
-       'any(.hooks.SessionStart[]?.hooks[]?; .command == $cmd)' \
-       "${SETTINGS}" > /dev/null 2>&1; then
+else
   TMP="$(mktemp)"
-  if jq --arg cmd "${HOOK_CMD}" '
+  if jq \
+      --arg session_cmd "${SESSION_HOOK_CMD}" \
+      --arg activity_cmd "${ACTIVITY_HOOK_CMD}" '
+        def add_hook($event; $cmd):
+          .hooks[$event] //= []
+          | if any(.hooks[$event][]?.hooks[]?; .command == $cmd)
+            then .
+            else .hooks[$event] += [{"hooks": [{"type": "command", "command": $cmd}]}]
+            end;
         .hooks //= {}
-        | .hooks.SessionStart //= []
-        | .hooks.SessionStart += [{"hooks": [{"type": "command", "command": $cmd}]}]
+        | add_hook("SessionStart"; $session_cmd)
+        | add_hook("UserPromptSubmit"; $activity_cmd)
+        | add_hook("PreToolUse"; $activity_cmd)
+        | add_hook("Stop"; $activity_cmd)
+        | add_hook("Notification"; $activity_cmd)
       ' "${SETTINGS}" > "${TMP}"; then
     mv "${TMP}" "${SETTINGS}"
   else

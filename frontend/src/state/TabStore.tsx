@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import type { Maybe } from "../lib/types";
+
 const STORAGE_KEY = "sulion.tabs.v2";
 
 export type PaneId = "top" | "bottom";
@@ -11,6 +13,7 @@ export type TabKind =
   | "diff"
   | "ref"
   | "secrets"
+  | "plan"
   | "monitor";
 
 /** Minimal registry entry. Kind plus the tab's stable handle is the
@@ -28,6 +31,8 @@ export interface TabData {
   path?: string;
   /** Library slug for reference tabs. */
   slug?: string;
+  /** Published plan id. Omitted for a repo's plan index/create view. */
+  planId?: string;
   /** Timeline focus target. Ignored for other tab kinds. */
   focusTurnId?: number;
   /** Optional: a specific tool call within the focused turn. The
@@ -90,7 +95,7 @@ function withDerived(
 /** Tab kinds that pair-link across panes. Activating a terminal in
  * one pane should swing the other pane to the matching timeline for
  * that session, and vice versa. File/diff/ref tabs don't participate. */
-function pairedKindOf(kind: TabKind | undefined): TabKind | null {
+function pairedKindOf(kind: Maybe<TabKind>): TabKind | null {
   if (kind === "terminal") return "timeline";
   if (kind === "timeline") return "terminal";
   return null;
@@ -305,6 +310,7 @@ export const useTabStore = create<TabStore>()(
             workspaceId: tab.workspaceId,
             path: tab.path,
             slug: tab.slug,
+            planId: tab.planId,
             focusTurnId: tab.focusTurnId,
             focusPairId: tab.focusPairId,
             focusKey: tab.focusKey,
@@ -411,7 +417,10 @@ function removeTabFromState(state: PersistedTabs, id: string): PersistedTabs {
 
 /** Canonical key that de-duplicates a tab spec. */
 export function tabKey(
-  spec: Pick<TabData, "kind" | "sessionId" | "repo" | "workspaceId" | "path" | "slug">,
+  spec: Pick<
+    TabData,
+    "kind" | "sessionId" | "repo" | "workspaceId" | "path" | "slug" | "planId"
+  >,
 ): string {
   const repoScope = `${spec.repo ?? ""}:${spec.workspaceId ?? "main"}`;
   switch (spec.kind) {
@@ -429,6 +438,10 @@ export function tabKey(
       return `ref:${spec.slug ?? ""}`;
     case "secrets":
       return `secrets:${spec.sessionId ?? ""}`;
+    case "plan":
+      return spec.planId
+        ? `plan:${spec.planId}`
+        : `plan:repo:${spec.repo ?? ""}`;
     case "monitor":
       return "monitor";
   }

@@ -9,7 +9,7 @@ No React context stores.
 
 | Store | Purpose |
 |---|---|
-| `SessionStore` | PTY sessions list, repo list, selected-session URL sync, repo group expansion, unread tracking, polling. |
+| `SessionStore` | PTY sessions, repos, workspaces, open-plan summaries, selected-session URL sync, repo group expansion, unread tracking, polling. |
 | `RepoStore` | Per-repo git status, file tree state, expansion state, polling. |
 | `TabStore` | Thin tab registry only. |
 | `ContextMenuStore` | Ephemeral open/close state for the global context-menu layer. |
@@ -54,12 +54,13 @@ exists and where it is:
 ```ts
 interface TabData {
   id: string;
-  kind: "terminal" | "timeline" | "monitor" | "file" | "diff" | "ref" | "secrets";
+  kind: "terminal" | "timeline" | "monitor" | "plan" | "file" | "diff" | "ref" | "secrets";
   sessionId?: string;
   repo?: string;
   workspaceId?: string;
   path?: string;
   slug?: string;
+  planId?: string;
 }
 ```
 
@@ -72,10 +73,16 @@ The registry does **not** hold:
 - File-tab fetched content, raw-toggle state
 - Search query, scope, hit list
 - Diff expanded-file set, stage-pending state
+- Plan detail, event history, draft fields, mutation-pending state
 
 File and diff tabs may carry `workspaceId`. That identifier is routing state,
 not fetched tab content: it decides whether the tab calls canonical repo routes
 or workspace-scoped routes.
+
+Plan tabs carry `repo` and optionally `planId`. Those identifiers are routing
+state. The open-plan summary list belongs in `SessionStore` because the sidebar,
+overview, command palette, and per-session current-plan projections all consume
+it; full plan detail stays inside `PlanPane`.
 
 The excluded tab-internal state above lives inside its owning component and dies
 with the tab's mount lifecycle unless there is a concrete cross-surface need to

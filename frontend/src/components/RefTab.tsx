@@ -1,6 +1,6 @@
 // Reference preview tab. Renders a saved global library reference.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { deleteLibraryEntry, getLibraryEntry } from "../api/client";
@@ -45,7 +45,7 @@ export function RefTab({ slug }: { slug: string }) {
     };
   }, [slug]);
 
-  const confirmDelete = async () => {
+  const confirmDelete = useCallback(async () => {
     setConfirmingDelete(false);
     try {
       await deleteLibraryEntry("references", slug);
@@ -58,15 +58,18 @@ export function RefTab({ slug }: { slug: string }) {
     } catch (err) {
       setError(err instanceof Error ? err.message : "delete failed");
     }
-  };
+  }, [closeTab, slug, tabs]);
 
-  const onDelete = () => setConfirmingDelete(true);
-  const cancelDelete = () => setConfirmingDelete(false);
+  const onDelete = useCallback(() => setConfirmingDelete(true), []);
+  const cancelDelete = useCallback(() => setConfirmingDelete(false), []);
 
-  const onCopy = async () => {
+  const onCopy = useCallback(async () => {
     if (!entry) return;
     await copyToClipboard(entry.body);
-  };
+  }, [entry]);
+  const confirmDeletion = useCallback(() => {
+    void confirmDelete();
+  }, [confirmDelete]);
 
   if (error) {
     return (
@@ -136,7 +139,7 @@ export function RefTab({ slug }: { slug: string }) {
           message={`"${entry.name}" will be removed from the library. This can't be undone.`}
           confirmLabel="Delete"
           destructive
-          onConfirm={() => void confirmDelete()}
+          onConfirm={confirmDeletion}
           onCancel={cancelDelete}
         />
       )}

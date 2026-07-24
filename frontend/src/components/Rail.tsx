@@ -85,12 +85,12 @@ export function Rail({
 
       <div className="rail__spacer" />
 
-      <Tooltip label="Monitor active agents" placement="right">
+      <Tooltip label="Overview of open terminals" placement="right">
         <button
           type="button"
           className="rail__icon"
           onClick={onOpenMonitor}
-          aria-label="Open monitor"
+          aria-label="Open overview"
         >
           <Icon name="activity" size={14} />
         </button>

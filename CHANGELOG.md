@@ -2,6 +2,22 @@
 
 All notable user-visible changes to Sulion are recorded here.
 
+## Unreleased
+
+### Published plans and terminal overview
+
+- Added durable repo-scoped published plans with ordered phases, status notes,
+  PTY attachments, revisioning, and audit history. Plans are available through
+  the browser and the new `sulion plan` PTY CLI without replacing agents'
+  detailed internal plans.
+- Added agent-operational activity reporting through lifecycle hooks,
+  transcript signals, and `sulion activity`, including explicit needs-input
+  and blocked states.
+- Reworked Monitor into a manager-style Overview: repos are teams, live
+  terminals are engineer cards, attention states sort first, and every card
+  combines activity, current plan/phase, latest output, uptime, cache-aware
+  token spend/rate, and measured context remaining.
+
 ## v1.6.0 - 2026-07-09
 
 ### Retrieval

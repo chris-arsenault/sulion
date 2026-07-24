@@ -23,6 +23,7 @@ async fn fresh_pool() -> db::Pool {
     // runner uses below.
     sqlx::query(
         "TRUNCATE retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, \
+         plan_events, plan_attachments, plan_phases, plans, session_activity_state, \
          events, ingester_state, claude_sessions, pty_sessions, repos, \
          workspaces, workspace_dirty_paths RESTART IDENTITY CASCADE",
     )

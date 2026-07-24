@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use uuid::Uuid;
@@ -30,12 +31,14 @@ use uuid::Uuid;
 use crate::db::Pool;
 
 const CORRELATE_IO_TIMEOUT: Duration = Duration::from_millis(750);
+const CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const RUNTIME_UPDATE_RETRY_DELAY: Duration = Duration::from_millis(50);
 const RUNTIME_UPDATE_MAX_ATTEMPTS: usize = 20;
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum SocketMsg {
+    Control(ControlMsg),
     Runtime(RuntimeMsg),
     Correlate(CorrelateMsg),
 }
@@ -56,6 +59,68 @@ pub struct RuntimeMsg {
     pub event: RuntimeEvent,
     #[serde(default)]
     pub exit_code: Option<i32>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ControlMsg {
+    pub pty_id: Uuid,
+    pub control: ControlRequest,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "command", rename_all = "snake_case")]
+pub enum ControlRequest {
+    PlanStart {
+        title: String,
+        summary: String,
+        phases: Vec<crate::plans::NewPhase>,
+        all_pending: bool,
+    },
+    PlanCurrent,
+    PlanList {
+        include_closed: bool,
+    },
+    PlanShow {
+        plan_id: Option<Uuid>,
+    },
+    PlanUpdate {
+        plan_id: Option<Uuid>,
+        input: crate::plans::UpdatePlanInput,
+    },
+    PlanAddPhase {
+        plan_id: Option<Uuid>,
+        phase: crate::plans::NewPhase,
+    },
+    PlanUpdatePhase {
+        plan_id: Option<Uuid>,
+        phase_reference: String,
+        input: crate::plans::UpdatePhaseInput,
+    },
+    PlanAttach {
+        plan_id: Uuid,
+    },
+    PlanDetach {
+        plan_id: Option<Uuid>,
+    },
+    PlanHistory {
+        plan_id: Option<Uuid>,
+    },
+    ActivitySet {
+        state: crate::activity::ActivityState,
+        summary: Option<String>,
+        reason: Option<String>,
+    },
+    ActivityClear,
+    ActivityGet,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ControlResponse {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -114,14 +179,140 @@ async fn handle_conn(pool: &Pool, stream: UnixStream) -> anyhow::Result<()> {
         return Ok(());
     }
     let msg: SocketMsg = serde_json::from_str(line)?;
-    match msg {
-        SocketMsg::Runtime(msg) => apply_runtime(pool, &msg).await?,
-        SocketMsg::Correlate(msg) => apply(pool, &msg).await?,
-    }
+    let response = match msg {
+        SocketMsg::Runtime(msg) => {
+            apply_runtime(pool, &msg).await?;
+            b"ok\n".to_vec()
+        }
+        SocketMsg::Correlate(msg) => {
+            apply(pool, &msg).await?;
+            b"ok\n".to_vec()
+        }
+        SocketMsg::Control(msg) => {
+            let response = match dispatch_control(pool, msg).await {
+                Ok(data) => ControlResponse {
+                    ok: true,
+                    data: Some(data),
+                    error: None,
+                },
+                Err(err) => ControlResponse {
+                    ok: false,
+                    data: None,
+                    error: Some(err.to_string()),
+                },
+            };
+            let mut encoded = serde_json::to_vec(&response)?;
+            encoded.push(b'\n');
+            encoded
+        }
+    };
 
-    // Tiny ACK so clients that care can block until we've committed.
-    let _ = tokio::time::timeout(CORRELATE_IO_TIMEOUT, reader.get_mut().write_all(b"ok\n")).await;
+    let _ = tokio::time::timeout(CORRELATE_IO_TIMEOUT, reader.get_mut().write_all(&response)).await;
     Ok(())
+}
+
+async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value> {
+    use crate::plans;
+
+    let (actor, repo_name) = plans::PlanActor::for_pty(pool, msg.pty_id).await?;
+    match msg.control {
+        ControlRequest::PlanStart {
+            title,
+            summary,
+            phases,
+            all_pending,
+        } => Ok(serde_json::to_value(
+            plans::create(
+                pool,
+                plans::CreatePlanInput {
+                    repo_name,
+                    title,
+                    summary,
+                    phases,
+                    all_pending,
+                    attach_current_pty: true,
+                },
+                &actor,
+            )
+            .await?,
+        )?),
+        ControlRequest::PlanCurrent => Ok(serde_json::to_value(
+            plans::current_for_pty(pool, msg.pty_id).await?,
+        )?),
+        ControlRequest::PlanList { include_closed } => Ok(serde_json::to_value(
+            plans::list_for_repo(pool, &repo_name, include_closed).await?,
+        )?),
+        ControlRequest::PlanShow { plan_id } => {
+            let id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
+            Ok(serde_json::to_value(plans::get(pool, id).await?)?)
+        }
+        ControlRequest::PlanUpdate { plan_id, input } => {
+            let id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
+            Ok(serde_json::to_value(
+                plans::update(pool, id, input, &actor).await?,
+            )?)
+        }
+        ControlRequest::PlanAddPhase { plan_id, phase } => {
+            let id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
+            Ok(serde_json::to_value(
+                plans::add_phase(pool, id, phase, &actor).await?,
+            )?)
+        }
+        ControlRequest::PlanUpdatePhase {
+            plan_id,
+            phase_reference,
+            input,
+        } => {
+            let id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
+            let phase_id = plans::resolve_phase_id(pool, id, &phase_reference).await?;
+            Ok(serde_json::to_value(
+                plans::update_phase(pool, id, phase_id, input, &actor).await?,
+            )?)
+        }
+        ControlRequest::PlanAttach { plan_id } => Ok(serde_json::to_value(
+            plans::attach(pool, plan_id, msg.pty_id, &actor).await?,
+        )?),
+        ControlRequest::PlanDetach { plan_id } => {
+            let id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
+            Ok(serde_json::to_value(
+                plans::detach(pool, id, msg.pty_id, &actor).await?,
+            )?)
+        }
+        ControlRequest::PlanHistory { plan_id } => {
+            let id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
+            Ok(serde_json::to_value(plans::events(pool, id).await?)?)
+        }
+        ControlRequest::ActivitySet {
+            state,
+            summary,
+            reason,
+        } => Ok(serde_json::to_value(
+            crate::activity::set(
+                pool,
+                msg.pty_id,
+                state,
+                summary.as_deref(),
+                reason.as_deref(),
+                "agent",
+                "explicit",
+            )
+            .await?,
+        )?),
+        ControlRequest::ActivityClear => {
+            crate::activity::clear(pool, msg.pty_id).await?;
+            Ok(serde_json::json!({ "cleared": true }))
+        }
+        ControlRequest::ActivityGet => {
+            let activity: Option<crate::activity::ActivityRecord> = sqlx::query_as(
+                "SELECT pty_session_id, state, summary, reason, source, confidence, updated_at \
+                   FROM session_activity_state WHERE pty_session_id = $1",
+            )
+            .bind(msg.pty_id)
+            .fetch_optional(pool)
+            .await?;
+            Ok(serde_json::to_value(activity)?)
+        }
+    }
 }
 
 /// Apply a correlation to the database. Idempotent and race-tolerant:
@@ -204,6 +395,18 @@ pub async fn apply_runtime(pool: &Pool, msg: &RuntimeMsg) -> anyhow::Result<()> 
                     "agent runtime running event matched no live PTY",
                 );
             }
+            if rows_affected > 0 {
+                crate::activity::set(
+                    pool,
+                    msg.pty_id,
+                    crate::activity::ActivityState::Unknown,
+                    None,
+                    None,
+                    "launcher",
+                    "unknown",
+                )
+                .await?;
+            }
         }
         RuntimeEvent::Exited => {
             sqlx::query(
@@ -221,6 +424,7 @@ pub async fn apply_runtime(pool: &Pool, msg: &RuntimeMsg) -> anyhow::Result<()> 
             .bind(msg.exit_code)
             .execute(pool)
             .await?;
+            crate::activity::clear(pool, msg.pty_id).await?;
         }
     }
 
@@ -288,6 +492,33 @@ pub async fn send_agent_runtime(
     }
 }
 
+pub async fn send_control(
+    sock: &Path,
+    pty_id: Uuid,
+    control: ControlRequest,
+) -> std::io::Result<ControlResponse> {
+    let mut stream = tokio::time::timeout(CONTROL_IO_TIMEOUT, UnixStream::connect(sock))
+        .await
+        .map_err(|_| control_timeout_error("connecting to control socket"))??;
+    let payload = serde_json::to_vec(&ControlMsg { pty_id, control })
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+    tokio::time::timeout(CONTROL_IO_TIMEOUT, stream.write_all(&payload))
+        .await
+        .map_err(|_| control_timeout_error("writing control payload"))??;
+    tokio::time::timeout(CONTROL_IO_TIMEOUT, stream.write_all(b"\n"))
+        .await
+        .map_err(|_| control_timeout_error("terminating control payload"))??;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    let read = tokio::time::timeout(CONTROL_IO_TIMEOUT, reader.read_line(&mut line))
+        .await
+        .map_err(|_| control_timeout_error("waiting for control response"))??;
+    if read == 0 {
+        return Err(unexpected_ack_eof());
+    }
+    serde_json::from_str(&line).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+}
+
 pub fn send_blocking_for_agent(
     sock: &Path,
     pty_id: Uuid,
@@ -340,6 +571,13 @@ fn timeout_error(phase: &str) -> io::Error {
     )
 }
 
+fn control_timeout_error(phase: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("timed out {phase} after {CONTROL_IO_TIMEOUT:?}"),
+    )
+}
+
 fn unexpected_ack_eof() -> io::Error {
     io::Error::new(
         io::ErrorKind::UnexpectedEof,
@@ -375,6 +613,23 @@ mod tests {
                 assert_eq!(msg.exit_code, None);
             }
             SocketMsg::Correlate(_) => panic!("parsed runtime as correlate"),
+            SocketMsg::Control(_) => panic!("parsed runtime as control"),
         }
+    }
+
+    #[test]
+    fn parse_control_msg() {
+        let raw = r#"{"pty_id":"00000000-0000-0000-0000-000000000001","control":{"command":"activity_set","state":"working","summary":"schema","reason":null}}"#;
+        let msg: SocketMsg = serde_json::from_str(raw).unwrap();
+        assert!(matches!(
+            msg,
+            SocketMsg::Control(ControlMsg {
+                control: ControlRequest::ActivitySet {
+                    state: crate::activity::ActivityState::Working,
+                    ..
+                },
+                ..
+            })
+        ));
     }
 }

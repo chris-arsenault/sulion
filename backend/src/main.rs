@@ -7,70 +7,7 @@ const INGESTER_RESTART_BACKOFF: std::time::Duration = std::time::Duration::from_
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    if argv
-        .get(1)
-        .and_then(|s| s.to_str())
-        .is_some_and(|s| s == "agent-launcher")
-    {
-        let cfg = sulion::agent::parse_launcher_args(&argv[2..])?;
-        let code = sulion::agent::run_launcher(cfg).await?;
-        std::process::exit(code);
-    }
-    if argv
-        .get(1)
-        .and_then(|s| s.to_str())
-        .is_some_and(|s| s == "codex-launcher")
-    {
-        let cfg = sulion::codex::parse_launcher_args(&argv[2..])?;
-        let code = sulion::codex::run_launcher(cfg).await?;
-        std::process::exit(code);
-    }
-    if argv
-        .get(1)
-        .and_then(|s| s.to_str())
-        .is_some_and(|s| s == "credential-helper")
-    {
-        let code = sulion::credential_helper::run(&argv[2..]).await?;
-        std::process::exit(code);
-    }
-    if argv
-        .get(1)
-        .and_then(|s| s.to_str())
-        .is_some_and(|s| s == "runner-client")
-    {
-        let code = sulion::container_runner::run_client(&argv[2..]).await?;
-        std::process::exit(code);
-    }
-    if argv
-        .get(1)
-        .and_then(|s| s.to_str())
-        .is_some_and(|s| s == "postgres")
-    {
-        let code = sulion::container_runner::run_postgres_cli(&argv[2..]).await?;
-        std::process::exit(code);
-    }
-    if argv
-        .get(1)
-        .and_then(|s| s.to_str())
-        .is_some_and(|s| s == "workspace")
-    {
-        let code = sulion::worktree::run_cli(&argv[2..]).await?;
-        std::process::exit(code);
-    }
-    if argv
-        .get(1)
-        .and_then(|s| s.to_str())
-        .is_some_and(|s| s == "retrieve")
-    {
-        let code = sulion::retrieval_cli::run(&argv[2..]).await?;
-        std::process::exit(code);
-    }
-    if argv
-        .get(1)
-        .and_then(|s| s.to_str())
-        .is_some_and(|s| s == "code")
-    {
-        let code = sulion::code_cli::run(&argv[2..]).await?;
+    if let Some(code) = dispatch_cli(&argv).await? {
         std::process::exit(code);
     }
 
@@ -143,6 +80,33 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(listen = %cfg.listen, "api listener bound");
     axum::serve(listener, app(state)).await?;
     Ok(())
+}
+
+async fn dispatch_cli(argv: &[std::ffi::OsString]) -> anyhow::Result<Option<i32>> {
+    let Some(command) = argv.get(1).and_then(|value| value.to_str()) else {
+        return Ok(None);
+    };
+    let args = &argv[2..];
+    let code = match command {
+        "agent-launcher" => {
+            let cfg = sulion::agent::parse_launcher_args(args)?;
+            sulion::agent::run_launcher(cfg).await?
+        }
+        "codex-launcher" => {
+            let cfg = sulion::codex::parse_launcher_args(args)?;
+            sulion::codex::run_launcher(cfg).await?
+        }
+        "credential-helper" => sulion::credential_helper::run(args).await?,
+        "runner-client" => sulion::container_runner::run_client(args).await?,
+        "postgres" => sulion::container_runner::run_postgres_cli(args).await?,
+        "workspace" => sulion::worktree::run_cli(args).await?,
+        "retrieve" => sulion::retrieval_cli::run(args).await?,
+        "code" => sulion::code_cli::run(args).await?,
+        "plan" => sulion::plan_cli::run_plan(args).await?,
+        "activity" => sulion::plan_cli::run_activity(args).await?,
+        _ => return Ok(None),
+    };
+    Ok(Some(code))
 }
 
 async fn run_startup_maintenance(

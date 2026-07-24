@@ -157,6 +157,7 @@ pub fn mock_terminal_script_path(repos_root: &Path) -> PathBuf {
 async fn reset_database(pool: &db::Pool) -> anyhow::Result<()> {
     sqlx::query(
         "TRUNCATE retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, \
+         plan_events, plan_attachments, plan_phases, plans, session_activity_state, \
          events, event_blocks, timeline_turns, ingester_state, \
          claude_sessions, pty_sessions, repos RESTART IDENTITY CASCADE",
     )

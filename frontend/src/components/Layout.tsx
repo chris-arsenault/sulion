@@ -279,6 +279,7 @@ function usePaletteCommands({
 }): PaletteCommand[] {
   const repos = useSessions((s) => s.repos);
   const sessions = useSessions((s) => s.sessions);
+  const plans = useSessions((s) => s.plans);
   const selectSession = useSessions((s) => s.selectSession);
   const openTab = useTabs((s) => s.openTab);
   // onOpenPalette retained in signature for future surfaces that want the
@@ -298,7 +299,7 @@ function usePaletteCommands({
     const out: PaletteCommand[] = [];
     out.push({
       id: "view.monitor",
-      label: "Open monitor",
+      label: "Open overview",
       icon: "activity",
       group: "view",
       run: () => openTab({ kind: "monitor" }, "top"),
@@ -318,6 +319,27 @@ function usePaletteCommands({
         group: "repo",
         run: () => appCommands.revealRepo({ repo: r.name }),
       });
+      out.push({
+        id: `repo.${r.name}.plans`,
+        label: `Open plans · ${r.name}`,
+        icon: "list",
+        group: "repo",
+        run: () => openTab({ kind: "plan", repo: r.name }),
+      });
+    }
+    for (const plan of plans) {
+      out.push({
+        id: `plan.${plan.id}`,
+        label: `Open plan · ${plan.repo_name} / ${plan.title}`,
+        icon: "list",
+        group: "plan",
+        run: () =>
+          openTab({
+            kind: "plan",
+            repo: plan.repo_name,
+            planId: plan.id,
+          }),
+      });
     }
     for (const s of sessions) {
       const label = s.label && s.label.length > 0 ? s.label : s.id.slice(0, 8);
@@ -330,5 +352,5 @@ function usePaletteCommands({
       });
     }
     return out;
-  }, [openTab, repos, sessions, setPinned, openTerminalFor]);
+  }, [openTab, plans, repos, sessions, setPinned, openTerminalFor]);
 }

@@ -17,10 +17,11 @@ references.
 
 ---
 
-## Sidebar — repos, sessions, files, library
+## Sidebar — repos, plans, sessions, files, library
 
-The left rail is the navigation surface. Repos group their PTY sessions,
-a lightweight file tree, and per-repo git staleness. The **Library**
+The left rail is the navigation surface. Repos group their published plans,
+PTY sessions, isolated workspaces, a lightweight file tree, and per-repo git
+staleness. The **Library**
 section at the bottom lists saved prompts and references. Just above the
 command palette entry, the rail also exposes the **Secrets** manager tab.
 Saved prompts can include `$name` placeholders; `$$` sends a literal
@@ -32,9 +33,8 @@ Right-click a session for rename / pin / colour / open-timeline /
 delete actions, including the shortcut to manage secrets for that PTY.
 New agent sessions can run in an isolated Sulion Git worktree by
 default, while explicit main-worktree sessions stay bound to the
-canonical checkout. Right-click a repo for repo-level actions (new
-session, open repo timeline, repo diff). Double-click a session name to
-rename in place.
+canonical checkout. Right-click a repo for repo-level actions (open plans, open
+repo timeline, repo diff). Double-click a session name to rename in place.
 
 ## Command palette
 
@@ -54,7 +54,7 @@ transcript.
 
 ![Overview](screenshots/01-workspace.png)
 
-Tabs support file, diff, monitor, and reference kinds alongside terminal
+Tabs support file, diff, overview, plan, and reference kinds alongside terminal
 and timeline, plus the Secrets manager tab. Drag a tab header onto the
 other pane's drop zone to split the work area; the layout persists
 across reloads. The tab context menu can also close stale terminal and
@@ -74,12 +74,29 @@ When you are mostly reading the structured timeline, the prompt bar can
 send text into the running Claude/Codex terminal without expanding the
 full terminal pane.
 
-## Monitor — active-session output
+## Published plans
 
-The **Monitor** tab shows the latest assistant output from active
-sessions in one mixed view. It follows the same timeline-derived data
-model as session timelines, but presents one card per active session so
-you can scan several agents without jumping between tabs.
+Each repo's **Plans** subsection shows active and paused plans with phase
+progress and the current phase. Open the repo plan index to start a plan with
+named phases, optionally attach it to a live terminal, or reopen closed history.
+The plan detail workspace edits phase descriptions, statuses, status notes,
+attachments, plan metadata, and closure. Its history records meaningful
+transitions.
+
+Published plans are a lightweight progress interface, not a replacement for an
+agent's detailed working plan. Agents can publish the same state from a Sulion
+PTY with `sulion plan`; see [`plans.md`](plans.md).
+
+## Overview — engineering teams
+
+The **Overview** tab shows every live terminal, whether or not its terminal tab
+is currently open. Repositories appear as teams and terminals as engineer
+cards, with teams needing attention first. Each card combines the agent's
+operational state and short summary, attached plan/current phase, latest report,
+model, uptime, cumulative token spend, average token rate, and context
+remaining. Context is only shown when the transcript reports both current
+usage and a context window; unavailable signals are labeled honestly. Open
+plans remain visible even when no terminal is attached.
 
 ## Thinking fly-out
 

@@ -22,6 +22,7 @@ async fn fresh_pool() -> db::Pool {
     let pool = db::connect(&url).await.expect("connect");
     sqlx::query(
         "TRUNCATE retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, \
+         plan_events, plan_attachments, plan_phases, plans, session_activity_state, \
          events, ingester_state, claude_sessions, pty_sessions, repos, \
          workspaces, workspace_dirty_paths RESTART IDENTITY CASCADE",
     )
@@ -227,6 +228,59 @@ async fn ingests_a_codex_rollout_event_from_codex_sessions_dir() {
     assert_eq!(source.0, "event_block");
     assert_eq!(source.1, "assistant_text");
     assert_eq!(source.2, "pending");
+}
+
+#[tokio::test]
+async fn projects_cache_aware_usage_without_double_counting_replayed_events() {
+    let pool = fresh_pool().await;
+    let claude = Fixture::new();
+    claude.append(
+        r#"{"type":"assistant","timestamp":"2026-04-19T01:00:00Z","message":{"model":"claude-sonnet-4","content":[],"usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":7000,"output_tokens":900}}}"#,
+    );
+    claude.append("\n");
+    claude.append(
+        r#"{"type":"assistant","timestamp":"2026-04-19T01:01:00Z","message":{"model":"claude-sonnet-4","content":[],"usage":{"input_tokens":200,"cache_creation_input_tokens":1000,"cache_read_input_tokens":8000,"output_tokens":800}}}"#,
+    );
+    claude.append("\n");
+
+    let ingester = Ingester::new();
+    ingester.tick(&pool, &claude.config()).await.unwrap();
+    ingester.tick(&pool, &claude.config()).await.unwrap();
+
+    let claude_usage: (i64, i64, i64, i64, Option<i64>) = sqlx::query_as(
+        "SELECT input_tokens, cached_input_tokens, output_tokens, total_tokens, context_tokens \
+           FROM agent_session_usage WHERE session_uuid = $1",
+    )
+    .bind(claude.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(claude_usage, (300, 18_000, 1_700, 20_000, Some(10_000)));
+
+    let codex = CodexFixture::new();
+    codex.append(
+        r#"{"timestamp":"2026-04-19T02:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":29000,"cached_input_tokens":20000,"output_tokens":3000,"reasoning_output_tokens":1200,"total_tokens":32000},"last_token_usage":{"input_tokens":18000,"cached_input_tokens":15000,"output_tokens":2000,"reasoning_output_tokens":800,"total_tokens":20000},"model_context_window":100000}}}"#,
+    );
+    codex.append("\n");
+    codex.append(
+        r#"{"timestamp":"2026-04-19T02:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":42000,"cached_input_tokens":31000,"output_tokens":5000,"reasoning_output_tokens":1800,"total_tokens":47000},"last_token_usage":{"input_tokens":24000,"cached_input_tokens":19000,"output_tokens":2500,"reasoning_output_tokens":500,"total_tokens":26500},"model_context_window":100000}}}"#,
+    );
+    codex.append("\n");
+    ingester.tick(&pool, &codex.config()).await.unwrap();
+
+    let codex_usage: (i64, i64, i64, i64, Option<i64>, Option<i64>) = sqlx::query_as(
+        "SELECT input_tokens, cached_input_tokens, output_tokens, total_tokens, \
+                context_tokens, model_context_window \
+           FROM agent_session_usage WHERE session_uuid = $1",
+    )
+    .bind(codex.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        codex_usage,
+        (42_000, 31_000, 5_000, 47_000, Some(26_000), Some(100_000))
+    );
 }
 
 #[tokio::test]
