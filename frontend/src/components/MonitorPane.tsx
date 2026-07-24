@@ -7,27 +7,45 @@ import type {
   MonitorTimelineRequest,
   MonitorTimelineResponse,
   PlanSummaryView,
+  RepoGitSummary,
   SessionActivityState,
   SessionView,
   TimelineTurn,
 } from "../api/types";
 import type { IconName } from "../icons";
+import { appCommands } from "../state/AppCommands";
 import { useSessions } from "../state/SessionStore";
-import { type TabStore, useTabs } from "../state/TabStore";
+import { useTabs } from "../state/TabStore";
+import {
+  contextMenuTriggerProps,
+  type MenuItem,
+  useContextMenu,
+} from "./common/contextMenuStore";
 import { Markdown } from "./timeline/Markdown";
 import { Sigil, Tooltip } from "./ui";
 import "./MonitorPane.css";
 
-export function MonitorPane({ active = true }: { active?: boolean }) {
+export function MonitorPane({
+  active = true,
+  onNavigate,
+}: {
+  active?: boolean;
+  /** Called after any action that navigates to another surface (open
+   * terminal / timeline / plan / diff). The modal host passes its close
+   * handler so navigation from the overlay dismisses it. */
+  onNavigate?: () => void;
+}) {
   const [data, setData] = useState<MonitorTimelineResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const { sessions, plans } = useSessions(
+  const { sessions, plans, repos } = useSessions(
     useShallow((store) => ({
       sessions: store.sessions,
       plans: store.plans,
+      repos: store.repos,
     })),
   );
+  const openTab = useTabs((store) => store.openTab);
   const liveSessions = useMemo(
     () =>
       sessions
@@ -126,6 +144,30 @@ export function MonitorPane({ active = true }: { active?: boolean }) {
       }).length,
     [liveSessions],
   );
+  const gitByRepo = useMemo(() => {
+    const map = new Map<string, RepoGitSummary>();
+    for (const repo of repos) {
+      if (repo.git) map.set(repo.name, repo.git);
+    }
+    return map;
+  }, [repos]);
+  // Live-session token rollup: fresh work vs full processed volume (the
+  // difference is cache reads re-counting the context each API call).
+  const tokenTotals = useMemo(() => {
+    let fresh = 0;
+    let processed = 0;
+    for (const session of liveSessions) {
+      const usage = session.agent_usage;
+      if (!usage) continue;
+      processed += usage.total_tokens;
+      fresh += Math.max(usage.total_tokens - usage.cached_input_tokens, 0);
+    }
+    return { fresh, processed };
+  }, [liveSessions]);
+  const openMetrics = useCallback(() => {
+    openTab({ kind: "metrics" }, "top");
+    onNavigate?.();
+  }, [onNavigate, openTab]);
 
   return (
     <div className="monitor-pane" data-testid="monitor-pane">
@@ -148,7 +190,28 @@ export function MonitorPane({ active = true }: { active?: boolean }) {
             label="ctx low"
             tone={contextWatchCount > 0 ? "warn" : "mute"}
           />
+          <Tooltip
+            label={`Live sessions: ${formatTokens(tokenTotals.fresh)} fresh tokens of ${formatTokens(tokenTotals.processed)} processed (the rest is cache reads re-counting context)`}
+          >
+            <span className="monitor-bar-stat monitor-bar-stat--tokens">
+              <strong className="tabular">
+                {formatTokens(tokenTotals.fresh)}
+              </strong>{" "}
+              fresh ·{" "}
+              <span className="tabular">
+                {formatTokens(tokenTotals.processed)}
+              </span>{" "}
+              processed
+            </span>
+          </Tooltip>
         </div>
+        <button
+          type="button"
+          className="monitor-pane__metrics-link"
+          onClick={openMetrics}
+        >
+          metrics
+        </button>
         <span className="monitor-pane__refresh">
           {loading ? "refreshing" : "live telemetry"}
         </span>
@@ -165,6 +228,8 @@ export function MonitorPane({ active = true }: { active?: boolean }) {
               key={team.repo}
               team={team}
               turnBySession={turnBySession}
+              git={gitByRepo.get(team.repo) ?? null}
+              onNavigate={onNavigate}
             />
           ))}
         </div>
@@ -198,10 +263,59 @@ interface MonitorTeam {
 function TeamSection({
   team,
   turnBySession,
+  git,
+  onNavigate,
 }: {
   team: MonitorTeam;
   turnBySession: Map<string, MonitorSessionTurn>;
+  git: RepoGitSummary | null;
+  onNavigate?: () => void;
 }) {
+  const openTab = useTabs((store) => store.openTab);
+  const openCtx = useContextMenu((store) => store.open);
+  const headerMenuTrigger = useMemo(
+    () =>
+      contextMenuTriggerProps(openCtx, () => [
+        {
+          kind: "item" as const,
+          id: "open-repo-plans",
+          label: "Open published plans",
+          onSelect: () => {
+            appCommands.openPlan({ repo: team.repo });
+            onNavigate?.();
+          },
+        },
+        {
+          kind: "item" as const,
+          id: "open-repo-timeline",
+          label: "Open repo timeline",
+          onSelect: () => {
+            openTab({ kind: "timeline", repo: team.repo }, "bottom");
+            onNavigate?.();
+          },
+        },
+        {
+          kind: "item" as const,
+          id: "open-repo-diff",
+          label: "Open repo diff",
+          onSelect: () => {
+            openTab({ kind: "diff", repo: team.repo });
+            onNavigate?.();
+          },
+        },
+        { kind: "separator" as const },
+        {
+          kind: "item" as const,
+          id: "reveal-repo",
+          label: "Reveal in sidebar",
+          onSelect: () => {
+            appCommands.revealRepo({ repo: team.repo });
+            onNavigate?.();
+          },
+        },
+      ]),
+    [onNavigate, openCtx, openTab, team.repo],
+  );
   const counts = activityCounts(team.sessions);
   // Plans already visible on a staffed row stay off the header to keep it
   // one line; the header only carries unstaffed (or unattached) plans.
@@ -213,11 +327,49 @@ function TeamSection({
   const headerPlans = team.plans.filter((plan) => !staffedPlanIds.has(plan.id));
   return (
     <section className="monitor-team" aria-label={`${team.repo} team`}>
-      <header className="monitor-team__header">
-        <span className="monitor-team__mark" aria-hidden="true">
+      {/* The mark carries the a11y-complete menu trigger (keyboard +
+        * right-click); the header-wide listener is a pointer-only
+        * convenience so right-click works anywhere on the row. */}
+      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions -- pointer-only augmentation; the keyboard path lives on the mark's trigger */}
+      <header
+        className="monitor-team__header"
+        onContextMenu={headerMenuTrigger.onContextMenu}
+      >
+        <span
+          className="monitor-team__mark"
+          aria-label={`${team.repo} repo actions`}
+          {...headerMenuTrigger}
+        >
           {team.repo.slice(0, 2).toUpperCase()}
         </span>
         <h3>{team.repo}</h3>
+        {git ? (
+          <Tooltip
+            label={[
+              git.last_commit
+                ? `${git.last_commit.subject}\ncommitted ${relativeAge(git.last_commit.committed_at)}`
+                : "No commits reported",
+              git.uncommitted_count > 0
+                ? `${git.uncommitted_count} uncommitted change${git.uncommitted_count === 1 ? "" : "s"}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join("\n")}
+          >
+            <span className="monitor-team__git tabular">
+              <Sigil icon="git-branch" size={12} tone="mute" />
+              {git.branch ?? "—"}
+              {git.last_commit
+                ? ` · ${shortAge(git.last_commit.committed_at)}`
+                : ""}
+              {git.uncommitted_count > 0 ? (
+                <span className="monitor-team__dirty">
+                  ±{git.uncommitted_count}
+                </span>
+              ) : null}
+            </span>
+          </Tooltip>
+        ) : null}
         <span className="monitor-team__meta">
           <Sigil icon="terminal" size={12} tone="mute" />
           <span className="tabular">{team.sessions.length}</span>
@@ -228,7 +380,7 @@ function TeamSection({
           </span>
         ) : null}
         <span className="monitor-team__spacer" />
-        <TeamPlanChips plans={headerPlans} />
+        <TeamPlanChips plans={headerPlans} onNavigate={onNavigate} />
       </header>
       {team.sessions.length === 0 ? (
         <div className="monitor-team__unassigned">No terminal staffed</div>
@@ -239,6 +391,7 @@ function TeamSection({
               key={session.id}
               session={session}
               item={turnBySession.get(session.id) ?? null}
+              onNavigate={onNavigate}
             />
           ))}
         </div>
@@ -250,11 +403,15 @@ function TeamSection({
 function TerminalCard({
   session,
   item,
+  onNavigate,
 }: {
   session: SessionView;
   item: MonitorSessionTurn | null;
+  onNavigate?: () => void;
 }) {
   const openTab = useTabs((store) => store.openTab);
+  const selectSession = useSessions((store) => store.selectSession);
+  const openCtx = useContextMenu((store) => store.open);
   const label = session.label?.trim() || session.id.slice(0, 8);
   const assistant = item?.turn ? latestAssistantText(item.turn) : null;
   const prompt =
@@ -268,35 +425,112 @@ function TerminalCard({
   const uptimeStart = session.agent_runtime?.started_at ?? session.created_at;
   const uptime = elapsedDuration(uptimeStart);
   const totalTokens = session.agent_usage?.total_tokens ?? null;
-  const burnRate = averageTokensPerHour(totalTokens, uptimeStart);
+  const cachedTokens = session.agent_usage?.cached_input_tokens ?? 0;
+  const freshTokens =
+    totalTokens == null ? null : Math.max(totalTokens - cachedTokens, 0);
+  const burnRate = averageTokensPerHour(freshTokens, uptimeStart);
   const agent = session.current_session_agent ?? session.agent_runtime?.agent;
   const model = session.agent_metadata?.model;
   const openTimeline = useCallback(() => {
     if (!item?.turn) {
       openTab({ kind: "timeline", sessionId: session.id }, "bottom");
-      return;
+    } else {
+      openTab(
+        {
+          kind: "timeline",
+          sessionId: session.id,
+          focusTurnId: item.turn.id,
+          focusKey: crypto.randomUUID(),
+        },
+        "bottom",
+      );
     }
-    openTab(
-      {
-        kind: "timeline",
-        sessionId: session.id,
-        focusTurnId: item.turn.id,
-        focusKey: crypto.randomUUID(),
-      },
-      "bottom",
-    );
-  }, [item?.turn, openTab, session.id]);
+    onNavigate?.();
+  }, [item?.turn, onNavigate, openTab, session.id]);
   const openPlan = useCallback(() => {
     if (!session.current_plan) return;
-    openTab({
-      kind: "plan",
+    appCommands.openPlan({
       repo: session.repo,
       planId: session.current_plan.id,
     });
-  }, [openTab, session.current_plan, session.repo]);
+    onNavigate?.();
+  }, [onNavigate, session.current_plan, session.repo]);
+  const goToTerminal = useCallback(() => {
+    selectSession(session.id);
+    openTab({ kind: "terminal", sessionId: session.id }, "top");
+    openTab({ kind: "timeline", sessionId: session.id }, "bottom");
+    onNavigate?.();
+  }, [onNavigate, openTab, selectSession, session.id]);
+  const cardMenuTrigger = useMemo(
+    () =>
+      contextMenuTriggerProps(openCtx, () => {
+        const items: MenuItem[] = [
+          {
+            kind: "item",
+            id: "go-to-terminal",
+            label: "Go to terminal",
+            onSelect: goToTerminal,
+          },
+          {
+            kind: "item",
+            id: "open-timeline",
+            label: "Open timeline",
+            onSelect: openTimeline,
+          },
+          {
+            kind: "item",
+            id: "future-prompts",
+            label: "Future prompts",
+            onSelect: () => {
+              appCommands.openFuturePrompts({ sessionId: session.id });
+              onNavigate?.();
+            },
+          },
+          { kind: "separator" },
+        ];
+        if (session.current_plan) {
+          items.push({
+            kind: "item",
+            id: "open-plan",
+            label: "Open plan",
+            onSelect: openPlan,
+          });
+        }
+        items.push(
+          {
+            kind: "item",
+            id: "open-diff",
+            label: session.workspace ? "Open workspace diff" : "Open repo diff",
+            onSelect: () => {
+              openTab({
+                kind: "diff",
+                repo: session.repo,
+                workspaceId: session.workspace?.id,
+              });
+              onNavigate?.();
+            },
+          },
+          {
+            kind: "item",
+            id: "open-secrets",
+            label: "Open secrets",
+            onSelect: () => {
+              openTab({ kind: "secrets", sessionId: session.id }, "top");
+              onNavigate?.();
+            },
+          },
+        );
+        return items;
+      }),
+    [goToTerminal, onNavigate, openCtx, openPlan, openTab, openTimeline, session],
+  );
 
   return (
-    <article className={`monitor-card monitor-card--${state}`}>
+    /* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- pointer-only convenience so right-click works anywhere on the card; the identity button carries the keyboard path to the same menu */
+    <article
+      className={`monitor-card monitor-card--${state}`}
+      onContextMenu={cardMenuTrigger.onContextMenu}
+    >
       <div className="monitor-card__head">
         <Tooltip label={`${activityLabel(state)} · up ${uptime}`}>
           <span className="monitor-card__state">
@@ -314,6 +548,8 @@ function TerminalCard({
             type="button"
             className="monitor-card__identity"
             onClick={openTimeline}
+            onContextMenu={cardMenuTrigger.onContextMenu}
+            onKeyDown={cardMenuTrigger.onKeyDown}
             aria-label={`Open timeline for ${label}`}
           >
             {label}
@@ -393,18 +629,22 @@ function TerminalCard({
         </Tooltip>
         <Tooltip
           label={
-            totalTokens == null
+            totalTokens == null || freshTokens == null
               ? "Token spend not reported"
               : [
-                  `${formatTokens(totalTokens)} tokens total`,
-                  burnRate == null ? null : `${formatTokens(burnRate)}/hr avg`,
+                  `${formatTokens(freshTokens)} fresh`,
+                  `${formatTokens(cachedTokens)} cache reads`,
+                  `${formatTokens(totalTokens)} processed`,
+                  burnRate == null
+                    ? null
+                    : `${formatTokens(burnRate)} fresh/hr avg`,
                 ]
                   .filter(Boolean)
                   .join(" · ")
           }
         >
           <span className="monitor-card__stat tabular">
-            {totalTokens == null ? "—" : formatTokens(totalTokens)}
+            {freshTokens == null ? "—" : formatTokens(freshTokens)}
           </span>
         </Tooltip>
         {session.current_plan ? (
@@ -444,8 +684,13 @@ function TerminalCard({
   );
 }
 
-function TeamPlanChips({ plans }: { plans: PlanSummaryView[] }) {
-  const openTab = useTabs((store) => store.openTab);
+function TeamPlanChips({
+  plans,
+  onNavigate,
+}: {
+  plans: PlanSummaryView[];
+  onNavigate?: () => void;
+}) {
   const ordered = useMemo(
     () =>
       [...plans].sort(
@@ -459,7 +704,7 @@ function TeamPlanChips({ plans }: { plans: PlanSummaryView[] }) {
   return (
     <span className="monitor-team__plans" aria-label="Unstaffed team plans">
       {ordered.map((plan) => (
-        <PlanChip key={plan.id} plan={plan} onOpen={openTab} />
+        <PlanChip key={plan.id} plan={plan} onNavigate={onNavigate} />
       ))}
     </span>
   );
@@ -467,15 +712,15 @@ function TeamPlanChips({ plans }: { plans: PlanSummaryView[] }) {
 
 function PlanChip({
   plan,
-  onOpen,
+  onNavigate,
 }: {
   plan: PlanSummaryView;
-  onOpen: TabStore["openTab"];
+  onNavigate?: () => void;
 }) {
-  const open = useCallback(
-    () => onOpen({ kind: "plan", repo: plan.repo_name, planId: plan.id }),
-    [onOpen, plan.id, plan.repo_name],
-  );
+  const open = useCallback(() => {
+    appCommands.openPlan({ repo: plan.repo_name, planId: plan.id });
+    onNavigate?.();
+  }, [onNavigate, plan.id, plan.repo_name]);
   return (
     <Tooltip
       label={[

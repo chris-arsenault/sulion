@@ -29,13 +29,13 @@ import {
 import { buildSecretContextMenu } from "./common/secretContextMenu";
 import { TerminalPane } from "./TerminalPane";
 import { TimelinePane } from "./TimelinePane";
+import { MetricsPane } from "./MetricsPane";
 import { MonitorPane } from "./MonitorPane";
 import { SessionEndedPane } from "./SessionEndedPane";
 import { FileTab } from "./FileTab";
 import { DiffTab } from "./DiffTab";
 import { RefTab } from "./RefTab";
 import { SecretsTab } from "./SecretsTab";
-import { PlanPane } from "./PlanPane";
 import "./WorkArea.css";
 
 const TAB_DRAG_MIME = "application/x-sulion-tab";
@@ -722,10 +722,10 @@ function liveLabel(
       return tab.sessionId
         ? `secrets · ${tab.sessionId.slice(0, 8)}`
         : "secrets";
-    case "plan":
-      return planLabel(tab);
     case "monitor":
       return "overview";
+    case "metrics":
+      return "metrics";
   }
 }
 
@@ -753,12 +753,6 @@ function diffLabel(tab: TabData): string {
     : `${prefix}diff: ${tab.repo ?? ""}`;
 }
 
-function planLabel(tab: TabData): string {
-  return tab.planId
-    ? `${tab.repo ?? "plan"} · plan`
-    : `${tab.repo ?? ""} · plans`;
-}
-
 function basename(p: string): string {
   const i = p.lastIndexOf("/");
   return i === -1 ? p : p.slice(i + 1);
@@ -778,10 +772,10 @@ function tabIcon(tab: TabData): IconName {
       return "pin";
     case "secrets":
       return "settings";
-    case "plan":
-      return "list";
     case "monitor":
       return "activity";
+    case "metrics":
+      return "target";
   }
 }
 
@@ -813,7 +807,13 @@ function TabContent({ tab, active }: { tab: TabData; active: boolean }) {
         );
       case "file":
         return (
-          <FileTab repo={tab.repo!} path={tab.path!} workspaceId={tab.workspaceId} />
+          <FileTab
+            repo={tab.repo!}
+            path={tab.path!}
+            workspaceId={tab.workspaceId}
+            focusLine={tab.focusLine}
+            focusKey={tab.focusKey}
+          />
         );
       case "diff":
         return <DiffTab repo={tab.repo!} path={tab.path} workspaceId={tab.workspaceId} />;
@@ -821,10 +821,10 @@ function TabContent({ tab, active }: { tab: TabData; active: boolean }) {
         return <RefTab slug={tab.slug!} />;
       case "secrets":
         return <SecretsTab />;
-      case "plan":
-        return <PlanPane repo={tab.repo!} planId={tab.planId} active={active} />;
       case "monitor":
         return <MonitorPane active={active} />;
+      case "metrics":
+        return <MetricsPane active={active} />;
     }
   }, [active, tab]);
 }

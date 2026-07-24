@@ -17,6 +17,7 @@ import type {
   LibraryEntry,
   LibraryKind,
   MonitorTimelineRequest,
+  MetricsResponse,
   MonitorTimelineResponse,
   CreatePlanInput,
   NewPlanPhaseInput,
@@ -261,6 +262,10 @@ export function getMonitorTimeline(
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+export function getMetrics(): Promise<MetricsResponse> {
+  return request<MetricsResponse>("/api/metrics");
 }
 
 export function listRepoPlans(
@@ -650,6 +655,29 @@ export function getRepoFile(name: string, path: string): Promise<FileResponse> {
   return request<FileResponse>(
     `/api/repos/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`,
   );
+}
+
+/** Same-origin URL for a file's raw bytes (images, PDFs, downloads). Fetched
+ * with the bearer token via {@link fetchFileBlob} — never used as a bare
+ * `<img src>`, which couldn't carry auth. Works identically on the LAN and
+ * behind the reverse proxy. */
+export function fileRawUrl(
+  target: { repo: string; workspaceId?: string },
+  path: string,
+): string {
+  const query = `path=${encodeURIComponent(path)}`;
+  return target.workspaceId
+    ? `/api/workspaces/${encodeURIComponent(target.workspaceId)}/file/raw?${query}`
+    : `/api/repos/${encodeURIComponent(target.repo)}/file/raw?${query}`;
+}
+
+/** Fetch a file's raw bytes as a Blob using the authenticated fetch path. */
+export async function fetchFileBlob(url: string): Promise<Blob> {
+  const resp = await authFetch(url, undefined, { json: false });
+  if (!resp.ok) {
+    throw new ApiError(resp.status, await parseErrorBody(resp));
+  }
+  return resp.blob();
 }
 
 export function getRepoFileTrace(

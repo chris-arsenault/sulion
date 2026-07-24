@@ -57,6 +57,10 @@ current PTY's attached plan; `--plan <uuid>` or an explicit plan id targets
 another plan. `sulion plan attach <uuid>` moves the PTY from any previous plan
 to that plan. Add `--json` for stable machine-readable output.
 
+Phases carry an optional t-shirt size (`--size s|m|l`, or a third `|size`
+segment in `--phase "Title|Description|m"`). Sizes weight the burndown and
+throughput charts (s=1, m=2, l=3); unsized phases count as weight 1.
+
 Errors follow the shared agent-CLI contract (same as `sulion-code`): failures
 print `sulion plan: <message>` plus a `next: <command>` recovery hint on
 stderr, with exit codes 64 (usage), 65 (control socket unreachable), and 66
@@ -99,6 +103,13 @@ turn-complete signal; the next explicit working/clear transition releases it.
 Each repo has a **Plans** subsection in the sidebar. Its plan tab supports
 creation, metadata edits, phase status/notes, phase addition, PTY attachment,
 closure, and history.
+
+The **Metrics** tab (`/api/metrics`) aggregates the portfolio: token rollups
+(fresh vs processed, where fresh excludes cache reads), a tokens-per-day
+series from `agent_usage_daily`, git activity per repo with agent/human
+commit attribution via `Co-Authored-By` trailers, churn hotspots from
+repeated file writes, and plan-flow charts (cumulative flow, per-plan
+burndown, throughput, cycle time) replayed from `plan_events`.
 
 The **Overview** tab presents repos as teams and every live PTY as an engineer
 card, including shells or sessions without an open browser tab. Teams needing

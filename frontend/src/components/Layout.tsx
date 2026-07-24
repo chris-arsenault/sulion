@@ -5,6 +5,7 @@ import { Rail } from "./Rail";
 import { Sidebar } from "./Sidebar";
 import { WorkArea } from "./WorkArea";
 import { FuturePromptsModal } from "./FuturePromptsModal";
+import { PlanModal } from "./PlanModal";
 import { MonitorPane } from "./MonitorPane";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { appCommands, useAppCommand } from "../state/AppCommands";
@@ -12,6 +13,10 @@ import { useTabs } from "../state/TabStore";
 import { useSessions } from "../state/SessionStore";
 import { CommandPalette, Overlay, type PaletteCommand } from "./ui";
 import "./Layout.css";
+
+/** Monotonic counter making each file focus request unique so repeated
+ * jumps to the same line re-trigger the scroll. */
+let fileFocusSeq = 0;
 
 const PIN_STORAGE_KEY = "sulion.sidebar.pinned.v1";
 const WIDTH_STORAGE_KEY = "sulion.sidebar.width.v1";
@@ -40,6 +45,10 @@ export function Layout() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [monitorOverlayOpen, setMonitorOverlayOpen] = useState(false);
   const [futurePromptsSessionId, setFuturePromptsSessionId] = useState<string | null>(null);
+  const [planTarget, setPlanTarget] = useState<{
+    repo: string;
+    planId?: string;
+  } | null>(null);
 
   const [pinned, setPinned] = useState<boolean>(() => {
     if (typeof localStorage === "undefined") return true;
@@ -68,9 +77,21 @@ export function Layout() {
   const openTabRef = useRef(openTab);
   openTabRef.current = openTab;
 
-  useAppCommand("open-file", ({ repo, path, workspaceId }) => {
-    openTabRef.current({ kind: "file", repo, path, workspaceId });
+  useAppCommand("open-file", ({ repo, path, workspaceId, line }) => {
+    openTabRef.current({
+      kind: "file",
+      repo,
+      path,
+      workspaceId,
+      focusLine: line,
+      // A fresh key on every request so revisiting the same file at the
+      // same line still re-scrolls, mirroring timeline focus.
+      focusKey: line != null ? `${line}:${++fileFocusSeq}` : undefined,
+    });
     setDrawerOpen(false);
+    // Reveal the file behind any transient modal (e.g. the plan modal a
+    // file:line reference was clicked from).
+    setPlanTarget(null);
   });
   useAppCommand("open-diff", ({ repo, path, workspaceId }) => {
     openTabRef.current({ kind: "diff", repo, path, workspaceId });
@@ -78,6 +99,10 @@ export function Layout() {
   });
   useAppCommand("open-future-prompts", ({ sessionId }) => {
     setFuturePromptsSessionId(sessionId);
+    setDrawerOpen(false);
+  });
+  useAppCommand("open-plan", ({ repo, planId }) => {
+    setPlanTarget({ repo, planId });
     setDrawerOpen(false);
   });
   useAppCommand("close-drawer", () => {
@@ -114,6 +139,7 @@ export function Layout() {
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   const closeMonitorOverlay = useCallback(() => setMonitorOverlayOpen(false), []);
   const closeFuturePrompts = useCallback(() => setFuturePromptsSessionId(null), []);
+  const closePlan = useCallback(() => setPlanTarget(null), []);
   const openDrawer = useCallback(() => setDrawerOpen(true), []);
   const closeDrawerLocal = useCallback(() => setDrawerOpen(false), []);
   const togglePinned = useCallback(() => setPinned((v) => !v), []);
@@ -161,6 +187,12 @@ export function Layout() {
           sessionId={futurePromptsSessionId}
           onClose={closeFuturePrompts}
         />
+        <PlanModal
+          open={planTarget !== null}
+          repo={planTarget?.repo ?? null}
+          planId={planTarget?.planId}
+          onClose={closePlan}
+        />
       </div>
     );
   }
@@ -200,6 +232,12 @@ export function Layout() {
         sessionId={futurePromptsSessionId}
         onClose={closeFuturePrompts}
       />
+      <PlanModal
+        open={planTarget !== null}
+        repo={planTarget?.repo ?? null}
+        planId={planTarget?.planId}
+        onClose={closePlan}
+      />
     </div>
   );
 }
@@ -225,7 +263,7 @@ function MonitorOverlay({
       maxWidth="96vw"
       maxHeight="92vh"
     >
-      <MonitorPane />
+      <MonitorPane onNavigate={onClose} />
     </Overlay>
   );
 }
@@ -345,6 +383,13 @@ function usePaletteCommands({
       run: () => openTab({ kind: "monitor" }, "top"),
     });
     out.push({
+      id: "view.metrics",
+      label: "Open metrics",
+      icon: "target",
+      group: "view",
+      run: () => openTab({ kind: "metrics" }, "top"),
+    });
+    out.push({
       id: "view.secrets",
       label: "Open secrets manager",
       icon: "settings",
@@ -375,7 +420,7 @@ function usePaletteCommands({
         group: "repo",
         searchOnly: true,
         rank: 15,
-        run: () => openTab({ kind: "plan", repo: r.name }),
+        run: () => appCommands.openPlan({ repo: r.name }),
       });
     }
     for (const plan of plans) {
@@ -387,11 +432,7 @@ function usePaletteCommands({
         searchOnly: true,
         rank: 10,
         run: () =>
-          openTab({
-            kind: "plan",
-            repo: plan.repo_name,
-            planId: plan.id,
-          }),
+          appCommands.openPlan({ repo: plan.repo_name, planId: plan.id }),
       });
     }
     const liveSessions = sessions

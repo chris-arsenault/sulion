@@ -191,6 +191,8 @@ export interface PlanPhaseView {
   description: string;
   status: PlanPhaseStatus;
   status_note: string | null;
+  /** Optional t-shirt weight for burndown (s=1, m=2, l=3). */
+  size: "s" | "m" | "l" | null;
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
@@ -717,4 +719,108 @@ export interface CreateFuturePromptInput {
 export interface UpdateFuturePromptInput {
   text?: string;
   state?: FuturePromptState;
+}
+
+// ─── Portfolio metrics (`/api/metrics`) ─────────────────────────────
+
+export interface UsageWindowView {
+  fresh_tokens: number;
+  cached_tokens: number;
+  total_tokens: number;
+}
+
+export interface MetricsUsageDay {
+  day: string;
+  fresh_tokens: number;
+  cached_tokens: number;
+  total_tokens: number;
+}
+
+export interface MetricsRepoUsage {
+  repo: string;
+  all_time: UsageWindowView;
+  today: UsageWindowView;
+  last_7d: UsageWindowView;
+}
+
+export interface MetricsUsage {
+  all_time: UsageWindowView;
+  today: UsageWindowView;
+  last_7d: UsageWindowView;
+  per_repo: MetricsRepoUsage[];
+  daily: MetricsUsageDay[];
+}
+
+export interface MetricsGitDay {
+  day: string;
+  commits: number;
+  insertions: number;
+  deletions: number;
+}
+
+export interface RepoGitActivityView {
+  repo: string;
+  commits_24h: number;
+  commits_7d: number;
+  insertions_24h: number;
+  deletions_24h: number;
+  insertions_7d: number;
+  deletions_7d: number;
+  agent_commits_7d: number;
+  human_commits_7d: number;
+  last_commit_at: string | null;
+  daily: MetricsGitDay[];
+}
+
+export interface ChurnHotspotView {
+  repo: string;
+  path: string;
+  write_turns: number;
+  sessions: number;
+  last_write_at: string;
+}
+
+export interface FlowCfdDay {
+  day: string;
+  pending: number;
+  in_progress: number;
+  blocked: number;
+  completed: number;
+  skipped: number;
+}
+
+export interface BurndownDayView {
+  day: string;
+  remaining_weight: number;
+  total_weight: number;
+}
+
+export interface PlanBurndownView {
+  plan_id: string;
+  repo: string;
+  title: string;
+  total_weight: number;
+  days: BurndownDayView[];
+}
+
+export interface ThroughputWeekView {
+  week_start: string;
+  completed_weight: number;
+}
+
+export interface FlowMetricsView {
+  wip: number;
+  blocked: number;
+  throughput_weeks: ThroughputWeekView[];
+  cycle_time_hours_p50: number | null;
+  cfd: FlowCfdDay[];
+  burndowns: PlanBurndownView[];
+}
+
+export interface MetricsResponse {
+  generated_at: string;
+  usage: MetricsUsage;
+  git: RepoGitActivityView[];
+  churn: ChurnHotspotView[];
+  flow: FlowMetricsView;
 }

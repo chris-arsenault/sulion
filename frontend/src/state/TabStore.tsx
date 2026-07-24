@@ -13,8 +13,8 @@ export type TabKind =
   | "diff"
   | "ref"
   | "secrets"
-  | "plan"
-  | "monitor";
+  | "monitor"
+  | "metrics";
 
 /** Minimal registry entry. Kind plus the tab's stable handle is the
  * identity; everything else is the tab's own business. */
@@ -31,8 +31,9 @@ export interface TabData {
   path?: string;
   /** Library slug for reference tabs. */
   slug?: string;
-  /** Published plan id. Omitted for a repo's plan index/create view. */
-  planId?: string;
+  /** 1-based line a file tab should reveal and highlight. Ignored for
+   * other tab kinds. */
+  focusLine?: number;
   /** Timeline focus target. Ignored for other tab kinds. */
   focusTurnId?: number;
   /** Optional: a specific tool call within the focused turn. The
@@ -128,7 +129,16 @@ export const useTabStore = create<TabStore>()(
                         focusKey: spec.focusKey,
                       } as TabData,
                     }
-                  : state.tabs,
+                  : spec.kind === "file" && spec.focusKey
+                    ? {
+                        ...state.tabs,
+                        [existingId]: {
+                          ...state.tabs[existingId],
+                          focusLine: spec.focusLine,
+                          focusKey: spec.focusKey,
+                        } as TabData,
+                      }
+                    : state.tabs,
               activeByPane: { ...state.activeByPane, [inPane]: existingId },
             }));
           }
@@ -310,7 +320,7 @@ export const useTabStore = create<TabStore>()(
             workspaceId: tab.workspaceId,
             path: tab.path,
             slug: tab.slug,
-            planId: tab.planId,
+            focusLine: tab.focusLine,
             focusTurnId: tab.focusTurnId,
             focusPairId: tab.focusPairId,
             focusKey: tab.focusKey,
@@ -419,7 +429,7 @@ function removeTabFromState(state: PersistedTabs, id: string): PersistedTabs {
 export function tabKey(
   spec: Pick<
     TabData,
-    "kind" | "sessionId" | "repo" | "workspaceId" | "path" | "slug" | "planId"
+    "kind" | "sessionId" | "repo" | "workspaceId" | "path" | "slug"
   >,
 ): string {
   const repoScope = `${spec.repo ?? ""}:${spec.workspaceId ?? "main"}`;
@@ -438,12 +448,10 @@ export function tabKey(
       return `ref:${spec.slug ?? ""}`;
     case "secrets":
       return `secrets:${spec.sessionId ?? ""}`;
-    case "plan":
-      return spec.planId
-        ? `plan:${spec.planId}`
-        : `plan:repo:${spec.repo ?? ""}`;
     case "monitor":
       return "monitor";
+    case "metrics":
+      return "metrics";
   }
 }
 

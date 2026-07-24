@@ -3,15 +3,19 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { MonitorPane } from "./MonitorPane";
+import { ContextMenuHost } from "./common/ContextMenu";
+import { resetContextMenuStore } from "./common/contextMenuStore";
 import type { SessionView } from "../api/types";
 import { useSessionStore } from "../state/SessionStore";
 import { useTabStore } from "../state/TabStore";
+import { appCommands } from "../state/AppCommands";
 import { appStatePayload, jsonResponse } from "../test/appState";
 
 const STARTED_AT = "2026-05-02T00:00:00Z";
 const ENDED_AT = "2026-05-02T00:00:02Z";
 const AGENT_SESSION_UUID = "00000000-0000-0000-0000-000000000001";
 const ALPHA_TASK = "Alpha task";
+const APP_STATE_URL = "/api/app-state";
 
 function session(id: string, revision: number): SessionView {
   return {
@@ -36,6 +40,8 @@ function session(id: string, revision: number): SessionView {
 describe("MonitorPane", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    resetContextMenuStore();
   });
 
   it("loads every live terminal even when it has no open tab", async () => {
@@ -44,7 +50,7 @@ describe("MonitorPane", () => {
       "fetch",
       vi.fn(async (input: RequestInfo, init?: RequestInit) => {
         const url = typeof input === "string" ? input : input.url;
-        if (url === "/api/app-state") {
+        if (url === APP_STATE_URL) {
           return jsonResponse(appStatePayload({ sessions: useSessionStore.getState().sessions }));
         }
         bodies.push(JSON.parse(init?.body as string));
@@ -119,7 +125,7 @@ describe("MonitorPane", () => {
       "fetch",
       vi.fn(async (input: RequestInfo) => {
         const url = typeof input === "string" ? input : input.url;
-        if (url === "/api/app-state") {
+        if (url === APP_STATE_URL) {
           return jsonResponse(
             appStatePayload({ sessions: useSessionStore.getState().sessions }),
           );
@@ -180,7 +186,8 @@ describe("MonitorPane", () => {
     expect(within(alpha).getByText(ALPHA_TASK)).toBeDefined();
     expect(within(beta).getByText("sess-b")).toBeDefined();
     expect(within(alpha).getByText("20%")).toBeDefined();
-    expect(within(alpha).getByText("47K")).toBeDefined();
+    // Fresh tokens (total 47K − 31K cache reads) headline the card.
+    expect(within(alpha).getByText("16K")).toBeDefined();
     expect(within(alpha).getByText("Implementing the dashboard")).toBeDefined();
 
     const user = userEvent.setup();
@@ -197,7 +204,7 @@ describe("MonitorPane", () => {
       "fetch",
       vi.fn(async (input: RequestInfo) => {
         const url = typeof input === "string" ? input : input.url;
-        if (url === "/api/app-state") {
+        if (url === APP_STATE_URL) {
           return jsonResponse(
             appStatePayload({
               sessions: useSessionStore.getState().sessions,
@@ -261,16 +268,92 @@ describe("MonitorPane", () => {
       sessionsLoaded: true,
     });
 
+    const openPlan = vi.spyOn(appCommands, "openPlan");
     render(<MonitorPane />);
     expect(await screen.findByText("Choose the durable API")).toBeDefined();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /plan · native plans/i }));
 
+    expect(openPlan).toHaveBeenCalledWith({ repo: "alpha", planId: "plan-1" });
+  });
+
+  it("offers Go to terminal from the card context menu and closes the modal host", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo) => {
+        const url = typeof input === "string" ? input : input.url;
+        if (url === APP_STATE_URL) {
+          return jsonResponse(
+            appStatePayload({ sessions: useSessionStore.getState().sessions }),
+          );
+        }
+        return jsonResponse({ generated_at: STARTED_AT, sessions: [] });
+      }),
+    );
+    useSessionStore.setState({
+      sessions: [session("sess-ctx", 1)],
+      sessionsLoaded: true,
+    });
+
+    const onNavigate = vi.fn();
+    render(
+      <>
+        <MonitorPane onNavigate={onNavigate} />
+        <ContextMenuHost />
+      </>,
+    );
+    const user = userEvent.setup();
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: await screen.findByText("sess-ctx"),
+    });
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Go to terminal" }),
+    );
+
+    const tabs = Object.values(useTabStore.getState().tabs);
     expect(
-      Object.values(useTabStore.getState().tabs).some(
-        (tab) => tab.kind === "plan" && tab.planId === "plan-1",
-      ),
+      tabs.some((tab) => tab.kind === "terminal" && tab.sessionId === "sess-ctx"),
     ).toBe(true);
+    expect(onNavigate).toHaveBeenCalled();
+  });
+
+  it("offers repo actions from the team header context menu", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo) => {
+        const url = typeof input === "string" ? input : input.url;
+        if (url === APP_STATE_URL) {
+          return jsonResponse(
+            appStatePayload({ sessions: useSessionStore.getState().sessions }),
+          );
+        }
+        return jsonResponse({ generated_at: STARTED_AT, sessions: [] });
+      }),
+    );
+    useSessionStore.setState({
+      sessions: [session("sess-hdr", 1)],
+      sessionsLoaded: true,
+    });
+
+    const openPlan = vi.spyOn(appCommands, "openPlan");
+    render(
+      <>
+        <MonitorPane />
+        <ContextMenuHost />
+      </>,
+    );
+    const user = userEvent.setup();
+    const region = await screen.findByRole("region", { name: "alpha team" });
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: within(region).getByRole("heading", { name: "alpha" }),
+    });
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Open published plans" }),
+    );
+
+    expect(openPlan).toHaveBeenCalledWith({ repo: "alpha" });
   });
 
   it("opens the focused timeline for a monitor card", async () => {
@@ -278,7 +361,7 @@ describe("MonitorPane", () => {
       "fetch",
       vi.fn(async (input: RequestInfo) => {
         const url = typeof input === "string" ? input : input.url;
-        if (url === "/api/app-state") {
+        if (url === APP_STATE_URL) {
           return jsonResponse(appStatePayload({ sessions: useSessionStore.getState().sessions }));
         }
         return jsonResponse({
