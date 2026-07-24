@@ -121,16 +121,18 @@
   --r-1: 2px;
   --r-2: 4px;
 
-  /* Z-index scale (centralised so overlays don't fight) */
+  /* Z-index scale (centralised so overlays don't fight). Context menus
+   * and tooltips are transient and must stay usable inside modal
+   * overlays (e.g. the Ctrl-M monitor), so they layer above --z-modal. */
   --z-tab: 1;
   --z-sticky: 10;
   --z-drawer-scrim: 50;
   --z-drawer: 60;
   --z-dropdown: 100;
-  --z-context-menu: 201;
-  --z-tooltip: 400;
   --z-overlay: 500;
   --z-modal: 600;
+  --z-context-menu: 650;
+  --z-tooltip: 700;
 }
 
 html,
