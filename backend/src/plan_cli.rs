@@ -21,10 +21,11 @@ pub async fn run_plan(args: &[OsString]) -> anyhow::Result<i32> {
         return Ok(0);
     }
     args.remove(0);
-    let request = parse_plan_request(&command, &mut args)?;
-    let response = call(request).await?;
-    print_response(response, json, ResponseKind::Plan)?;
-    Ok(0)
+    let request = match parse_plan_request(&command, &mut args) {
+        Ok(request) => request,
+        Err(err) => return Ok(usage_failure(ResponseKind::Plan, &err)),
+    };
+    run_control(request, json, ResponseKind::Plan).await
 }
 
 pub async fn run_activity(args: &[OsString]) -> anyhow::Result<i32> {
@@ -39,10 +40,21 @@ pub async fn run_activity(args: &[OsString]) -> anyhow::Result<i32> {
         return Ok(0);
     }
     args.remove(0);
-    let request = match command.as_str() {
+    let request = match parse_activity_request(&command, &mut args) {
+        Ok(request) => request,
+        Err(err) => return Ok(usage_failure(ResponseKind::Activity, &err)),
+    };
+    run_control(request, json, ResponseKind::Activity).await
+}
+
+fn parse_activity_request(
+    command: &str,
+    args: &mut Vec<String>,
+) -> anyhow::Result<ControlRequest> {
+    let request = match command {
         "working" => {
             let summary =
-                take_option(&mut args, "--summary")?.or_else(|| take_positional(&mut args));
+                take_option(args, "--summary")?.or_else(|| take_positional(args));
             ControlRequest::ActivitySet {
                 state: ActivityState::Working,
                 summary,
@@ -50,8 +62,8 @@ pub async fn run_activity(args: &[OsString]) -> anyhow::Result<i32> {
             }
         }
         "waiting" | "needs-input" => {
-            let summary = take_option(&mut args, "--summary")?;
-            let reason = take_option(&mut args, "--reason")?.or_else(|| take_positional(&mut args));
+            let summary = take_option(args, "--summary")?;
+            let reason = take_option(args, "--reason")?.or_else(|| take_positional(args));
             ControlRequest::ActivitySet {
                 state: ActivityState::NeedsInput,
                 summary,
@@ -59,8 +71,8 @@ pub async fn run_activity(args: &[OsString]) -> anyhow::Result<i32> {
             }
         }
         "blocked" => {
-            let summary = take_option(&mut args, "--summary")?;
-            let reason = take_option(&mut args, "--reason")?.or_else(|| take_positional(&mut args));
+            let summary = take_option(args, "--summary")?;
+            let reason = take_option(args, "--reason")?.or_else(|| take_positional(args));
             ControlRequest::ActivitySet {
                 state: ActivityState::Blocked,
                 summary,
@@ -69,7 +81,7 @@ pub async fn run_activity(args: &[OsString]) -> anyhow::Result<i32> {
         }
         "awaiting" | "awaiting-prompt" => {
             let summary =
-                take_option(&mut args, "--summary")?.or_else(|| take_positional(&mut args));
+                take_option(args, "--summary")?.or_else(|| take_positional(args));
             ControlRequest::ActivitySet {
                 state: ActivityState::AwaitingPrompt,
                 summary,
@@ -80,10 +92,8 @@ pub async fn run_activity(args: &[OsString]) -> anyhow::Result<i32> {
         "status" | "show" => ControlRequest::ActivityGet,
         other => bail!("unknown activity command: {other}"),
     };
-    reject_unknown_options(&args)?;
-    let response = call(request).await?;
-    print_response(response, json, ResponseKind::Activity)?;
-    Ok(0)
+    reject_unknown_options(args)?;
+    Ok(request)
 }
 
 fn parse_plan_request(command: &str, args: &mut Vec<String>) -> anyhow::Result<ControlRequest> {
@@ -262,25 +272,67 @@ enum ResponseKind {
     Activity,
 }
 
-fn print_response(response: ControlResponse, json: bool, kind: ResponseKind) -> anyhow::Result<()> {
+impl ResponseKind {
+    fn tool(self) -> &'static str {
+        match self {
+            ResponseKind::Plan => "sulion plan",
+            ResponseKind::Activity => "sulion activity",
+        }
+    }
+
+    /// The `next:` hint printed when the control service refuses a request
+    /// — points at the read command that shows the state the refusal was
+    /// about (e.g. "no current plan" → list what exists).
+    fn recovery(self) -> &'static str {
+        match self {
+            ResponseKind::Plan => "sulion plan list --all",
+            ResponseKind::Activity => "sulion activity status",
+        }
+    }
+}
+
+// Exit codes mirror the sulion-code CLI contract: 64 usage error, 65 the
+// control socket is unreachable (bad environment), 66 the request reached
+// the service and was refused. Every failure prints a `next:` line.
+fn usage_failure(kind: ResponseKind, err: &anyhow::Error) -> i32 {
+    let tool = kind.tool();
+    eprintln!("{tool}: {err}");
+    eprintln!("next: {tool} help");
+    64
+}
+
+async fn run_control(
+    request: ControlRequest,
+    json: bool,
+    kind: ResponseKind,
+) -> anyhow::Result<i32> {
+    let tool = kind.tool();
+    let response = match call(request).await {
+        Ok(response) => response,
+        Err(err) => {
+            eprintln!("{tool}: {err}");
+            eprintln!("next: {tool} help");
+            return Ok(65);
+        }
+    };
     if !response.ok {
-        bail!(
-            "{}",
-            response
-                .error
-                .unwrap_or_else(|| "control request failed".to_string())
-        );
+        let message = response
+            .error
+            .unwrap_or_else(|| "control request failed".to_string());
+        eprintln!("{tool}: {message}");
+        eprintln!("next: {}", kind.recovery());
+        return Ok(66);
     }
     let data = response.data.unwrap_or(Value::Null);
     if json {
         println!("{}", serde_json::to_string_pretty(&data)?);
-        return Ok(());
+        return Ok(0);
     }
     match kind {
         ResponseKind::Plan => print_plan_data(&data),
         ResponseKind::Activity => print_activity_data(&data),
     }
-    Ok(())
+    Ok(0)
 }
 
 fn print_plan_data(data: &Value) {
@@ -445,45 +497,75 @@ fn reject_unknown_options(args: &[String]) -> anyhow::Result<()> {
 fn print_plan_usage() {
     println!(
         "\
-Sulion published plans
+Sulion published plans — durable, repo-scoped phase summaries
 
 Usage:
-  sulion plan start <title> --summary <text> --phase <title[|description]>...
+  sulion plan [--json] <command> ...
+
+Commands:
+  help
+  start <title> --summary <text> --phase <title[|description]>... [--all-pending]
+  current
+  list [--all]
+  show [plan-id]
+  update [--plan uuid] [--title text] [--summary text]
+  status <active|paused> [--plan uuid] [--note text]
+  close (--completed|--canceled) [--skip-remaining] [--note text]
+  phase add <title> [--description text] [--status status]
+  phase set <id|position> <status> [--note text] [--position n]
+  attach <plan-uuid>
+  detach [plan-uuid]
+  history [plan-id]
+
+Statuses:
+  plan   active | paused (close sets completed or canceled)
+  phase  pending | in_progress | blocked | completed | skipped
+
+Rules:
+  repo and acting PTY are inferred from the current terminal
+  a plan is the compact user-facing projection; keep detailed reasoning in
+    your native plan tool
+  start requires at least one --phase; the first begins in_progress unless
+    --all-pending
+  close --completed rejects unfinished phases unless --skip-remaining
+  most commands target this PTY's current plan; --plan <uuid> overrides
+  `step` is an alias for `phase`
+
+Start:
   sulion plan current
-  sulion plan list [--all]
-  sulion plan show [plan-id]
-  sulion plan update [--plan id] [--title text] [--summary text]
-  sulion plan status <active|paused> [--plan id] [--note text]
-  sulion plan close (--completed|--canceled) [--skip-remaining] [--note text]
-  sulion plan phase add <title> [--description text] [--status status]
-  sulion plan phase set <id|position> [status] [--note text] [--position n]
-  sulion plan attach <plan-id>
-  sulion plan detach [plan-id]
-  sulion plan history [plan-id]
-
-Options:
-  --json    stable machine-readable output
-
-Published plans are a durable phase summary. They do not replace the agent's
-detailed working plan."
+  sulion plan start \"<title>\" --summary \"<text>\" --phase \"Title|Description\"
+  sulion plan phase set 1 completed --note \"...\"
+  sulion plan close --completed"
     );
 }
 
 fn print_activity_usage() {
     println!(
         "\
-Sulion terminal activity
+Sulion terminal activity — what this terminal is doing right now
 
 Usage:
-  sulion activity working [summary] [--summary text]
-  sulion activity waiting [reason] [--reason text]
-  sulion activity blocked [reason] [--reason text]
-  sulion activity awaiting [summary]
-  sulion activity status
-  sulion activity clear
+  sulion activity [--json] <command>
 
-Use waiting only when a user decision is required; routine idle-at-prompt state
-is reported automatically when the agent lifecycle exposes it."
+Commands:
+  help
+  working [summary]
+  waiting [reason]      (alias: needs-input)
+  blocked [reason]
+  awaiting [summary]    (alias: awaiting-prompt)
+  status
+  clear
+
+Rules:
+  routine working/idle transitions are reported automatically by the agent
+    lifecycle; publish explicit states only when they say more
+  use waiting only when a user decision or permission is actually required
+  an explicit waiting/blocked state persists until an explicit working or
+    clear releases it
+
+Start:
+  sulion activity status
+  sulion activity waiting --reason \"Choose the migration policy\""
     );
 }
 
@@ -536,6 +618,25 @@ mod tests {
         ];
         let error = parse_plan_request("start", &mut args).unwrap_err();
         assert!(error.to_string().contains("plan title is required"));
+    }
+
+    #[test]
+    fn activity_waiting_takes_a_positional_reason() {
+        let mut args = vec!["Choose the migration policy".to_string()];
+        let request = parse_activity_request("waiting", &mut args).unwrap();
+        let ControlRequest::ActivitySet { state, reason, .. } = request else {
+            panic!("expected activity set");
+        };
+        assert_eq!(state, ActivityState::NeedsInput);
+        assert_eq!(reason.as_deref(), Some("Choose the migration policy"));
+    }
+
+    #[test]
+    fn activity_rejects_unknown_commands_and_stray_arguments() {
+        let mut args = vec![];
+        assert!(parse_activity_request("panic", &mut args).is_err());
+        let mut args = vec!["done".to_string(), "--bogus".to_string()];
+        assert!(parse_activity_request("working", &mut args).is_err());
     }
 
     #[test]

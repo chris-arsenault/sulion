@@ -1,3 +1,12 @@
+/* Monitor pane — dense portfolio overview.
+ *
+ * Target density: ~10 repo teams × 3 terminals visible on one screen.
+ * One team = one --lane-sm header plus a wrapping run of fixed-width
+ * terminal cards; team containers pack top-to-bottom via CSS multicol.
+ * Everything beyond the at-a-glance signal (latest assistant report,
+ * token detail, burn rate, plan phase) lives in Tier-1 tooltips.
+ */
+
 .monitor-pane {
   height: 100%;
   min-height: 0;
@@ -7,175 +16,76 @@
   color: var(--text);
 }
 
-.monitor-pane__header {
+.monitor-pane__bar {
+  height: var(--lane-md);
+  flex: none;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 16px 20px;
+  gap: 16px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--hairline);
   background: var(--canvas-1);
 }
 
-.monitor-pane__header h2 {
-  margin: 1px 0 0;
+.monitor-pane__bar h2 {
+  margin: 0;
   color: var(--text-hi);
-  font-size: 20px;
+  font-size: var(--t-body);
   font-weight: var(--w-600);
-  letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
-.monitor-pane__header p {
-  margin: 3px 0 0;
+.monitor-pane__totals {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.monitor-bar-stat {
   color: var(--text-lo);
-  font-size: var(--t-ui);
-}
-
-.monitor-pane__eyebrow {
-  color: var(--accent-hi);
   font-family: var(--font-mono);
   font-size: var(--t-meta);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.monitor-pane__status {
+.monitor-bar-stat strong {
+  color: var(--text-hi);
+  font-weight: var(--w-600);
+}
+
+.monitor-bar-stat--ok strong {
+  color: var(--ok-fg);
+}
+
+.monitor-bar-stat--warn strong {
+  color: var(--warn-fg);
+}
+
+.monitor-bar-stat--atn strong {
+  color: var(--atn-fg);
+}
+
+.monitor-bar-stat--mute strong {
+  color: var(--text-dis);
+}
+
+.monitor-pane__refresh {
+  margin-left: auto;
   color: var(--text-dis);
   font-family: var(--font-mono);
   font-size: var(--t-meta);
   white-space: nowrap;
 }
 
-.monitor-pane__summary {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(105px, 1fr));
-  gap: 1px;
-  border-bottom: 1px solid var(--hairline);
-  background: var(--hairline);
-}
-
-.portfolio-metric {
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 10px 16px;
-  background: var(--canvas-1);
-}
-
-.portfolio-metric strong {
-  color: var(--text-hi);
-  font-family: var(--font-mono);
-  font-size: var(--t-head);
-  font-variant-numeric: tabular-nums;
-}
-
-.portfolio-metric span {
-  overflow: hidden;
-  color: var(--text-lo);
-  font-size: var(--t-ui);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.portfolio-metric--working strong {
-  color: var(--ok-fg);
-}
-
-.portfolio-metric--warning strong {
-  color: var(--warn-fg);
-}
-
-.portfolio-metric--critical strong {
-  color: var(--crit-fg);
-}
-
-.portfolio-metric--muted strong {
-  color: var(--text-mid);
-}
-
-.activity-badge,
-.health-label {
-  display: inline-flex;
-  width: fit-content;
-  align-items: center;
-  border: 1px solid var(--hairline);
-  border-radius: 999px;
-  padding: 2px 7px;
-  background: var(--canvas-2);
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--t-meta);
-  line-height: 1.35;
-  white-space: nowrap;
-}
-
-.activity-badge--working,
-.activity-badge--starting {
-  border-color: color-mix(in oklab, var(--accent) 45%, var(--hairline));
-  color: var(--accent-hi);
-  background: var(--info-bg);
-}
-
-.activity-badge--needs_input,
-.activity-badge--blocked {
-  border-color: color-mix(in oklab, var(--crit-mark) 48%, var(--hairline));
-  color: var(--crit-fg);
-  background: var(--crit-bg);
-}
-
-.activity-badge--awaiting_prompt {
-  border-color: color-mix(in oklab, var(--ok-mark) 42%, var(--hairline));
-  color: var(--ok-fg);
-  background: var(--ok-bg);
-}
-
-.health-label {
-  border-color: transparent;
-  padding-inline: 0;
-  background: transparent;
-}
-
-.health-label::before {
-  width: 6px;
-  height: 6px;
-  margin-right: 5px;
-  border-radius: 50%;
-  background: var(--mute-mark);
-  content: "";
-}
-
-.health-label--healthy {
-  color: var(--ok-fg);
-}
-
-.health-label--healthy::before {
-  background: var(--ok-mark);
-}
-
-.health-label--warning {
-  color: var(--warn-fg);
-}
-
-.health-label--warning::before {
-  background: var(--warn-mark);
-}
-
-.health-label--critical {
-  color: var(--crit-fg);
-}
-
-.health-label--critical::before {
-  background: var(--crit-mark);
-}
-
 .monitor-pane__error {
-  margin: 10px 16px 0;
-  padding: 8px 10px;
+  margin: 8px 10px 0;
+  padding: 6px 8px;
   color: var(--crit-fg);
   background: var(--crit-bg);
   border: 1px solid color-mix(in oklab, var(--crit-mark) 35%, transparent);
-  border-radius: var(--r-2);
+  border-radius: var(--r-1);
   font-size: var(--t-ui);
 }
 
@@ -188,499 +98,424 @@
   font-style: italic;
 }
 
+/* Team containers flow through as many balanced columns as the pane
+ * width allows — a column is sized to hold two terminal cards. */
 .monitor-pane__teams {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 14px;
+  columns: 496px;
+  column-gap: 8px;
+  padding: 8px;
 }
 
 .monitor-team {
+  break-inside: avoid;
+  margin-bottom: 8px;
   border: 1px solid var(--hairline);
-  border-radius: var(--r-2);
+  border-radius: var(--r-1);
   background: var(--canvas-1);
   overflow: hidden;
 }
 
 .monitor-team__header {
+  height: var(--lane-sm);
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-height: 58px;
-  padding: 10px 12px;
+  gap: 8px;
+  padding: 0 8px;
   border-bottom: 1px solid var(--hairline);
   background: var(--canvas-2);
 }
 
-.monitor-team__identity {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
 .monitor-team__mark {
-  width: 34px;
-  height: 34px;
+  width: 18px;
+  height: 18px;
   flex: none;
   display: grid;
   place-items: center;
   border: 1px solid color-mix(in oklab, var(--accent) 42%, var(--hairline));
-  border-radius: var(--r-2);
+  border-radius: var(--r-1);
   background: var(--accent-lo);
   color: var(--accent-hi);
   font-family: var(--font-mono);
-  font-size: var(--t-meta);
+  font-size: 9px;
   font-weight: var(--w-600);
+  letter-spacing: 0.02em;
 }
 
-.monitor-team__identity h3 {
+.monitor-team__header h3 {
   margin: 0;
   overflow: hidden;
   color: var(--text-hi);
-  font-size: var(--t-head);
+  font-size: var(--t-ui);
   font-weight: var(--w-600);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.monitor-team__identity p {
-  margin: 1px 0 0;
+.monitor-team__meta {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   color: var(--text-lo);
   font-family: var(--font-mono);
   font-size: var(--t-meta);
 }
 
-.monitor-team__status {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
+.monitor-team__attention {
+  flex: none;
+  border: 1px solid color-mix(in oklab, var(--atn-mark) 48%, var(--hairline));
+  border-radius: 999px;
+  padding: 0 6px;
+  background: var(--atn-bg);
+  color: var(--atn-fg);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.monitor-team__spacer {
+  flex: 1;
 }
 
 .monitor-team__plans {
+  min-width: 0;
   display: flex;
-  gap: 7px;
-  overflow-x: auto;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--hairline);
-  background: var(--canvas-1);
+  gap: 4px;
+  overflow: hidden;
 }
 
-.monitor-team__plans button {
-  min-width: 220px;
-  display: flex;
+.monitor-plan-chip {
+  flex: none;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 4px;
+  height: var(--lane-xs);
   border: 1px solid var(--hairline);
-  border-left: 3px solid var(--accent);
+  border-left: 2px solid var(--accent);
   border-radius: var(--r-1);
-  padding: 6px 8px;
-  background: var(--canvas-2);
-  color: var(--text);
-  text-align: left;
+  padding: 0 6px;
+  background: var(--canvas-1);
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
   cursor: pointer;
 }
 
-.monitor-team__plans button.is-blocked {
+.monitor-plan-chip.is-blocked {
   border-left-color: var(--crit-mark);
 }
 
-.monitor-team__plans button:hover {
+.monitor-plan-chip:hover {
   border-color: var(--accent);
   color: var(--accent-hi);
 }
 
-.monitor-team__plans button > span:first-child {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.monitor-team__plans strong,
-.monitor-team__plans small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.monitor-team__plans small,
-.monitor-team__plans button > span:last-child {
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--t-meta);
-}
-
 .monitor-team__unassigned {
-  padding: 18px;
+  height: var(--lane-xs);
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
   color: var(--text-dis);
+  font-size: var(--t-meta);
   font-style: italic;
-  text-align: center;
 }
 
-.monitor-team__engineers {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(390px, 100%), 1fr));
-  gap: 10px;
-  padding: 10px;
+.monitor-team__cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px;
 }
 
+/* Terminal card — fixed width, three compact lines (head / summary /
+ * stats). The left edge carries the activity tone for scanning. */
 .monitor-card {
+  width: 232px;
+  flex: none;
   min-width: 0;
   display: flex;
   flex-direction: column;
+  gap: 3px;
+  padding: 5px 7px 6px;
   border: 1px solid var(--hairline);
-  border-top: 2px solid var(--mute-mark);
-  border-radius: var(--r-2);
+  border-left: 2px solid var(--mute-mark);
+  border-radius: var(--r-1);
   background: var(--canvas-0);
-  overflow: hidden;
 }
 
-.monitor-card--healthy {
-  border-top-color: var(--ok-mark);
+.monitor-card--working,
+.monitor-card--starting {
+  border-left-color: var(--info-mark);
 }
 
-.monitor-card--warning {
-  border-top-color: var(--warn-mark);
+.monitor-card--awaiting_prompt {
+  border-left-color: var(--ok-mark);
 }
 
-.monitor-card--critical {
-  border-color: color-mix(in oklab, var(--crit-mark) 58%, var(--hairline));
-  border-top-color: var(--crit-mark);
+.monitor-card--needs_input {
+  border-left-color: var(--atn-mark);
+  background: color-mix(in oklab, var(--atn-bg) 45%, var(--canvas-0));
+}
+
+.monitor-card--blocked {
+  border-left-color: var(--crit-mark);
+  background: color-mix(in oklab, var(--crit-bg) 45%, var(--canvas-0));
 }
 
 .monitor-card__head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 11px;
-  border-bottom: 1px solid var(--hairline);
-  background: var(--canvas-1);
-}
-
-.monitor-card__identity {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-}
-
-.monitor-card__identity:hover .monitor-card__person strong {
-  color: var(--accent-hi);
-}
-
-.monitor-card__avatar {
-  width: 30px;
-  height: 30px;
-  flex: none;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--hairline);
-  border-radius: 50%;
-  background: var(--canvas-2);
-  color: var(--accent-hi);
-}
-
-.monitor-card__person {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.monitor-card__person strong,
-.monitor-card__person span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.monitor-card__person strong {
-  color: var(--text-hi);
-  font-size: var(--t-body);
-  font-weight: var(--w-600);
-}
-
-.monitor-card__person span {
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--t-meta);
+  gap: 5px;
 }
 
 .monitor-card__state {
   flex: none;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-}
-
-.monitor-card__metrics {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  border-bottom: 1px solid var(--hairline);
-  background: var(--hairline);
-}
-
-.engineer-metric {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 9px 10px;
-  background: var(--canvas-1);
-}
-
-.engineer-metric > span,
-.engineer-metric small {
-  overflow: hidden;
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--t-meta);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.engineer-metric strong {
-  margin-top: 2px;
-  color: var(--text-hi);
-  font-family: var(--font-mono);
-  font-size: var(--t-head);
-  font-variant-numeric: tabular-nums;
-  font-weight: var(--w-500);
-}
-
-.engineer-metric--healthy strong {
-  color: var(--ok-fg);
-}
-
-.engineer-metric--warning strong {
-  color: var(--warn-fg);
-}
-
-.engineer-metric--critical strong {
-  color: var(--crit-fg);
-}
-
-.engineer-metric--unknown strong {
-  color: var(--text-mid);
-}
-
-.engineer-metric progress {
-  width: 100%;
-  height: 3px;
-  margin-top: 6px;
-  border: 0;
-  border-radius: 999px;
-  overflow: hidden;
-  background: var(--canvas-3);
-  color: var(--ok-mark);
-}
-
-.engineer-metric progress::-webkit-progress-bar {
-  background: var(--canvas-3);
-}
-
-.engineer-metric progress::-webkit-progress-value {
-  background: var(--ok-mark);
-}
-
-.engineer-metric progress::-moz-progress-bar {
-  background: var(--ok-mark);
-}
-
-.engineer-metric--warning progress::-webkit-progress-value,
-.engineer-metric--warning progress::-moz-progress-bar {
-  background: var(--warn-mark);
-}
-
-.engineer-metric--critical progress::-webkit-progress-value,
-.engineer-metric--critical progress::-moz-progress-bar {
-  background: var(--crit-mark);
-}
-
-.monitor-card__activity {
-  display: grid;
-  grid-template-columns: 82px minmax(0, 1fr);
-  gap: 8px;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--hairline);
-  background: var(--canvas-1);
-}
-
-.monitor-card__activity > span,
-.monitor-card__section-label,
-.monitor-card__unassigned > span {
-  color: var(--text-dis);
-  font-family: var(--font-mono);
-  font-size: var(--t-meta);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.monitor-card__activity p {
-  margin: 0;
-  overflow: hidden;
-  color: var(--text);
-  font-size: var(--t-ui);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.monitor-card__assignment {
-  min-height: 39px;
-  border-bottom: 1px solid var(--hairline);
-}
-
-.monitor-card__plan,
-.monitor-card__unassigned {
-  width: 100%;
-  min-height: 38px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 7px 10px;
 }
 
-.monitor-card__plan {
+.monitor-card__identity {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
   border: 0;
-  background: var(--accent-lo);
-  color: var(--text);
+  padding: 0;
+  background: transparent;
+  color: var(--text-hi);
+  font-size: var(--t-ui);
+  font-weight: var(--w-500);
   text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.monitor-card__plan:hover {
+.monitor-card__identity:hover {
   color: var(--accent-hi);
 }
 
-.monitor-card__plan > span,
-.monitor-card__unassigned > strong {
-  min-width: 0;
+.monitor-card__report {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  white-space: nowrap;
+}
+
+.monitor-card__summary {
+  margin: 0;
   overflow: hidden;
+  color: var(--text-mid);
+  font-size: var(--t-meta);
+  line-height: var(--lh-dense);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.monitor-card__plan > span:last-child {
-  flex: none;
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--t-meta);
-}
-
-.monitor-card__unassigned {
-  justify-content: flex-start;
-  background: var(--canvas-1);
-}
-
-.monitor-card__unassigned strong {
-  color: var(--text-mid);
-  font-size: var(--t-ui);
-  font-weight: var(--w-400);
-}
-
-.monitor-card__report {
-  min-height: 104px;
-  padding: 9px 10px 7px;
-}
-
-.monitor-card__assistant {
-  max-height: 76px;
-  overflow: hidden;
-  margin-top: 3px;
-  color: var(--text-mid);
-  font-size: var(--t-ui);
-  line-height: var(--lh-dense);
-}
-
-.monitor-card__assistant .md {
-  color: inherit;
-}
-
-.monitor-card__assistant p:first-child {
-  margin-top: 0;
-}
-
-.monitor-card__assistant p:last-child {
-  margin-bottom: 0;
-}
-
-.monitor-card__muted {
+.monitor-card__summary--shell,
+.monitor-card__summary--unknown {
   color: var(--text-dis);
   font-style: italic;
 }
 
-.monitor-card__footer {
+.monitor-card__summary--needs_input {
+  color: var(--atn-fg);
+}
+
+.monitor-card__summary--blocked {
+  color: var(--crit-fg);
+}
+
+.monitor-card__stats {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
-  margin-top: auto;
-  padding: 6px 10px;
-  border-top: 1px solid var(--hairline);
-  background: var(--canvas-1);
+}
+
+.monitor-card__stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  white-space: nowrap;
+}
+
+.monitor-card__plan {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent-hi);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.monitor-card__plan:hover {
+  text-decoration: underline;
+}
+
+.monitor-card__plan.is-blocked {
+  color: var(--crit-fg);
+}
+
+.monitor-card__plan--none {
   color: var(--text-dis);
+  cursor: default;
+}
+
+/* Context gauge — coloured % plus a 10-step mini bar. */
+.monitor-card__ctx--healthy {
+  color: var(--ok-fg);
+}
+
+.monitor-card__ctx--warning {
+  color: var(--warn-fg);
+}
+
+.monitor-card__ctx--critical {
+  color: var(--crit-fg);
+}
+
+.monitor-card__ctx--unknown {
+  color: var(--text-dis);
+}
+
+.monitor-card__ctx-track {
+  width: 18px;
+  height: 3px;
+  flex: none;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--canvas-3);
+}
+
+.monitor-card__ctx-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: currentcolor;
+}
+
+.monitor-card__ctx-fill[data-remaining="0"] {
+  width: 0%;
+}
+
+.monitor-card__ctx-fill[data-remaining="1"] {
+  width: 10%;
+}
+
+.monitor-card__ctx-fill[data-remaining="2"] {
+  width: 20%;
+}
+
+.monitor-card__ctx-fill[data-remaining="3"] {
+  width: 30%;
+}
+
+.monitor-card__ctx-fill[data-remaining="4"] {
+  width: 40%;
+}
+
+.monitor-card__ctx-fill[data-remaining="5"] {
+  width: 50%;
+}
+
+.monitor-card__ctx-fill[data-remaining="6"] {
+  width: 60%;
+}
+
+.monitor-card__ctx-fill[data-remaining="7"] {
+  width: 70%;
+}
+
+.monitor-card__ctx-fill[data-remaining="8"] {
+  width: 80%;
+}
+
+.monitor-card__ctx-fill[data-remaining="9"] {
+  width: 90%;
+}
+
+.monitor-card__ctx-fill[data-remaining="10"] {
+  width: 100%;
+}
+
+/* Modal presentation (⌘M / Ctrl-M) — the same pane hosted in an Overlay
+ * above the workspace. */
+.monitor-overlay .ui-overlay__surface {
+  height: 92vh;
+}
+
+.monitor-overlay .ui-overlay__body {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+
+.monitor-overlay .monitor-pane {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Latest-report tooltip body — rendered inside the Tier-1 tooltip. */
+.ui-tooltip:has(.monitor-report-tip) {
+  max-width: 460px;
+}
+
+.monitor-report-tip__body {
+  max-height: 280px;
+  overflow: hidden;
+  font-size: var(--t-ui);
+  line-height: var(--lh-dense);
+}
+
+.monitor-report-tip__body .md {
+  color: inherit;
+}
+
+.monitor-report-tip__body p:first-child {
+  margin-top: 0;
+}
+
+.monitor-report-tip__body p:last-child {
+  margin-bottom: 0;
+}
+
+.monitor-report-tip__meta {
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px solid var(--hairline);
+  color: var(--text-lo);
   font-family: var(--font-mono);
   font-size: var(--t-meta);
 }
 
-.monitor-card__footer span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 @media (max-width: 900px) {
-  .monitor-pane__summary {
-    grid-template-columns: repeat(3, minmax(100px, 1fr));
-  }
-
-  .portfolio-metric:nth-child(n + 4) {
-    border-top: 1px solid var(--hairline);
+  .monitor-pane__bar {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 6px 12px;
+    row-gap: 2px;
   }
 }
 
 @media (max-width: 640px) {
-  .monitor-pane__header,
-  .monitor-team__header {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .monitor-pane__status {
-    white-space: normal;
-  }
-
-  .monitor-pane__summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .monitor-pane__teams {
-    padding: 8px;
-  }
-
-  .monitor-team__status {
-    justify-content: flex-start;
-  }
-
-  .monitor-card__metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .engineer-metric:last-child {
-    grid-column: span 2;
+  /* One column of teams; cards stretch to the full pane width. */
+  .monitor-card {
+    width: 100%;
   }
 }

@@ -219,6 +219,12 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
         return false;
       }
 
+      // Ctrl+M toggles the app-wide monitor overlay (Layout listens on
+      // window). Swallow it here so xterm doesn't also send CR to the PTY.
+      if (ev.key === "m" || ev.key === "M") {
+        return false;
+      }
+
       return true;
     });
 

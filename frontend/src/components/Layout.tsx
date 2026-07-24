@@ -5,11 +5,12 @@ import { Rail } from "./Rail";
 import { Sidebar } from "./Sidebar";
 import { WorkArea } from "./WorkArea";
 import { FuturePromptsModal } from "./FuturePromptsModal";
+import { MonitorPane } from "./MonitorPane";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { appCommands, useAppCommand } from "../state/AppCommands";
 import { useTabs } from "../state/TabStore";
 import { useSessions } from "../state/SessionStore";
-import { CommandPalette, type PaletteCommand } from "./ui";
+import { CommandPalette, Overlay, type PaletteCommand } from "./ui";
 import "./Layout.css";
 
 const PIN_STORAGE_KEY = "sulion.sidebar.pinned.v1";
@@ -37,6 +38,7 @@ export function Layout() {
   const isMobile = useMediaQuery("(max-width: 767px)");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [monitorOverlayOpen, setMonitorOverlayOpen] = useState(false);
   const [futurePromptsSessionId, setFuturePromptsSessionId] = useState<string | null>(null);
 
   const [pinned, setPinned] = useState<boolean>(() => {
@@ -82,12 +84,18 @@ export function Layout() {
     setDrawerOpen(false);
   });
 
-  // ⌘K / Ctrl-K opens the command palette. Esc is handled by the Overlay.
+  // ⌘K / Ctrl-K opens the command palette. ⌘M / Ctrl-M toggles the monitor
+  // overlay (TerminalPane excludes the chord from xterm so it never reaches
+  // the PTY). Esc is handled by the Overlay.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen(true);
+      }
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "m") {
+        e.preventDefault();
+        setMonitorOverlayOpen((open) => !open);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -104,6 +112,7 @@ export function Layout() {
     setDrawerOpen(false);
   }, []);
   const closePalette = useCallback(() => setPaletteOpen(false), []);
+  const closeMonitorOverlay = useCallback(() => setMonitorOverlayOpen(false), []);
   const closeFuturePrompts = useCallback(() => setFuturePromptsSessionId(null), []);
   const openDrawer = useCallback(() => setDrawerOpen(true), []);
   const closeDrawerLocal = useCallback(() => setDrawerOpen(false), []);
@@ -146,6 +155,7 @@ export function Layout() {
           onClose={closePalette}
           commands={commands}
         />
+        <MonitorOverlay open={monitorOverlayOpen} onClose={closeMonitorOverlay} />
         <FuturePromptsModal
           open={futurePromptsSessionId !== null}
           sessionId={futurePromptsSessionId}
@@ -184,12 +194,39 @@ export function Layout() {
         onClose={closePalette}
         commands={commands}
       />
+      <MonitorOverlay open={monitorOverlayOpen} onClose={closeMonitorOverlay} />
       <FuturePromptsModal
         open={futurePromptsSessionId !== null}
         sessionId={futurePromptsSessionId}
         onClose={closeFuturePrompts}
       />
     </div>
+  );
+}
+
+/** The monitor as a transient modal over the workspace (⌘M / Ctrl-M
+ * toggles it). Same component as the monitor tab; mounting on open is
+ * what starts its polling, so a closed overlay costs nothing. */
+function MonitorOverlay({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <Overlay
+      open={open}
+      onClose={onClose}
+      modal
+      className="monitor-overlay"
+      aria-label="Team overview"
+      width="min(96vw, 1720px)"
+      maxWidth="96vw"
+      maxHeight="92vh"
+    >
+      <MonitorPane />
+    </Overlay>
   );
 }
 
@@ -295,6 +332,9 @@ function usePaletteCommands({
     [openTab, selectSession],
   );
 
+  // Empty query shows only the action entries. Navigation entries are
+  // searchOnly: they surface as the user types, ranked labeled sessions >
+  // repos > plans > unlabeled sessions, with sessions ordered by recency.
   return useMemo<PaletteCommand[]>(() => {
     const out: PaletteCommand[] = [];
     out.push({
@@ -303,6 +343,13 @@ function usePaletteCommands({
       icon: "activity",
       group: "view",
       run: () => openTab({ kind: "monitor" }, "top"),
+    });
+    out.push({
+      id: "view.secrets",
+      label: "Open secrets manager",
+      icon: "settings",
+      group: "view",
+      run: () => openTab({ kind: "secrets" }, "top"),
     });
     out.push({
       id: "sidebar.toggle-pin",
@@ -317,6 +364,8 @@ function usePaletteCommands({
         label: `Jump to repo · ${r.name}`,
         icon: "git-branch",
         group: "repo",
+        searchOnly: true,
+        rank: 20,
         run: () => appCommands.revealRepo({ repo: r.name }),
       });
       out.push({
@@ -324,6 +373,8 @@ function usePaletteCommands({
         label: `Open plans · ${r.name}`,
         icon: "list",
         group: "repo",
+        searchOnly: true,
+        rank: 15,
         run: () => openTab({ kind: "plan", repo: r.name }),
       });
     }
@@ -333,6 +384,8 @@ function usePaletteCommands({
         label: `Open plan · ${plan.repo_name} / ${plan.title}`,
         icon: "list",
         group: "plan",
+        searchOnly: true,
+        rank: 10,
         run: () =>
           openTab({
             kind: "plan",
@@ -341,13 +394,23 @@ function usePaletteCommands({
           }),
       });
     }
-    for (const s of sessions) {
-      const label = s.label && s.label.length > 0 ? s.label : s.id.slice(0, 8);
+    const liveSessions = sessions
+      .filter((s) => s.state === "live")
+      .sort((a, b) =>
+        (b.last_event_at ?? b.created_at).localeCompare(
+          a.last_event_at ?? a.created_at,
+        ),
+      );
+    for (const s of liveSessions) {
+      const labeled = Boolean(s.label && s.label.trim().length > 0);
+      const label = labeled && s.label ? s.label : s.id.slice(0, 8);
       out.push({
         id: `session.${s.id}`,
         label: `Open session · ${s.repo} / ${label}`,
         icon: "terminal",
         group: "session",
+        searchOnly: true,
+        rank: labeled ? 30 : 5,
         run: () => openTerminalFor(s.id),
       });
     }

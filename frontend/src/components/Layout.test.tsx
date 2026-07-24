@@ -144,6 +144,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const MONITOR_PANE = "monitor-pane";
+const CTRL_M = "{Control>}m{/Control}";
+
 describe("Layout", () => {
   it("desktop (>=768px): renders the sidebar inline (no drawer)", async () => {
     stubMatchMedia(() => false); // no mobile media match
@@ -157,6 +160,45 @@ describe("Layout", () => {
     expect(screen.queryByLabelText(/open sessions drawer/i)).toBeNull();
     // Each empty pane shows its own "drag a tab here" splash.
     expect(screen.getAllByText(/drag a tab here/i).length).toBeGreaterThan(0);
+  });
+
+  it("toggles the monitor overlay with Ctrl+M", async () => {
+    stubMatchMedia(() => false); // desktop
+    render(
+      <>
+        <Layout />
+        <ContextMenuHost />
+      </>,
+    );
+    expect(screen.queryByTestId(MONITOR_PANE)).toBeNull();
+
+    const user = userEvent.setup();
+    await user.keyboard(CTRL_M);
+    expect(await screen.findByTestId(MONITOR_PANE)).toBeDefined();
+    expect(screen.getByRole("dialog", { name: "Team overview" })).toBeDefined();
+
+    await user.keyboard(CTRL_M);
+    await waitFor(() => {
+      expect(screen.queryByTestId(MONITOR_PANE)).toBeNull();
+    });
+  });
+
+  it("closes the monitor overlay with Escape", async () => {
+    stubMatchMedia(() => false); // desktop
+    render(
+      <>
+        <Layout />
+        <ContextMenuHost />
+      </>,
+    );
+    const user = userEvent.setup();
+    await user.keyboard(CTRL_M);
+    expect(await screen.findByTestId(MONITOR_PANE)).toBeDefined();
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByTestId(MONITOR_PANE)).toBeNull();
+    });
   });
 
   it("mobile (<768px): shows hamburger, hides sidebar until toggled", async () => {

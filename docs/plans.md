@@ -57,6 +57,13 @@ current PTY's attached plan; `--plan <uuid>` or an explicit plan id targets
 another plan. `sulion plan attach <uuid>` moves the PTY from any previous plan
 to that plan. Add `--json` for stable machine-readable output.
 
+Errors follow the shared agent-CLI contract (same as `sulion-code`): failures
+print `sulion plan: <message>` plus a `next: <command>` recovery hint on
+stderr, with exit codes 64 (usage), 65 (control socket unreachable), and 66
+(request refused by the service). `sulion plan help` / `sulion activity help`
+carry the full JIT reference — commands, status vocabularies, rules, and a
+starting sequence.
+
 Creating a plan requires at least one phase. By default the first phase starts
 `in_progress` and the rest start `pending`; `--all-pending` leaves all phases
 pending. Completing a plan with unfinished phases is rejected unless

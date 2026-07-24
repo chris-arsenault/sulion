@@ -15,6 +15,13 @@ export interface PaletteCommand {
   hint?: string;
   icon?: IconName;
   group?: string;
+  /** Navigation entries set this: hidden while the query is empty, so an
+   * empty palette shows only true actions instead of the whole universe
+   * of sessions / repos / plans. */
+  searchOnly?: boolean;
+  /** Tie-break priority when match scores are equal (higher first). Lets
+   * the producer weight groups — e.g. labeled sessions above plans. */
+  rank?: number;
   run: () => void;
 }
 
@@ -62,10 +69,14 @@ export function CommandPalette({
   }, [open]);
 
   const filtered = useMemo(() => {
+    if (!query) return commands.filter((c) => !c.searchOnly);
     const scored = commands
-      .map((c) => ({ c, s: score(query, c.label) }))
+      .map((c, i) => ({ c, i, s: score(query, c.label) }))
       .filter((x) => x.s > 0)
-      .sort((a, b) => b.s - a.s);
+      .sort(
+        (a, b) =>
+          b.s - a.s || (b.c.rank ?? 0) - (a.c.rank ?? 0) || a.i - b.i,
+      );
     return scored.map((x) => x.c);
   }, [query, commands]);
 

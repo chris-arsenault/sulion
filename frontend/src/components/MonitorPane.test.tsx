@@ -100,7 +100,12 @@ describe("MonitorPane", () => {
 
     render(<MonitorPane />);
 
-    await waitFor(() => expect(screen.getByText("latest assistant output")).toBeDefined());
+    const report = await screen.findByTestId("monitor-report-sess-a");
+    const user = userEvent.setup();
+    await user.hover(report);
+    await waitFor(() =>
+      expect(screen.getByText("latest assistant output")).toBeDefined(),
+    );
     expect(screen.getByText("sess-b")).toBeDefined();
     expect(bodies[0]).toMatchObject({
       session_ids: ["sess-a", "sess-b"],
@@ -176,8 +181,15 @@ describe("MonitorPane", () => {
     expect(within(beta).getByText("sess-b")).toBeDefined();
     expect(within(alpha).getByText("20%")).toBeDefined();
     expect(within(alpha).getByText("47K")).toBeDefined();
-    expect(within(alpha).getByText("Context low")).toBeDefined();
     expect(within(alpha).getByText("Implementing the dashboard")).toBeDefined();
+
+    const user = userEvent.setup();
+    await user.hover(within(alpha).getByTestId("monitor-ctx-sess-a"));
+    await waitFor(() =>
+      expect(
+        screen.getByText(/80K of 100K used · 20% left/),
+      ).toBeDefined(),
+    );
   });
 
   it("shows attention state and opens a terminal's published plan", async () => {

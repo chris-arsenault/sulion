@@ -74,7 +74,7 @@ Live in `frontend/src/components/ui/`. Re-export from `./ui` barrel.
 - **Tab** — icon-forward tab with binding-sigil slot, accent underline for active state.
 - **Tooltip** — Tier-1 primitive.
 - **Overlay** — modal or anchored transient frame. Shared header / close / Esc / z-index for ToolHoverCard, ThinkingFlyout, SubagentModal.
-- **CommandPalette** — Cmd/Ctrl-K. Single entry for navigation and actions. Keeps the "only three shortcuts" rule (palette, Esc, Enter).
+- **CommandPalette** — Cmd/Ctrl-K. Single entry for navigation and actions. Query-gated: an empty palette lists only action commands; navigation entries (live sessions, repos, plans) are `searchOnly` and surface as the user types, ranked labeled sessions > repos > plans > unlabeled sessions with sessions in recency order. Keeps the "only four shortcuts" rule (palette, monitor toggle, Esc, Enter). Cmd/Ctrl-M toggles the monitor overview as a modal overlay; TerminalPane excludes the chord from xterm so it never reaches the PTY.
 
 ## Motion
 
@@ -100,4 +100,4 @@ Kept explicitly off-ramp so the shape can hold. File a ticket before adding.
 - Work-area column reconfiguration beyond the existing horizontal split
 - Per-tool-type icons in TurnRow (ship category-level sigils first, add per-tool only if ambiguous at a glance)
 - Radial menus
-- Keyboard navigation beyond Cmd-K / Esc / Enter
+- Keyboard navigation beyond Cmd-K / Cmd-M / Esc / Enter
