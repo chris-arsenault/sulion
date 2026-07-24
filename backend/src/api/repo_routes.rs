@@ -6,13 +6,14 @@ use std::sync::Arc;
 
 use axum::body::{Body, Bytes};
 use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::Response;
 use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::device_routes::DevicePrincipal;
+use super::file_content::{self, FileResponse};
 use super::routes::{repo_path, repos_root, validate_repo_name, ApiError, ApiResult};
 use crate::{git, ingest, repo_state, workspace, AppState};
 
@@ -155,16 +156,6 @@ pub(super) struct FileQuery {
 }
 
 #[derive(Serialize)]
-pub(super) struct FileResponse {
-    pub(super) path: String,
-    pub(super) size: u64,
-    pub(super) mime: String,
-    pub(super) binary: bool,
-    pub(super) truncated: bool,
-    pub(super) content: Option<String>,
-}
-
-#[derive(Serialize)]
 pub(super) struct FileTraceTouchResponse {
     pub(super) pty_session_id: Option<Uuid>,
     pub(super) session_uuid: Uuid,
@@ -192,44 +183,27 @@ pub(super) struct FileTraceResponse {
     pub(super) touches: Vec<FileTraceTouchResponse>,
 }
 
-const FILE_PREVIEW_CAP: u64 = 1024 * 1024; // 1 MiB
-
 pub(super) async fn get_repo_file(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     Query(q): Query<FileQuery>,
 ) -> ApiResult<Json<FileResponse>> {
     let root = repo_path(&state, &name)?;
-    let (abs, _) = workspace::resolve_in_repo(&root, &q.path)
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    let meta = tokio::fs::metadata(&abs).await?;
-    let size = meta.len();
-    if size > FILE_PREVIEW_CAP {
-        return Ok(Json(FileResponse {
-            path: q.path,
-            size,
-            mime: "application/octet-stream".into(),
-            binary: true,
-            truncated: true,
-            content: None,
-        }));
-    }
-    let bytes = tokio::fs::read(&abs).await?;
-    let binary = workspace::looks_binary(&bytes);
-    let mime = guess_mime(&q.path, binary);
-    let content = if binary {
-        None
-    } else {
-        Some(String::from_utf8_lossy(&bytes).into_owned())
-    };
-    Ok(Json(FileResponse {
-        path: q.path,
-        size,
-        mime,
-        binary,
-        truncated: false,
-        content,
-    }))
+    Ok(Json(file_content::build_preview(root, &q.path).await?))
+}
+
+/// Cognito-authenticated raw bytes for the browser file viewer: images, PDFs,
+/// downloads, and any binary the preview route reports with `content: null`.
+/// Same-origin under `/api`, so it works identically on the LAN and through the
+/// reverse proxy — the browser sends its bearer token like every other call.
+pub(super) async fn get_repo_file_raw(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Query(q): Query<FileQuery>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let root = repo_path(&state, &name)?;
+    file_content::serve_bytes(root, &q.path, &headers, file_content::RAW_MAX_BYTES).await
 }
 
 pub(super) async fn get_repo_file_trace(
@@ -269,29 +243,6 @@ pub(super) async fn get_repo_file_trace(
             })
             .collect(),
     }))
-}
-
-fn guess_mime(path: &str, binary: bool) -> String {
-    if binary {
-        return "application/octet-stream".into();
-    }
-    let ext = std::path::Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    match ext.as_str() {
-        "md" | "markdown" => "text/markdown",
-        "json" => "application/json",
-        "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" | "java" | "c" | "cpp" | "h" | "sh"
-        | "toml" | "yaml" | "yml" | "html" | "css" | "scss" | "sql" => "text/plain",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "svg" => "image/svg+xml",
-        _ => "text/plain",
-    }
-    .to_string()
 }
 
 #[derive(Deserialize)]

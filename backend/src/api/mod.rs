@@ -14,6 +14,7 @@ use crate::{db, AppState};
 mod admin_routes;
 mod app_state_routes;
 mod device_routes;
+mod file_content;
 mod future_prompt_routes;
 mod library_routes;
 mod plan_routes;

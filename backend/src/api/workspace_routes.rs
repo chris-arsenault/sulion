@@ -5,12 +5,14 @@
 use std::sync::Arc;
 
 use axum::extract::{Multipart, Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::Response;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::repo_routes::{FileResponse, FileTraceResponse, FileTraceTouchResponse};
+use super::file_content::{self, FileResponse};
+use super::repo_routes::{FileTraceResponse, FileTraceTouchResponse};
 use super::routes::{ApiError, ApiResult};
 use crate::{git, ingest, workspace as fs_workspace, worktree, AppState};
 
@@ -52,7 +54,6 @@ pub(super) struct UploadQuery {
     path: Option<String>,
 }
 
-const FILE_PREVIEW_CAP: u64 = 1024 * 1024;
 const UPLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024;
 
 pub(super) async fn list_workspaces(
@@ -168,36 +169,32 @@ pub(super) async fn get_workspace_file(
         .load_workspace(id)
         .await
         .map_err(|_| ApiError::NotFound)?;
-    let (abs, _) = fs_workspace::resolve_in_repo(&workspace.path, &q.path)
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    let meta = tokio::fs::metadata(&abs).await?;
-    let size = meta.len();
-    if size > FILE_PREVIEW_CAP {
-        return Ok(Json(FileResponse {
-            path: q.path,
-            size,
-            mime: "application/octet-stream".into(),
-            binary: true,
-            truncated: true,
-            content: None,
-        }));
-    }
-    let bytes = tokio::fs::read(&abs).await?;
-    let binary = fs_workspace::looks_binary(&bytes);
-    let mime = guess_mime(&q.path, binary);
-    let content = if binary {
-        None
-    } else {
-        Some(String::from_utf8_lossy(&bytes).into_owned())
-    };
-    Ok(Json(FileResponse {
-        path: q.path,
-        size,
-        mime,
-        binary,
-        truncated: false,
-        content,
-    }))
+    Ok(Json(
+        file_content::build_preview(workspace.path, &q.path).await?,
+    ))
+}
+
+/// Cognito-authenticated raw bytes for a workspace file — the worktree
+/// counterpart to `get_repo_file_raw`. See that handler for the LAN /
+/// reverse-proxy rationale.
+pub(super) async fn get_workspace_file_raw(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Query(q): Query<FileQuery>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let workspace = state
+        .workspace_state
+        .load_workspace(id)
+        .await
+        .map_err(|_| ApiError::NotFound)?;
+    file_content::serve_bytes(
+        workspace.path,
+        &q.path,
+        &headers,
+        file_content::RAW_MAX_BYTES,
+    )
+    .await
 }
 
 pub(super) async fn get_workspace_file_trace(
@@ -346,27 +343,4 @@ pub(super) async fn post_workspace_upload(
         Some((path, size)) => Ok(Json(UploadResponse { path, size })),
         None => Err(ApiError::BadRequest("no file field".into())),
     }
-}
-
-fn guess_mime(path: &str, binary: bool) -> String {
-    if binary {
-        return "application/octet-stream".into();
-    }
-    let ext = std::path::Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    match ext.as_str() {
-        "md" | "markdown" => "text/markdown",
-        "json" => "application/json",
-        "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" | "java" | "c" | "cpp" | "h" | "sh"
-        | "toml" | "yaml" | "yml" | "html" | "css" | "scss" | "sql" => "text/plain",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "svg" => "image/svg+xml",
-        _ => "text/plain",
-    }
-    .to_string()
 }
