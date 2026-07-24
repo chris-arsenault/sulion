@@ -23,6 +23,7 @@ pub mod future_prompts;
 pub mod git;
 pub mod ingest;
 pub mod library;
+pub mod metrics;
 pub mod plan_cli;
 pub mod plans;
 pub mod pty;

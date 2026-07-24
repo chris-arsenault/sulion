@@ -240,6 +240,119 @@ async fn app_state_includes_agent_usage_health_metrics() {
 }
 
 #[tokio::test]
+async fn metrics_endpoint_rolls_up_usage_and_plan_flow() {
+    let h = Harness::new().await;
+    let repo_path = h.repos_root().join("metrics-repo");
+    std::fs::create_dir_all(&repo_path).unwrap();
+    let pty_id = insert_test_pty(&h.state.pool, "metrics-repo", &repo_path).await;
+    let session_uuid = Uuid::new_v4();
+    sulion::correlate::apply(
+        &h.state.pool,
+        &sulion::correlate::CorrelateMsg {
+            pty_id,
+            session_uuid,
+            agent: "claude-code".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO agent_session_usage \
+            (session_uuid, agent, input_tokens, cached_input_tokens, output_tokens, \
+             reasoning_output_tokens, total_tokens, context_tokens, model_context_window, \
+             last_byte_offset, observed_at) \
+         VALUES ($1, 'claude-code', 1000, 90000, 500, 0, 91500, NULL, NULL, 10, NOW())",
+    )
+    .bind(session_uuid)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+    // Yesterday's snapshot: 40_000 total / 39_000 cached, so today's delta
+    // is 51_500 total with 51_000 cached.
+    sqlx::query(
+        "INSERT INTO agent_usage_daily \
+            (day, session_uuid, agent, input_tokens, cached_input_tokens, output_tokens, \
+             reasoning_output_tokens, total_tokens) \
+         VALUES (CURRENT_DATE - 1, $1, 'claude-code', 800, 39000, 200, 0, 40000), \
+                (CURRENT_DATE, $1, 'claude-code', 1000, 90000, 500, 0, 91500)",
+    )
+    .bind(session_uuid)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+
+    let plan = sulion::plans::create(
+        &h.state.pool,
+        sulion::plans::CreatePlanInput {
+            repo_name: "metrics-repo".to_string(),
+            title: "Flow plan".to_string(),
+            summary: String::new(),
+            phases: vec![
+                sulion::plans::NewPhase {
+                    title: "Build".to_string(),
+                    description: String::new(),
+                    status: None,
+                    size: Some("l".to_string()),
+                },
+                sulion::plans::NewPhase {
+                    title: "Verify".to_string(),
+                    description: String::new(),
+                    status: None,
+                    size: None,
+                },
+            ],
+            all_pending: false,
+            attach_current_pty: false,
+        },
+        &sulion::plans::PlanActor {
+            kind: "user".to_string(),
+            pty_session_id: None,
+            agent_session_uuid: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let metrics: serde_json::Value = h
+        .client
+        .get(format!("{}/api/metrics", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(metrics["usage"]["all_time"]["total_tokens"], 91_500);
+    assert_eq!(metrics["usage"]["all_time"]["cached_tokens"], 90_000);
+    assert_eq!(metrics["usage"]["all_time"]["fresh_tokens"], 1_500);
+    assert_eq!(metrics["usage"]["today"]["total_tokens"], 51_500);
+    assert_eq!(metrics["usage"]["today"]["fresh_tokens"], 500);
+    let repo_usage = metrics["usage"]["per_repo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["repo"] == "metrics-repo")
+        .unwrap();
+    assert_eq!(repo_usage["all_time"]["total_tokens"], 91_500);
+
+    // Flow: first phase auto-starts in_progress (weight 3 = size l).
+    assert_eq!(metrics["flow"]["wip"], 1);
+    let burndown = metrics["flow"]["burndowns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["plan_id"] == plan.id.to_string())
+        .unwrap();
+    assert_eq!(burndown["total_weight"], 4);
+    let last_day = burndown["days"].as_array().unwrap().last().unwrap();
+    assert_eq!(last_day["remaining_weight"], 4);
+    let cfd_last = metrics["flow"]["cfd"].as_array().unwrap().last().unwrap();
+    assert_eq!(cfd_last["in_progress"], 3);
+    assert_eq!(cfd_last["pending"], 1);
+}
+
+#[tokio::test]
 async fn create_session_with_missing_repo_returns_400() {
     let h = Harness::new().await;
     let resp = h
@@ -967,6 +1080,82 @@ async fn file_trace_returns_related_turns() {
     assert_eq!(body["touches"][0]["pty_session_id"], pty_id.to_string());
     assert_eq!(body["touches"][0]["turn_id"], 0);
     assert_eq!(body["touches"][0]["touch_kind"], "inspect");
+}
+
+#[tokio::test]
+async fn repo_file_preview_defers_binary_media_and_raw_route_streams_bytes() {
+    let h = Harness::new().await;
+    std::fs::create_dir_all(h.repos_root().join("r/assets")).unwrap();
+    std::fs::write(h.repos_root().join("r/readme.md"), "# hi\n").unwrap();
+    let png: [u8; 12] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 1, 2, 3];
+    std::fs::write(h.repos_root().join("r/assets/logo.png"), png).unwrap();
+
+    // Text preview inlines content with its real MIME.
+    let md: serde_json::Value = h
+        .client
+        .get(format!("{}/api/repos/r/file?path=readme.md", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(md["mime"], "text/markdown");
+    assert_eq!(md["binary"], false);
+    assert_eq!(md["content"], "# hi\n");
+
+    // A PNG preview reports image/png with no inline content — bytes are
+    // fetched from the raw route, not nulled to octet-stream as before.
+    let meta: serde_json::Value = h
+        .client
+        .get(format!(
+            "{}/api/repos/r/file?path=assets%2Flogo.png",
+            h.base
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(meta["mime"], "image/png");
+    assert_eq!(meta["binary"], true);
+    assert!(meta["content"].is_null());
+
+    // The raw route streams the actual bytes with the correct content type.
+    let raw = h
+        .client
+        .get(format!(
+            "{}/api/repos/r/file/raw?path=assets%2Flogo.png",
+            h.base
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(raw.status(), reqwest::StatusCode::OK);
+    assert_eq!(raw.headers()[reqwest::header::CONTENT_TYPE], "image/png");
+    assert_eq!(raw.headers()[reqwest::header::ACCEPT_RANGES], "bytes");
+    assert_eq!(raw.bytes().await.unwrap().as_ref(), png.as_slice());
+
+    // A Range request yields 206 with just the requested slice.
+    let part = h
+        .client
+        .get(format!(
+            "{}/api/repos/r/file/raw?path=assets%2Flogo.png",
+            h.base
+        ))
+        .header(reqwest::header::RANGE, "bytes=0-3")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(part.status(), reqwest::StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        part.headers()[reqwest::header::CONTENT_RANGE],
+        format!("bytes 0-3/{}", png.len())
+    );
+    assert_eq!(part.bytes().await.unwrap().as_ref(), &png[0..4]);
+
+    h.shutdown_sessions().await;
 }
 
 #[tokio::test]

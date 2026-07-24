@@ -11,6 +11,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
@@ -85,43 +86,8 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/monitor/timeline",
             post(timeline_routes::monitor_timeline),
         )
-        .route("/api/workspaces", get(workspace_routes::list_workspaces))
-        .route(
-            "/api/workspaces/:id",
-            get(workspace_routes::get_workspace).delete(workspace_routes::delete_workspace),
-        )
-        .route(
-            "/api/workspaces/:id/refresh",
-            post(workspace_routes::post_workspace_refresh),
-        )
-        .route(
-            "/api/workspaces/:id/dirty-paths",
-            get(workspace_routes::get_workspace_dirty_paths),
-        )
-        .route(
-            "/api/workspaces/:id/files",
-            get(workspace_routes::get_workspace_files),
-        )
-        .route(
-            "/api/workspaces/:id/file",
-            get(workspace_routes::get_workspace_file),
-        )
-        .route(
-            "/api/workspaces/:id/file-trace",
-            get(workspace_routes::get_workspace_file_trace),
-        )
-        .route(
-            "/api/workspaces/:id/git/diff",
-            get(workspace_routes::get_workspace_diff),
-        )
-        .route(
-            "/api/workspaces/:id/git/stage",
-            post(workspace_routes::post_workspace_stage),
-        )
-        .route(
-            "/api/workspaces/:id/upload",
-            post(workspace_routes::post_workspace_upload),
-        )
+        .route("/api/metrics", get(portfolio_metrics))
+        .merge(workspace_router())
         .route("/api/repos/:name/git/diff", get(repo_routes::get_repo_diff))
         .route(
             "/api/repos/:name/refresh",
@@ -137,6 +103,10 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/api/repos/:name/files", get(repo_routes::get_repo_files))
         .route("/api/repos/:name/file", get(repo_routes::get_repo_file))
+        .route(
+            "/api/repos/:name/file/raw",
+            get(repo_routes::get_repo_file_raw),
+        )
         .route(
             "/api/repos/:name/file-trace",
             get(repo_routes::get_repo_file_trace),
@@ -159,6 +129,53 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/admin/retrieval/reindex",
             post(admin_routes::retrieval_reindex),
+        )
+}
+
+fn workspace_router() -> Router<Arc<AppState>> {
+    use axum::routing::{get, post};
+
+    Router::new()
+        .route("/api/workspaces", get(workspace_routes::list_workspaces))
+        .route(
+            "/api/workspaces/:id",
+            get(workspace_routes::get_workspace).delete(workspace_routes::delete_workspace),
+        )
+        .route(
+            "/api/workspaces/:id/refresh",
+            post(workspace_routes::post_workspace_refresh),
+        )
+        .route(
+            "/api/workspaces/:id/dirty-paths",
+            get(workspace_routes::get_workspace_dirty_paths),
+        )
+        .route(
+            "/api/workspaces/:id/files",
+            get(workspace_routes::get_workspace_files),
+        )
+        .route(
+            "/api/workspaces/:id/file",
+            get(workspace_routes::get_workspace_file),
+        )
+        .route(
+            "/api/workspaces/:id/file/raw",
+            get(workspace_routes::get_workspace_file_raw),
+        )
+        .route(
+            "/api/workspaces/:id/file-trace",
+            get(workspace_routes::get_workspace_file_trace),
+        )
+        .route(
+            "/api/workspaces/:id/git/diff",
+            get(workspace_routes::get_workspace_diff),
+        )
+        .route(
+            "/api/workspaces/:id/git/stage",
+            post(workspace_routes::post_workspace_stage),
+        )
+        .route(
+            "/api/workspaces/:id/upload",
+            post(workspace_routes::post_workspace_upload),
         )
 }
 
@@ -185,6 +202,15 @@ fn plan_router() -> Router<Arc<AppState>> {
             delete(plan_routes::detach_plan),
         )
         .route("/api/plans/:id/events", get(plan_routes::plan_events))
+}
+
+/// Portfolio metrics for the monitor and metrics tab: token rollups,
+/// git activity, churn hotspots, and plan flow. Read-only aggregation;
+/// git scans are cached in-process.
+async fn portfolio_metrics(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<crate::metrics::MetricsResponse>> {
+    Ok(Json(crate::metrics::portfolio_metrics(&state.pool).await?))
 }
 
 // ─── error type ───────────────────────────────────────────────────────
