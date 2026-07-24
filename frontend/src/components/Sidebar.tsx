@@ -786,10 +786,10 @@ function RepoGroup({
   );
   const openPlans = useCallback(
     (planId?: string) => {
-      openTab({ kind: "plan", repo: group.name, planId });
+      appCommands.openPlan({ repo: group.name, planId });
       appCommands.closeDrawer();
     },
-    [group.name, openTab],
+    [group.name],
   );
   const openPlansClick = useCallback(() => openPlans(), [openPlans]);
   const openPlansButtonClick = useCallback(
@@ -856,7 +856,7 @@ function RepoGroup({
           id: "open-repo-plans",
           label: "Open published plans",
           onSelect: () => {
-            openTab({ kind: "plan", repo: group.name });
+            appCommands.openPlan({ repo: group.name });
             appCommands.closeDrawer();
           },
         },

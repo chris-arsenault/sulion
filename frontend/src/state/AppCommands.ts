@@ -3,9 +3,17 @@ import { useEffect, useRef } from "react";
 import type { LibraryKind } from "../api/types";
 
 export type AppCommand =
-  | { type: "open-file"; repo: string; path: string; workspaceId?: string }
+  | {
+      type: "open-file";
+      repo: string;
+      path: string;
+      workspaceId?: string;
+      /** 1-based line to reveal and briefly highlight in the file view. */
+      line?: number;
+    }
   | { type: "open-diff"; repo: string; path?: string; workspaceId?: string }
   | { type: "open-future-prompts"; sessionId: string }
+  | { type: "open-plan"; repo: string; planId?: string }
   | { type: "reveal-file"; repo: string; path: string }
   | { type: "reveal-repo"; repo: string }
   | { type: "close-drawer" }
@@ -35,6 +43,10 @@ export const appCommands = {
 
   openFuturePrompts(detail: Omit<AppCommandOf<"open-future-prompts">, "type">) {
     dispatchAppCommand({ type: "open-future-prompts", ...detail });
+  },
+
+  openPlan(detail: Omit<AppCommandOf<"open-plan">, "type">) {
+    dispatchAppCommand({ type: "open-plan", ...detail });
   },
 
   revealFile(detail: Omit<AppCommandOf<"reveal-file">, "type">) {

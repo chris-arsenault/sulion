@@ -3,15 +3,18 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { PlanView, SessionView } from "../api/types";
+import { resetSessionStore, useSessionStore } from "../state/SessionStore";
+import { resetTabStore } from "../state/TabStore";
 import {
-  resetSessionStore,
-  useSessionStore,
-} from "../state/SessionStore";
-import { resetTabStore, useTabStore } from "../state/TabStore";
+  type AppCommand,
+  resetAppCommands,
+  subscribeToAppCommand,
+} from "../state/AppCommands";
 import { appStatePayload, jsonResponse } from "../test/appState";
-import { PlanPane } from "./PlanPane";
+import { PlanModal } from "./PlanModal";
 
 const NOW = "2026-07-23T00:00:00Z";
+const noop = () => {};
 
 function liveSession(): SessionView {
   return {
@@ -54,6 +57,7 @@ function plan(status: PlanView["status"] = "active"): PlanView {
         description: "Schema and service",
         status: "in_progress",
         status_note: null,
+        size: null,
         started_at: NOW,
         completed_at: null,
         created_at: NOW,
@@ -64,9 +68,10 @@ function plan(status: PlanView["status"] = "active"): PlanView {
   };
 }
 
-describe("PlanPane", () => {
+describe("PlanModal", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    resetAppCommands();
     act(() => {
       resetSessionStore();
       resetTabStore();
@@ -92,6 +97,9 @@ describe("PlanPane", () => {
           body: init?.body ? JSON.parse(init.body as string) : undefined,
         });
         if (method === "POST") return jsonResponse(created, 201);
+        if (url.endsWith("/events")) return jsonResponse([]);
+        // Detail load after creation resolves to the created plan.
+        if (url.endsWith("/plans/plan-1")) return jsonResponse(created);
         return jsonResponse([]);
       }),
     );
@@ -100,7 +108,7 @@ describe("PlanPane", () => {
       sessionsLoaded: true,
     });
 
-    render(<PlanPane repo="alpha" />);
+    render(<PlanModal open repo="alpha" onClose={noop} />);
     const user = userEvent.setup();
     await user.type(screen.getByLabelText("Title"), "Native plans");
     await user.type(
@@ -130,14 +138,11 @@ describe("PlanPane", () => {
         attach_pty_id: "pty-1",
       }),
     );
-    expect(
-      Object.values(useTabStore.getState().tabs).some(
-        (tab) => tab.kind === "plan" && tab.planId === "plan-1",
-      ),
-    ).toBe(true);
+    // Creating navigates the modal onto the new plan's detail view.
+    expect(await screen.findByText("revision 2")).toBeDefined();
   });
 
-  it("updates a published phase from the plan detail workspace", async () => {
+  it("updates a published phase from the plan detail view", async () => {
     const initial = plan();
     const completed: PlanView = {
       ...initial,
@@ -169,17 +174,16 @@ describe("PlanPane", () => {
       }),
     );
 
-    render(<PlanPane repo="alpha" planId="plan-1" />);
+    render(<PlanModal open repo="alpha" planId="plan-1" onClose={noop} />);
     const user = userEvent.setup();
-    await screen.findByDisplayValue("Schema and service");
+    await user.click(
+      await screen.findByRole("button", { name: "Edit phase 1" }),
+    );
     await user.selectOptions(
       screen.getByLabelText("Phase 1 status"),
       "completed",
     );
-    await user.type(
-      screen.getByLabelText("Phase 1 status note"),
-      "verified",
-    );
+    await user.type(screen.getByLabelText("Phase 1 status note"), "verified");
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() =>
@@ -191,6 +195,47 @@ describe("PlanPane", () => {
       }),
     );
     expect(screen.getByText("revision 3")).toBeDefined();
+  });
+
+  it("opens a file:line reference from a phase description", async () => {
+    const withRef: PlanView = {
+      ...plan(),
+      phases: [
+        {
+          ...plan().phases[0]!,
+          description: "Wire it in src/state/TabStore.tsx:441 first.",
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo) => {
+        const url = typeof input === "string" ? input : input.url;
+        if (url === "/api/app-state") return jsonResponse(appStatePayload());
+        if (url.endsWith("/events")) return jsonResponse([]);
+        return jsonResponse(withRef);
+      }),
+    );
+    const commands: AppCommand[] = [];
+    subscribeToAppCommand("open-file", (command) => commands.push(command));
+
+    render(<PlanModal open repo="alpha" planId="plan-1" onClose={noop} />);
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole("button", {
+        name: "src/state/TabStore.tsx:441",
+      }),
+    );
+
+    expect(commands).toEqual([
+      {
+        type: "open-file",
+        repo: "alpha",
+        path: "src/state/TabStore.tsx",
+        workspaceId: undefined,
+        line: 441,
+      },
+    ]);
   });
 
   it("explicitly skips unfinished phases when completing a plan", async () => {
@@ -227,7 +272,7 @@ describe("PlanPane", () => {
       }),
     );
 
-    render(<PlanPane repo="alpha" planId="plan-1" />);
+    render(<PlanModal open repo="alpha" planId="plan-1" onClose={noop} />);
     const user = userEvent.setup();
     await user.click(
       await screen.findByRole("button", { name: "Complete & skip 1" }),

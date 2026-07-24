@@ -12,7 +12,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { authFetch, getRepoFile, getWorkspaceFile } from "../api/client";
+import {
+  fetchFileBlob,
+  fileRawUrl,
+  getRepoFile,
+  getWorkspaceFile,
+} from "../api/client";
 import { Icon } from "../icons";
 import { Tooltip } from "./ui";
 import type { FileResponse } from "../api/types";
@@ -27,10 +32,14 @@ export function FileTab({
   repo,
   path,
   workspaceId,
+  focusLine,
+  focusKey,
 }: {
   repo: string;
   path: string;
   workspaceId?: string;
+  focusLine?: number;
+  focusKey?: string;
 }) {
   const [data, setData] = useState<FileResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -141,7 +150,14 @@ export function FileTab({
       </div>
       <div className="ft__body">
         <FileTracePanel repo={repo} path={path} workspaceId={workspaceId} />
-        <FileBody data={data} repo={repo} workspaceId={workspaceId} kind={renderKind} />
+        <FileBody
+          data={data}
+          repo={repo}
+          workspaceId={workspaceId}
+          kind={renderKind}
+          focusLine={focusLine}
+          focusKey={focusKey}
+        />
       </div>
     </div>
   );
@@ -225,17 +241,23 @@ function FileBody({
   repo,
   workspaceId,
   kind,
+  focusLine,
+  focusKey,
 }: {
   data: FileResponse;
   repo: string;
   workspaceId?: string;
   kind: RenderKind;
+  focusLine?: number;
+  focusKey?: string;
 }) {
   if (kind.kind === "truncated") {
     return (
-      <div className="ft__muted">
-        File exceeds 1 MiB; preview disabled. Use the terminal to inspect it
-        directly.
+      <div className="ft__notice">
+        <span className="ft__muted">
+          File exceeds 1 MiB; inline preview disabled.
+        </span>
+        <FileDownload repo={repo} workspaceId={workspaceId} path={data.path} />
       </div>
     );
   }
@@ -251,7 +273,10 @@ function FileBody({
   }
   if (kind.kind === "binary") {
     return (
-      <div className="ft__muted">Binary file ({formatSize(data.size)}).</div>
+      <div className="ft__notice">
+        <span className="ft__muted">Binary file ({formatSize(data.size)}).</span>
+        <FileDownload repo={repo} workspaceId={workspaceId} path={data.path} />
+      </div>
     );
   }
   if (kind.kind === "image-svg") {
@@ -290,12 +315,29 @@ function FileBody({
     );
   }
   if (kind.kind === "code") {
-    return <HighlightedCode lang={kind.lang} code={kind.code} />;
+    return (
+      <HighlightedCode
+        lang={kind.lang}
+        code={kind.code}
+        focusLine={focusLine}
+        focusKey={focusKey}
+      />
+    );
   }
   return <pre className="ft__code">{kind.code}</pre>;
 }
 
-function HighlightedCode({ lang, code }: { lang: string; code: string }) {
+function HighlightedCode({
+  lang,
+  code,
+  focusLine,
+  focusKey,
+}: {
+  lang: string;
+  code: string;
+  focusLine?: number;
+  focusKey?: string;
+}) {
   const [html, setHtml] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const reqId = useRef(0);
@@ -333,7 +375,7 @@ function HighlightedCode({ lang, code }: { lang: string; code: string }) {
       <pre className="ft__code ft__code--loading">{code}</pre>
     );
   }
-  return <HighlightedBody html={html} />;
+  return <HighlightedBody html={html} focusLine={focusLine} focusKey={focusKey} />;
 }
 
 function SvgBody({ svg }: { svg: string }) {
@@ -362,15 +404,7 @@ function AuthenticatedImage({
     setError(null);
     void (async () => {
       try {
-        const resp = await authFetch(
-          workspaceId
-            ? `/api/workspaces/${encodeURIComponent(workspaceId)}/file?path=${encodeURIComponent(path)}&raw=1`
-            : `/api/repos/${encodeURIComponent(repo)}/file?path=${encodeURIComponent(path)}&raw=1`,
-          undefined,
-          { json: false },
-        );
-        if (!resp.ok) throw new Error(`image fetch failed (${resp.status})`);
-        const blob = await resp.blob();
+        const blob = await fetchFileBlob(fileRawUrl({ repo, workspaceId }, path));
         if (cancelled) return;
         objectUrl = URL.createObjectURL(blob);
         setSrc(objectUrl);
@@ -390,9 +424,93 @@ function AuthenticatedImage({
   return <img src={src} alt={alt} className="ft__img" />;
 }
 
-function HighlightedBody({ html }: { html: string }) {
+/** Downloads a file's bytes through the authenticated raw route. Used for
+ * binaries the viewer can't render inline and for oversized text. Same fetch +
+ * object-URL path as the image viewer, so it works on the LAN and the proxy. */
+function FileDownload({
+  repo,
+  workspaceId,
+  path,
+}: {
+  repo: string;
+  workspaceId?: string;
+  path: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const download = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const blob = await fetchFileBlob(fileRawUrl({ repo, workspaceId }, path));
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = path.slice(path.lastIndexOf("/") + 1) || "download";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "download failed");
+    } finally {
+      setBusy(false);
+    }
+  }, [path, repo, workspaceId]);
+
+  return (
+    <span className="ft__download-row">
+      <button
+        type="button"
+        className="ft__download"
+        onClick={download}
+        disabled={busy}
+      >
+        {busy ? "Downloading…" : "Download"}
+      </button>
+      {error ? <span className="ft__parse-err">{error}</span> : null}
+    </span>
+  );
+}
+
+function HighlightedBody({
+  html,
+  focusLine,
+  focusKey,
+}: {
+  html: string;
+  focusLine?: number;
+  focusKey?: string;
+}) {
   const inner = useMemo(() => ({ __html: html }), [html]);
-  return <div className="ft__highlighted" dangerouslySetInnerHTML={inner} />;
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  // Shiki emits one `<span class="line">` per source line. Scroll the
+  // requested line into view and flash it whenever a focus request lands
+  // (keyed on focusKey so the same line can be re-targeted).
+  useEffect(() => {
+    if (!focusLine) return;
+    const container = ref.current;
+    if (!container) return;
+    const lines = container.querySelectorAll<HTMLElement>(".line");
+    const target = lines[focusLine - 1];
+    if (!target) return;
+    target.scrollIntoView({ block: "center" });
+    target.classList.add("ft__line--focus");
+    const timer = window.setTimeout(
+      () => target.classList.remove("ft__line--focus"),
+      1600,
+    );
+    return () => {
+      window.clearTimeout(timer);
+      target.classList.remove("ft__line--focus");
+    };
+  }, [html, focusLine, focusKey]);
+
+  return (
+    <div ref={ref} className="ft__highlighted" dangerouslySetInnerHTML={inner} />
+  );
 }
 
 function formatSize(bytes: number): string {

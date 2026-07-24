@@ -120,8 +120,54 @@
   background: transparent;
 }
 
+/* A file:line jump flashes the target line, then fades. Shiki keeps each
+   source line as an inline `.line` span, so the highlight tracks the code
+   text without forcing block layout (which would double the line gaps). */
+.ft__highlighted .line {
+  transition: background var(--dur-2) var(--ease);
+}
+
+.ft__line--focus {
+  background: var(--accent-lo);
+  box-shadow: 0 0 0 1px var(--accent);
+  border-radius: var(--r-1);
+}
+
 .ft__code--loading {
   opacity: 0.7;
+}
+
+.ft__notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.ft__download-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ft__download {
+  border: 1px solid var(--canvas-3);
+  border-radius: var(--r-1);
+  padding: 4px 10px;
+  background: var(--canvas-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ft__download:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-hi);
+}
+
+.ft__download:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .ft__body {

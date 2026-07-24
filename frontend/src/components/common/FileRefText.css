@@ -1,0 +1,24 @@
+.file-ref {
+  display: inline;
+  padding: 0 3px;
+  border: 0;
+  border-radius: var(--r-1);
+  background: var(--accent-lo);
+  color: var(--accent-hi);
+  font-family: var(--font-mono);
+  font-size: 0.94em;
+  line-height: inherit;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background var(--dur-0) var(--ease), color var(--dur-0) var(--ease);
+}
+
+.file-ref:hover {
+  background: var(--accent);
+  color: var(--canvas-0);
+}
+
+.file-ref:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}

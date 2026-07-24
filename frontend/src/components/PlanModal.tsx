@@ -30,37 +30,105 @@ import type {
   UpdatePlanPhaseInput,
 } from "../api/types";
 import { Icon } from "../icons";
+import type { Maybe } from "../lib/types";
 import { useSessions } from "../state/SessionStore";
-import { useTabs } from "../state/TabStore";
-import "./PlanPane.css";
+import { FileRefText } from "./common/FileRefText";
+import { Overlay } from "./ui";
+import "./PlanModal.css";
 
-interface PlanPaneProps {
-  repo: string;
+interface PlanModalProps {
+  open: boolean;
+  repo: string | null;
   planId?: string;
-  active?: boolean;
+  onClose: () => void;
 }
 
 type PlanMutation = (operation: () => Promise<PlanView>) => Promise<void>;
 
-export function PlanPane({ repo, planId, active = true }: PlanPaneProps) {
-  return planId ? (
-    <PlanDetail repo={repo} planId={planId} active={active} />
-  ) : (
-    <PlanIndex repo={repo} active={active} />
+/** Published plans live in a compact modal, not a workspace tab. It opens
+ * either on a repo's plan index (list + create) or straight onto one plan's
+ * detail; navigation between the two is local modal state. */
+export function PlanModal({ open, repo, planId, onClose }: PlanModalProps) {
+  const [selectedPlanId, setSelectedPlanId] = useState<Maybe<string>>(planId);
+  const [detailTitle, setDetailTitle] = useState<string | null>(null);
+
+  // Re-seed whenever the modal is (re)opened against a new target.
+  useEffect(() => {
+    if (open) {
+      setSelectedPlanId(planId);
+      setDetailTitle(null);
+    }
+  }, [open, planId, repo]);
+
+  const backToIndex = useCallback(() => {
+    setSelectedPlanId(undefined);
+    setDetailTitle(null);
+  }, []);
+  const openDetail = useCallback((nextPlanId: string) => {
+    setSelectedPlanId(nextPlanId);
+    setDetailTitle(null);
+  }, []);
+
+  if (!open || !repo) return null;
+
+  const inDetail = Boolean(selectedPlanId);
+
+  return (
+    <Overlay
+      open={open}
+      onClose={onClose}
+      modal
+      className="plan-modal"
+      width={620}
+      maxWidth="min(94vw, 620px)"
+      maxHeight="82vh"
+      leading={
+        inDetail ? (
+          <button
+            type="button"
+            className="plan-modal__back"
+            onClick={backToIndex}
+            aria-label="Back to plans"
+          >
+            <Icon name="chevron-right" size={16} />
+          </button>
+        ) : (
+          <Icon name="list-checks" size={16} />
+        )
+      }
+      title={inDetail ? detailTitle ?? "Plan" : "Published plans"}
+      subtitle={inDetail ? `${repo} · plan` : repo}
+    >
+      {selectedPlanId ? (
+        <PlanDetail
+          repo={repo}
+          planId={selectedPlanId}
+          onTitle={setDetailTitle}
+        />
+      ) : (
+        <PlanIndex repo={repo} onOpenPlan={openDetail} />
+      )}
+    </Overlay>
   );
 }
 
-function PlanIndex({ repo, active }: { repo: string; active: boolean }) {
+function PlanIndex({
+  repo,
+  onOpenPlan,
+}: {
+  repo: string;
+  onOpenPlan: (planId: string) => void;
+}) {
   const [plans, setPlans] = useState<PlanView[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showClosed, setShowClosed] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
   const [title, setTitle] = useState("");
   const [summary, setSummary] = useState("");
   const [phaseText, setPhaseText] = useState("");
   const [attachPty, setAttachPty] = useState("");
   const [creating, setCreating] = useState(false);
-  const openTab = useTabs((store) => store.openTab);
   const { sessions, refresh, planRevisionKey } = useSessions(
     useShallow((store) => ({
       sessions: store.sessions,
@@ -79,6 +147,7 @@ function PlanIndex({ repo, active }: { repo: string; active: boolean }) {
     (event: ChangeEvent<HTMLInputElement>) => setShowClosed(event.target.checked),
     [],
   );
+  const toggleCreate = useCallback(() => setShowCreate((open) => !open), []);
   const onTitleChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => setTitle(event.target.value),
     [],
@@ -95,10 +164,6 @@ function PlanIndex({ repo, active }: { repo: string; active: boolean }) {
     (event: ChangeEvent<HTMLSelectElement>) => setAttachPty(event.target.value),
     [],
   );
-  const openPlan = useCallback(
-    (nextPlanId: string) => openTab({ kind: "plan", repo, planId: nextPlanId }),
-    [openTab, repo],
-  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -113,8 +178,8 @@ function PlanIndex({ repo, active }: { repo: string; active: boolean }) {
   }, [repo, showClosed]);
 
   useEffect(() => {
-    if (active) void load();
-  }, [active, load, planRevisionKey]);
+    void load();
+  }, [load, planRevisionKey]);
 
   const onCreate = useCallback(
     async (event: FormEvent) => {
@@ -140,42 +205,44 @@ function PlanIndex({ repo, active }: { repo: string; active: boolean }) {
         setSummary("");
         setPhaseText("");
         setAttachPty("");
+        setShowCreate(false);
         setError(null);
         await refresh();
-        openTab({ kind: "plan", repo, planId: created.id });
+        onOpenPlan(created.id);
       } catch (err) {
         setError(messageOf(err));
       } finally {
         setCreating(false);
       }
     },
-    [attachPty, openTab, phaseText, refresh, repo, summary, title],
+    [attachPty, onOpenPlan, phaseText, refresh, repo, summary, title],
   );
 
+  // The create form defaults open when the repo has no plans yet, and can be
+  // toggled otherwise. It stays put while the list loads so it never flickers.
+  const formOpen = showCreate || plans.length === 0;
+
   return (
-    <div className="plan-pane" data-testid="plan-pane">
-      <header className="plan-pane__header">
-        <div>
-          <div className="plan-pane__eyebrow">{repo}</div>
-          <h2>Published plans</h2>
-          <p>Lightweight phases agents can publish alongside their detailed work.</p>
-        </div>
-        <label className="plan-pane__closed-toggle">
-          <input
-            type="checkbox"
-            checked={showClosed}
-            onChange={onShowClosedChange}
-          />
+    <div className="plan-modal__index">
+      <div className="plan-modal__toolbar">
+        <button
+          type="button"
+          className="plan-modal__primary"
+          onClick={toggleCreate}
+          aria-expanded={formOpen}
+        >
+          <Icon name="plus" size={12} /> New plan
+        </button>
+        <label className="plan-modal__closed-toggle">
+          <input type="checkbox" checked={showClosed} onChange={onShowClosedChange} />
           Show closed
         </label>
-      </header>
+      </div>
 
-      <div className="plan-pane__index">
-        <form className="plan-pane__create" onSubmit={onCreate}>
-          <div className="plan-pane__section-heading">
-            <Icon name="plus" size={14} />
-            <span>Start a plan</span>
-          </div>
+      {error ? <div className="plan-modal__error">{error}</div> : null}
+
+      {formOpen ? (
+        <form className="plan-modal__create" onSubmit={onCreate}>
           <label>
             Title
             <input
@@ -202,18 +269,15 @@ function PlanIndex({ repo, active }: { repo: string; active: boolean }) {
               value={phaseText}
               onChange={onPhaseTextChange}
               placeholder={"Backend | Durable data and commands\nFrontend | Plan workspace\nVerify | Tests and docs"}
-              rows={5}
+              rows={4}
             />
-            <span className="plan-pane__hint">
+            <span className="plan-modal__hint">
               One phase per line. Add a description after <code>|</code>.
             </span>
           </label>
           <label>
             Attach to terminal
-            <select
-              value={attachPty}
-              onChange={onAttachPtyChange}
-            >
+            <select value={attachPty} onChange={onAttachPtyChange}>
               <option value="">No terminal yet</option>
               {repoSessions.map((session) => (
                 <option key={session.id} value={session.id}>
@@ -222,24 +286,24 @@ function PlanIndex({ repo, active }: { repo: string; active: boolean }) {
               ))}
             </select>
           </label>
-          <button type="submit" className="plan-pane__primary" disabled={creating}>
-            {creating ? "Starting…" : "Start plan"}
-          </button>
-        </form>
-
-        <section className="plan-pane__plans" aria-label="Plans">
-          <div className="plan-pane__section-heading">
-            <Icon name="list" size={14} />
-            <span>{loading ? "Loading plans…" : `${plans.length} plans`}</span>
+          <div className="plan-modal__create-actions">
+            <button type="submit" className="plan-modal__primary" disabled={creating}>
+              {creating ? "Starting…" : "Start plan"}
+            </button>
           </div>
-          {error ? <div className="plan-pane__error">{error}</div> : null}
-          {!loading && plans.length === 0 ? (
-            <div className="plan-pane__empty">No published plans in this repo yet.</div>
-          ) : null}
-          {plans.map((plan) => (
-            <PlanCard key={plan.id} plan={plan} onOpen={openPlan} />
-          ))}
-        </section>
+        </form>
+      ) : null}
+
+      <div className="plan-modal__list" aria-label="Plans">
+        {loading && plans.length === 0 ? (
+          <div className="plan-modal__muted">Loading plans…</div>
+        ) : null}
+        {!loading && plans.length === 0 ? (
+          <div className="plan-modal__empty">No published plans in this repo yet.</div>
+        ) : null}
+        {plans.map((plan) => (
+          <PlanRow key={plan.id} plan={plan} onOpen={onOpenPlan} />
+        ))}
       </div>
     </div>
   );
@@ -248,11 +312,11 @@ function PlanIndex({ repo, active }: { repo: string; active: boolean }) {
 function PlanDetail({
   repo,
   planId,
-  active,
+  onTitle,
 }: {
   repo: string;
   planId: string;
-  active: boolean;
+  onTitle: (title: string) => void;
 }) {
   const [plan, setPlan] = useState<PlanView | null>(null);
   const [events, setEvents] = useState<PlanEventView[]>([]);
@@ -269,8 +333,7 @@ function PlanDetail({
       sessions: store.sessions,
       refresh: store.refresh,
       ambientRevision:
-        store.plans.find((candidate) => candidate.id === planId)?.revision ??
-        null,
+        store.plans.find((candidate) => candidate.id === planId)?.revision ?? null,
     })),
   );
 
@@ -284,15 +347,16 @@ function PlanDetail({
       setEvents(nextEvents);
       setTitle(nextPlan.title);
       setSummary(nextPlan.summary);
+      onTitle(nextPlan.title);
       setError(null);
     } catch (err) {
       setError(messageOf(err));
     }
-  }, [planId]);
+  }, [onTitle, planId]);
 
   useEffect(() => {
-    if (active) void load();
-  }, [active, ambientRevision, load]);
+    void load();
+  }, [ambientRevision, load]);
 
   const mutate = useCallback(
     async (operation: () => Promise<PlanView>) => {
@@ -302,6 +366,7 @@ function PlanDetail({
         setPlan(next);
         setTitle(next.title);
         setSummary(next.summary);
+        onTitle(next.title);
         setEvents(await getPlanEvents(planId));
         setError(null);
         await refresh();
@@ -311,7 +376,7 @@ function PlanDetail({
         setBusy(false);
       }
     },
-    [planId, refresh],
+    [onTitle, planId, refresh],
   );
 
   const liveRepoSessions = useMemo(
@@ -332,9 +397,7 @@ function PlanDetail({
     async (event: FormEvent) => {
       event.preventDefault();
       if (!plan) return;
-      await mutate(() =>
-        updatePlan(plan.id, { title: title.trim(), summary: summary.trim() }),
-      );
+      await mutate(() => updatePlan(plan.id, { title: title.trim(), summary: summary.trim() }));
       setEditMeta(false);
     },
     [mutate, plan, summary, title],
@@ -343,26 +406,18 @@ function PlanDetail({
     (status: PlanStatus, skipRemaining = false) => {
       if (!plan) return Promise.resolve();
       return mutate(() =>
-        updatePlan(plan.id, {
-          status,
-          skip_remaining: skipRemaining,
-        }),
+        updatePlan(plan.id, { status, skip_remaining: skipRemaining }),
       );
     },
     [mutate, plan],
   );
-  const pausePlan = useCallback(() => {
-    void setPlanStatus("paused");
-  }, [setPlanStatus]);
-  const resumePlan = useCallback(() => {
-    void setPlanStatus("active");
-  }, [setPlanStatus]);
-  const completePlan = useCallback(() => {
-    void setPlanStatus("completed", unfinishedPhaseCount > 0);
-  }, [setPlanStatus, unfinishedPhaseCount]);
-  const cancelPlan = useCallback(() => {
-    void setPlanStatus("canceled");
-  }, [setPlanStatus]);
+  const pausePlan = useCallback(() => void setPlanStatus("paused"), [setPlanStatus]);
+  const resumePlan = useCallback(() => void setPlanStatus("active"), [setPlanStatus]);
+  const completePlan = useCallback(
+    () => void setPlanStatus("completed", unfinishedPhaseCount > 0),
+    [setPlanStatus, unfinishedPhaseCount],
+  );
+  const cancelPlan = useCallback(() => void setPlanStatus("canceled"), [setPlanStatus]);
   const addPhase = useCallback(
     async (event: FormEvent) => {
       event.preventDefault();
@@ -396,8 +451,7 @@ function PlanDetail({
     [],
   );
   const onNewPhaseDescriptionChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) =>
-      setNewPhaseDescription(event.target.value),
+    (event: ChangeEvent<HTMLInputElement>) => setNewPhaseDescription(event.target.value),
     [],
   );
   const onAttachPtyChange = useCallback(
@@ -409,196 +463,188 @@ function PlanDetail({
 
   if (!plan) {
     return (
-      <div className="plan-pane plan-pane--loading" data-testid="plan-pane">
-        {error ? <div className="plan-pane__error">{error}</div> : "Loading plan…"}
+      <div className="plan-modal__loading">
+        {error ? <div className="plan-modal__error">{error}</div> : "Loading plan…"}
       </div>
     );
   }
 
+  const editable = plan.status === "active" || plan.status === "paused";
+  const locked = plan.status === "completed" || plan.status === "canceled";
+
   return (
-    <div className="plan-pane" data-testid="plan-pane">
-      <header className="plan-pane__header plan-pane__header--detail">
-        <div className="plan-pane__title-block">
-          <div className="plan-pane__eyebrow">{plan.repo_name} · published plan</div>
-          {editMeta ? (
-            <form className="plan-pane__meta-form" onSubmit={saveMeta}>
-              <input
-                aria-label="Plan title"
-                value={title}
-                onChange={onTitleChange}
-                maxLength={160}
-              />
-              <textarea
-                aria-label="Plan description"
-                value={summary}
-                onChange={onSummaryChange}
-                rows={2}
-                maxLength={1_000}
-              />
-              <div className="plan-pane__actions">
-                <button type="submit" className="plan-pane__primary" disabled={busy}>
-                  Save
+    <div className="plan-modal__detail">
+      {error ? <div className="plan-modal__error">{error}</div> : null}
+
+      <div className="plan-modal__meta">
+        {editMeta ? (
+          <form className="plan-modal__meta-form" onSubmit={saveMeta}>
+            <input
+              aria-label="Plan title"
+              value={title}
+              onChange={onTitleChange}
+              maxLength={160}
+            />
+            <textarea
+              aria-label="Plan description"
+              value={summary}
+              onChange={onSummaryChange}
+              rows={2}
+              maxLength={1_000}
+            />
+            <div className="plan-modal__actions">
+              <button type="submit" className="plan-modal__primary" disabled={busy}>
+                Save
+              </button>
+              <button type="button" onClick={cancelMetaEdit}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        ) : (
+          <p className="plan-modal__summary">
+            {plan.summary ? (
+              <FileRefText text={plan.summary} repo={repo} />
+            ) : (
+              "No description"
+            )}
+          </p>
+        )}
+        <div className="plan-modal__status-row">
+          <span className={`plan-status plan-status--${plan.status}`}>{plan.status}</span>
+          <span className="plan-modal__revision">revision {plan.revision}</span>
+          <span className="plan-modal__status-actions">
+            {!editMeta && !locked ? (
+              <button type="button" onClick={beginMetaEdit}>
+                Edit
+              </button>
+            ) : null}
+            {plan.status === "active" ? (
+              <button type="button" disabled={busy} onClick={pausePlan}>
+                Pause
+              </button>
+            ) : plan.status === "paused" ? (
+              <button type="button" disabled={busy} onClick={resumePlan}>
+                Resume
+              </button>
+            ) : null}
+            {editable ? (
+              <>
+                <button type="button" disabled={busy} onClick={completePlan}>
+                  {unfinishedPhaseCount > 0
+                    ? `Complete & skip ${unfinishedPhaseCount}`
+                    : "Complete"}
                 </button>
-                <button type="button" onClick={cancelMetaEdit}>
+                <button
+                  type="button"
+                  className="plan-modal__danger"
+                  disabled={busy}
+                  onClick={cancelPlan}
+                >
                   Cancel
                 </button>
-              </div>
-            </form>
-          ) : (
-            <>
-              <h2>{plan.title}</h2>
-              <p>{plan.summary || "No description"}</p>
-            </>
-          )}
-        </div>
-        <div className="plan-pane__header-actions">
-          <span className={`plan-status plan-status--${plan.status}`}>
-            {plan.status}
-          </span>
-          {!editMeta ? (
-            <button type="button" onClick={beginMetaEdit}>
-              Edit
-            </button>
-          ) : null}
-          {plan.status === "active" ? (
-            <button type="button" disabled={busy} onClick={pausePlan}>
-              Pause
-            </button>
-          ) : plan.status === "paused" ? (
-            <button type="button" disabled={busy} onClick={resumePlan}>
-              Resume
-            </button>
-          ) : null}
-          {plan.status === "active" || plan.status === "paused" ? (
-            <>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={completePlan}
-              >
-                {unfinishedPhaseCount > 0
-                  ? `Complete & skip ${unfinishedPhaseCount}`
-                  : "Complete"}
-              </button>
-              <button
-                type="button"
-                className="plan-pane__danger"
-                disabled={busy}
-                onClick={cancelPlan}
-              >
-                Cancel plan
-              </button>
-            </>
-          ) : null}
-        </div>
-      </header>
-
-      {error ? <div className="plan-pane__error">{error}</div> : null}
-
-      <div className="plan-pane__detail">
-        <main className="plan-pane__phases">
-          <div className="plan-pane__section-heading">
-            <Icon name="list" size={14} />
-            <span>Phases</span>
-            <span className="plan-pane__revision">revision {plan.revision}</span>
-          </div>
-          <PlanProgress phases={plan.phases} />
-          <ol className="plan-pane__phase-list">
-            {plan.phases.map((phase) => (
-              <li key={phase.id}>
-                <PhaseEditor
-                  phase={phase}
-                  planId={plan.id}
-                  disabled={busy || plan.status === "completed" || plan.status === "canceled"}
-                  onMutate={mutate}
-                />
-              </li>
-            ))}
-          </ol>
-          {plan.status === "active" || plan.status === "paused" ? (
-            <form className="plan-pane__add-phase" onSubmit={addPhase}>
-              <input
-                value={newPhaseTitle}
-                onChange={onNewPhaseTitleChange}
-                placeholder="Add a phase"
-                aria-label="New phase title"
-                maxLength={160}
-              />
-              <input
-                value={newPhaseDescription}
-                onChange={onNewPhaseDescriptionChange}
-                placeholder="Short description"
-                aria-label="New phase description"
-                maxLength={1_000}
-              />
-              <button type="submit" disabled={busy || !newPhaseTitle.trim()}>
-                <Icon name="plus" size={12} /> Add
-              </button>
-            </form>
-          ) : null}
-        </main>
-
-        <aside className="plan-pane__aside">
-          <section>
-            <div className="plan-pane__section-heading">Attached terminals</div>
-            {plan.attachments.length === 0 ? (
-              <div className="plan-pane__muted">No terminals attached.</div>
-            ) : (
-              <div className="plan-pane__attachments">
-                {plan.attachments.map((attachment) => (
-                  <AttachmentRow
-                    key={attachment.pty_session_id}
-                    attachment={attachment}
-                    sessions={sessions}
-                    planId={plan.id}
-                    disabled={busy}
-                    onMutate={mutate}
-                  />
-                ))}
-              </div>
-            )}
-            {plan.status === "active" || plan.status === "paused" ? (
-              <div className="plan-pane__attach">
-                <select
-                  value={attachPty}
-                  onChange={onAttachPtyChange}
-                  aria-label="Terminal to attach"
-                >
-                  <option value="">Choose terminal</option>
-                  {liveRepoSessions.map((session) => (
-                    <option key={session.id} value={session.id}>
-                      {sessionLabel(session)}
-                    </option>
-                  ))}
-                </select>
-                <button type="button" disabled={busy || !attachPty} onClick={attach}>
-                  Attach
-                </button>
-              </div>
+              </>
             ) : null}
-          </section>
-
-          <section>
-            <details>
-              <summary>History · {events.length}</summary>
-              <ol className="plan-pane__history">
-                {events.map((event) => (
-                  <li key={event.id}>
-                    <strong>{humanEvent(event.event_type)}</strong>
-                    <span>{event.note || statusChange(event) || event.actor_kind}</span>
-                    <time dateTime={event.created_at}>{relativeAge(event.created_at)}</time>
-                  </li>
-                ))}
-              </ol>
-            </details>
-          </section>
-        </aside>
+          </span>
+        </div>
+        <PlanProgress phases={plan.phases} />
       </div>
+
+      <ol className="plan-modal__phase-list">
+        {plan.phases.map((phase) => (
+          <li key={phase.id}>
+            <PhaseRow
+              phase={phase}
+              planId={plan.id}
+              repo={repo}
+              disabled={busy || locked}
+              onMutate={mutate}
+            />
+          </li>
+        ))}
+      </ol>
+
+      {editable ? (
+        <form className="plan-modal__add-phase" onSubmit={addPhase}>
+          <input
+            value={newPhaseTitle}
+            onChange={onNewPhaseTitleChange}
+            placeholder="Add a phase"
+            aria-label="New phase title"
+            maxLength={160}
+          />
+          <input
+            value={newPhaseDescription}
+            onChange={onNewPhaseDescriptionChange}
+            placeholder="Short description"
+            aria-label="New phase description"
+            maxLength={1_000}
+          />
+          <button type="submit" disabled={busy || !newPhaseTitle.trim()}>
+            <Icon name="plus" size={12} /> Add
+          </button>
+        </form>
+      ) : null}
+
+      <section className="plan-modal__section">
+        <div className="plan-modal__section-heading">
+          <Icon name="link" size={12} />
+          <span>Attached terminals</span>
+        </div>
+        {plan.attachments.length === 0 ? (
+          <div className="plan-modal__muted">No terminals attached.</div>
+        ) : (
+          <div className="plan-modal__attachments">
+            {plan.attachments.map((attachment) => (
+              <AttachmentRow
+                key={attachment.pty_session_id}
+                attachment={attachment}
+                sessions={sessions}
+                planId={plan.id}
+                disabled={busy}
+                onMutate={mutate}
+              />
+            ))}
+          </div>
+        )}
+        {editable ? (
+          <div className="plan-modal__attach">
+            <select
+              value={attachPty}
+              onChange={onAttachPtyChange}
+              aria-label="Terminal to attach"
+            >
+              <option value="">Choose terminal</option>
+              {liveRepoSessions.map((session) => (
+                <option key={session.id} value={session.id}>
+                  {sessionLabel(session)}
+                </option>
+              ))}
+            </select>
+            <button type="button" disabled={busy || !attachPty} onClick={attach}>
+              Attach
+            </button>
+          </div>
+        ) : null}
+      </section>
+
+      <details className="plan-modal__history">
+        <summary>History · {events.length}</summary>
+        <ol>
+          {events.map((event) => (
+            <li key={event.id}>
+              <strong>{humanEvent(event.event_type)}</strong>
+              <span>{event.note || statusChange(event) || event.actor_kind}</span>
+              <time dateTime={event.created_at}>{relativeAge(event.created_at)}</time>
+            </li>
+          ))}
+        </ol>
+      </details>
     </div>
   );
 }
 
-function PlanCard({
+function PlanRow({
   plan,
   onOpen,
 }: {
@@ -607,10 +653,11 @@ function PlanCard({
 }) {
   const open = useCallback(() => onOpen(plan.id), [onOpen, plan.id]);
   return (
-    <button type="button" className="plan-pane__plan-card" onClick={open}>
-      <span className={`plan-status plan-status--${plan.status}`}>{plan.status}</span>
-      <strong>{plan.title}</strong>
-      <span>{plan.summary || "No description"}</span>
+    <button type="button" className="plan-modal__plan-row" onClick={open}>
+      <span className="plan-modal__plan-main">
+        <span className={`plan-status plan-status--${plan.status}`}>{plan.status}</span>
+        <strong>{plan.title}</strong>
+      </span>
       <PlanProgress phases={plan.phases} />
     </button>
   );
@@ -636,11 +683,9 @@ function AttachmentRow({
     void onMutate(() => detachPlan(planId, attachment.pty_session_id));
   }, [attachment.pty_session_id, onMutate, planId]);
   return (
-    <div>
+    <div className="plan-modal__attachment">
       <span>
-        {session
-          ? sessionLabel(session)
-          : attachment.pty_session_id.slice(0, 8)}
+        {session ? sessionLabel(session) : attachment.pty_session_id.slice(0, 8)}
       </span>
       <button
         type="button"
@@ -654,17 +699,20 @@ function AttachmentRow({
   );
 }
 
-function PhaseEditor({
+function PhaseRow({
   phase,
   planId,
+  repo,
   disabled,
   onMutate,
 }: {
   phase: PlanPhaseView;
   planId: string;
+  repo: string;
   disabled: boolean;
   onMutate: PlanMutation;
 }) {
+  const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(phase.title);
   const [description, setDescription] = useState(phase.description);
   const [status, setStatus] = useState<PlanPhaseStatus>(phase.status);
@@ -684,30 +732,34 @@ function PhaseEditor({
       event.preventDefault();
       const patch: UpdatePlanPhaseInput = {};
       if (title.trim() !== phase.title) patch.title = title.trim();
-      if (description.trim() !== phase.description) {
-        patch.description = description.trim();
-      }
+      if (description.trim() !== phase.description) patch.description = description.trim();
       if (status !== phase.status) patch.status = status;
-      if (note.trim() !== (phase.status_note ?? "")) {
-        patch.status_note = note.trim();
-      }
+      if (note.trim() !== (phase.status_note ?? "")) patch.status_note = note.trim();
       if (position !== phase.position) patch.position = position;
       await onMutate(() => updatePlanPhase(planId, phase.id, patch));
+      setEditing(false);
     },
     [description, note, onMutate, phase, planId, position, status, title],
   );
+  const beginEdit = useCallback(() => setEditing(true), []);
+  const cancelEdit = useCallback(() => {
+    setTitle(phase.title);
+    setDescription(phase.description);
+    setStatus(phase.status);
+    setNote(phase.status_note ?? "");
+    setPosition(phase.position);
+    setEditing(false);
+  }, [phase]);
   const onTitleChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => setTitle(event.target.value),
     [],
   );
   const onDescriptionChange = useCallback(
-    (event: ChangeEvent<HTMLTextAreaElement>) =>
-      setDescription(event.target.value),
+    (event: ChangeEvent<HTMLTextAreaElement>) => setDescription(event.target.value),
     [],
   );
   const onPositionChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) =>
-      setPosition(Number(event.target.value)),
+    (event: ChangeEvent<HTMLInputElement>) => setPosition(Number(event.target.value)),
     [],
   );
   const onStatusChange = useCallback(
@@ -727,8 +779,42 @@ function PhaseEditor({
     position !== phase.position;
   const validPosition = Number.isInteger(position) && position >= 1;
 
+  if (!editing) {
+    return (
+      <div className={`plan-phase plan-phase--${phase.status}`}>
+        <span className="plan-phase__position">{phase.position}</span>
+        <div className="plan-phase__body">
+          <span className="plan-phase__title">{phase.title}</span>
+          {phase.description ? (
+            <span className="plan-phase__desc">
+              <FileRefText text={phase.description} repo={repo} />
+            </span>
+          ) : null}
+          {phase.status_note ? (
+            <span className="plan-phase__note">
+              <FileRefText text={phase.status_note} repo={repo} />
+            </span>
+          ) : null}
+        </div>
+        <span className="plan-phase__tail">
+          <span className="plan-phase__status">{phase.status.replace("_", " ")}</span>
+          {!disabled ? (
+            <button
+              type="button"
+              className="plan-phase__edit"
+              aria-label={`Edit phase ${phase.position}`}
+              onClick={beginEdit}
+            >
+              <Icon name="pencil" size={12} />
+            </button>
+          ) : null}
+        </span>
+      </div>
+    );
+  }
+
   return (
-    <form className={`plan-phase plan-phase--${phase.status}`} onSubmit={submit}>
+    <form className={`plan-phase plan-phase--${phase.status} plan-phase--editing`} onSubmit={submit}>
       <span className="plan-phase__position">{phase.position}</span>
       <div className="plan-phase__fields">
         <input
@@ -777,11 +863,16 @@ function PhaseEditor({
             placeholder="Status note"
             maxLength={1_000}
           />
+        </div>
+        <div className="plan-phase__edit-actions">
           <button
             type="submit"
             disabled={disabled || !title.trim() || !validPosition || !dirty}
           >
             Save
+          </button>
+          <button type="button" onClick={cancelEdit} disabled={disabled}>
+            Cancel
           </button>
         </div>
       </div>

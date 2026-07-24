@@ -1,0 +1,513 @@
+/* Published plans render inside the shared ui-overlay modal chrome; these
+ * rules only style the modal body (index list + create, and plan detail). */
+
+.plan-modal .ui-overlay__body {
+  padding: 0;
+}
+
+.plan-modal button,
+.plan-modal input,
+.plan-modal textarea,
+.plan-modal select {
+  font: inherit;
+}
+
+.plan-modal button {
+  border: 1px solid var(--canvas-3);
+  border-radius: var(--r-1);
+  padding: 4px 8px;
+  background: var(--canvas-1);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.plan-modal button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-hi);
+}
+
+.plan-modal button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.plan-modal input,
+.plan-modal textarea,
+.plan-modal select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--canvas-3);
+  border-radius: var(--r-1);
+  padding: 6px 7px;
+  background: var(--canvas-0);
+  color: var(--text);
+}
+
+.plan-modal textarea {
+  resize: vertical;
+}
+
+.plan-modal__primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--accent-lo) !important;
+  border-color: var(--accent) !important;
+  color: var(--accent-hi) !important;
+}
+
+.plan-modal__back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--text-mid) !important;
+  transform: rotate(180deg);
+}
+
+.plan-modal__back:hover {
+  color: var(--accent-hi) !important;
+}
+
+.plan-modal__error {
+  margin: 10px 12px 0;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in oklab, var(--crit-mark) 40%, transparent);
+  border-radius: var(--r-1);
+  color: var(--crit-fg);
+  background: var(--crit-bg);
+  font-size: var(--t-ui);
+}
+
+.plan-modal__muted,
+.plan-modal__empty {
+  color: var(--text-dis);
+  font-size: var(--t-ui);
+}
+
+/* ---- Index ---- */
+
+.plan-modal__index {
+  display: flex;
+  flex-direction: column;
+}
+
+.plan-modal__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.plan-modal__closed-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-lo);
+  font-size: var(--t-ui);
+  white-space: nowrap;
+}
+
+.plan-modal__closed-toggle input {
+  width: auto;
+}
+
+.plan-modal__create {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--canvas-1);
+}
+
+.plan-modal__create label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-lo);
+  font-size: var(--t-ui);
+}
+
+.plan-modal__create-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.plan-modal__hint {
+  color: var(--text-dis);
+  font-size: var(--t-meta);
+}
+
+.plan-modal__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 12px;
+}
+
+.plan-modal__plan-row {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 10px !important;
+  text-align: left;
+}
+
+.plan-modal__plan-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plan-modal__plan-main strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--w-600);
+}
+
+/* ---- Detail ---- */
+
+.plan-modal__loading {
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  color: var(--text-lo);
+}
+
+.plan-modal__detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.plan-modal__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plan-modal__summary {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: var(--t-ui);
+}
+
+.plan-modal__meta-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plan-modal__status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.plan-modal__revision {
+  color: var(--text-dis);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+}
+
+.plan-modal__status-actions,
+.plan-modal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.plan-modal__status-actions {
+  margin-left: auto;
+}
+
+.plan-modal__danger {
+  color: var(--crit-fg) !important;
+}
+
+.plan-status {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  text-transform: uppercase;
+}
+
+.plan-status--active {
+  color: var(--ok-fg);
+  background: var(--ok-bg);
+}
+
+.plan-status--paused {
+  color: var(--warn-fg);
+  background: var(--warn-bg);
+}
+
+.plan-status--completed {
+  color: var(--accent-hi);
+  background: var(--accent-lo);
+}
+
+.plan-status--canceled {
+  color: var(--text-dis);
+  background: var(--canvas-3);
+}
+
+.plan-progress {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-lo);
+}
+
+.plan-progress > span {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--canvas-3);
+}
+
+.plan-progress i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.plan-progress small {
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+}
+
+/* ---- Phases ---- */
+
+.plan-modal__phase-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-phase {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  border-left: 3px solid var(--canvas-3);
+  padding: 8px 10px;
+  background: var(--canvas-1);
+  border-radius: 0 var(--r-1) var(--r-1) 0;
+}
+
+.plan-phase--editing {
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: start;
+}
+
+.plan-phase--in_progress {
+  border-left-color: var(--accent);
+}
+
+.plan-phase--blocked {
+  border-left-color: var(--crit-mark);
+}
+
+.plan-phase--completed,
+.plan-phase--skipped {
+  border-left-color: var(--ok-mark);
+}
+
+.plan-phase__position {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--canvas-3);
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+}
+
+.plan-phase__body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plan-phase__title {
+  font-size: var(--t-ui);
+  font-weight: var(--w-600);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-phase__desc {
+  color: var(--text-lo);
+  font-size: var(--t-meta);
+}
+
+.plan-phase__note {
+  color: var(--text-dis);
+  font-size: var(--t-meta);
+  font-style: italic;
+}
+
+.plan-phase__tail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plan-phase__status {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.plan-phase__edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px !important;
+  color: var(--text-mid);
+}
+
+.plan-phase__fields {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plan-phase__fields > input {
+  font-weight: var(--w-600);
+}
+
+.plan-phase__controls {
+  display: grid;
+  grid-template-columns: 56px 116px minmax(80px, 1fr);
+  gap: 6px;
+}
+
+.plan-phase__edit-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.plan-modal__add-phase {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(150px, 1fr) auto;
+  gap: 7px;
+}
+
+.plan-modal__add-phase button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* ---- Attachments + history ---- */
+
+.plan-modal__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.plan-modal__section-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-hi);
+  font-size: var(--t-ui);
+  font-weight: var(--w-600);
+}
+
+.plan-modal__attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.plan-modal__attachment {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--t-ui);
+}
+
+.plan-modal__attach {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.plan-modal__history {
+  border-top: 1px solid var(--hairline);
+  padding-top: 10px;
+  font-size: var(--t-ui);
+}
+
+.plan-modal__history summary {
+  cursor: pointer;
+  color: var(--text-lo);
+}
+
+.plan-modal__history ol {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-modal__history li {
+  display: grid;
+  gap: 2px;
+  border-left: 1px solid var(--canvas-3);
+  padding-left: 8px;
+  font-size: var(--t-meta);
+}
+
+.plan-modal__history strong {
+  font-weight: var(--w-600);
+  text-transform: capitalize;
+}
+
+.plan-modal__history span,
+.plan-modal__history time {
+  color: var(--text-dis);
+}
+
+@media (max-width: 560px) {
+  .plan-phase__controls,
+  .plan-modal__add-phase {
+    grid-template-columns: 1fr;
+  }
+}

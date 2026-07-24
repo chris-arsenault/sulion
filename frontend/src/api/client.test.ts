@@ -5,6 +5,8 @@ import {
   createSession,
   deleteSession,
   deleteWorkspace,
+  fetchFileBlob,
+  fileRawUrl,
   getAppState,
   getHistory,
   getRepoDirtyPaths,
@@ -449,6 +451,41 @@ describe("api client", () => {
         expires_at: "2026-01-01T00:02:00Z",
       },
     ]);
+  });
+});
+
+describe("fileRawUrl", () => {
+  it("builds same-origin repo and workspace raw byte URLs", () => {
+    expect(fileRawUrl({ repo: "my repo" }, "src/a b.png")).toBe(
+      "/api/repos/my%20repo/file/raw?path=src%2Fa%20b.png",
+    );
+    expect(
+      fileRawUrl({ repo: "my repo", workspaceId: "ws-1" }, "logo.png"),
+    ).toBe("/api/workspaces/ws-1/file/raw?path=logo.png");
+  });
+});
+
+describe("fetchFileBlob", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("fetches the raw URL with auth and returns the blob", async () => {
+    let seenUrl = "";
+    stubFetch(async (url) => {
+      seenUrl = url;
+      return new Response(new Blob(["PNGDATA"]), {
+        status: 200,
+        headers: { "Content-Type": "image/png" },
+      });
+    });
+    const blob = await fetchFileBlob(fileRawUrl({ repo: "r" }, "a.png"));
+    expect(seenUrl).toBe("/api/repos/r/file/raw?path=a.png");
+    expect(await blob.text()).toBe("PNGDATA");
+  });
+
+  it("raises ApiError on a failed fetch", async () => {
+    stubFetch(async () => new Response("nope", { status: 404 }));
+    await expect(fetchFileBlob(fileRawUrl({ repo: "r" }, "missing.png")))
+      .rejects.toBeInstanceOf(ApiError);
   });
 });
 
