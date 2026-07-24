@@ -47,14 +47,10 @@ pub async fn run_activity(args: &[OsString]) -> anyhow::Result<i32> {
     run_control(request, json, ResponseKind::Activity).await
 }
 
-fn parse_activity_request(
-    command: &str,
-    args: &mut Vec<String>,
-) -> anyhow::Result<ControlRequest> {
+fn parse_activity_request(command: &str, args: &mut Vec<String>) -> anyhow::Result<ControlRequest> {
     let request = match command {
         "working" => {
-            let summary =
-                take_option(args, "--summary")?.or_else(|| take_positional(args));
+            let summary = take_option(args, "--summary")?.or_else(|| take_positional(args));
             ControlRequest::ActivitySet {
                 state: ActivityState::Working,
                 summary,
@@ -80,8 +76,7 @@ fn parse_activity_request(
             }
         }
         "awaiting" | "awaiting-prompt" => {
-            let summary =
-                take_option(args, "--summary")?.or_else(|| take_positional(args));
+            let summary = take_option(args, "--summary")?.or_else(|| take_positional(args));
             ControlRequest::ActivitySet {
                 state: ActivityState::AwaitingPrompt,
                 summary,
