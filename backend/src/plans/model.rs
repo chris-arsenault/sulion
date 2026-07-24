@@ -49,6 +49,9 @@ pub struct NewPhase {
     pub description: String,
     #[serde(default)]
     pub status: Option<String>,
+    /// Optional t-shirt size ('s' | 'm' | 'l') for weighted burndown.
+    #[serde(default)]
+    pub size: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -82,6 +85,7 @@ pub struct UpdatePhaseInput {
     pub status: Option<String>,
     pub status_note: Option<String>,
     pub position: Option<i32>,
+    pub size: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -93,6 +97,7 @@ pub struct PlanPhaseView {
     pub description: String,
     pub status: String,
     pub status_note: Option<String>,
+    pub size: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,

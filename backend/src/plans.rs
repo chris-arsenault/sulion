@@ -38,6 +38,7 @@ pub async fn create(
                 MAX_DESCRIPTION_CHARS,
             )?,
             initial_phase_status(phase.status.as_deref(), index, input.all_pending)?,
+            validate_phase_size(phase.size.as_deref())?,
         ));
     }
 
@@ -70,13 +71,13 @@ pub async fn create(
     )
     .await?;
 
-    for (index, (phase_title, description, status)) in phases.into_iter().enumerate() {
+    for (index, (phase_title, description, status, size)) in phases.into_iter().enumerate() {
         let phase_id = Uuid::new_v4();
         let started = status == "in_progress";
         sqlx::query(
             "INSERT INTO plan_phases \
-                 (id, plan_id, position, title, description, status, started_at, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $7 THEN NOW() ELSE NULL END, NOW(), NOW())",
+                 (id, plan_id, position, title, description, status, size, started_at, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $8, CASE WHEN $7 THEN NOW() ELSE NULL END, NOW(), NOW())",
         )
         .bind(phase_id)
         .bind(plan_id)
@@ -85,6 +86,7 @@ pub async fn create(
         .bind(description)
         .bind(&status)
         .bind(started)
+        .bind(size)
         .execute(&mut *tx)
         .await?;
         insert_event(
@@ -307,6 +309,7 @@ pub async fn add_phase(
     )?;
     let status = phase.status.as_deref().unwrap_or("pending");
     validate_phase_status(status)?;
+    let size = validate_phase_size(phase.size.as_deref())?;
     let mut tx = pool.begin().await?;
     ensure_plan_open(&mut tx, plan_id).await?;
     let position: i32 = sqlx::query_scalar(
@@ -318,8 +321,8 @@ pub async fn add_phase(
     let phase_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO plan_phases \
-             (id, plan_id, position, title, description, status, started_at, completed_at, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, \
+             (id, plan_id, position, title, description, status, size, started_at, completed_at, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, \
                  CASE WHEN $6 = 'in_progress' THEN NOW() ELSE NULL END, \
                  CASE WHEN $6 IN ('completed', 'skipped') THEN NOW() ELSE NULL END, NOW(), NOW())",
     )
@@ -329,6 +332,7 @@ pub async fn add_phase(
     .bind(title)
     .bind(description)
     .bind(status)
+    .bind(size)
     .execute(&mut *tx)
     .await?;
     bump_revision(&mut tx, plan_id).await?;
@@ -358,7 +362,7 @@ pub async fn update_phase(
     let mut tx = pool.begin().await?;
     ensure_plan_open(&mut tx, plan_id).await?;
     let current: PlanPhaseView = sqlx::query_as(
-        "SELECT id, plan_id, position, title, description, status, status_note, \
+        "SELECT id, plan_id, position, title, description, status, status_note, size, \
                 started_at, completed_at, created_at, updated_at \
            FROM plan_phases WHERE id = $1 AND plan_id = $2 FOR UPDATE",
     )
@@ -381,12 +385,16 @@ pub async fn update_phase(
         Some(value) => clean_note(Some(value))?,
         None => current.status_note,
     };
+    let size = match input.size.as_deref() {
+        Some(value) => validate_phase_size(Some(value))?,
+        None => current.size,
+    };
     if let Some(position) = input.position {
         move_phase(&mut tx, plan_id, phase_id, current.position, position).await?;
     }
     sqlx::query(
         "UPDATE plan_phases \
-            SET title = $3, description = $4, status = $5, status_note = $6, \
+            SET title = $3, description = $4, status = $5, status_note = $6, size = $7, \
                 started_at = CASE \
                     WHEN $5 IN ('in_progress', 'blocked') THEN COALESCE(started_at, NOW()) \
                     WHEN $5 = 'pending' THEN NULL ELSE started_at END, \
@@ -400,6 +408,7 @@ pub async fn update_phase(
     .bind(description)
     .bind(status)
     .bind(status_note.as_deref())
+    .bind(size.as_deref())
     .execute(&mut *tx)
     .await?;
     bump_revision(&mut tx, plan_id).await?;
@@ -536,7 +545,7 @@ pub async fn resolve_phase_id(pool: &Pool, plan_id: Uuid, reference: &str) -> an
 
 async fn hydrate(pool: &Pool, row: PlanRow) -> anyhow::Result<PlanView> {
     let phases = sqlx::query_as(
-        "SELECT id, plan_id, position, title, description, status, status_note, \
+        "SELECT id, plan_id, position, title, description, status, status_note, size, \
                 started_at, completed_at, created_at, updated_at \
            FROM plan_phases WHERE plan_id = $1 ORDER BY position",
     )
@@ -847,6 +856,20 @@ fn validate_phase_status(status: &str) -> anyhow::Result<()> {
         Ok(())
     } else {
         anyhow::bail!("invalid phase status: {status}")
+    }
+}
+
+/// Normalize an optional phase size. Case-insensitive; empty clears it.
+fn validate_phase_size(size: Option<&str>) -> anyhow::Result<Option<String>> {
+    let Some(raw) = size else { return Ok(None) };
+    let normalized = raw.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    if matches!(normalized.as_str(), "s" | "m" | "l") {
+        Ok(Some(normalized))
+    } else {
+        anyhow::bail!("invalid phase size: {raw} (expected s, m, or l)")
     }
 }
 

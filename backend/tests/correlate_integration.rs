@@ -532,11 +532,13 @@ async fn control_socket_publishes_plans_and_preserves_explicit_attention() {
                     title: "Build".to_string(),
                     description: "Implement it".to_string(),
                     status: None,
+                    size: Some("m".to_string()),
                 },
                 NewPhase {
                     title: "Verify".to_string(),
                     description: "Test it".to_string(),
                     status: None,
+                    size: None,
                 },
             ],
             all_pending: false,
@@ -547,6 +549,8 @@ async fn control_socket_publishes_plans_and_preserves_explicit_attention() {
     assert!(started.ok, "{:?}", started.error);
     let plan = started.data.unwrap();
     assert_eq!(plan["title"], "Published work");
+    assert_eq!(plan["phases"][0]["size"], "m");
+    assert_eq!(plan["phases"][1]["size"], serde_json::Value::Null);
     assert_eq!(plan["attachments"][0]["pty_session_id"], pty_id.to_string());
     let plan_id = plan["id"].as_str().unwrap().parse::<Uuid>().unwrap();
 
@@ -562,6 +566,7 @@ async fn control_socket_publishes_plans_and_preserves_explicit_attention() {
                 status: Some("completed".to_string()),
                 status_note: Some("done".to_string()),
                 position: None,
+                size: None,
             },
         },
     )

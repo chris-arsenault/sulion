@@ -205,6 +205,7 @@ fn parse_phase_request(args: &mut Vec<String>) -> anyhow::Result<ControlRequest>
             let title_option = take_option(args, "--title")?;
             let description = take_option(args, "--description")?.unwrap_or_default();
             let status = take_option(args, "--status")?;
+            let size = take_option(args, "--size")?;
             let plan_id = take_uuid_option(args, "--plan")?;
             let title = title_option
                 .or_else(|| take_positional(args))
@@ -216,6 +217,7 @@ fn parse_phase_request(args: &mut Vec<String>) -> anyhow::Result<ControlRequest>
                     title,
                     description,
                     status,
+                    size,
                 },
             })
         }
@@ -225,6 +227,7 @@ fn parse_phase_request(args: &mut Vec<String>) -> anyhow::Result<ControlRequest>
             let status_note = take_option(args, "--note")?;
             let title = take_option(args, "--title")?;
             let description = take_option(args, "--description")?;
+            let size = take_option(args, "--size")?;
             let position = take_option(args, "--position")?
                 .map(|value| value.parse::<i32>())
                 .transpose()
@@ -242,6 +245,7 @@ fn parse_phase_request(args: &mut Vec<String>) -> anyhow::Result<ControlRequest>
                     status,
                     status_note,
                     position,
+                    size,
                 },
             })
         }
@@ -414,15 +418,18 @@ fn print_activity_data(data: &Value) {
     );
 }
 
+/// `--phase "Title|Description|size"` — description and size segments are
+/// optional; size is the t-shirt weight (s|m|l) for weighted burndown.
 fn parse_phase(raw: &str) -> NewPhase {
-    let (title, description) = raw
-        .split_once('|')
-        .map(|(title, description)| (title.trim(), description.trim()))
-        .unwrap_or((raw.trim(), ""));
+    let mut parts = raw.splitn(3, '|').map(str::trim);
+    let title = parts.next().unwrap_or("");
+    let description = parts.next().unwrap_or("");
+    let size = parts.next().filter(|value| !value.is_empty());
     NewPhase {
         title: title.to_string(),
         description: description.to_string(),
         status: None,
+        size: size.map(str::to_string),
     }
 }
 
@@ -499,15 +506,15 @@ Usage:
 
 Commands:
   help
-  start <title> --summary <text> --phase <title[|description]>... [--all-pending]
+  start <title> --summary <text> --phase <title[|description[|size]]>... [--all-pending]
   current
   list [--all]
   show [plan-id]
   update [--plan uuid] [--title text] [--summary text]
   status <active|paused> [--plan uuid] [--note text]
   close (--completed|--canceled) [--skip-remaining] [--note text]
-  phase add <title> [--description text] [--status status]
-  phase set <id|position> <status> [--note text] [--position n]
+  phase add <title> [--description text] [--status status] [--size s|m|l]
+  phase set <id|position> <status> [--note text] [--position n] [--size s|m|l]
   attach <plan-uuid>
   detach [plan-uuid]
   history [plan-id]
@@ -515,6 +522,7 @@ Commands:
 Statuses:
   plan   active | paused (close sets completed or canceled)
   phase  pending | in_progress | blocked | completed | skipped
+  size   optional t-shirt weight s | m | l for weighted burndown
 
 Rules:
   repo and acting PTY are inferred from the current terminal
@@ -613,6 +621,35 @@ mod tests {
         ];
         let error = parse_plan_request("start", &mut args).unwrap_err();
         assert!(error.to_string().contains("plan title is required"));
+    }
+
+    #[test]
+    fn phase_specs_carry_optional_size() {
+        let mut args = vec![
+            "Feature".to_string(),
+            "--phase".to_string(),
+            "Schema|Persist plans|m".to_string(),
+            "--phase".to_string(),
+            "UI|Frontend".to_string(),
+        ];
+        let request = parse_plan_request("start", &mut args).unwrap();
+        let ControlRequest::PlanStart { phases, .. } = request else {
+            panic!("expected plan start");
+        };
+        assert_eq!(phases[0].size.as_deref(), Some("m"));
+        assert_eq!(phases[1].size, None);
+
+        let mut args = vec![
+            "add".to_string(),
+            "Polish".to_string(),
+            "--size".to_string(),
+            "l".to_string(),
+        ];
+        let request = parse_plan_request("phase", &mut args).unwrap();
+        let ControlRequest::PlanAddPhase { phase, .. } = request else {
+            panic!("expected phase add");
+        };
+        assert_eq!(phase.size.as_deref(), Some("l"));
     }
 
     #[test]
