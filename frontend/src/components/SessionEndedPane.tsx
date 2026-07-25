@@ -4,9 +4,9 @@
 
 import { useCallback, useState } from "react";
 
-import type { CreateSessionRequest, SessionView } from "../api/types";
+import type { SessionView } from "../api/types";
+import { isResumableSession, useResumeSession } from "../hooks/useResumeSession";
 import { useSessions } from "../state/SessionStore";
-import { useTabs } from "../state/TabStore";
 import { Icon } from "../icons";
 import { Tooltip } from "./ui";
 import "./SessionEndedPane.css";
@@ -16,81 +16,26 @@ interface Props {
 }
 
 export function SessionEndedPane({ session }: Props) {
-  const createSession = useSessions((store) => store.createSession);
-  const updateSession = useSessions((store) => store.updateSession);
   const deleteSession = useSessions((store) => store.deleteSession);
   const selectSession = useSessions((store) => store.selectSession);
-  const openTab = useTabs((store) => store.openTab);
-  const rebindSessionTabs = useTabs((store) => store.rebindSessionTabs);
+  const resumeSession = useResumeSession();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const resumeAgent = session.current_session_agent;
-  const workspaceId = session.workspace?.id;
-  const workspaceKind = session.workspace?.kind;
 
-  const canResume =
-    session.state === "orphaned" &&
-    session.current_session_uuid != null &&
-    (resumeAgent === "claude-code" || resumeAgent === "codex");
+  const canResume = isResumableSession(session);
 
   const onResume = useCallback(async () => {
-    if (!session.current_session_uuid) return;
     setBusy(true);
     setError(null);
     try {
-      const resumeRequest: CreateSessionRequest = {
-        repo: session.repo,
-        resume_session_uuid: session.current_session_uuid,
-        resume_agent: resumeAgent ?? "claude-code",
-      };
-      if (workspaceId && workspaceKind !== "main") {
-        resumeRequest.workspace_id = workspaceId;
-      } else {
-        resumeRequest.workspace_mode = "main";
-        resumeRequest.working_dir = session.working_dir;
-      }
-      const created = await createSession(resumeRequest);
-      // Carry the user's customisations (label, pin, colour) onto the
-      // successor session so a resume feels seamless — same chip in
-      // the sidebar, same pin position. Skip the round-trip when
-      // nothing is customised.
-      const hasCustomisation =
-        session.label != null || session.pinned || session.color != null;
-      if (hasCustomisation) {
-        await updateSession(created.id, {
-          label: session.label,
-          pinned: session.pinned,
-          color: session.color,
-        });
-      }
-      rebindSessionTabs(session.id, created.id);
-      openTab({ kind: "terminal", sessionId: created.id }, "top");
-      openTab({ kind: "timeline", sessionId: created.id }, "bottom");
-      selectSession(created.id);
-      await deleteSession(session.id);
+      await resumeSession(session);
     } catch (e) {
       setError(e instanceof Error ? e.message : "resume failed");
     } finally {
       setBusy(false);
     }
-  }, [
-    createSession,
-    updateSession,
-    session.current_session_uuid,
-    session.id,
-    session.repo,
-    session.working_dir,
-    workspaceId,
-    workspaceKind,
-    session.label,
-    session.pinned,
-    session.color,
-    resumeAgent,
-    openTab,
-    rebindSessionTabs,
-    selectSession,
-    deleteSession,
-  ]);
+  }, [resumeSession, session]);
 
   const onDelete = useCallback(async () => {
     setBusy(true);

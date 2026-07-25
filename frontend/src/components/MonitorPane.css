@@ -411,6 +411,49 @@
   cursor: default;
 }
 
+/* Abandoned (orphaned-but-resumable) sessions — dashed, muted, with a
+ * one-click resume. */
+.monitor-card--abandoned {
+  border-style: dashed;
+  border-left: 2px dashed var(--mute-mark);
+  background: var(--canvas-0);
+}
+
+.monitor-card--abandoned .monitor-card__identity {
+  color: var(--text-mid);
+}
+
+.monitor-card__resume {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--lane-xs);
+  border: 1px solid color-mix(in oklab, var(--accent) 42%, var(--hairline));
+  border-radius: var(--r-1);
+  padding: 0 8px;
+  background: var(--accent-lo);
+  color: var(--accent-hi);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  cursor: pointer;
+}
+
+.monitor-card__resume:hover {
+  border-color: var(--accent);
+}
+
+.monitor-card__resume:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.monitor-team__more-abandoned {
+  align-self: center;
+  color: var(--text-dis);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+}
+
 /* Context gauge — coloured % plus a 10-step mini bar. */
 .monitor-card__ctx--healthy {
   color: var(--ok-fg);

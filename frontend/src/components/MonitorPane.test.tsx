@@ -356,6 +356,105 @@ describe("MonitorPane", () => {
     expect(openPlan).toHaveBeenCalledWith({ repo: "alpha" });
   });
 
+  it("shows an abandoned card for orphaned resumable sessions and resumes on click", async () => {
+    const created = {
+      ...session("sess-new", 1),
+      id: "sess-new",
+    };
+    const posts: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.url;
+        if (url === APP_STATE_URL) {
+          return jsonResponse(
+            appStatePayload({ sessions: useSessionStore.getState().sessions }),
+          );
+        }
+        if (url === "/api/sessions" && init?.method === "POST") {
+          posts.push(init.body as string);
+          return jsonResponse(created);
+        }
+        if (url.startsWith("/api/sessions/") && init?.method === "DELETE") {
+          return jsonResponse({});
+        }
+        return jsonResponse({ generated_at: STARTED_AT, sessions: [] });
+      }),
+    );
+    useSessionStore.setState({
+      sessions: [
+        {
+          ...session("sess-gone", 1),
+          state: "orphaned",
+          label: "Abandoned work",
+          current_session_uuid: AGENT_SESSION_UUID,
+          current_session_agent: "claude-code",
+        },
+      ],
+      sessionsLoaded: true,
+    });
+
+    const onNavigate = vi.fn();
+    render(<MonitorPane onNavigate={onNavigate} />);
+
+    const region = await screen.findByRole("region", { name: "alpha team" });
+    expect(within(region).getByText(/orphaned claude-code session/)).toBeDefined();
+
+    const user = userEvent.setup();
+    await user.click(
+      within(region).getByRole("button", {
+        name: "Resume Abandoned work with a new PTY",
+      }),
+    );
+
+    await waitFor(() => expect(posts.length).toBe(1));
+    expect(JSON.parse(posts[0]!)).toMatchObject({
+      repo: "alpha",
+      resume_session_uuid: AGENT_SESSION_UUID,
+      resume_agent: "claude-code",
+    });
+    await waitFor(() =>
+      expect(
+        Object.values(useTabStore.getState().tabs).some(
+          (tab) => tab.kind === "terminal" && tab.sessionId === "sess-new",
+        ),
+      ).toBe(true),
+    );
+    expect(onNavigate).toHaveBeenCalled();
+  });
+
+  it("does not offer resume for dead sessions", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo) => {
+        const url = typeof input === "string" ? input : input.url;
+        if (url === APP_STATE_URL) {
+          return jsonResponse(
+            appStatePayload({ sessions: useSessionStore.getState().sessions }),
+          );
+        }
+        return jsonResponse({ generated_at: STARTED_AT, sessions: [] });
+      }),
+    );
+    useSessionStore.setState({
+      sessions: [
+        {
+          ...session("sess-dead", 1),
+          state: "dead",
+          current_session_uuid: AGENT_SESSION_UUID,
+          current_session_agent: "claude-code",
+        },
+      ],
+      sessionsLoaded: true,
+    });
+
+    render(<MonitorPane />);
+    await waitFor(() =>
+      expect(screen.getByText(/no live teams or published plans/i)).toBeDefined(),
+    );
+    expect(screen.queryByRole("button", { name: /resume/i })).toBeNull();
+  });
+
   it("opens the focused timeline for a monitor card", async () => {
     vi.stubGlobal(
       "fetch",

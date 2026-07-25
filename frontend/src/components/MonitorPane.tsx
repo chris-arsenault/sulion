@@ -13,6 +13,7 @@ import type {
   TimelineTurn,
 } from "../api/types";
 import type { IconName } from "../icons";
+import { isResumableSession, useResumeSession } from "../hooks/useResumeSession";
 import { appCommands } from "../state/AppCommands";
 import { useSessions } from "../state/SessionStore";
 import { useTabs } from "../state/TabStore";
@@ -51,6 +52,19 @@ export function MonitorPane({
       sessions
         .filter((session) => session.state === "live")
         .sort(sessionActivityCompare),
+    [sessions],
+  );
+  // Abandoned: the PTY is gone but the agent transcript survives, so one
+  // click can resume it into a fresh terminal.
+  const abandonedSessions = useMemo(
+    () =>
+      sessions
+        .filter(isResumableSession)
+        .sort((a, b) =>
+          (b.last_event_at ?? b.created_at).localeCompare(
+            a.last_event_at ?? a.created_at,
+          ),
+        ),
     [sessions],
   );
   const sessionIds = useMemo(
@@ -133,8 +147,8 @@ export function MonitorPane({
   );
   const counts = useMemo(() => activityCounts(liveSessions), [liveSessions]);
   const teams = useMemo(
-    () => buildTeams(liveSessions, plans),
-    [liveSessions, plans],
+    () => buildTeams(liveSessions, abandonedSessions, plans),
+    [abandonedSessions, liveSessions, plans],
   );
   const contextWatchCount = useMemo(
     () =>
@@ -189,6 +203,11 @@ export function MonitorPane({
             value={contextWatchCount}
             label="ctx low"
             tone={contextWatchCount > 0 ? "warn" : "mute"}
+          />
+          <BarStat
+            value={abandonedSessions.length}
+            label="resumable"
+            tone="mute"
           />
           <Tooltip
             label={`Live sessions: ${formatTokens(tokenTotals.fresh)} fresh tokens of ${formatTokens(tokenTotals.processed)} processed (the rest is cache reads re-counting context)`}
@@ -257,6 +276,8 @@ function BarStat({
 interface MonitorTeam {
   repo: string;
   sessions: SessionView[];
+  /** Orphaned-but-resumable sessions, newest activity first. */
+  abandoned: SessionView[];
   plans: PlanSummaryView[];
 }
 
@@ -382,7 +403,7 @@ function TeamSection({
         <span className="monitor-team__spacer" />
         <TeamPlanChips plans={headerPlans} onNavigate={onNavigate} />
       </header>
-      {team.sessions.length === 0 ? (
+      {team.sessions.length === 0 && team.abandoned.length === 0 ? (
         <div className="monitor-team__unassigned">No terminal staffed</div>
       ) : (
         <div className="monitor-team__cards">
@@ -394,9 +415,139 @@ function TeamSection({
               onNavigate={onNavigate}
             />
           ))}
+          {team.abandoned.slice(0, 3).map((session) => (
+            <AbandonedCard
+              key={session.id}
+              session={session}
+              onNavigate={onNavigate}
+            />
+          ))}
+          {team.abandoned.length > 3 ? (
+            <Tooltip
+              label={`${team.abandoned.length - 3} more orphaned session${
+                team.abandoned.length - 3 === 1 ? "" : "s"
+              } can be resumed from the sidebar`}
+            >
+              <span className="monitor-team__more-abandoned">
+                +{team.abandoned.length - 3} resumable
+              </span>
+            </Tooltip>
+          ) : null}
         </div>
       )}
     </section>
+  );
+}
+
+/** An orphaned session with a resumable agent transcript: the PTY is
+ * gone (e.g. backend restart) but one click respawns it. Mirrors the
+ * SessionEndedPane resume flow exactly. */
+function AbandonedCard({
+  session,
+  onNavigate,
+}: {
+  session: SessionView;
+  onNavigate?: () => void;
+}) {
+  const openTab = useTabs((store) => store.openTab);
+  const deleteSession = useSessions((store) => store.deleteSession);
+  const openCtx = useContextMenu((store) => store.open);
+  const resumeSession = useResumeSession();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const label = session.label?.trim() || session.id.slice(0, 8);
+  const agent = session.current_session_agent ?? "agent";
+  const lastActive = session.last_event_at ?? session.created_at;
+
+  const resume = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await resumeSession(session);
+      onNavigate?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "resume failed");
+    } finally {
+      setBusy(false);
+    }
+  }, [onNavigate, resumeSession, session]);
+  const openTimeline = useCallback(() => {
+    openTab({ kind: "timeline", sessionId: session.id }, "bottom");
+    onNavigate?.();
+  }, [onNavigate, openTab, session.id]);
+  const cardMenuTrigger = useMemo(
+    () =>
+      contextMenuTriggerProps(openCtx, () => [
+        {
+          kind: "item" as const,
+          id: "resume",
+          label: "Resume with new PTY",
+          onSelect: () => void resume(),
+        },
+        {
+          kind: "item" as const,
+          id: "open-timeline",
+          label: "Open timeline",
+          onSelect: openTimeline,
+        },
+        { kind: "separator" as const },
+        {
+          kind: "item" as const,
+          id: "delete",
+          label: "Delete session",
+          destructive: true,
+          onSelect: () => void deleteSession(session.id),
+        },
+      ]),
+    [deleteSession, openCtx, openTimeline, resume, session.id],
+  );
+
+  return (
+    /* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- pointer-only convenience; the identity button carries the keyboard path to the same menu */
+    <article
+      className="monitor-card monitor-card--abandoned"
+      onContextMenu={cardMenuTrigger.onContextMenu}
+    >
+      <div className="monitor-card__head">
+        <Tooltip label="Orphaned — the PTY is gone but the agent transcript survives">
+          <span className="monitor-card__state">
+            <Sigil icon="session-orphan" size={12} tone="mute" />
+          </span>
+        </Tooltip>
+        <Tooltip
+          label={`${agent} session ${session.current_session_uuid?.slice(0, 8) ?? ""}\nClick to open the timeline`}
+        >
+          <button
+            type="button"
+            className="monitor-card__identity"
+            onClick={openTimeline}
+            onContextMenu={cardMenuTrigger.onContextMenu}
+            onKeyDown={cardMenuTrigger.onKeyDown}
+            aria-label={`Open timeline for ${label}`}
+          >
+            {label}
+          </button>
+        </Tooltip>
+        <span className="monitor-card__report">
+          <span className="tabular">{shortAge(lastActive)}</span>
+        </span>
+      </div>
+      <p className="monitor-card__summary monitor-card__summary--shell">
+        {error ?? `orphaned ${agent} session · resumable`}
+      </p>
+      <div className="monitor-card__stats">
+        <button
+          type="button"
+          className="monitor-card__resume"
+          onClick={resume}
+          disabled={busy}
+          aria-label={`Resume ${label} with a new PTY`}
+        >
+          <Sigil icon="refresh-cw" size={12} />
+          {busy ? "resuming…" : "resume"}
+        </button>
+      </div>
+    </article>
   );
 }
 
@@ -832,26 +983,28 @@ function sessionActivityCompare(a: SessionView, b: SessionView): number {
 
 function buildTeams(
   sessions: SessionView[],
+  abandoned: SessionView[],
   plans: PlanSummaryView[],
 ): MonitorTeam[] {
   const teams = new Map<string, MonitorTeam>();
-  for (const session of sessions) {
-    const team = teams.get(session.repo) ?? {
-      repo: session.repo,
+  const teamFor = (repo: string): MonitorTeam => {
+    const team = teams.get(repo) ?? {
+      repo,
       sessions: [],
+      abandoned: [],
       plans: [],
     };
-    team.sessions.push(session);
-    teams.set(session.repo, team);
+    teams.set(repo, team);
+    return team;
+  };
+  for (const session of sessions) {
+    teamFor(session.repo).sessions.push(session);
+  }
+  for (const session of abandoned) {
+    teamFor(session.repo).abandoned.push(session);
   }
   for (const plan of plans) {
-    const team = teams.get(plan.repo_name) ?? {
-      repo: plan.repo_name,
-      sessions: [],
-      plans: [],
-    };
-    team.plans.push(plan);
-    teams.set(plan.repo_name, team);
+    teamFor(plan.repo_name).plans.push(plan);
   }
   return Array.from(teams.values()).sort(
     (a, b) =>
