@@ -161,3 +161,45 @@ describe("unassociatedTerminalTimelineTabIds", () => {
     expect(ids).not.toContain(fileTab);
   });
 });
+
+describe("TabStore rehydration drops retired tab kinds", () => {
+  beforeEach(() => {
+    resetTabStore();
+  });
+
+  afterEach(() => {
+    resetTabStore();
+    window.localStorage.clear();
+  });
+
+  it("skips a persisted tab whose kind no longer exists (e.g. the old plan tab)", async () => {
+    // Seed localStorage exactly as the persist middleware would have,
+    // including a retired "plan" tab that would crash the WorkArea
+    // switches (React error #130) if rehydrated verbatim.
+    window.localStorage.setItem(
+      "sulion.tabs.v2",
+      JSON.stringify({
+        version: 0,
+        state: {
+          tabs: {
+            term1: { id: "term1", kind: "terminal", sessionId: "s1" },
+            plan1: { id: "plan1", kind: "plan", repo: "alpha" },
+          },
+          panes: { top: ["term1", "plan1"], bottom: [] },
+          activeByPane: { top: "plan1", bottom: null },
+          sticky: { top: false, bottom: false },
+        },
+      }),
+    );
+
+    await useTabStore.persist.rehydrate();
+
+    const state = useTabStore.getState();
+    expect(state.tabs.plan1).toBeUndefined();
+    expect(state.tabs.term1?.kind).toBe("terminal");
+    expect(state.panes.top).toEqual(["term1"]);
+    // The retired tab was the persisted active one; fall back to a
+    // surviving tab rather than dangling on a dropped id.
+    expect(state.activeByPane.top).toBe("term1");
+  });
+});

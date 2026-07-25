@@ -16,6 +16,27 @@ export type TabKind =
   | "monitor"
   | "metrics";
 
+/** The currently-valid tab kinds. Persisted state is rehydrated across
+ * deploys, so a tab whose kind was removed (e.g. the old "plan" tab)
+ * can linger in localStorage. Rendering one crashes — the WorkArea
+ * switches have no default arm, so a stale kind flows into
+ * `<Icon name={undefined}>` (React error #130). The rehydrator drops
+ * any tab whose kind isn't in this set. */
+const KNOWN_TAB_KINDS: ReadonlySet<TabKind> = new Set<TabKind>([
+  "terminal",
+  "timeline",
+  "file",
+  "diff",
+  "ref",
+  "secrets",
+  "monitor",
+  "metrics",
+]);
+
+function isKnownTabKind(kind: unknown): kind is TabKind {
+  return typeof kind === "string" && KNOWN_TAB_KINDS.has(kind as TabKind);
+}
+
 /** Minimal registry entry. Kind plus the tab's stable handle is the
  * identity; everything else is the tab's own business. */
 export interface TabData {
@@ -312,6 +333,9 @@ export const useTabStore = create<TabStore>()(
           [string, Partial<TabData>]
         >) {
           if (!tab || typeof tab !== "object") continue;
+          // Drop tabs whose kind was retired since this state was
+          // persisted; rendering an unknown kind crashes the app.
+          if (!isKnownTabKind(tab.kind)) continue;
           hydratedTabs[id] = {
             id: tab.id ?? id,
             kind: tab.kind,
