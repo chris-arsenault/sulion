@@ -665,6 +665,7 @@ describe("Sidebar", () => {
       current_session_agent: null,
       last_event_at: null,
       label: null,
+      agent_label: "batcher dedupe pass",
       pinned: false,
       color: null,
     });
@@ -672,6 +673,8 @@ describe("Sidebar", () => {
     const user = userEvent.setup();
 
     await waitFor(() => expect(screen.getByText(/44444444/)).toBeDefined());
+    // The agent-set name renders beside the display name.
+    expect(screen.getByText("batcher dedupe pass")).toBeDefined();
 
     await openSessionContextMenu(user, /44444444/);
     await user.click(screen.getByRole("menuitem", { name: /pin to top/i }));

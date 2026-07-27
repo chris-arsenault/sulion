@@ -41,6 +41,9 @@ struct AppSessionView {
     last_event_at: Option<DateTime<Utc>>,
     timeline_revision: i64,
     label: Option<String>,
+    /// Agent-chosen terminal name (`sulion name`). Shown beside the
+    /// user's label in the sidebar and monitor; never in tab headers.
+    agent_label: Option<String>,
     pinned: bool,
     color: Option<String>,
     agent_runtime: AppAgentRuntimeView,
@@ -142,6 +145,7 @@ struct AppSessionRow {
     last_event_at: Option<DateTime<Utc>>,
     timeline_revision: i64,
     label: Option<String>,
+    agent_label: Option<String>,
     pinned: bool,
     color: Option<String>,
     agent_runtime_agent: Option<String>,
@@ -204,6 +208,7 @@ impl From<AppSessionRow> for AppSessionView {
             last_event_at: row.last_event_at,
             timeline_revision: row.timeline_revision,
             label: row.label,
+            agent_label: row.agent_label,
             pinned: row.pinned,
             color: row.color,
             agent_runtime: AppAgentRuntimeView {
@@ -384,7 +389,7 @@ async fn load_sessions(pool: &crate::db::Pool) -> ApiResult<Vec<AppSessionView>>
                 ws.base_sha AS workspace_base_sha, ws.merge_target AS workspace_merge_target, \
                 tss.latest_event_at AS last_event_at, \
                 COALESCE(tss.revision, 0)::BIGINT AS timeline_revision, \
-                ps.label, ps.pinned, ps.color, \
+                ps.label, ps.agent_label, ps.pinned, ps.color, \
                 ps.agent_runtime_agent, ps.agent_runtime_state, ps.agent_runtime_started_at, \
                 ps.agent_runtime_ended_at, ps.agent_runtime_exit_code, \
                 asm.agent AS metadata_agent, asm.model AS metadata_model, \

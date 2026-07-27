@@ -105,6 +105,7 @@ async fn dispatch_cli(argv: &[std::ffi::OsString]) -> anyhow::Result<Option<i32>
         "code" => sulion::code_cli::run(args).await?,
         "plan" => sulion::plan_cli::run_plan(args).await?,
         "activity" => sulion::plan_cli::run_activity(args).await?,
+        "name" => sulion::plan_cli::run_name(args).await?,
         _ => return Ok(None),
     };
     Ok(Some(code))

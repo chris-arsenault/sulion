@@ -98,6 +98,18 @@ Use `waiting` only when user action is actually required. An explicit
 `needs_input` or `blocked` report is not overwritten by a later automatic
 turn-complete signal; the next explicit working/clear transition releases it.
 
+Agents may also name their terminal — no permission required:
+
+```sh
+sulion name "ingest batcher refactor"
+sulion name show
+sulion name clear
+```
+
+The agent name complements the user's label (it never overwrites it) and is
+shown beside it in the sidebar and team overview, deliberately not in tab
+headers.
+
 ## Browser surfaces
 
 Each repo has a **Plans** subsection in the sidebar. Its plan tab supports

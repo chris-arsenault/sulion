@@ -47,6 +47,44 @@ pub async fn run_activity(args: &[OsString]) -> anyhow::Result<i32> {
     run_control(request, json, ResponseKind::Activity).await
 }
 
+pub async fn run_name(args: &[OsString]) -> anyhow::Result<i32> {
+    let mut args = utf8_args(args, "name")?;
+    let json = take_flag(&mut args, "--json");
+    if args.is_empty() {
+        print_name_usage();
+        return Ok(64);
+    }
+    if matches!(args[0].as_str(), "help" | "-h" | "--help") {
+        print_name_usage();
+        return Ok(0);
+    }
+    let request = match parse_name_request(&mut args) {
+        Ok(request) => request,
+        Err(err) => return Ok(usage_failure(ResponseKind::Name, &err)),
+    };
+    run_control(request, json, ResponseKind::Name).await
+}
+
+fn parse_name_request(args: &mut Vec<String>) -> anyhow::Result<ControlRequest> {
+    match args[0].as_str() {
+        "show" => {
+            args.remove(0);
+            reject_unknown_options(args)?;
+            Ok(ControlRequest::SessionNameGet)
+        }
+        "clear" => {
+            args.remove(0);
+            reject_unknown_options(args)?;
+            Ok(ControlRequest::SessionNameSet { name: None })
+        }
+        // Everything else is the name itself; multiple words join so
+        // quoting is optional.
+        _ => Ok(ControlRequest::SessionNameSet {
+            name: Some(args.join(" ")),
+        }),
+    }
+}
+
 fn parse_activity_request(command: &str, args: &mut Vec<String>) -> anyhow::Result<ControlRequest> {
     let request = match command {
         "working" => {
@@ -269,6 +307,7 @@ async fn call(control: ControlRequest) -> anyhow::Result<ControlResponse> {
 enum ResponseKind {
     Plan,
     Activity,
+    Name,
 }
 
 impl ResponseKind {
@@ -276,6 +315,7 @@ impl ResponseKind {
         match self {
             ResponseKind::Plan => "sulion plan",
             ResponseKind::Activity => "sulion activity",
+            ResponseKind::Name => "sulion name",
         }
     }
 
@@ -286,6 +326,7 @@ impl ResponseKind {
         match self {
             ResponseKind::Plan => "sulion plan list --all",
             ResponseKind::Activity => "sulion activity status",
+            ResponseKind::Name => "sulion name show",
         }
     }
 }
@@ -330,8 +371,16 @@ async fn run_control(
     match kind {
         ResponseKind::Plan => print_plan_data(&data),
         ResponseKind::Activity => print_activity_data(&data),
+        ResponseKind::Name => print_name_data(&data),
     }
     Ok(0)
+}
+
+fn print_name_data(data: &Value) {
+    match data.get("agent_label").and_then(Value::as_str) {
+        Some(name) => println!("{name}"),
+        None => println!("No agent name set."),
+    }
 }
 
 fn print_plan_data(data: &Value) {
@@ -542,6 +591,30 @@ Start:
     );
 }
 
+fn print_name_usage() {
+    println!(
+        "\
+Sulion terminal name — an agent-chosen name shown beside the user's label
+
+Usage:
+  sulion name [--json] <text> | show | clear
+
+Commands:
+  <text>   set this terminal's agent name (words join; quoting optional)
+  show     print the current agent name
+  clear    remove it
+
+Rules:
+  complements the user's label; never overwrites it
+  keep it short (max 100 chars); shown in the sidebar and team overview,
+    never in tab headers
+  set it when it helps the user tell terminals apart — no permission needed
+
+Start:
+  sulion name \"ingest batcher refactor\""
+    );
+}
+
 fn print_activity_usage() {
     println!(
         "\
@@ -650,6 +723,34 @@ mod tests {
             panic!("expected phase add");
         };
         assert_eq!(phase.size.as_deref(), Some("l"));
+    }
+
+    #[test]
+    fn name_command_parses_set_show_and_clear() {
+        let mut args = vec![
+            "ingest".to_string(),
+            "batcher".to_string(),
+            "refactor".to_string(),
+        ];
+        let request = parse_name_request(&mut args).unwrap();
+        assert_eq!(
+            request,
+            ControlRequest::SessionNameSet {
+                name: Some("ingest batcher refactor".to_string())
+            }
+        );
+
+        let mut args = vec!["show".to_string()];
+        assert_eq!(
+            parse_name_request(&mut args).unwrap(),
+            ControlRequest::SessionNameGet
+        );
+
+        let mut args = vec!["clear".to_string()];
+        assert_eq!(
+            parse_name_request(&mut args).unwrap(),
+            ControlRequest::SessionNameSet { name: None }
+        );
     }
 
     #[test]

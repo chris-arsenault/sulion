@@ -621,3 +621,83 @@ async fn control_socket_publishes_plans_and_preserves_explicit_attention() {
     listener_task.abort();
     let _ = std::fs::remove_file(&sock);
 }
+
+#[tokio::test]
+async fn control_socket_sets_and_clears_the_agent_terminal_name() {
+    let pool = fresh_pool().await;
+    let pty_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pty_sessions (id, repo, working_dir, state, created_at) \
+         VALUES ($1, 'r', '/tmp', 'live', NOW())",
+    )
+    .bind(pty_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let sock = tmp_sock();
+    let socket_path = sock.clone();
+    let listener_pool = pool.clone();
+    let listener_task = tokio::spawn(async move {
+        let _ = correlate::run(listener_pool, socket_path).await;
+    });
+    wait_for_socket(&sock).await;
+
+    // Set trims whitespace and echoes the stored value.
+    let set = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::SessionNameSet {
+            name: Some("  ingest batcher refactor  ".to_string()),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(set.ok, "{:?}", set.error);
+    assert_eq!(set.data.unwrap()["agent_label"], "ingest batcher refactor");
+
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT agent_label FROM pty_sessions WHERE id = $1")
+            .bind(pty_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored.as_deref(), Some("ingest batcher refactor"));
+
+    let shown = correlate::send_control(&sock, pty_id, ControlRequest::SessionNameGet)
+        .await
+        .unwrap();
+    assert_eq!(
+        shown.data.unwrap()["agent_label"],
+        "ingest batcher refactor"
+    );
+
+    // Over-long names are refused, not truncated.
+    let too_long = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::SessionNameSet {
+            name: Some("x".repeat(101)),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!too_long.ok);
+
+    // Clear removes it.
+    let cleared =
+        correlate::send_control(&sock, pty_id, ControlRequest::SessionNameSet { name: None })
+            .await
+            .unwrap();
+    assert!(cleared.ok);
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT agent_label FROM pty_sessions WHERE id = $1")
+            .bind(pty_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, None);
+
+    listener_task.abort();
+    let _ = std::fs::remove_file(&sock);
+}

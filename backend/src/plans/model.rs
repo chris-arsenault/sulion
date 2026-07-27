@@ -42,7 +42,7 @@ impl PlanActor {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct NewPhase {
     pub title: String,
     #[serde(default)]
@@ -68,7 +68,7 @@ pub struct CreatePlanInput {
     pub attach_current_pty: bool,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct UpdatePlanInput {
     pub title: Option<String>,
     pub summary: Option<String>,
@@ -78,7 +78,7 @@ pub struct UpdatePlanInput {
     pub skip_remaining: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct UpdatePhaseInput {
     pub title: Option<String>,
     pub description: Option<String>,

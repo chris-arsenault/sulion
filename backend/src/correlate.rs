@@ -67,7 +67,7 @@ pub struct ControlMsg {
     pub control: ControlRequest,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum ControlRequest {
     PlanStart {
@@ -112,6 +112,12 @@ pub enum ControlRequest {
     },
     ActivityClear,
     ActivityGet,
+    /// Agent-chosen terminal name. `None` clears it. Complements the
+    /// user's label — never overwrites it.
+    SessionNameSet {
+        name: Option<String>,
+    },
+    SessionNameGet,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -311,6 +317,30 @@ async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value>
             .fetch_optional(pool)
             .await?;
             Ok(serde_json::to_value(activity)?)
+        }
+        ControlRequest::SessionNameSet { name } => {
+            let cleaned = match name.as_deref().map(str::trim) {
+                None | Some("") => None,
+                Some(value) if value.chars().count() > 100 => {
+                    anyhow::bail!("agent name must be 100 characters or fewer")
+                }
+                Some(value) => Some(value.to_string()),
+            };
+            sqlx::query("UPDATE pty_sessions SET agent_label = $2 WHERE id = $1")
+                .bind(msg.pty_id)
+                .bind(cleaned.as_deref())
+                .execute(pool)
+                .await?;
+            Ok(serde_json::json!({ "agent_label": cleaned }))
+        }
+        ControlRequest::SessionNameGet => {
+            let label: Option<String> =
+                sqlx::query_scalar("SELECT agent_label FROM pty_sessions WHERE id = $1")
+                    .bind(msg.pty_id)
+                    .fetch_optional(pool)
+                    .await?
+                    .flatten();
+            Ok(serde_json::json!({ "agent_label": label }))
         }
     }
 }

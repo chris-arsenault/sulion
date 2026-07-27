@@ -1908,6 +1908,14 @@ interface SessionRowProps {
   ) => void | Promise<void>;
 }
 
+/** Agent-chosen terminal name (`sulion name`), rendered beside the
+ * user's display name. Hidden when unset or redundant with the label. */
+function SessionAgentLabel({ session }: { session: SessionView }) {
+  const name = session.agent_label?.trim();
+  if (!name || name === session.label) return null;
+  return <span className="sidebar__session-agent-label">{name}</span>;
+}
+
 function SessionRow({
   session: s,
   selected,
@@ -2100,6 +2108,7 @@ function SessionRow({
                   </span>
                 )}
                 {displayName}
+                <SessionAgentLabel session={s} />
               </span>
               <span className="sidebar__session-meta tabular">
                 {ageSince(s.created_at)} · {sessionLabel}

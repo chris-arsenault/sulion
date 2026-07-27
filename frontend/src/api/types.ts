@@ -85,6 +85,9 @@ export interface SessionView {
   timeline_revision?: number;
   /** User-facing label; overrides the uuid prefix in the sidebar. */
   label: string | null;
+  /** Agent-chosen terminal name (`sulion name`). Shown beside the
+   * user's label in the sidebar and monitor; never in tab headers. */
+  agent_label?: string | null;
   /** Pinned sessions float to the top of their repo group. */
   pinned: boolean;
   /** Palette-constrained colour tag name. */

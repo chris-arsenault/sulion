@@ -683,6 +683,19 @@
   white-space: nowrap;
 }
 
+/* Agent-chosen terminal name (`sulion name`) — quieter than the user's
+ * label it sits beside. */
+.sidebar__session-agent-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  font-weight: var(--w-400);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sidebar__session-meta {
   color: var(--text-lo);
   font-size: var(--t-meta);
