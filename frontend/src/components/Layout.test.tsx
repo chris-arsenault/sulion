@@ -21,6 +21,7 @@ vi.mock("./ui", async () => {
 import { ContextMenuHost } from "./common/ContextMenu";
 import { Layout } from "./Layout";
 import { appCommands } from "../state/AppCommands";
+import { useTabStore } from "../state/TabStore";
 import { appStatePayload, jsonResponse } from "../test/appState";
 
 const mockState = {
@@ -176,6 +177,37 @@ describe("Layout", () => {
     await user.keyboard(CTRL_M);
     expect(await screen.findByTestId(MONITOR_PANE)).toBeDefined();
     expect(screen.getByRole("dialog", { name: "Team overview" })).toBeDefined();
+
+    await user.keyboard(CTRL_M);
+    await waitFor(() => {
+      expect(screen.queryByTestId(MONITOR_PANE)).toBeNull();
+    });
+  });
+
+  it("keeps the metrics view inside the monitor overlay", async () => {
+    stubMatchMedia(() => false); // desktop
+    render(
+      <>
+        <Layout />
+        <ContextMenuHost />
+      </>,
+    );
+    const user = userEvent.setup();
+    await user.keyboard(CTRL_M);
+    expect(await screen.findByTestId(MONITOR_PANE)).toBeDefined();
+
+    await user.click(screen.getByRole("button", { name: "metrics" }));
+    expect(await screen.findByTestId("metrics-pane")).toBeDefined();
+    // Still the same dialog — no metrics workspace tab was opened.
+    expect(screen.getByRole("dialog", { name: "Team overview" })).toBeDefined();
+    expect(
+      Object.values(useTabStore.getState().tabs).some(
+        (tab) => tab.kind === "metrics",
+      ),
+    ).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "overview" }));
+    expect(await screen.findByTestId(MONITOR_PANE)).toBeDefined();
 
     await user.keyboard(CTRL_M);
     await waitFor(() => {

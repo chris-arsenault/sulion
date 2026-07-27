@@ -137,6 +137,7 @@ describe("MonitorPane", () => {
       sessions: [
         {
           ...session("sess-a", 1),
+          agent_label: "batcher dedupe pass",
           agent_runtime: {
             agent: "codex",
             state: "running",
@@ -184,6 +185,8 @@ describe("MonitorPane", () => {
     const alpha = await screen.findByRole("region", { name: "alpha team" });
     const beta = screen.getByRole("region", { name: "beta team" });
     expect(within(alpha).getByText(ALPHA_TASK)).toBeDefined();
+    // The agent-set name sits beside the user's label on the card.
+    expect(within(alpha).getByText("batcher dedupe pass")).toBeDefined();
     expect(within(beta).getByText("sess-b")).toBeDefined();
     expect(within(alpha).getByText("20%")).toBeDefined();
     // Fresh tokens (total 47K − 31K cache reads) headline the card.
@@ -503,9 +506,19 @@ describe("MonitorPane", () => {
 
     render(<MonitorPane />);
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: /open timeline/i }));
+    await user.click(
+      await screen.findByRole("button", { name: /go to terminal for/i }),
+    );
 
-    const timeline = Object.values(useTabStore.getState().tabs).find(
+    // The card's primary click raises the session: terminal in the top
+    // pane plus the timeline focused on the latest turn below.
+    const tabs = useTabStore.getState();
+    const terminal = Object.values(tabs.tabs).find(
+      (tab) => tab.kind === "terminal" && tab.sessionId === "sess-a",
+    );
+    expect(terminal).toBeDefined();
+    expect(tabs.activeByPane.top).toBe(terminal?.id);
+    const timeline = Object.values(tabs.tabs).find(
       (tab) => tab.kind === "timeline" && tab.sessionId === "sess-a",
     );
     expect(timeline?.focusTurnId).toBe(7);

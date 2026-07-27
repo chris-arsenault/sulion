@@ -37,6 +37,23 @@
   font-size: var(--t-meta);
 }
 
+.metrics-pane__overview-link {
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-1);
+  height: var(--lane-xs);
+  padding: 0 8px;
+  background: var(--canvas-2);
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  cursor: pointer;
+}
+
+.metrics-pane__overview-link:hover {
+  border-color: var(--accent);
+  color: var(--accent-hi);
+}
+
 .metrics-pane__error {
   margin: 8px 10px 0;
   padding: 6px 8px;

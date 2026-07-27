@@ -6,6 +6,7 @@ import { Sidebar } from "./Sidebar";
 import { WorkArea } from "./WorkArea";
 import { FuturePromptsModal } from "./FuturePromptsModal";
 import { PlanModal } from "./PlanModal";
+import { MetricsPane } from "./MetricsPane";
 import { MonitorPane } from "./MonitorPane";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { appCommands, useAppCommand } from "../state/AppCommands";
@@ -243,8 +244,10 @@ export function Layout() {
 }
 
 /** The monitor as a transient modal over the workspace (⌘M / Ctrl-M
- * toggles it). Same component as the monitor tab; mounting on open is
- * what starts its polling, so a closed overlay costs nothing. */
+ * toggles it). Same components as the monitor/metrics tabs; mounting on
+ * open is what starts their polling, so a closed overlay costs nothing.
+ * The metrics button swaps the overlay's content in place — it never
+ * opens a workspace tab from the modal. */
 function MonitorOverlay({
   open,
   onClose,
@@ -252,6 +255,12 @@ function MonitorOverlay({
   open: boolean;
   onClose: () => void;
 }) {
+  const [view, setView] = useState<"overview" | "metrics">("overview");
+  useEffect(() => {
+    if (!open) setView("overview");
+  }, [open]);
+  const showMetrics = useCallback(() => setView("metrics"), []);
+  const showOverview = useCallback(() => setView("overview"), []);
   return (
     <Overlay
       open={open}
@@ -263,7 +272,11 @@ function MonitorOverlay({
       maxWidth="96vw"
       maxHeight="92vh"
     >
-      <MonitorPane onNavigate={onClose} />
+      {view === "overview" ? (
+        <MonitorPane onNavigate={onClose} onOpenMetrics={showMetrics} />
+      ) : (
+        <MetricsPane onOpenOverview={showOverview} />
+      )}
     </Overlay>
   );
 }

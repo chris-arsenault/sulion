@@ -24,7 +24,15 @@ const CFD_BANDS = [
 ] as const;
 const BAR_COLOR = "#4a90e2";
 
-export function MetricsPane({ active = true }: { active?: boolean }) {
+export function MetricsPane({
+  active = true,
+  onOpenOverview,
+}: {
+  active?: boolean;
+  /** Modal host override: switch the overlay back to the team overview
+   * instead of leaving the modal. */
+  onOpenOverview?: () => void;
+}) {
   const [data, setData] = useState<MetricsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -55,6 +63,15 @@ export function MetricsPane({ active = true }: { active?: boolean }) {
         <span className="metrics-pane__refresh">
           {loading ? "refreshing" : data ? `as of ${timeOf(data.generated_at)}` : ""}
         </span>
+        {onOpenOverview ? (
+          <button
+            type="button"
+            className="metrics-pane__overview-link"
+            onClick={onOpenOverview}
+          >
+            overview
+          </button>
+        ) : null}
       </header>
       {error ? <div className="metrics-pane__error">{error}</div> : null}
       {!data ? (

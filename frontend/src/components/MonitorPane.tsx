@@ -29,12 +29,16 @@ import "./MonitorPane.css";
 export function MonitorPane({
   active = true,
   onNavigate,
+  onOpenMetrics,
 }: {
   active?: boolean;
   /** Called after any action that navigates to another surface (open
    * terminal / timeline / plan / diff). The modal host passes its close
    * handler so navigation from the overlay dismisses it. */
   onNavigate?: () => void;
+  /** Modal host override: show metrics inside the overlay instead of
+   * opening the metrics workspace tab. */
+  onOpenMetrics?: () => void;
 }) {
   const [data, setData] = useState<MonitorTimelineResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -179,9 +183,13 @@ export function MonitorPane({
     return { fresh, processed };
   }, [liveSessions]);
   const openMetrics = useCallback(() => {
+    if (onOpenMetrics) {
+      onOpenMetrics();
+      return;
+    }
     openTab({ kind: "metrics" }, "top");
     onNavigate?.();
-  }, [onNavigate, openTab]);
+  }, [onNavigate, onOpenMetrics, openTab]);
 
   return (
     <div className="monitor-pane" data-testid="monitor-pane">
@@ -609,9 +617,21 @@ function TerminalCard({
   const goToTerminal = useCallback(() => {
     selectSession(session.id);
     openTab({ kind: "terminal", sessionId: session.id }, "top");
-    openTab({ kind: "timeline", sessionId: session.id }, "bottom");
+    if (item?.turn) {
+      openTab(
+        {
+          kind: "timeline",
+          sessionId: session.id,
+          focusTurnId: item.turn.id,
+          focusKey: crypto.randomUUID(),
+        },
+        "bottom",
+      );
+    } else {
+      openTab({ kind: "timeline", sessionId: session.id }, "bottom");
+    }
     onNavigate?.();
-  }, [onNavigate, openTab, selectSession, session.id]);
+  }, [item?.turn, onNavigate, openTab, selectSession, session.id]);
   const cardMenuTrigger = useMemo(
     () =>
       contextMenuTriggerProps(openCtx, () => {
@@ -692,20 +712,27 @@ function TerminalCard({
           label={[
             [agent, model].filter(Boolean).join(" · ") || "Open shell",
             `up ${uptime}`,
-            "Click to open the timeline",
+            "Click to go to the terminal",
           ].join("\n")}
         >
           <button
             type="button"
             className="monitor-card__identity"
-            onClick={openTimeline}
+            onClick={goToTerminal}
             onContextMenu={cardMenuTrigger.onContextMenu}
             onKeyDown={cardMenuTrigger.onKeyDown}
-            aria-label={`Open timeline for ${label}`}
+            aria-label={`Go to terminal for ${label}`}
           >
             {label}
           </button>
         </Tooltip>
+        {session.agent_label?.trim() && session.agent_label !== session.label ? (
+          <Tooltip label={`Agent-set name: ${session.agent_label}`}>
+            <span className="monitor-card__agent-label">
+              {session.agent_label}
+            </span>
+          </Tooltip>
+        ) : null}
         <Tooltip
           label={
             item?.turn ? (

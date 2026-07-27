@@ -332,6 +332,19 @@
   color: var(--accent-hi);
 }
 
+/* Agent-chosen terminal name — quieter than the user's label, capped so
+ * the identity keeps priority in the head row. */
+.monitor-card__agent-label {
+  max-width: 45%;
+  flex: none;
+  overflow: hidden;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .monitor-card__report {
   flex: none;
   display: inline-flex;
@@ -543,7 +556,8 @@
   overflow: hidden;
 }
 
-.monitor-overlay .monitor-pane {
+.monitor-overlay .monitor-pane,
+.monitor-overlay .metrics-pane {
   flex: 1;
   min-width: 0;
 }
