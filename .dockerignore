@@ -1,0 +1,9 @@
+.git
+**/dist
+**/node_modules
+**/target
+**/target-*
+frontend/test-results
+frontend/playwright-report
+test-results
+.sulion-paste

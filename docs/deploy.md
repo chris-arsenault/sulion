@@ -9,6 +9,11 @@ overlays live in [`deploy/`](../deploy/README.md); Komodo continues to consume
 the root definition during the migration, and rendering it with
 `deploy/compose.truenas.yaml` makes the standalone/brokered policy explicit.
 
+The dedicated host configuration, activation boundary, secret paths, and
+box-side verification commands live in [`nix/README.md`](../nix/README.md).
+Its deployment unit consumes this same Compose graph from an immutable Nix
+store path; it never runs the editable checkout under `/home/dev/repos`.
+
 Sulion now has six services:
 
 - `backend` — main API + PTY runtime

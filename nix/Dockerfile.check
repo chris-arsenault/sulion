@@ -1,0 +1,15 @@
+FROM docker.io/nixos/nix:2.31.2 AS source
+WORKDIR /src
+COPY flake.nix ./
+COPY flake.lock ./
+COPY nix ./nix
+COPY compose.yaml ./
+COPY deploy ./deploy
+
+FROM source AS evaluate
+RUN nix --extra-experimental-features "nix-command flakes" \
+  flake check --no-build --print-build-logs
+
+FROM source AS test
+RUN nix --extra-experimental-features "nix-command flakes" \
+  build .#checks.x86_64-linux.dev-node-vm --print-build-logs

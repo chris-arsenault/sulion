@@ -50,3 +50,8 @@ services:
       SULION_BROKER_UPSTREAM: broker:8081
     extra_hosts:
       - host.docker.internal:host-gateway
+
+networks:
+  sulion:
+    driver_opts:
+      com.docker.network.bridge.name: sulion0

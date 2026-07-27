@@ -11,6 +11,8 @@
 ```bash
 make ci                      # fast lint + unit/typecheck checks; no integration
 make validate-deploy         # render every currently supported Compose role
+make validate-nix            # evaluate the NixOS host and VM test
+make test-nix                # build and run the NixOS VM acceptance test
 make lint-rust               # clippy
 make fmt-rust                # fmt --check
 make test-rust               # backend unit / non-DB tests
