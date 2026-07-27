@@ -1,4 +1,8 @@
-{ lib, ... }:
+{
+  lib,
+  device ? "/dev/disk/by-id/REPLACE_WITH_INSTALL_DISK",
+  ...
+}:
 {
   # The bootstrap command overrides this placeholder with --disk main <by-id>.
   # Runtime mounts continue to use filesystem labels from hardware-configuration.nix,
@@ -6,7 +10,7 @@
   disko.enableConfig = false;
   disko.devices.disk.main = {
     type = "disk";
-    device = lib.mkDefault "/dev/disk/by-id/REPLACE_WITH_INSTALL_DISK";
+    device = lib.mkDefault device;
     content = {
       type = "gpt";
       partitions = {

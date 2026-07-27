@@ -18,7 +18,7 @@ Administration key:
 
 Safety:
   --confirm-disk PATH         Non-interactive confirmation; must equal --disk.
-  --dry-run                   Build and print the Disko plan without erasing.
+  --dry-run                   Evaluate the Disko layout without erasing.
   -h, --help                  Show this help.
 EOF
 }
@@ -90,12 +90,10 @@ if lsblk -nrpo MOUNTPOINTS "$resolved_disk" | grep -Eq '[^[:space:]]'; then
 fi
 
 stage_dir=$(mktemp -d)
-password_mount=
 cleanup() {
-  if [[ -n "$password_mount" ]] && mountpoint -q "$password_mount"; then
-    umount "$password_mount"
+  if mountpoint -q /mnt; then
+    umount -R /mnt
   fi
-  [[ -z "$password_mount" ]] || rmdir "$password_mount" 2>/dev/null || true
   rm -rf "$stage_dir"
 }
 trap cleanup EXIT
@@ -118,20 +116,13 @@ printf 'Administration key: %s\n' "$key_fingerprint"
 printf 'Flake source: %s\n' "${SULION_BOOTSTRAP_FLAKE:?SULION_BOOTSTRAP_FLAKE is not set}"
 
 disko_args=(
-  --mode format
+  --mode destroy,format,mount
   --flake "${SULION_BOOTSTRAP_FLAKE}#sulion-enclave"
-  --disk main "$disk"
-  --extra-files "$authorized_key" /var/lib/sulion/config/ssh/authorized_keys
-  --write-efi-boot-entries
+  --argstr disk "$disk"
 )
 
 if [[ "$dry_run" == true ]]; then
-  dry_run_mount="${stage_dir}/dry-run-root"
-  mkdir -p "$dry_run_mount"
-  "${SULION_DISKO_INSTALL:?SULION_DISKO_INSTALL is not set}" \
-    "${disko_args[@]}" \
-    --mount-point "$dry_run_mount" \
-    --dry-run
+  "${SULION_DISKO:?SULION_DISKO is not set}" "${disko_args[@]}" --dry-run
   printf 'Dry run complete. No disk changes were made.\n'
   exit 0
 fi
@@ -144,29 +135,38 @@ else
   [[ "$confirmation" == "erase ${disk}" ]] || die "installation canceled"
 fi
 
-read -r -s -p "New console/sudo password for sulion: " password
-printf '\n'
-[[ -n "$password" ]] || die "password must not be empty"
-read -r -s -p "Confirm password: " password_confirmation
-printf '\n'
-[[ "$password" == "$password_confirmation" ]] || die "passwords do not match"
-unset password_confirmation
-password_hash=$(printf '%s\n' "$password" | mkpasswd --method=yescrypt --stdin)
-unset password
+mountpoint -q /mnt && die "/mnt is already in use"
+"${SULION_DISKO:?SULION_DISKO is not set}" \
+  "${disko_args[@]}" \
+  --yes-wipe-all-disks
 
-"${SULION_DISKO_INSTALL:?SULION_DISKO_INSTALL is not set}" "${disko_args[@]}"
+findmnt /mnt >/dev/null || die "Disko did not mount the target root at /mnt"
+findmnt /mnt/boot >/dev/null || die "Disko did not mount the EFI partition at /mnt/boot"
 
-udevadm settle
-root_partition="${disk}-part2"
-[[ -b "$root_partition" ]] || die "installed root partition is missing: $root_partition"
-password_mount=$(mktemp -d)
-mount "$root_partition" "$password_mount"
-printf 'sulion:%s\n' "$password_hash" | chpasswd --root "$password_mount" --encrypted
-unset password_hash
+install -D -m 0600 -o root -g root \
+  "$authorized_key" \
+  /mnt/var/lib/sulion/config/ssh/authorized_keys
+
+export NIX_CONFIG="${NIX_CONFIG:-}
+experimental-features = nix-command flakes"
+nixos-install \
+  --root /mnt \
+  --flake "${SULION_BOOTSTRAP_FLAKE}#sulion-enclave"
+
+nixos-enter --root /mnt -c 'passwd sulion'
+
+for service_binary in systemd-oomd systemd-timesyncd; do
+  found_service_binary=false
+  for service_path in "/mnt/nix/store/"*-systemd-*/lib/systemd/"$service_binary"; do
+    [[ -e "$service_path" ]] || continue
+    found_service_binary=true
+    [[ -x "$service_path" ]] || die "installed service is not executable: ${service_path#/mnt}"
+  done
+  [[ "$found_service_binary" == true ]] || die "installed service is missing: $service_binary"
+done
+
 sync
-umount "$password_mount"
-rmdir "$password_mount"
-password_mount=
+umount -R /mnt
 
 printf '\nInstallation complete.\n'
 printf 'Remove the installer media, reboot, and SSH as sulion using %s.\n' "$key_fingerprint"

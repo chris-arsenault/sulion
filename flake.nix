@@ -23,7 +23,7 @@
       adminKey = import ./nix/packages/admin-key.nix { inherit pkgs; };
       bootstrapEnclave = import ./nix/packages/bootstrap-enclave.nix {
         inherit pkgs self;
-        diskoInstall = disko.packages.${system}.disko-install;
+        diskoPackage = disko.packages.${system}.disko;
       };
     in
     {
@@ -49,6 +49,17 @@
           ./nix/hosts/dedicated/default.nix
         ];
       };
+
+      diskoConfigurations.sulion-enclave =
+        {
+          lib,
+          disk ? "/dev/disk/by-id/REPLACE_WITH_INSTALL_DISK",
+          ...
+        }:
+        import ./nix/hosts/dedicated/disko.nix {
+          inherit lib;
+          device = disk;
+        };
 
       checks.${system}.dev-node-vm = import ./nix/tests/dev-node-vm.nix {
         inherit nixpkgs system;

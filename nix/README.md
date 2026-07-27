@@ -153,7 +153,8 @@ nix --extra-experimental-features 'nix-command flakes' run \
 ```
 
 Review the printed disk identity, public-key fingerprint, flake revision, and
-Disko commands. Then remove `--dry-run` and execute the installation:
+successful Disko evaluation. Then remove `--dry-run` and execute the
+installation:
 
 ```bash
 nix --extra-experimental-features 'nix-command flakes' run \
@@ -166,10 +167,13 @@ nix --extra-experimental-features 'nix-command flakes' run \
 The command validates that it is running as root on an x86_64 NixOS installer
 booted through UEFI, refuses partition paths and mounted disks, and requires the
 full stable disk path to be typed back before erasing. It creates the declared
-GPT/ESP/ext4 layout, installs the exact resolved flake source, places the public
-key in root-owned machine-local state, and prompts twice for the initial
-`sulion` console/sudo password. Cleartext password material is not passed to Nix
-or written into the repository.
+GPT/ESP/ext4 layout with Disko, mounts it at `/mnt`, and populates it through
+the standard `nixos-install` path. It installs the exact resolved flake source,
+places the public key in root-owned machine-local state, and uses the standard
+NixOS password prompts for the root recovery and `sulion` console/sudo
+passwords. It verifies the installed systemd OOM and time-synchronization
+executables before unmounting the target. Cleartext password material is not
+passed to Nix or written into the repository.
 
 When it reports completion:
 
