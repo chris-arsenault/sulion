@@ -1,6 +1,5 @@
 {
   config,
-  lib,
   pkgs,
   ...
 }:
@@ -15,11 +14,12 @@
 
   networking = {
     hostName = "sulion-enclave";
-    useDHCP = lib.mkDefault true;
     firewall.extraInputRules = ''
       ip saddr ${config.sulion.lanCidr} tcp dport 22 accept comment "Sulion LAN SSH"
     '';
   };
+
+  users.users.sulion.openssh.authorizedKeys.keys = import ./authorized-keys.nix;
 
   services.openssh = {
     enable = true;

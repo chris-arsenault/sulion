@@ -75,15 +75,31 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
 struct Health {
     status: &'static str,
     db: &'static str,
+    role: &'static str,
+    development_node: &'static str,
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Health>) {
+    let role = if state.node_protocol_required {
+        "control-plane"
+    } else {
+        "standalone"
+    };
+    let development_node = if !state.node_protocol_required {
+        "local"
+    } else if state.node_control.active_connection_count().await > 0 {
+        "connected"
+    } else {
+        "unavailable"
+    };
     match db::ping(&state.pool).await {
         Ok(()) => (
             StatusCode::OK,
             Json(Health {
                 status: "ok",
                 db: "ok",
+                role,
+                development_node,
             }),
         ),
         Err(err) => {
@@ -93,6 +109,8 @@ async fn health(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Health>
                 Json(Health {
                     status: "degraded",
                     db: "unreachable",
+                    role,
+                    development_node,
                 }),
             )
         }

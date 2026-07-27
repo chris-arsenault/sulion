@@ -2,5 +2,25 @@ services:
   backend:
     environment:
       SULION_DEPLOYMENT_ROLE: standalone
+      SULION_NODE_TRANSPORT: loopback
       SULION_DOCKER_MODE: ${SULION_DOCKER_MODE:-brokered}
+      SULION_REPOS_ROOT: /home/dev/repos
+      SULION_WORKSPACES_ROOT: /home/dev/workspaces
+      SULION_CLAUDE_PROJECTS: /home/dev/.claude/projects
+      SULION_CODEX_SESSIONS: /home/dev/.codex/sessions
+      SULION_SECRET_BROKER_REGISTRATION_TOKEN: ${SULION_SECRET_BROKER_REGISTRATION_TOKEN}
+      SULION_CODE_INTEL_URL: http://sulion-code-intel:8084
+      SULION_RUNNER_URL: http://sulion-runner:8082
+    ports:
+      - "${SULION_DEV_BIND_ADDRESS:-192.168.66.3}:${SULION_DEV_PORT_RANGE:-26000-26010}:${SULION_DEV_PORT_RANGE:-26000-26010}"
+    volumes:
+      - ${SULION_HOME_HOST_PATH:-/mnt/apps/apps/sulion}:/home/dev
+      - ${SULION_REPOS_HOST_PATH:-/mnt/apps/apps/sulion/repos}:/home/dev/repos
+      - ${SULION_WORKSPACES_HOST_PATH:-/mnt/apps/apps/sulion/workspaces}:/home/dev/workspaces
+      - sulion_run:/run/sulion
 
+  code-intel:
+    profiles: !reset []
+
+  runner:
+    profiles: !reset []

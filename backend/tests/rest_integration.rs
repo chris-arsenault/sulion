@@ -1391,6 +1391,8 @@ async fn health_endpoint_reports_ok_when_db_reachable() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "ok");
     assert_eq!(body["db"], "ok");
+    assert_eq!(body["role"], "standalone");
+    assert_eq!(body["development_node"], "local");
 }
 
 #[tokio::test]

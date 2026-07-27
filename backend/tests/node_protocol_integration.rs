@@ -48,12 +48,21 @@ async fn fresh_pool() -> db::Pool {
 }
 
 async fn start_server(pool: db::Pool) -> (String, Arc<AppState>) {
-    let state = AppState::new(
+    start_server_with_node_mode(pool, false).await
+}
+
+async fn start_server_with_node_mode(
+    pool: db::Pool,
+    node_protocol_required: bool,
+) -> (String, Arc<AppState>) {
+    let state = AppState::new_with_auth_and_node_mode(
         pool,
         "/tmp".into(),
         "/tmp/sulion-workspaces-test".into(),
         "/tmp/sulion-library-test".into(),
         Arc::new(sulion::ingest::Ingester::new()),
+        None,
+        node_protocol_required,
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("listener address");
@@ -62,6 +71,61 @@ async fn start_server(pool: db::Pool) -> (String, Arc<AppState>) {
         let _ = axum::serve(listener, router).await;
     });
     (format!("http://{addr}"), state)
+}
+
+#[tokio::test]
+async fn control_health_stays_ready_and_mutations_refuse_local_fallback_without_a_node() {
+    let pool = fresh_pool().await;
+    let (base, _state) = start_server_with_node_mode(pool, true).await;
+    let client = reqwest::Client::new();
+
+    let health = client
+        .get(format!("{base}/health"))
+        .send()
+        .await
+        .expect("control health");
+    assert_eq!(health.status(), reqwest::StatusCode::OK);
+    let health: Value = health.json().await.expect("control health json");
+    assert_eq!(health["role"], "control-plane");
+    assert_eq!(health["development_node"], "unavailable");
+
+    let app_state = client
+        .get(format!("{base}/api/app-state"))
+        .send()
+        .await
+        .expect("control app state");
+    assert_eq!(app_state.status(), reqwest::StatusCode::OK);
+    let app_state: Value = app_state.json().await.expect("control app state json");
+    assert_eq!(app_state["nodes"], json!([]));
+
+    let create = client
+        .post(format!("{base}/api/repos"))
+        .json(&json!({"name": "must-not-be-local"}))
+        .send()
+        .await
+        .expect("control mutation");
+    assert_eq!(create.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    let create: Value = create.json().await.expect("control mutation json");
+    assert_eq!(create["error"], "development node is unavailable");
+}
+
+#[tokio::test]
+async fn control_release_identity_is_advertised_and_recorded_for_the_node() {
+    let pool = fresh_pool().await;
+    let control =
+        NodeControl::with_heartbeat_and_release(pool, 5, 20, Some("release-test-123".into()));
+    let node_id = Uuid::new_v4();
+    control
+        .start_loopback(node_id, "release-test")
+        .await
+        .expect("start release-aware loopback");
+
+    let nodes = control.list_nodes().await.expect("list release-aware node");
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(
+        nodes[0].desired_release_digest.as_deref(),
+        Some("release-test-123")
+    );
 }
 
 fn generate_keypair() -> Ed25519KeyPair {

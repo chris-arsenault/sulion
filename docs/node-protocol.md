@@ -1,15 +1,14 @@
 # Control-plane and development-node contract
 
-Status: Phase 4 transport and persistence foundation shipped; development
-runtime extraction remains scheduled for Phase 5.
+Status: Phase 6 control-plane and development-node roles implemented;
+production cutover remains Phase 7.
 
 This document defines the runtime seam selected by
-[ADR 0002](adrs/0002-hybrid-control-plane-and-dev-node.md). Phase 4 selected a
-bounded JSON protocol over WebSocket for the long-lived channel and proved its
-identity, heartbeat, compatibility, replay, and reconciliation behavior. Phase
-5 adds the typed PTY, terminal-stream, repository, and workspace messages to
-that channel. The ownership and failure behavior below remains the target for
-that extraction.
+[ADR 0002](adrs/0002-hybrid-control-plane-and-dev-node.md). The bounded JSON
+protocol over WebSocket carries identity, heartbeat, compatibility, replay,
+reconciliation, typed PTY, terminal-stream, repository, and workspace
+messages. The production TrueNAS and dedicated NixOS roles now select opposite
+sides of this seam.
 
 ## Terms
 
@@ -146,7 +145,7 @@ stable node ID, boot ID, build/version range, path contract, Docker policy,
 release digest, and sorted capabilities. Control verifies the signature
 against the enrolled public key before recording any compatible connection.
 Direct deployments must expose this endpoint only through TLS (`wss`);
-production proxy wiring is part of the control-plane phase.
+production uses `wss://sulion.services.ahara.io/ws/nodes`.
 
 ## Version handshake
 
@@ -235,9 +234,9 @@ request, or shell fragment from the public API. Agent launch variants and
 filesystem scopes are explicit protocol types.
 
 `probe_echo` and `reconcile_inventory` exercise the durable dispatcher without
-host mutation. Phase 5 adds closed session, agent, repo, workspace, file, Git,
-upload, and terminal request types; there is still no generic command
-operation. The operation table preallocates IDs, enforces
+host mutation. Closed session, agent, repo, workspace, file, Git, upload, and
+terminal request types use the same typed seam; there is still no generic
+command operation. The operation table preallocates IDs, enforces
 `(node_id, idempotency_key)` uniqueness, records every dispatch boot and
 attempt, and retains terminal result/error data. Both transports keep a bounded
 current-boot result cache.

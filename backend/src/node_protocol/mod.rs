@@ -33,7 +33,10 @@ use store::NodeStore;
 
 const CONTROL_BUILD_GIT_SHA: &str = match option_env!("SULION_BUILD_GIT_SHA") {
     Some(value) => value,
-    None => "dev",
+    None => match option_env!("GITHUB_SHA") {
+        Some(value) => value,
+        None => "dev",
+    },
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -80,6 +83,7 @@ pub struct NodeControl {
     terminal_streams: Arc<RwLock<HashMap<Uuid, mpsc::Sender<TerminalEvent>>>>,
     heartbeat_interval_seconds: u64,
     heartbeat_timeout_seconds: u64,
+    desired_release_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,6 +198,20 @@ impl NodeControl {
         heartbeat_interval_seconds: u64,
         heartbeat_timeout_seconds: u64,
     ) -> Arc<Self> {
+        Self::with_heartbeat_and_release(
+            pool,
+            heartbeat_interval_seconds,
+            heartbeat_timeout_seconds,
+            configured_release_digest(),
+        )
+    }
+
+    pub fn with_heartbeat_and_release(
+        pool: crate::db::Pool,
+        heartbeat_interval_seconds: u64,
+        heartbeat_timeout_seconds: u64,
+        desired_release_digest: Option<String>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             store: NodeStore::new(pool, heartbeat_timeout_seconds),
             active: Arc::new(RwLock::new(HashMap::new())),
@@ -201,6 +219,9 @@ impl NodeControl {
             terminal_streams: Arc::new(RwLock::new(HashMap::new())),
             heartbeat_interval_seconds,
             heartbeat_timeout_seconds,
+            desired_release_digest: desired_release_digest
+                .map(|value| value.trim().to_string())
+                .filter(|value| valid_signed_text(value, 256)),
         })
     }
 
@@ -500,7 +521,9 @@ impl NodeControl {
         let accepted_capabilities = accepted_capabilities(&hello.capabilities);
         if let Err(reason) = compatibility_reason(&hello) {
             self.cancel_active(hello.node_id).await;
-            self.store.record_incompatible(&hello, &reason).await?;
+            self.store
+                .record_incompatible(&hello, &reason, self.desired_release_digest.as_deref())
+                .await?;
             return Ok(Registration::Rejected(self.hello_ack(
                 false,
                 Some(reason),
@@ -509,7 +532,14 @@ impl NodeControl {
             )));
         }
         let connection_id = Uuid::new_v4();
-        let acceptance = self.store.record_connection(&hello, connection_id).await?;
+        let acceptance = self
+            .store
+            .record_connection(
+                &hello,
+                connection_id,
+                self.desired_release_digest.as_deref(),
+            )
+            .await?;
         let directive = match acceptance {
             ConnectionAcceptance::SameBoot => ReconciliationDirective::Resume,
             ConnectionAcceptance::NewBoot => ReconciliationDirective::ReportInventory,
@@ -550,7 +580,7 @@ impl NodeControl {
             control_build_git_sha: CONTROL_BUILD_GIT_SHA.to_string(),
             protocol_version: NODE_PROTOCOL_VERSION,
             accepted_capabilities,
-            desired_release_digest: None,
+            desired_release_digest: self.desired_release_digest.clone(),
             heartbeat_interval_secs: self.heartbeat_interval_seconds,
             heartbeat_timeout_secs: self.heartbeat_timeout_seconds,
             drain_state: "accepting".into(),
@@ -833,6 +863,13 @@ fn valid_protocol_identifier(value: &str, max_len: usize) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
+fn configured_release_digest() -> Option<String> {
+    std::env::var("SULION_RELEASE_DIGEST")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| valid_signed_text(value, 256))
 }
 
 fn compatibility_reason(hello: &NodeHello) -> Result<(), String> {

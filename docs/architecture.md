@@ -7,10 +7,11 @@ Pointers into the code are the source of truth. This doc exists to orient a read
 ## Shape
 
 Sulion has a durable control plane and a machine-local development runtime.
-The dedicated deployment runs the API/control process, `sulion-node`, and
-`sulion-ingester` as separate processes. The portable standalone role can
-still run their ownership logic through an in-process loopback node for
-TrueNAS and generic-Linux rollback.
+TrueNAS runs the API/control process, frontend, broker, and retrieval. The
+dedicated deployment runs `sulion-node`, `sulion-ingester`, and code
+intelligence as separate processes. The portable standalone role can still run
+the ownership logic through an in-process loopback node for TrueNAS and
+generic-Linux rollback.
 
 ```
 PTY shell ──► node shadow ──► node protocol ──► control WebSocket ──► xterm.js
@@ -25,7 +26,7 @@ PTY helpers ──► retrieval/node-local code-intel/rootless Docker
 The public browser path is `sulion.services.ahara.io` → shared Ahara ALB/WAF →
 EC2 nginx → WireGuard → the TrueNAS-published frontend port. The frontend
 container remains the same-origin boundary for static assets, `/api`, `/ws`,
-and `/broker`; it is not split onto CloudFront.
+`/broker`, and `/retrieval`; it is not split onto CloudFront.
 
 The live pane shows "now." All review happens in the structured timeline, sourced from the ingested transcript, not the terminal buffer.
 
@@ -233,19 +234,19 @@ daemon, and PTYs cannot manage the system daemon that runs Sulion.
 ## Deployment shape
 
 OCI images plus the common Compose graph remain the portable application
-contract. The Phase 5 dedicated NixOS overlay starts three independently
-restartable roles from the shared backend/workbench image:
+contract. The production Compose selections divide the graph by ownership:
 
-- `backend` is control-only and mounts no source, workspace, transcript, or
-  Docker paths;
+- the root TrueNAS selection starts the frontend, control-only `backend`,
+  broker, and retrieval, with no source, workspace, transcript, code-intel,
+  runner, or Docker mounts;
 - `node` owns `/home/sulion`, PTYs, filesystem/worktree state, correlation, and
   the rootless Docker socket; and
 - `ingester` mounts only Claude and Codex transcript roots read-only.
 
 Code intelligence mounts local repos/workspaces on the node host. Broker and
-retrieval remain durable services backed by TrueNAS Postgres. The current
-TrueNAS overlay remains the standalone rollback deployment until the
-control-plane-only role lands in Phase 6. Full setup is in
+retrieval remain durable services backed by TrueNAS Postgres. The standalone
+overlay plus the TrueNAS host-policy overlay restores the previous combined,
+brokered runtime for rollback. Full setup is in
 [`deploy.md`](deploy.md); the decision and remaining sequence are in
 [`adrs/0002-hybrid-control-plane-and-dev-node.md`](adrs/0002-hybrid-control-plane-and-dev-node.md)
 and [`plans/dedicated-nixos-dev-node.md`](plans/dedicated-nixos-dev-node.md).

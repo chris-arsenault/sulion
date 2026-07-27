@@ -56,19 +56,7 @@ in
     lanCidr = lib.mkOption {
       type = lib.types.str;
       default = "192.168.66.0/24";
-      description = "IPv4 LAN allowed to reach SSH, SMB, discovery, UI, and development ports.";
-    };
-
-    frontendPort = lib.mkOption {
-      type = lib.types.port;
-      default = 30080;
-      description = "LAN port for the transitional dedicated Sulion frontend.";
-    };
-
-    backendPort = lib.mkOption {
-      type = lib.types.port;
-      default = 8080;
-      description = "Host-network backend port reachable only from the Sulion system bridge.";
+      description = "IPv4 LAN allowed to reach SSH, SMB, discovery, and development ports.";
     };
 
     devPortFrom = lib.mkOption {
@@ -81,12 +69,6 @@ in
       type = lib.types.port;
       default = 26010;
       description = "Last LAN-published rootless development port.";
-    };
-
-    bridgeName = lib.mkOption {
-      type = lib.types.str;
-      default = "sulion0";
-      description = "Stable system-Docker bridge used by the dedicated Compose role.";
     };
 
     rootlessSocket = lib.mkOption {
@@ -117,16 +99,10 @@ in
       homeMode = "0750";
       shell = pkgs.bashInteractive;
       linger = true;
-      extraGroups = [ "wheel" ];
-    };
-
-    users.groups.sulion-broker.gid = 7322;
-    users.users.sulion-broker = {
-      isSystemUser = true;
-      uid = 7322;
-      group = "sulion-broker";
-      home = "/var/lib/sulion/broker";
-      createHome = false;
+      extraGroups = [
+        "networkmanager"
+        "wheel"
+      ];
     };
 
     security.sudo.wheelNeedsPassword = true;
@@ -142,6 +118,15 @@ in
 
     networking.nftables.enable = true;
     networking.firewall.enable = true;
+    networking.networkmanager = {
+      enable = true;
+      unmanaged = [
+        "interface-name:br-*"
+        "interface-name:docker0"
+        "interface-name:sulion0"
+        "interface-name:veth*"
+      ];
+    };
 
     environment.systemPackages = with pkgs; [
       acl
@@ -168,7 +153,6 @@ in
       "d /var/lib/sulion/config 0700 root root - -"
       "d /var/lib/sulion/secrets 0700 root root - -"
       "d /var/lib/sulion/node 0700 root root - -"
-      "d /var/lib/sulion/broker 0750 sulion-broker sulion-broker - -"
     ];
   };
 }

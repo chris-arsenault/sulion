@@ -61,7 +61,7 @@ in
       serviceConfig = {
         Type = "oneshot";
         EnvironmentFile = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
-        ExecStart = "${pkgs.restic}/bin/restic backup --one-file-system ${host.reposRoot} /var/lib/samba /var/lib/sulion/broker";
+        ExecStart = "${pkgs.restic}/bin/restic backup --one-file-system ${host.reposRoot} /var/lib/samba /var/lib/sulion/node";
         ExecStartPost = "${pkgs.restic}/bin/restic forget --keep-daily 7 --keep-weekly 5 --keep-monthly 12 --prune";
         Nice = 10;
         IOSchedulingClass = "best-effort";

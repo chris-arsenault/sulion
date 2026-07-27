@@ -36,6 +36,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed("test $(hostname) = sulion-enclave-test")
     machine.succeed("test $(id -u sulion) = 7321")
     machine.succeed("test $(id -g sulion) = 7321")
+    machine.succeed("id -nG sulion | tr ' ' '\\n' | grep -Fx networkmanager")
     machine.fail("id dev")
     machine.succeed("test $(stat -c %U:%G /home/sulion/repos) = sulion:sulion")
     machine.succeed("getfacl -cp /home/sulion/repos | grep -F 'default:user::rwx'")
@@ -46,6 +47,9 @@ pkgs.testers.runNixOSTest {
     machine.succeed("test $(stat -c %U:%G /home/sulion/.local/share/docker) = sulion:sulion")
     machine.succeed("test $(stat -c %U:%G /var/lib/sulion/node) = root:root")
     machine.succeed("test $(stat -c %a /var/lib/sulion/node) = 700")
+    machine.fail("id sulion-broker")
+    machine.fail("test -e /var/lib/sulion/broker")
+    machine.wait_for_unit("NetworkManager.service")
 
     docker_env = "XDG_RUNTIME_DIR=/run/user/7321 DOCKER_HOST=unix:///run/user/7321/docker.sock"
     as_sulion = f"{docker_env} sudo --preserve-env=XDG_RUNTIME_DIR,DOCKER_HOST -u sulion"
@@ -101,6 +105,9 @@ pkgs.testers.runNixOSTest {
       "systemctl cat sulion-stack.service | grep -F /var/lib/sulion/node/private-key.pk8"
     )
     machine.succeed("systemctl cat sulion-stack.service | grep -F compose.dedicated.yaml")
+    machine.succeed(
+      "systemctl cat sulion-stack.service | grep -F 'Sulion dedicated development-node application'"
+    )
     machine.fail("systemctl is-enabled sulion-stack.service")
     machine.succeed(
       "test ! -e /etc/systemd/system/multi-user.target.wants/sulion-stack.service"

@@ -1,30 +1,14 @@
 services:
   backend:
-    network_mode: host
-    ports: !reset []
-    networks: !reset []
-    environment:
-      SULION_DEPLOYMENT_ROLE: control-plane
-      SULION_NODE_TRANSPORT: remote
-      SULION_DOCKER_MODE: none
-      SULION_REPOS_ROOT: /var/empty/sulion/repos
-      SULION_WORKSPACES_ROOT: /var/empty/sulion/workspaces
-      SULION_CLAUDE_PROJECTS: /var/empty/sulion/claude-projects
-      SULION_CODEX_SESSIONS: /var/empty/sulion/codex-sessions
-      SULION_SECRET_BROKER_URL: http://127.0.0.1:8081
-      SULION_SECRET_BROKER_REGISTRATION_TOKEN: !reset null
-      SULION_RETRIEVAL_URL: http://127.0.0.1:8083
-      SULION_CODE_INTEL_URL: http://127.0.0.1:8084
-      SULION_RUNNER_URL: ""
-    volumes: !reset []
+    profiles:
+      - control-plane
 
   node:
     profiles: !reset []
     network_mode: host
     networks: !reset []
     environment:
-      SULION_NODE_CONTROL_URL: ws://127.0.0.1:8080/ws/nodes
-      SULION_NODE_ALLOW_INSECURE_WS: "1"
+      SULION_NODE_CONTROL_URL: ${SULION_NODE_CONTROL_URL:-wss://sulion.services.ahara.io/ws/nodes}
       SULION_DOCKER_MODE: direct
       SULION_REPOS_ROOT: /home/sulion/repos
       SULION_WORKSPACES_ROOT: /home/sulion/workspaces
@@ -33,8 +17,8 @@ services:
       DOCKER_HOST: unix:///run/user/7321/docker.sock
       XDG_RUNTIME_DIR: /run/user/7321
       HOME: /home/sulion
-      SULION_SECRET_BROKER_URL: http://127.0.0.1:8081
-      SULION_RETRIEVAL_URL: http://127.0.0.1:8083
+      SULION_SECRET_BROKER_URL: ${SULION_SECRET_BROKER_URL:-https://sulion.services.ahara.io/broker}
+      SULION_RETRIEVAL_URL: ${SULION_RETRIEVAL_URL:-https://sulion.services.ahara.io/retrieval}
       SULION_CODE_INTEL_URL: http://127.0.0.1:8084
     volumes: !override
       - ${SULION_HOME_HOST_PATH:-/home/sulion}:/home/sulion
@@ -59,16 +43,15 @@ services:
       - ${SULION_HOME_HOST_PATH:-/home/sulion}/.codex/sessions:/home/sulion/.codex/sessions:ro
 
   broker:
-    ports: !override
-      - "127.0.0.1:8081:8081"
-    volumes: !override
-      - ${SULION_BROKER_STATE_HOST_PATH:-/var/lib/sulion/broker}:/var/lib/sulion-broker:ro
+    profiles:
+      - control-plane
 
   retrieval:
-    ports: !override
-      - "127.0.0.1:8083:8083"
+    profiles:
+      - control-plane
 
   code-intel:
+    profiles: !reset []
     ports: !override
       - "127.0.0.1:8084:8084"
     environment:
@@ -82,13 +65,8 @@ services:
       - brokered
 
   frontend:
-    ports: !override
-      - "${SULION_FRONTEND_BIND_ADDRESS:-0.0.0.0}:${SULION_FRONTEND_PORT:-30080}:80"
-    environment:
-      SULION_BACKEND_UPSTREAM: host.docker.internal:8080
-      SULION_BROKER_UPSTREAM: broker:8081
-    extra_hosts:
-      - host.docker.internal:host-gateway
+    profiles:
+      - control-plane
 
 networks:
   sulion:

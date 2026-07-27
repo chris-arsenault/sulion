@@ -88,7 +88,7 @@ pub(super) async fn start(
             rootless: false,
         },
         path_contract_version: PATH_CONTRACT_VERSION,
-        observed_release_digest: None,
+        observed_release_digest: control.desired_release_digest.clone(),
         signature: String::new(),
     };
     let registered = control.register_internal(hello).await?;
@@ -119,7 +119,7 @@ pub(super) async fn start_runtime(
             rootless: true,
         },
         path_contract_version: PATH_CONTRACT_VERSION,
-        observed_release_digest: None,
+        observed_release_digest: control.desired_release_digest.clone(),
         signature: String::new(),
     };
     let registered = control.register_internal(hello).await?;

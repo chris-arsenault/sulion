@@ -20,6 +20,10 @@ module "edge" {
         "/api/devices/pair/token",
         "/api/repos/*/ingest",
         "/api/repos/*/raw",
+        "/broker/v1/use",
+        "/broker/v1/pty-credentials",
+        "/broker/v1/pty-credentials/*",
+        "/retrieval/*",
       ]
       authenticated = false
     },

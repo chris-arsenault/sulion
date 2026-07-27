@@ -29,7 +29,7 @@ in
     startAtBoot = lib.mkOption {
       type = lib.types.bool;
       default = false;
-      description = "Start the split Sulion control and development-node stack automatically at boot.";
+      description = "Start the Sulion development-node stack automatically at boot.";
     };
   };
 
@@ -42,7 +42,7 @@ in
     ];
 
     systemd.services.sulion-stack = {
-      description = "Sulion dedicated-host control and development-node application";
+      description = "Sulion dedicated development-node application";
       wantedBy = lib.optional cfg.startAtBoot "multi-user.target";
       requires = [ "docker.service" ];
       wants = [
@@ -75,8 +75,7 @@ in
     };
 
     networking.firewall.extraInputRules = ''
-      ip saddr ${host.lanCidr} tcp dport { ${toString host.frontendPort}, ${toString host.devPortFrom}-${toString host.devPortTo} } accept comment "Sulion UI and dev ports"
-      iifname "${host.bridgeName}" tcp dport ${toString host.backendPort} accept comment "Sulion frontend to host backend"
+      ip saddr ${host.lanCidr} tcp dport ${toString host.devPortFrom}-${toString host.devPortTo} accept comment "Sulion development ports"
     '';
   };
 }

@@ -10,14 +10,15 @@ Sulion module.
 
 The host runs two Docker daemons:
 
-- root-owned system Docker runs the Sulion application;
+- root-owned system Docker runs the Sulion node, ingester, and code-intelligence
+  containers;
 - the lingering `sulion` user owns a rootless daemon at
   `/run/user/7321/docker.sock`.
 
 The dedicated Compose role mounts only the latter into `sulion-node`. The
-control process has no development filesystem or Docker mount, and the
-node-local ingester sees only transcript directories. The `sulion` user is
-intentionally not a member of the system `docker` group.
+TrueNAS control plane is not present on this host, and the node-local ingester
+sees only transcript directories. The `sulion` user is intentionally not a
+member of the system `docker` group.
 
 Repositories live at `/home/sulion/repos` on the machine's local filesystem.
 The dedicated Compose adapter preserves `/home/sulion` inside the workbench so
@@ -25,11 +26,10 @@ bind paths sent to the host's rootless Docker daemon resolve identically. The
 shared OCI image still resolves UID/GID 7321 to its portable `dev` account, but
 the host login and all host-visible ownership use `sulion`; no second host user
 is created. Samba exports the repository directory as `repos`; workspaces,
-agent state, Docker state, the broker key, and deployment secrets are not
-shared. SMB, WSD, mDNS, the frontend, SSH, and development ports are accepted
-only from `192.168.66.0/24`. The system-Docker bridge has the stable name
-`sulion0`, and only that interface may reach the host-network backend on port
-8080.
+agent state, Docker state, and deployment secrets are not shared. SMB, WSD,
+mDNS, SSH, and development ports are accepted only from `192.168.66.0/24`.
+The node initiates its authenticated control connection outbound; this host
+exposes no Sulion API or frontend.
 
 ## Fresh installation contract
 
@@ -50,12 +50,12 @@ or improvise different storage choices during installation.
 | Disk encryption | none, so the dedicated node can reboot unattended |
 | Swap and hibernation | none; the machine has 32 GB RAM and does not hibernate |
 | Host name | `sulion-enclave` |
-| Network | wired DHCP on `192.168.66.0/24`; no static address in the host |
+| Network | NetworkManager, wired or Wi-Fi DHCP on `192.168.66.0/24`; no static host address |
 | Time zone | UTC |
 | Console | US keymap, English UTF-8 environment, no graphical desktop |
-| Interactive identity | `sulion`, UID/GID 7321, wheel member |
+| Interactive identity | `sulion`, UID/GID 7321, wheel and NetworkManager member |
 | Remote login | SSH keys only; root SSH and SSH passwords disabled |
-| Application startup | `sulion-stack.service` installed but disabled |
+| Node startup | `sulion-stack.service` installed but disabled |
 
 No LUKS is an explicit availability choice: this node must recover from a
 power interruption without a local unlock. If physical-at-rest protection
@@ -74,8 +74,10 @@ test -d /sys/firmware/efi/efivars
 ip -brief address
 ```
 
-The second command must show a working LAN address. The installation and flake
-input both require network access.
+The second command must show a working LAN address. If it does not, run
+`nmtui`, choose **Activate a connection**, select the Wi-Fi network, and enter
+its passphrase. Confirm the address with `ip -brief address` before continuing.
+The installation and flake input both require network access.
 
 ### Select the installation disk
 
@@ -87,7 +89,8 @@ ls -l /dev/disk/by-id
 ```
 
 Set `INSTALL_DISK` to the one whole-disk identifier for the dedicated system
-disk. This is the only machine-specific installation value:
+disk. This is the only machine-specific value that identifies a destructive
+target:
 
 ```bash
 export INSTALL_DISK=/dev/disk/by-id/REPLACE_WITH_THE_SYSTEM_DISK
@@ -132,16 +135,80 @@ The checked-in hardware leaf consumes those `nixos` and `boot` filesystem
 labels and includes the normal NVMe, AHCI, SATA, and USB storage modules. Do
 not replace it with generated UUID-based configuration for this layout.
 
+### Preserve the installer Wi-Fi connection
+
+The installer and installed system have separate `/etc` trees. Merely joining
+Wi-Fi in the installer does not copy that connection into the installed
+system. If the machine will use Wi-Fi after reboot, copy the root-only
+NetworkManager profile after mounting `/mnt`:
+
+```bash
+nmcli -f NAME,TYPE,DEVICE connection show
+find /etc/NetworkManager/system-connections -maxdepth 1 -type f -print
+
+install -d -m 0700 /mnt/etc/NetworkManager/system-connections
+cp -a /etc/NetworkManager/system-connections/. \
+  /mnt/etc/NetworkManager/system-connections/
+find /mnt/etc/NetworkManager/system-connections \
+  -maxdepth 1 -type f -exec chmod 0600 {} +
+```
+
+Only do this after `nmtui` has successfully activated the intended Wi-Fi
+connection. The profile contains the network credential and must remain
+root-readable only. The checked-in host enables NetworkManager, so that
+profile is loaded automatically on every boot.
+
 ### Install the repository-defined system
 
-Clone this branch directly into the target filesystem, then install its
-`sulion-enclave` flake output:
+Clone this branch directly into the target filesystem:
 
 ```bash
 mkdir -p /mnt/etc
 nix-shell -p git --run \
   'git clone --branch feat/dedicated-nixos-dev-node --single-branch https://github.com/chris-arsenault/sulion.git /mnt/etc/sulion'
+```
 
+### Generate and authorize the SSH key
+
+Generate the key on the laptop or desktop that will initiate SSH connections,
+not on `sulion-enclave`. On Linux or macOS:
+
+```bash
+ssh-keygen -t ed25519 -a 64 \
+  -f ~/.ssh/sulion-enclave \
+  -C "$(whoami)@sulion-enclave"
+cat ~/.ssh/sulion-enclave.pub
+```
+
+On Windows PowerShell:
+
+```powershell
+ssh-keygen.exe -t ed25519 -a 64 `
+  -f "$env:USERPROFILE\.ssh\sulion-enclave" `
+  -C "$env:USERNAME@sulion-enclave"
+Get-Content "$env:USERPROFILE\.ssh\sulion-enclave.pub"
+```
+
+Keep the private file named `sulion-enclave` on that client. Copy only the
+single-line `.pub` output to the installer console. Open
+`/mnt/etc/sulion/nix/hosts/dedicated/authorized-keys.nix`:
+
+```bash
+nano /mnt/etc/sulion/nix/hosts/dedicated/authorized-keys.nix
+```
+
+Make it a Nix list containing the complete public-key line:
+
+```nix
+[
+  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA_REPLACE_WITH_REAL_KEY client@sulion-enclave"
+]
+```
+
+Do not paste the private key. With the public key in place, install the
+`sulion-enclave` flake output:
+
+```bash
 nixos-install --flake /mnt/etc/sulion#sulion-enclave
 nixos-enter --root /mnt -c 'passwd sulion'
 sync
@@ -163,19 +230,62 @@ The Unix and Samba accounts represent the same single user. They may use the
 same human-entered password, but Samba stores its own credential verifier. Do
 not configure `force user` or create separate per-client identities.
 
-The first installation intentionally requires the local console because the
-repository cannot contain a personal SSH public key. Before operating the node
-remotely, add the chosen public key to
-`users.users.sulion.openssh.authorizedKeys.keys` in
-`nix/hosts/dedicated/default.nix`, then apply it locally:
+If the installer Wi-Fi profile was not copied, or this is an already-installed
+machine being moved to a new network, configure it once at the local console:
+
+```bash
+sudo nmtui
+nmcli -f NAME,TYPE,DEVICE connection show --active
+```
+
+Choose **Activate a connection** in `nmtui`. NetworkManager stores the selected
+profile outside the Nix store and reconnects automatically after reboot.
+
+If this machine was installed from an earlier revision that did not enable
+NetworkManager, `nmtui` will not exist yet. Use temporary wired networking,
+update `/etc/sulion`, and activate the fixed configuration before joining
+Wi-Fi:
 
 ```bash
 cd /etc/sulion
+git pull --ff-only
 sudo nixos-rebuild test --flake .#sulion-enclave
 sudo nixos-rebuild switch --flake .#sulion-enclave
+sudo nmtui
 ```
 
-Do not enable SSH password authentication as a shortcut.
+If wired networking is unavailable, boot the installer USB again, connect with
+`nmtui`, mount the existing `nixos` and `boot` labels under `/mnt`, copy the
+installer profile using the commands above, update `/mnt/etc/sulion`, and
+build the next boot generation from inside the installed system:
+
+```bash
+mount /dev/disk/by-label/nixos /mnt
+mount -o umask=0077 /dev/disk/by-label/boot /mnt/boot
+git -C /mnt/etc/sulion pull --ff-only
+nixos-enter --root /mnt -c \
+  'cd /etc/sulion && nixos-rebuild boot --flake .#sulion-enclave'
+reboot
+```
+
+From the client that owns the private key, verify SSH. On Linux or macOS:
+
+```bash
+ssh -i ~/.ssh/sulion-enclave sulion@sulion-enclave.local
+```
+
+On Windows PowerShell:
+
+```powershell
+ssh.exe -i "$env:USERPROFILE\.ssh\sulion-enclave" sulion@sulion-enclave
+```
+
+Use the machine's DHCP address if local hostname discovery is unavailable. Do
+not enable SSH password authentication as a shortcut.
+
+For an already-installed machine, put the public-key line in
+`/etc/sulion/nix/hosts/dedicated/authorized-keys.nix`, then run the same
+`nixos-rebuild test` and `nixos-rebuild switch` commands above.
 
 ### First-boot acceptance
 
@@ -186,6 +296,7 @@ hostnamectl hostname
 findmnt /
 findmnt /boot
 id
+nmcli -f NAME,TYPE,DEVICE connection show --active
 systemctl --user is-active docker.service
 docker info
 docker compose version
@@ -194,9 +305,10 @@ systemctl is-enabled sulion-stack.service
 ```
 
 Expected results are hostname `sulion-enclave`, root label `nixos`, boot label
-`boot`, UID/GID 7321, an active rootless Docker daemon, a successful limited
-container, and a disabled Sulion application unit. `systemctl is-enabled`
-intentionally exits nonzero while printing `disabled`.
+`boot`, UID/GID 7321, an active wired or Wi-Fi connection, an active rootless
+Docker daemon, a successful limited container, and a disabled Sulion node
+unit. `systemctl is-enabled` intentionally exits nonzero while printing
+`disabled`.
 
 From another LAN machine, connect to `\\sulion-enclave\repos` on Windows or
 `smb://sulion-enclave.local/repos` on macOS and create a test directory. On the
@@ -210,9 +322,10 @@ directories under `/var/lib/sulion`; provision:
 - `/var/lib/sulion/config/runtime.env` with mode `0600`, using
   `deploy/dedicated.env.example` as the field contract;
 - `/var/lib/sulion/node/private-key.pk8`, owned by `root:root` with mode `0600`;
-- `/var/lib/sulion/broker/master.key` as exactly 32 random bytes, owned by
-  `7322:7322` with mode `0400`;
 - optional Restic credentials under `/var/lib/sulion/secrets`.
+
+The broker database and master key remain on TrueNAS. They must not be copied
+to this host.
 
 The checked-in dedicated identity is
 `019d4f28-88ac-7a80-932c-b0f53a0708f4`. Keep that value in
@@ -237,8 +350,9 @@ sudo docker run --rm --user root \
 ```
 
 The `sulion-stack.service` unit is installed but deliberately disabled until
-matching OCI images and the runtime env file exist. Start it once; the
-unenrolled node will retry safely while the control plane comes online:
+matching OCI images and the runtime env file exist. It starts only the node,
+ingester, and code-intelligence roles. Start it once; the unenrolled node will
+retry safely while the TrueNAS control plane comes online:
 
 ```bash
 sudo systemctl start sulion-stack.service
@@ -253,7 +367,7 @@ do not add it to `runtime.env`:
 read -rsp "Sulion access token: " SULION_ADMIN_ACCESS_TOKEN
 echo
 NODE_ENROLLMENT_TOKEN="$(
-  curl -fsS http://sulion-enclave:30080/api/nodes/enrollment-tokens \
+  curl -fsS https://sulion.services.ahara.io/api/nodes/enrollment-tokens \
     -H "Authorization: Bearer ${SULION_ADMIN_ACCESS_TOKEN}" \
     -H "Content-Type: application/json" \
     --data '{"display_name":"dedicated NixOS node","target_node_id":"019d4f28-88ac-7a80-932c-b0f53a0708f4","ttl_seconds":300}' |
@@ -269,7 +383,7 @@ sudo docker run --rm --network host --user root \
   -v /var/lib/sulion/node:/var/lib/sulion-node:ro \
   --entrypoint /usr/local/bin/sulion-node \
   "${SULION_BACKEND_IMAGE}" \
-  enroll --control-url http://127.0.0.1:8080 \
+  enroll --control-url https://sulion.services.ahara.io \
   --token "${NODE_ENROLLMENT_TOKEN}" \
   --key /var/lib/sulion-node/private-key.pk8
 unset NODE_ENROLLMENT_TOKEN
@@ -277,9 +391,11 @@ unset SULION_BACKEND_IMAGE
 sudo systemctl reload sulion-stack.service
 ```
 
-The returned `node_id` must equal the checked-in ID. Thereafter the system
-deployer can update or restart the control container independently of
-`sulion-node`; browser terminals reconnect to the surviving PTY.
+The returned `node_id` must equal the checked-in ID. The TrueNAS control plane
+can then redeploy independently of `sulion-node`; browser terminals reconnect
+to the surviving PTY. Reloading `sulion-stack.service` updates only the
+node-side containers and remains session-affecting until Phase 7 adds the
+deployment drain gate.
 
 At runtime `sulion-node` opens the root-only key and then drops its process,
 filesystem, PTY, and Docker work to UID/GID 7321. Agent shells therefore cannot
@@ -309,9 +425,9 @@ LAN clients use `\\sulion-enclave\repos` on Windows or
 ## Backups
 
 `sulion.backup` provides a low-priority asynchronous Restic timer for the local
-repository tree, Samba identity/ACL state, and broker state. It is disabled
-until a TrueNAS Restic repository and root-readable credentials are chosen.
-Enabling it never mounts the repository working tree from TrueNAS.
+repository tree, Samba identity/ACL state, and enrolled node state. It is
+disabled until a TrueNAS Restic repository and root-readable credentials are
+chosen. Enabling it never mounts the repository working tree from TrueNAS.
 
 ## Tests
 

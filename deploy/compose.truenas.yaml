@@ -1,6 +1,8 @@
+# Apply this host-policy overlay together with compose.standalone.yaml to
+# restore the combined TrueNAS runtime during rollback.
 services:
   backend:
     environment:
       SULION_DEPLOYMENT_ROLE: standalone
+      SULION_NODE_TRANSPORT: loopback
       SULION_DOCKER_MODE: brokered
-

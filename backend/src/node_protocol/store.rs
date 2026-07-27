@@ -154,6 +154,7 @@ impl NodeStore {
         &self,
         hello: &NodeHello,
         connection_id: Uuid,
+        desired_release_digest: Option<&str>,
     ) -> Result<ConnectionAcceptance, NodeProtocolError> {
         let mut tx = self.pool.begin().await?;
         let previous_boot_id: Option<Uuid> = sqlx::query_as::<_, (Option<Uuid>,)>(
@@ -196,7 +197,8 @@ impl NodeStore {
                 path_contract_version = $9, boot_id = $10, connection_id = $11, \
                 connection_state = 'connected', compatibility_error = NULL, \
                 observed_release_digest = $12, connected_at = NOW(), \
-                last_heartbeat_at = NOW(), node_disconnected_at = NULL, updated_at = NOW() \
+                last_heartbeat_at = NOW(), node_disconnected_at = NULL, \
+                desired_release_digest = $13, updated_at = NOW() \
               WHERE id = $1",
         )
         .bind(hello.node_id)
@@ -211,6 +213,7 @@ impl NodeStore {
         .bind(hello.boot_id)
         .bind(connection_id)
         .bind(&hello.observed_release_digest)
+        .bind(desired_release_digest)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -221,6 +224,7 @@ impl NodeStore {
         &self,
         hello: &NodeHello,
         reason: &str,
+        desired_release_digest: Option<&str>,
     ) -> Result<(), NodeProtocolError> {
         sqlx::query(
             "UPDATE dev_nodes SET \
@@ -228,7 +232,8 @@ impl NodeStore {
                 build_git_sha = $5, capabilities = $6, docker_policy = $7, docker_info = $8, \
                 path_contract_version = $9, boot_id = $10, connection_id = NULL, \
                 connection_state = 'incompatible', compatibility_error = $11, \
-                observed_release_digest = $12, node_disconnected_at = NOW(), updated_at = NOW() \
+                observed_release_digest = $12, desired_release_digest = $13, \
+                node_disconnected_at = NOW(), updated_at = NOW() \
               WHERE id = $1 AND revoked_at IS NULL",
         )
         .bind(hello.node_id)
@@ -243,6 +248,7 @@ impl NodeStore {
         .bind(hello.boot_id)
         .bind(reason)
         .bind(&hello.observed_release_digest)
+        .bind(desired_release_digest)
         .execute(&self.pool)
         .await?;
         Ok(())

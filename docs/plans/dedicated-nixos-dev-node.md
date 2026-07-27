@@ -1,6 +1,7 @@
 # Dedicated NixOS development node and TrueNAS control plane
 
-Status: proposed; architecture agreed, implementation not started.
+Status: implementation complete through Phase 6; production cutover and
+acceptance remain.
 
 ## Outcome
 
@@ -527,6 +528,8 @@ window.
 
 ### Phase 1 — Contract and regression baseline
 
+Status: implemented on `feat/dedicated-nixos-dev-node`.
+
 Deliverables:
 
 - Architecture decision record for control-plane/node ownership.
@@ -544,6 +547,8 @@ Exit gate:
 - No application deployment has moved.
 
 ### Phase 2 — Portable deployment roles
+
+Status: implemented on `feat/dedicated-nixos-dev-node`.
 
 Deliverables:
 
@@ -568,6 +573,8 @@ Exit gate:
 - Common service definitions are not duplicated across host adapters.
 
 ### Phase 3 — First-class NixOS dedicated host
+
+Status: implemented on `feat/dedicated-nixos-dev-node`.
 
 Deliverables:
 
@@ -665,6 +672,9 @@ Implementation note:
 
 ### Phase 6 — TrueNAS control-plane deployment
 
+Status: implemented on `feat/dedicated-nixos-dev-node`; live production
+network and redeploy gates remain part of the Phase 7 cutover.
+
 Deliverables:
 
 - TrueNAS control-plane Compose role.
@@ -681,6 +691,21 @@ Exit gate:
 - Connected-node session, file, Git, terminal, and secret flows pass through
   the production network boundary.
 - A control-plane redeploy leaves an active NixOS PTY alive.
+
+Implementation note:
+
+- Root Compose is the Komodo-selected TrueNAS control plane and activates only
+  backend, broker, retrieval, and frontend. It has no development filesystem,
+  transcript, code-intelligence, runner, or Docker mounts.
+- The dedicated overlay activates only node, ingester, and code intelligence
+  and uses the public TLS node, broker, and retrieval routes.
+- Control health remains successful while the node is disconnected, reports
+  the node state separately, preserves durable reads, and returns `503` for
+  node-owned mutations.
+- Protocol/build/release compatibility is visible in the node status UI and
+  the desired release is persisted during registration.
+- The standalone overlay plus the TrueNAS host-policy overlay remains the
+  combined brokered rollback role.
 
 ### Phase 7 — Release automation and production cutover
 

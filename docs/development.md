@@ -35,9 +35,10 @@ cd frontend && pnpm install && pnpm dev
 ```
 
 The portable Compose bundle and role overlays are documented in
-[`deploy/README.md`](../deploy/README.md). `compose.yaml` remains the common
-application graph and preserves current TrueNAS defaults when no overlay or
-site variables are supplied.
+[`deploy/README.md`](../deploy/README.md). `compose.yaml` is the production
+TrueNAS control-plane selection. Add `deploy/compose.standalone.yaml` for a
+combined generic-Linux runtime, or `deploy/compose.dedicated.yaml` for the
+node-only NixOS runtime.
 
 ## PTY Postgres
 

@@ -2,12 +2,12 @@
 
 Standard ahara TrueNAS deploy: Docker Compose via Komodo, shared TrueNAS Postgres auto-provisioned by the migration Lambda, Komodo stack created on demand by the deploy action.
 
-The root `compose.yaml` is also the portable application definition. Host
-paths, Postgres endpoints, image registry, bind addresses, and public URL are
-parameterized while retaining the values below as TrueNAS defaults. Small role
-overlays live in [`deploy/`](../deploy/README.md); Komodo continues to consume
-the root definition during the migration, and rendering it with
-`deploy/compose.truenas.yaml` makes the standalone/brokered policy explicit.
+The root `compose.yaml` is both the portable service graph and the production
+TrueNAS control-plane selection. It starts only frontend, backend/control,
+broker, and retrieval. Small role overlays live in
+[`deploy/`](../deploy/README.md): the dedicated overlay selects the NixOS
+node-side services, while the standalone overlay (plus the TrueNAS policy
+overlay on that host) restores the previous combined deployment for rollback.
 
 The dedicated host configuration, activation boundary, secret paths, and
 box-side verification commands live in [`nix/README.md`](../nix/README.md).
@@ -27,22 +27,21 @@ The common graph now has eight runtime service roles:
 - `runner` — constrained Docker command broker, only service with the host Docker socket
 - `frontend` — static UI + reverse proxy
 
-`node` and `ingester` are profile-gated in the common graph and activated by
-`deploy/compose.dedicated.yaml`. All three Rust processes currently use the
-same workbench image with different entry points; CI still builds that large
-artifact once.
+`node`, `ingester`, code intelligence, and the constrained runner are
+profile-gated in the common graph. The dedicated overlay activates the first
+three; the standalone overlay activates code intelligence and the runner while
+the backend hosts the loopback node runtime. All three core Rust processes
+currently use the same workbench image with different entry points; CI still
+builds that large artifact once.
 
-In the dedicated role:
+Across the production split:
 
-- control uses remote-node mode and has no repo, workspace, transcript, home,
-  or Docker bind;
+- TrueNAS control uses remote-node mode and has no repo, workspace, transcript,
+  home, code-intelligence, runner, or Docker bind;
 - the node alone mounts `/home/sulion`, its root-only enrolled key, the
   correlation run directory, and the rootless Docker socket;
 - the ingester mounts only the two transcript roots read-only; and
 - code intelligence reads the local repo/workspace roots on that host.
-
-The current TrueNAS overlay remains a combined standalone deployment until
-Phase 6 introduces the control-plane-only Komodo role.
 
 ## One-time cross-repo registration
 
@@ -61,38 +60,25 @@ Sulion also carries project-local Terraform under [`infrastructure/terraform/`](
 
 ## One-time TrueNAS bootstrap
 
-Four datasets, each chowned to the matching container user:
+The production control plane requires only the broker-state dataset:
 
 ```bash
-zfs create apps/apps/sulion
-chown 7321:7321 /mnt/apps/apps/sulion
-
-zfs create apps/apps/sulion/repos
-chown 7321:7321 /mnt/apps/apps/sulion/repos
-
-zfs create apps/apps/sulion/workspaces
-chown 7321:7321 /mnt/apps/apps/sulion/workspaces
-
 zfs create apps/apps/sulion-broker
 chown 7322:7322 /mnt/apps/apps/sulion-broker
 ```
 
-Why four:
-
-- `apps/apps/sulion` is the dev user's home. Credentials, shell history, claude sessions, etc.
-- `apps/apps/sulion/repos` holds the working trees. On its own dataset so you can expose it via NFS/SMB, snapshot it on a different cadence, and mount it from other machines without carrying home-dir state.
-- `apps/apps/sulion/workspaces` holds Sulion-created Git worktrees for isolated sessions.
-- `apps/apps/sulion-broker` belongs only to the broker container. It holds the broker master key and is **never** mounted into the PTY container.
-
-ZFS snapshots don't recurse into child datasets by default, so the nested layout keeps parent-level snapshots light — pass `-r` to `zfs snapshot` when you explicitly want everything.
+`apps/apps/sulion-broker` belongs only to the broker container. It holds the
+broker master key and is never mounted into control or a node. Existing
+`apps/apps/sulion`, `repos`, and `workspaces` datasets remain unchanged through
+the migration so the standalone rollback role can mount them. They are not in
+the production control-plane I/O path.
 
 UID/GID **7321** is deliberately off the 1000-series consumer range. Pinned in `backend/Dockerfile` via the `DEV_UID` / `DEV_GID` build args; change both together or not at all.
 
 The broker runs as **7322:7322**, configured in [`broker/Dockerfile`](</home/dev/repos/sulion/broker/Dockerfile>).
 
-`compose.yaml` bind-mounts each dataset explicitly — Docker's plain bind doesn't follow nested ZFS datasets under the parent, so every dataset needs its own entry. This also means you can add a `zfs create apps/apps/sulion/<something>` later and the compose file keeps working until you're ready to wire it in.
-
-That's the whole bootstrap. `backend/entrypoint.sh` self-provisions `~/.claude/`, `~/.ssh/`, `~/.local/bin/`, `~/.config/gh/`, `~/repos/`, and `~/workspaces/` on first boot and pre-writes `.claude/settings.json` wiring the `SessionStart` hook.
+The standalone overlay bind-mounts each legacy dataset explicitly because a
+plain Docker bind does not follow nested ZFS datasets under its parent.
 
 ## Broker key
 
@@ -119,11 +105,11 @@ No manual Komodo UI setup. No manual SSM puts.
 
 Deploy `ahara-infra` before the first Sulion edge deployment so the internal
 nginx upstream, WireGuard ingress, and Sulion deployer permissions already
-exist. Run a TrueNAS/standalone deployment from outside a Sulion PTY:
-replacing that combined backend still terminates its active shells. In the
-dedicated role, replacing only `backend` drops browser attachments while
-node-owned PTYs continue; replacing `node` remains a session-affecting
-operation.
+exist. The production TrueNAS deploy replaces only control-plane services: a
+backend replacement drops browser attachments, while node-owned PTYs continue
+and reconnect. Applying the combined rollback role still terminates any PTYs
+owned by that combined backend. Replacing `sulion-node` remains
+session-affecting until the Phase 7 drain gate is active.
 
 The backend/control container owns the main `sulion` database migrations and
 Postgres-only startup repair. Node, ingester, retrieval, and code intelligence
@@ -177,7 +163,9 @@ The PTY helper is `sulion-code`; the full command contract is in
 
 ## Drop in credentials
 
-SSH into TrueNAS. The dataset root is the container's `/home/dev/`:
+The following paths apply only when restoring the standalone TrueNAS rollback
+role. SSH into TrueNAS; the legacy dataset root is the container's
+`/home/dev/`:
 
 - SSH keys: `/mnt/apps/apps/sulion/.ssh/` (private keys chmod 0600)
 - Git identity: `/mnt/apps/apps/sulion/.gitconfig`
@@ -190,17 +178,30 @@ Secrets are no longer intended to live in repo-local `.env` files. The broker st
 
 ```bash
 curl -sf http://192.168.66.3:30080/health
-# → {"status":"ok","db":"ok"}
+# → {"status":"ok","db":"ok","role":"control-plane","development_node":"connected"}
 
 curl -sf https://sulion.services.ahara.io/health
-# → {"status":"ok","db":"ok"}
+# → {"status":"ok","db":"ok","role":"control-plane","development_node":"connected"}
 ```
 
-UI at `https://sulion.services.ahara.io/`. The frontend blocks on Cognito sign-in. REST and broker requests carry the Cognito token; PTY WebSockets use a short-lived, one-use ticket minted by an authenticated request. After login, create a repo, spawn a session, run `claude`. The `SessionStart` hook correlates the agent session; the timeline populates from ingested JSONL.
+`development_node` is `unavailable` while the node is disconnected; that does
+not make the control health check fail. UI and Postgres-backed history remain
+available, while filesystem and PTY mutations return `503`.
+
+UI is at `https://sulion.services.ahara.io/`. The frontend blocks on Cognito
+sign-in. Browser REST and broker-management requests carry the Cognito token;
+PTY WebSockets use a short-lived, one-use ticket minted by an authenticated
+request. The node establishes `wss://sulion.services.ahara.io/ws/nodes`
+outbound and uses service-authenticated `/broker` and `/retrieval` routes.
 
 ## Networking
 
-The public path is shared Ahara ALB/WAF → EC2 nginx → WireGuard → the frontend published on `192.168.66.3:30080`. The direct LAN URL remains available for operations and rollback. The backend container also publishes PTY dev-server slots on `192.168.66.3:26000-26010`. A process in a Sulion PTY must bind `0.0.0.0` on one of those ports to be reachable from the LAN, for example:
+The public path is shared Ahara ALB/WAF → EC2 nginx → WireGuard → the frontend
+published on `192.168.66.3:30080`. The direct LAN URL remains available for
+operations and rollback. Development ports `26000-26010` are published by
+workloads on `sulion-enclave`, not by the TrueNAS backend. A process in a
+Sulion PTY must bind `0.0.0.0` on one of those ports to be reachable from the
+LAN, for example:
 
 ```bash
 npm run dev -- --host 0.0.0.0 --port 26000
@@ -208,4 +209,8 @@ npm run dev -- --host 0.0.0.0 --port 26000
 
 Those dev ports are direct LAN exposure and are not routed through Sulion auth.
 
-The stack also creates the internal Docker network `sulion`; runner-launched containers join that network automatically so PTY workflows can reach them by container name. Public listener rules apply ALB JWT validation to Cognito-protected HTTP routes, while the application remains authoritative for public pairing, device-token, and one-use WebSocket-ticket routes.
+The standalone stack also creates the internal Docker network `sulion`;
+runner-launched containers join that network automatically. Public listener
+rules apply ALB JWT validation to browser routes. Node enrollment, the node
+WebSocket, signed broker redemption/PTY registration, and bearer-authenticated
+retrieval are application-authenticated machine routes.

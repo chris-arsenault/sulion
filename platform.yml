@@ -5,6 +5,9 @@ stack:
   - typescript
   - terraform
 truenas: true
+truenas_compose_path: compose.yaml
+truenas_compose_check_paths:
+  - compose.yaml
 images:
   - backend
   - broker

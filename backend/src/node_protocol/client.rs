@@ -78,6 +78,7 @@ impl NodeClientConfig {
             node_id,
             private_key_path,
             build_git_sha: option_env!("SULION_BUILD_GIT_SHA")
+                .or(option_env!("GITHUB_SHA"))
                 .unwrap_or("dev")
                 .to_string(),
             observed_release_digest: std::env::var("SULION_RELEASE_DIGEST").ok(),
