@@ -265,8 +265,8 @@ sudo nixos-rebuild switch \
   --flake github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#sulion-enclave
 ```
 
-Replace the branch ref with `main` after merge. Application image promotion is
-separate and uses `sulion-node-deploy` below.
+Replace the branch ref with `main` after merge. Application images update
+independently through the node release poller below.
 
 ## Runtime files
 
@@ -376,10 +376,22 @@ the broker master key remains protected by staying on TrueNAS.
 
 ## Deploy a CI release
 
-CI publishes every application image under the full Git commit SHA. Node
-activation is deliberately explicit because replacing `sulion-node` terminates
-its PTYs. After confirming that no active PTY needs to survive, deploy the
-successful commit:
+CI publishes every application image under the full Git commit SHA. After the
+images and TrueNAS control-plane deployment succeed, CI advances the
+`node-release` branch to that commit. `sulion-node-update.timer` polls that
+branch every two minutes and deploys a changed SHA through the root-owned
+Compose deployment command.
+
+Replacing `sulion-node` terminates its PTYs. Automatic node delivery therefore
+assumes running PTYs may be replaced by a successful `main` deployment. Check
+the timer and its most recent attempt with:
+
+```bash
+systemctl status sulion-node-update.timer
+journalctl -u sulion-node-update.service
+```
+
+The underlying command remains available for an immediate deployment:
 
 ```bash
 sudo sulion-node-deploy FULL_40_CHARACTER_GIT_SHA
@@ -387,13 +399,10 @@ sudo sulion-node-deploy FULL_40_CHARACTER_GIT_SHA
 
 The command accepts no mutable tags. It renders the dedicated Compose role
 with a temporary root-only environment, pulls the node, ingester, and
-code-intelligence images, records the selected SHA in `runtime.env`, applies
-the stack, and verifies that all three containers are running. It does not
-guess whether sessions are disposable and does not automatically roll back a
-failed activation.
-
-To return to a prior application release, run the same command with its
-previous known-good full SHA. NixOS host changes remain a separate
+code-intelligence images, applies the stack, verifies that all three containers
+are running, and then records the selected SHA in `runtime.env`. A failed
+activation leaves the previous SHA recorded so the poller retries. NixOS host
+changes remain a separate
 `nixos-rebuild switch --flake ...#sulion-enclave` operation.
 
 The one-time repository copy and authority switch are documented in

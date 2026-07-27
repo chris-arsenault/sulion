@@ -60,7 +60,7 @@ pkgs.testers.runNixOSTest {
     machine.fail("test -e /var/lib/sulion/broker")
     machine.wait_for_unit("NetworkManager.service")
 
-    machine.succeed("ssh-keygen -q -t ed25519 -N '' -f /tmp/enclave-admin")
+    machine.succeed("ssh-keygen -q -t ed25519 -N \"\" -f /tmp/enclave-admin")
     machine.succeed("sulion-admin-key add /tmp/enclave-admin.pub")
     machine.succeed("test $(wc -l </var/lib/sulion/config/ssh/authorized_keys) = 1")
     machine.succeed("sulion-admin-key add /tmp/enclave-admin.pub")
@@ -116,6 +116,15 @@ pkgs.testers.runNixOSTest {
     machine.succeed("systemctl is-enabled sulion-stack.service")
     machine.succeed(
       "test -e /etc/systemd/system/multi-user.target.wants/sulion-stack.service"
+    )
+    machine.succeed("command -v sulion-node-deploy")
+    machine.succeed("command -v sulion-node-update")
+    machine.succeed("systemctl is-enabled sulion-node-update.timer")
+    machine.succeed(
+      "systemctl cat sulion-node-update.timer | grep -F 'OnUnitActiveSec=2min'"
+    )
+    machine.succeed(
+      "systemctl cat sulion-node-update.service | grep -F 'Poll and deploy the current Sulion node release'"
     )
   '';
 }

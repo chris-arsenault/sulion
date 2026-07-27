@@ -56,12 +56,7 @@ echo "Pulling node-side images"
 "${compose[@]}" pull node ingester code-intel
 
 echo "Activating node release"
-install -m 0600 -o root -g root "${candidate}" "${env_file}"
-if ! systemctl reload-or-restart sulion-stack.service; then
-  echo "activation failed; runtime.env names ${tag}, but no rollback was attempted" >&2
-  echo "inspect sulion-stack.service and explicitly deploy the prior commit if needed" >&2
-  exit 1
-fi
+"${compose[@]}" up -d --remove-orphans
 
 for container in sulion-node sulion-ingester sulion-code-intel; do
   if [[ "$(docker inspect --format '{{.State.Running}}' "${container}" 2>/dev/null)" != "true" ]]; then
@@ -70,4 +65,5 @@ for container in sulion-node sulion-ingester sulion-code-intel; do
   fi
 done
 
+install -m 0600 -o root -g root "${candidate}" "${env_file}"
 echo "Sulion node release ${tag} is running"

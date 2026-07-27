@@ -40,6 +40,7 @@ Full list in [docs/architecture.md](docs/architecture.md#invariants--do-not-brea
 - E2E is the single Playwright suite in `frontend/e2e/`, backed by `scripts/run-e2e-stack.mjs`. No in-browser MSW mock mode.
 - Git staleness, invariants, and the dataset layout live in docs/; don't re-explain them in comments or commit messages.
 - Codex and Claude share the same canonical event schema. When editing ingest code, assume both agents flow through it.
+- Follow the implementation mechanism already agreed in the plan or conversation. Simplification may remove supporting machinery, but must not substitute a different architecture; ask before doing so.
 - In Sulion PTYs, run `sulion-code help` before structural code navigation.
 - `sulion plan` publishes a durable user-facing phase summary when useful; it
   complements rather than replaces an agent's detailed internal plan. See

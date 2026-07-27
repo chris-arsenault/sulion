@@ -14,6 +14,36 @@ let
     source = cfg.source;
     envFile = cfg.envFile;
   };
+  nodeUpdate = pkgs.writeShellApplication {
+    name = "sulion-node-update";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.git
+      pkgs.gnused
+      nodeDeploy
+    ];
+    text = ''
+      env_file=${lib.escapeShellArg cfg.envFile}
+      release="$(
+        git ls-remote --exit-code \
+          https://github.com/chris-arsenault/sulion.git \
+          refs/heads/node-release |
+          cut -f1
+      )"
+
+      if [[ ! "$release" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "node-release did not resolve to one full Git commit SHA" >&2
+        exit 65
+      fi
+
+      current="$(sed -n 's/^IMAGE_TAG=//p' "$env_file")"
+      if [[ "$current" == "$release" ]]; then
+        exit 0
+      fi
+
+      exec sulion-node-deploy "$release"
+    '';
+  };
 in
 {
   options.sulion.deployer = {
@@ -46,7 +76,10 @@ in
       }
     ];
 
-    environment.systemPackages = [ nodeDeploy ];
+    environment.systemPackages = [
+      nodeDeploy
+      nodeUpdate
+    ];
 
     systemd.services.sulion-stack = {
       description = "Sulion dedicated development-node application";
@@ -77,6 +110,34 @@ in
         RestartSec = "5s";
         TimeoutStartSec = "20min";
         TimeoutStopSec = "5min";
+      };
+    };
+
+    systemd.services.sulion-node-update = {
+      description = "Poll and deploy the current Sulion node release";
+      requires = [ "docker.service" ];
+      wants = [ "network-online.target" ];
+      after = [
+        "docker.service"
+        "network-online.target"
+      ];
+      unitConfig.ConditionPathExists = [
+        cfg.envFile
+        "/var/lib/sulion/node/private-key.pk8"
+      ];
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${nodeUpdate}/bin/sulion-node-update";
+      };
+    };
+
+    systemd.timers.sulion-node-update = {
+      description = "Poll for Sulion node releases";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "2min";
+        OnUnitActiveSec = "2min";
+        Unit = "sulion-node-update.service";
       };
     };
 

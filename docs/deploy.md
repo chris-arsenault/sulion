@@ -107,6 +107,9 @@ Push to `main`. The shared ahara CI workflow builds all Sulion images, pushes to
 2. Runs `terraform apply` in [`infrastructure/terraform/`](</home/dev/repos/sulion/infrastructure/terraform>) → creates the Sulion edge listener rules/certificate/DNS and Cognito app client, then publishes `/ahara/cognito/clients/sulion-app` plus `/ahara/auth-trigger/clients/sulion`.
 3. Creates (or reuses) the `sulion` Komodo stack pointed at this repo's `compose.yaml`.
 4. Resolves the SSM paths declared in [`secret-paths.yml`](</home/dev/repos/sulion/secret-paths.yml>), sets them as Komodo stack env vars, and deploys.
+5. Advances the `node-release` branch after the shared workflow succeeds. The
+   root-owned timer on `sulion-enclave` polls that branch and deploys the same
+   commit's node, ingester, and code-intelligence images.
 
 No manual Komodo UI setup. No manual SSM puts.
 

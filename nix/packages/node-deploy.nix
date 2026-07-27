@@ -11,7 +11,6 @@ pkgs.writeShellApplication {
     docker-compose
     gnugrep
     gnused
-    systemd
   ];
   text = ''
     export SULION_DEPLOY_SOURCE=${source}

@@ -81,3 +81,5 @@ Real stack + Postgres + seeded ingest data via `scripts/run-e2e-stack.mjs`. Spec
 ## CI
 
 `.github/workflows/ci.yml` is a minimal caller of the shared ahara workflow at `chris-arsenault/ahara/.github/workflows/ci.yml@main`. Lint / test / build / Docker push / Komodo deploy are driven by `platform.yml`.
+After that job succeeds on `main`, the caller advances `node-release` to the
+same commit for the dedicated host's pull deployer.

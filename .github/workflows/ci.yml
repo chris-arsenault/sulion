@@ -17,3 +17,17 @@ jobs:
   ci:
     uses: chris-arsenault/ahara/.github/workflows/ci.yml@main
     secrets: inherit
+
+  publish-node-release:
+    name: Publish node release
+    needs: ci
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Advance node release pointer
+        run: git push origin "${GITHUB_SHA}:refs/heads/node-release"
