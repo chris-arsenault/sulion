@@ -50,6 +50,18 @@ RUN dnf install -y --setopt=install_weak_deps=False dnf-plugins-core epel-releas
   && ln -sf /usr/bin/python3.12 /usr/local/bin/python3 \
   && ln -sf /usr/bin/python3.12 /usr/local/bin/python
 
+# The backend image supports two independent Docker policies. Brokered mode
+# keeps using the constrained runner service; direct mode reaches a rootless
+# user daemon through its mounted socket. Install the real CLI and Compose
+# plugin without installing or starting a daemon in this container.
+RUN dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo \
+  && dnf install -y --setopt=install_weak_deps=False \
+    docker-ce-cli \
+    docker-buildx-plugin \
+    docker-compose-plugin \
+  && dnf clean all \
+  && rm -rf /var/cache/dnf
+
 # Python helpers used from PTYs. Keep these system-installed so agents
 # can import them immediately from the default shell without creating a
 # virtualenv first.

@@ -596,6 +596,9 @@ fn configure_pty_environment(
         "SULION_CODE_INTEL_URL",
         "SULION_CODE_INTEL_TOKEN",
         "SULION_RUNNER_URL",
+        "SULION_DOCKER_MODE",
+        "DOCKER_HOST",
+        "XDG_RUNTIME_DIR",
     ] {
         forward_env(cmd, key);
     }

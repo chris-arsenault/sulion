@@ -1,6 +1,6 @@
 services:
   backend:
-    image: ghcr.io/chris-arsenault/sulion/backend:${IMAGE_TAG}
+    image: ${SULION_IMAGE_REGISTRY:-ghcr.io/chris-arsenault/sulion}/backend:${IMAGE_TAG:-latest}
     container_name: sulion-backend
     restart: unless-stopped
     environment:
@@ -8,11 +8,11 @@ services:
       # DB + role + SSM creds are auto-provisioned by the
       # ahara-db-migrate-truenas Lambda once sulion is registered
       # in ahara-infra/infrastructure/terraform/services/db-migrate-truenas.tf.
-      SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@192.168.66.3:5432/sulion"
+      SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@${SULION_POSTGRES_HOST:-192.168.66.3}:${SULION_POSTGRES_PORT:-5432}/${SULION_DB_NAME:-sulion}"
       SULION_LISTEN: "0.0.0.0:8080"
       # Public browser-facing origin. Used to build the device-pairing /pair
       # approval link returned by POST /api/devices/pair.
-      SULION_PUBLIC_URL: "https://sulion.services.ahara.io"
+      SULION_PUBLIC_URL: "${SULION_PUBLIC_URL:-https://sulion.services.ahara.io}"
       SULION_REPOS_ROOT: "/home/dev/repos"
       SULION_WORKSPACES_ROOT: "/home/dev/workspaces"
       SULION_CLAUDE_PROJECTS: "/home/dev/.claude/projects"
@@ -20,20 +20,21 @@ services:
       SULION_CORRELATE_SOCK: "/run/sulion/correlate.sock"
       SULION_AUTH_ISSUER_URL: "${SULION_AUTH_ISSUER_URL}"
       SULION_AUTH_CLIENT_ID: "${SULION_AUTH_CLIENT_ID}"
-      SULION_SECRET_BROKER_URL: "http://sulion-broker:8081"
+      SULION_SECRET_BROKER_URL: "${SULION_SECRET_BROKER_URL:-http://sulion-broker:8081}"
       SULION_SECRET_BROKER_REGISTRATION_TOKEN: "${SULION_SECRET_BROKER_REGISTRATION_TOKEN}"
-      SULION_RETRIEVAL_URL: "http://sulion-retrieval:8083"
+      SULION_RETRIEVAL_URL: "${SULION_RETRIEVAL_URL:-http://sulion-retrieval:8083}"
       SULION_RETRIEVAL_TOKEN: "${SULION_RETRIEVAL_TOKEN}"
-      SULION_CODE_INTEL_URL: "http://sulion-code-intel:8084"
+      SULION_CODE_INTEL_URL: "${SULION_CODE_INTEL_URL:-http://sulion-code-intel:8084}"
       SULION_CODE_INTEL_TOKEN: "${SULION_CODE_INTEL_TOKEN}"
-      SULION_RUNNER_URL: "http://sulion-runner:8082"
-      SULION_DEV_PORT_RANGE: "26000-26010"
+      SULION_RUNNER_URL: "${SULION_RUNNER_URL:-http://sulion-runner:8082}"
+      SULION_DOCKER_MODE: "${SULION_DOCKER_MODE:-brokered}"
+      SULION_DEV_PORT_RANGE: "${SULION_DEV_PORT_RANGE:-26000-26010}"
       HOME: "/home/dev"
     ports:
       # LAN-published PTY dev-server slots. Processes must bind
       # 0.0.0.0 on one of these container ports to be reachable at
       # http://192.168.66.3:<port>/.
-      - "192.168.66.3:26000-26010:26000-26010"
+      - "${SULION_DEV_BIND_ADDRESS:-192.168.66.3}:${SULION_DEV_PORT_RANGE:-26000-26010}:${SULION_DEV_PORT_RANGE:-26000-26010}"
     networks:
       - sulion
     volumes:
@@ -41,24 +42,24 @@ services:
       # The container entrypoint self-provisions the subtree on first
       # boot; TrueNAS operator only needs to create the dataset and
       # chown it to 7321:7321.
-      - /mnt/apps/apps/sulion:/home/dev
+      - ${SULION_HOME_HOST_PATH:-/mnt/apps/apps/sulion}:/home/dev
       # Repos on a nested dataset so the tree can be shared via
       # NFS/SMB and snapshotted independently of home. Docker binds
       # plain (not rbind), so a child ZFS dataset under the primary
       # bind isn't visible through /home/dev — needs its own explicit
       # mount. Works as a plain directory too before the dataset is
       # created, so ordering of the bootstrap vs deploy doesn't matter.
-      - /mnt/apps/apps/sulion/repos:/home/dev/repos
-      - /mnt/apps/apps/sulion/workspaces:/home/dev/workspaces
+      - ${SULION_REPOS_HOST_PATH:-/mnt/apps/apps/sulion/repos}:/home/dev/repos
+      - ${SULION_WORKSPACES_HOST_PATH:-/mnt/apps/apps/sulion/workspaces}:/home/dev/workspaces
       - sulion_run:/run/sulion
 
   broker:
-    image: ghcr.io/chris-arsenault/sulion/broker:${IMAGE_TAG}
+    image: ${SULION_IMAGE_REGISTRY:-ghcr.io/chris-arsenault/sulion}/broker:${IMAGE_TAG:-latest}
     container_name: sulion-broker
     restart: unless-stopped
     environment:
       SULION_SECRET_BROKER_LISTEN: "0.0.0.0:8081"
-      SULION_SECRET_BROKER_DB_URL: "postgres://${BROKER_DB_USER}:${BROKER_DB_PASSWORD}@192.168.66.3:5432/sulion_broker"
+      SULION_SECRET_BROKER_DB_URL: "postgres://${BROKER_DB_USER}:${BROKER_DB_PASSWORD}@${SULION_POSTGRES_HOST:-192.168.66.3}:${SULION_POSTGRES_PORT:-5432}/${SULION_BROKER_DB_NAME:-sulion_broker}"
       SULION_SECRET_BROKER_MASTER_KEY_PATH: "/var/lib/sulion-broker/master.key"
       SULION_AUTH_ISSUER_URL: "${SULION_AUTH_ISSUER_URL}"
       SULION_AUTH_CLIENT_ID: "${SULION_AUTH_CLIENT_ID}"
@@ -66,17 +67,17 @@ services:
     networks:
       - sulion
     volumes:
-      - /mnt/apps/apps/sulion-broker:/var/lib/sulion-broker:ro
+      - ${SULION_BROKER_STATE_HOST_PATH:-/mnt/apps/apps/sulion-broker}:/var/lib/sulion-broker:ro
 
   retrieval:
-    image: ghcr.io/chris-arsenault/sulion/retrieval:${IMAGE_TAG}
+    image: ${SULION_IMAGE_REGISTRY:-ghcr.io/chris-arsenault/sulion}/retrieval:${IMAGE_TAG:-latest}
     container_name: sulion-retrieval
     restart: unless-stopped
     environment:
       SULION_RETRIEVAL_LISTEN: "0.0.0.0:8083"
-      SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@192.168.66.3:5432/sulion"
+      SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@${SULION_POSTGRES_HOST:-192.168.66.3}:${SULION_POSTGRES_PORT:-5432}/${SULION_DB_NAME:-sulion}"
       SULION_RETRIEVAL_TOKEN: "${SULION_RETRIEVAL_TOKEN}"
-      SULION_RETRIEVAL_EMBEDDING_URL: "http://192.168.66.3:5361"
+      SULION_RETRIEVAL_EMBEDDING_URL: "${SULION_RETRIEVAL_EMBEDDING_URL:-http://192.168.66.3:5361}"
       SULION_RETRIEVAL_EMBEDDING_MODEL: "nomic-ai/nomic-embed-text-v1.5"
       SULION_RETRIEVAL_EMBEDDING_DIMENSIONS: "768"
       # Idle cadence for the semantic indexing worker; backlog drains continuously.
@@ -85,12 +86,12 @@ services:
       - sulion
 
   code-intel:
-    image: ghcr.io/chris-arsenault/sulion/code-intel:${IMAGE_TAG}
+    image: ${SULION_IMAGE_REGISTRY:-ghcr.io/chris-arsenault/sulion}/code-intel:${IMAGE_TAG:-latest}
     container_name: sulion-code-intel
     restart: unless-stopped
     environment:
       SULION_CODE_INTEL_LISTEN: "0.0.0.0:8084"
-      SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@192.168.66.3:5432/sulion"
+      SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@${SULION_POSTGRES_HOST:-192.168.66.3}:${SULION_POSTGRES_PORT:-5432}/${SULION_DB_NAME:-sulion}"
       SULION_CODE_INTEL_TOKEN: "${SULION_CODE_INTEL_TOKEN}"
       SULION_CODE_INTEL_ALLOWED_ROOTS: "/home/dev/repos,/home/dev/workspaces"
       SULION_CODE_INTEL_LSP_MAX_SERVERS: "6"
@@ -100,11 +101,11 @@ services:
     networks:
       - sulion
     volumes:
-      - /mnt/apps/apps/sulion/repos:/home/dev/repos:ro
-      - /mnt/apps/apps/sulion/workspaces:/home/dev/workspaces:ro
+      - ${SULION_REPOS_HOST_PATH:-/mnt/apps/apps/sulion/repos}:/home/dev/repos:ro
+      - ${SULION_WORKSPACES_HOST_PATH:-/mnt/apps/apps/sulion/workspaces}:/home/dev/workspaces:ro
 
   runner:
-    image: ghcr.io/chris-arsenault/sulion/runner:${IMAGE_TAG}
+    image: ${SULION_IMAGE_REGISTRY:-ghcr.io/chris-arsenault/sulion}/runner:${IMAGE_TAG:-latest}
     container_name: sulion-runner
     restart: unless-stopped
     environment:
@@ -120,17 +121,17 @@ services:
       # `docker build .` uses Docker's normal local context handling.
       # The Docker socket is the runner's privileged boundary; backend
       # and PTYs never receive it.
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /mnt/apps/apps/sulion:/home/dev:ro
-      - /mnt/apps/apps/sulion/repos:/home/dev/repos:ro
-      - /mnt/apps/apps/sulion/workspaces:/home/dev/workspaces:ro
+      - ${SULION_SYSTEM_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - ${SULION_HOME_HOST_PATH:-/mnt/apps/apps/sulion}:/home/dev:ro
+      - ${SULION_REPOS_HOST_PATH:-/mnt/apps/apps/sulion/repos}:/home/dev/repos:ro
+      - ${SULION_WORKSPACES_HOST_PATH:-/mnt/apps/apps/sulion/workspaces}:/home/dev/workspaces:ro
 
   frontend:
-    image: ghcr.io/chris-arsenault/sulion/frontend:${IMAGE_TAG}
+    image: ${SULION_IMAGE_REGISTRY:-ghcr.io/chris-arsenault/sulion}/frontend:${IMAGE_TAG:-latest}
     container_name: sulion-frontend
     restart: unless-stopped
     ports:
-      - "192.168.66.3:30080:80"
+      - "${SULION_FRONTEND_BIND_ADDRESS:-192.168.66.3}:${SULION_FRONTEND_PORT:-30080}:80"
     environment:
       SULION_COGNITO_USER_POOL_ID: "${SULION_COGNITO_USER_POOL_ID}"
       SULION_COGNITO_CLIENT_ID: "${SULION_COGNITO_CLIENT_ID}"
@@ -146,4 +147,4 @@ volumes:
 
 networks:
   sulion:
-    name: sulion
+    name: ${SULION_NETWORK_NAME:-sulion}

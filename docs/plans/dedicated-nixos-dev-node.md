@@ -547,18 +547,24 @@ Exit gate:
 
 Deliverables:
 
-- Common Compose definition plus control-plane, dev-node, standalone, and
-  TrueNAS overlays.
+- Common Compose definition plus dedicated-host, standalone, and TrueNAS
+  overlays for the current combined runtime.
 - Parameterized paths and service endpoints instead of TrueNAS addresses in
   common definitions.
 - Independent `direct` and `brokered` Docker policies.
 - CI validation of every Compose combination.
 - Existing Komodo deployment expressed through the TrueNAS/standalone profile.
 
+The control-plane and dev-node overlays are added in Phases 5 and 6, once the
+services they select exist. Until then, the dedicated-host overlay is a
+functional transitional standalone deployment; role files must not imply a
+physical split that the binaries do not yet implement.
+
 Exit gate:
 
 - Current TrueNAS deployment renders equivalently from the new files.
-- Generic Linux standalone starts and passes health checks.
+- Generic Linux standalone and the transitional dedicated deployment render
+  from the common graph.
 - Common service definitions are not duplicated across host adapters.
 
 ### Phase 3 — First-class NixOS dedicated host

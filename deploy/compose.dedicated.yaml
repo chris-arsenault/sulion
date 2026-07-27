@@ -1,0 +1,52 @@
+services:
+  backend:
+    network_mode: host
+    ports: !reset []
+    networks: !reset []
+    environment:
+      SULION_DEPLOYMENT_ROLE: standalone
+      SULION_DOCKER_MODE: direct
+      DOCKER_HOST: unix:///run/user/7321/docker.sock
+      XDG_RUNTIME_DIR: /run/user/7321
+      SULION_SECRET_BROKER_URL: http://127.0.0.1:8081
+      SULION_RETRIEVAL_URL: http://127.0.0.1:8083
+      SULION_CODE_INTEL_URL: http://127.0.0.1:8084
+      SULION_RUNNER_URL: ""
+    volumes: !override
+      - ${SULION_HOME_HOST_PATH:-/home/dev}:/home/dev
+      - type: bind
+        source: ${SULION_ROOTLESS_DOCKER_SOCKET:-/run/user/7321/docker.sock}
+        target: /run/user/7321/docker.sock
+        bind:
+          create_host_path: false
+      - sulion_run:/run/sulion
+
+  broker:
+    ports: !override
+      - "127.0.0.1:8081:8081"
+    volumes: !override
+      - ${SULION_BROKER_STATE_HOST_PATH:-/var/lib/sulion/broker}:/var/lib/sulion-broker:ro
+
+  retrieval:
+    ports: !override
+      - "127.0.0.1:8083:8083"
+
+  code-intel:
+    ports: !override
+      - "127.0.0.1:8084:8084"
+    volumes: !override
+      - ${SULION_REPOS_HOST_PATH:-/home/dev/repos}:/home/dev/repos:ro
+      - ${SULION_WORKSPACES_HOST_PATH:-/home/dev/workspaces}:/home/dev/workspaces:ro
+
+  runner:
+    profiles:
+      - brokered
+
+  frontend:
+    ports: !override
+      - "${SULION_FRONTEND_BIND_ADDRESS:-0.0.0.0}:${SULION_FRONTEND_PORT:-30080}:80"
+    environment:
+      SULION_BACKEND_UPSTREAM: host.docker.internal:8080
+      SULION_BROKER_UPSTREAM: broker:8081
+    extra_hosts:
+      - host.docker.internal:host-gateway

@@ -10,6 +10,7 @@
 
 ```bash
 make ci                      # fast lint + unit/typecheck checks; no integration
+make validate-deploy         # render every currently supported Compose role
 make lint-rust               # clippy
 make fmt-rust                # fmt --check
 make test-rust               # backend unit / non-DB tests
@@ -30,6 +31,11 @@ cd backend && cargo run
 # Frontend (proxies /api and /ws to :8080)
 cd frontend && pnpm install && pnpm dev
 ```
+
+The portable Compose bundle and role overlays are documented in
+[`deploy/README.md`](../deploy/README.md). `compose.yaml` remains the common
+application graph and preserves current TrueNAS defaults when no overlay or
+site variables are supplied.
 
 ## PTY Postgres
 

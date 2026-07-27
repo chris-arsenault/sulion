@@ -1,0 +1,6 @@
+services:
+  backend:
+    environment:
+      SULION_DEPLOYMENT_ROLE: standalone
+      SULION_DOCKER_MODE: brokered
+

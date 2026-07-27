@@ -1,6 +1,14 @@
-.PHONY: ci lint-rust fmt-rust test-rust test-rust-integration lint-ts typecheck-ts test-ts e2e e2e-install screenshots
+.PHONY: ci validate-deploy lint-rust fmt-rust test-rust test-rust-integration lint-ts typecheck-ts test-ts e2e e2e-install screenshots
 
-ci: lint-rust fmt-rust test-rust lint-ts typecheck-ts test-ts
+ci: validate-deploy lint-rust fmt-rust test-rust lint-ts typecheck-ts test-ts
+
+validate-deploy:
+	docker compose --env-file deploy/compose.validate.env -f compose.yaml config --quiet
+	docker compose --env-file deploy/compose.validate.env -f compose.yaml -f deploy/compose.truenas.yaml config --quiet
+	docker compose --env-file deploy/compose.validate.env -f compose.yaml -f deploy/compose.standalone.yaml config --quiet
+	docker compose --env-file deploy/compose.validate.env -f compose.yaml -f deploy/compose.dedicated.yaml config --quiet
+	docker compose --env-file deploy/compose.validate.env -f compose.yaml config --format json | jq -e '.services.backend.image == "ghcr.io/chris-arsenault/sulion/backend:test" and .services.backend.environment.SULION_DOCKER_MODE == "brokered" and .services.backend.volumes[0].source == "/mnt/apps/apps/sulion" and .services.frontend.ports[0].host_ip == "192.168.66.3"'
+	docker compose --env-file deploy/compose.validate.env -f compose.yaml -f deploy/compose.dedicated.yaml config --format json | jq -e '.services.runner == null and .services.backend.network_mode == "host" and .services.backend.ports == null and .services.backend.environment.SULION_DOCKER_MODE == "direct" and .services.backend.environment.DOCKER_HOST == "unix:///run/user/7321/docker.sock" and any(.services.backend.volumes[]; .source == "/run/user/7321/docker.sock") and all(.services.backend.volumes[]; .source != "/var/run/docker.sock") and .services.frontend.environment.SULION_BACKEND_UPSTREAM == "host.docker.internal:8080"'
 
 lint-rust:
 	cd backend && cargo clippy --release -- -D warnings -W clippy::cognitive_complexity

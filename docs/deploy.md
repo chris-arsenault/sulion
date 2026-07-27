@@ -2,6 +2,13 @@
 
 Standard ahara TrueNAS deploy: Docker Compose via Komodo, shared TrueNAS Postgres auto-provisioned by the migration Lambda, Komodo stack created on demand by the deploy action.
 
+The root `compose.yaml` is also the portable application definition. Host
+paths, Postgres endpoints, image registry, bind addresses, and public URL are
+parameterized while retaining the values below as TrueNAS defaults. Small role
+overlays live in [`deploy/`](../deploy/README.md); Komodo continues to consume
+the root definition during the migration, and rendering it with
+`deploy/compose.truenas.yaml` makes the standalone/brokered policy explicit.
+
 Sulion now has six services:
 
 - `backend` — main API + PTY runtime
