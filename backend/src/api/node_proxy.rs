@@ -2,7 +2,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::routes::{ApiError, ApiResult};
-use crate::node_protocol::{NodeOperationKind, NodeProtocolError, NodeRequestKind};
+use crate::node_protocol::{NodeProtocolError, NodeRequestKind};
 use crate::AppState;
 
 pub async fn default_node(state: &AppState) -> ApiResult<Uuid> {
@@ -43,31 +43,15 @@ pub async fn workspace_node(state: &AppState, workspace_id: Uuid) -> ApiResult<U
     node_id.ok_or_else(|| ApiError::Unavailable("workspace has no development-node owner".into()))
 }
 
-pub async fn operation(
-    state: &AppState,
-    node_id: Uuid,
-    idempotency_key: &str,
-    kind: NodeOperationKind,
-    resource_id: Option<Uuid>,
-    payload: Value,
-) -> ApiResult<Value> {
-    state
-        .node_control
-        .request_operation_and_wait(node_id, idempotency_key, kind, resource_id, payload)
-        .await
-        .map_err(map_error)
-}
-
 pub async fn request(
     state: &AppState,
     node_id: Uuid,
     kind: NodeRequestKind,
-    resource_id: Option<Uuid>,
     payload: Value,
 ) -> ApiResult<Value> {
     state
         .node_control
-        .request(node_id, kind, resource_id, payload)
+        .request(node_id, kind, payload)
         .await
         .map_err(map_error)
 }
@@ -86,9 +70,6 @@ pub fn map_error(error: NodeProtocolError) -> ApiError {
         }
         NodeProtocolError::Remote { code, message } => {
             ApiError::Unavailable(format!("development node {code}: {message}"))
-        }
-        NodeProtocolError::Incompatible(reason) => {
-            ApiError::Unavailable(format!("development node is incompatible: {reason}"))
         }
         other => ApiError::Internal(anyhow::anyhow!(other)),
     }

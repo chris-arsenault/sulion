@@ -13,14 +13,16 @@ pkgs.testers.runNixOSTest {
         ../modules/sulion-node.nix
         ../modules/sulion-samba.nix
         ../modules/sulion-deployer.nix
-        ../modules/sulion-backup.nix
       ];
 
       sulion = {
         enable = true;
         lanCidr = "192.168.0.0/16";
         samba.enable = true;
-        deployer.enable = true;
+        deployer = {
+          enable = true;
+          startAtBoot = true;
+        };
       };
 
       virtualisation.memorySize = 3072;
@@ -36,6 +38,8 @@ pkgs.testers.runNixOSTest {
     machine.succeed("test $(hostname) = sulion-enclave-test")
     machine.succeed("test $(id -u sulion) = 7321")
     machine.succeed("test $(id -g sulion) = 7321")
+    machine.succeed("test $(getent group docker | cut -d: -f3) = 7322")
+    machine.succeed("id -nG sulion | tr ' ' '\\n' | grep -Fx docker")
     machine.succeed("id -nG sulion | tr ' ' '\\n' | grep -Fx networkmanager")
     machine.fail("id dev")
     machine.succeed("test $(stat -c %U:%G /home/sulion/repos) = sulion:sulion")
@@ -44,7 +48,6 @@ pkgs.testers.runNixOSTest {
     machine.succeed("getfacl -cp /home/sulion/repos | grep -F 'default:other::---'")
     machine.succeed("test $(stat -c %U:%G /home/sulion/.local) = sulion:sulion")
     machine.succeed("test $(stat -c %U:%G /home/sulion/.local/share) = sulion:sulion")
-    machine.succeed("test $(stat -c %U:%G /home/sulion/.local/share/docker) = sulion:sulion")
     machine.succeed("test $(stat -c %U:%G /var/lib/sulion/node) = root:root")
     machine.succeed("test $(stat -c %a /var/lib/sulion/node) = 700")
     machine.succeed("test $(stat -c %U:%G /var/lib/sulion/config/ssh) = root:sulion")
@@ -70,25 +73,8 @@ pkgs.testers.runNixOSTest {
       "-o UserKnownHostsFile=/dev/null -i /tmp/enclave-admin sulion@127.0.0.1 true"
     )
 
-    docker_env = "XDG_RUNTIME_DIR=/run/user/7321 DOCKER_HOST=unix:///run/user/7321/docker.sock"
-    as_sulion = f"{docker_env} sudo --preserve-env=XDG_RUNTIME_DIR,DOCKER_HOST -u sulion"
-    try:
-        machine.wait_until_succeeds(
-            f"{as_sulion} systemctl --user is-active docker.service",
-            timeout=60,
-        )
-    except Exception:
-        _, user_status = machine.execute("loginctl user-status sulion --no-pager")
-        _, service_status = machine.execute(
-            f"{as_sulion} systemctl --user status docker.service --no-pager -l"
-        )
-        _, service_journal = machine.execute(
-            f"{as_sulion} journalctl --user -u docker.service --no-pager -n 100"
-        )
-        print(user_status)
-        print(service_status)
-        print(service_journal)
-        raise
+    machine.wait_for_unit("docker.service")
+    as_sulion = "sudo -u sulion"
     machine.succeed(f"tar cv --files-from /dev/null | {as_sulion} docker import - scratchimg")
     machine.succeed(f"{as_sulion} docker network create sulion-options")
     machine.succeed(f"{as_sulion} docker volume create sulion-options")
@@ -101,7 +87,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed(f"{as_sulion} docker ps --format '{{{{.Names}}}}' | grep -Fx options")
     machine.succeed(f"{as_sulion} docker inspect options")
     machine.succeed(f"{as_sulion} docker compose version")
-    machine.fail("sudo -u sulion env DOCKER_HOST=unix:///var/run/docker.sock docker version")
+    machine.succeed(f"{as_sulion} docker version")
     machine.succeed(f"{as_sulion} docker rm --force options")
 
     machine.wait_for_unit("samba-smbd.service")
@@ -119,7 +105,7 @@ pkgs.testers.runNixOSTest {
     )
     machine.succeed("getfattr -n user.DOSATTRIB /home/sulion/repos/from-smb/hostname.txt")
 
-    machine.succeed("systemctl cat sulion-stack.service | grep -F /run/user/7321/docker.sock")
+    machine.succeed("systemctl cat sulion-stack.service | grep -F /var/run/docker.sock")
     machine.succeed(
       "systemctl cat sulion-stack.service | grep -F /var/lib/sulion/node/private-key.pk8"
     )
@@ -127,9 +113,9 @@ pkgs.testers.runNixOSTest {
     machine.succeed(
       "systemctl cat sulion-stack.service | grep -F 'Sulion dedicated development-node application'"
     )
-    machine.fail("systemctl is-enabled sulion-stack.service")
+    machine.succeed("systemctl is-enabled sulion-stack.service")
     machine.succeed(
-      "test ! -e /etc/systemd/system/multi-user.target.wants/sulion-stack.service"
+      "test -e /etc/systemd/system/multi-user.target.wants/sulion-stack.service"
     )
   '';
 }

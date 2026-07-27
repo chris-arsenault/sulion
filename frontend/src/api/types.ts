@@ -172,30 +172,14 @@ export interface RepoView {
 export type NodeConnectionState =
   | "enrolled"
   | "connected"
-  | "disconnected"
-  | "stale"
-  | "incompatible"
-  | "revoked";
+  | "disconnected";
 
 export interface NodeView {
   id: string;
   display_name: string;
-  credential_status: "active" | "internal" | "revoked" | string;
   protocol_version: number | null;
-  build_git_sha: string | null;
-  capabilities: string[];
-  docker_policy: "none" | "brokered" | "direct";
-  docker_info: {
-    server_version?: string | null;
-    rootless?: boolean;
-  };
-  path_contract_version: number | null;
   boot_id: string | null;
   connection_state: NodeConnectionState;
-  compatibility_error: string | null;
-  desired_release_digest: string | null;
-  observed_release_digest: string | null;
-  drain_state: "accepting" | "draining" | "drained";
   connected_at: string | null;
   last_heartbeat_at: string | null;
   node_disconnected_at: string | null;

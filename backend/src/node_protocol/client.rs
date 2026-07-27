@@ -1,6 +1,5 @@
 //! Outbound development-node client.
 
-use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,7 +9,7 @@ use futures::{SinkExt, StreamExt};
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
@@ -19,27 +18,18 @@ use super::model::{
     RequestResultPayload, TerminalBytesPayload, TerminalResizePayload,
 };
 use super::{
-    heartbeat_envelope, operation_result_envelope, DockerInfo, DockerPolicy, NodeHello,
-    NodeOperationKind, NodeRequestKind, OperationResultPayload, OperationResultStatus,
-    WireEnvelope, CAPABILITY_OPERATION_PROBE, CAPABILITY_REPO_RUNTIME,
-    CAPABILITY_SESSION_RECONCILE, CAPABILITY_SESSION_RUNTIME, CAPABILITY_TERMINAL_STREAM,
-    CAPABILITY_WORKSPACE_RUNTIME, CONTROL_PROTOCOL_MAX, CONTROL_PROTOCOL_MIN,
-    NODE_PROTOCOL_VERSION, PATH_CONTRACT_VERSION,
+    heartbeat_envelope, NodeHello, NodeRequestKind, RequestResultStatus, WireEnvelope,
+    NODE_PROTOCOL_VERSION,
 };
 use crate::node_runtime::{NodeRuntime, SessionInputRequest, SessionResizeRequest};
 
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
-const RESULT_CACHE_CAPACITY: usize = 512;
 
 #[derive(Debug, Clone)]
 pub struct NodeClientConfig {
     pub control_url: String,
     pub node_id: Uuid,
     pub private_key_path: PathBuf,
-    pub build_git_sha: String,
-    pub observed_release_digest: Option<String>,
-    pub docker_policy: DockerPolicy,
-    pub docker_info: DockerInfo,
 }
 
 impl NodeClientConfig {
@@ -64,76 +54,18 @@ impl NodeClientConfig {
             std::env::var("SULION_NODE_PRIVATE_KEY_PATH")
                 .map_err(|_| anyhow::anyhow!("SULION_NODE_PRIVATE_KEY_PATH must be set"))?,
         );
-        let docker_policy = match std::env::var("SULION_DOCKER_MODE")
-            .unwrap_or_else(|_| "direct".into())
-            .as_str()
-        {
-            "direct" => DockerPolicy::Direct,
-            "brokered" => DockerPolicy::Brokered,
-            "none" => DockerPolicy::None,
-            _ => anyhow::bail!("SULION_DOCKER_MODE must be direct, brokered, or none"),
-        };
         Ok(Self {
             control_url,
             node_id,
             private_key_path,
-            build_git_sha: option_env!("SULION_BUILD_GIT_SHA")
-                .or(option_env!("GITHUB_SHA"))
-                .unwrap_or("dev")
-                .to_string(),
-            observed_release_digest: std::env::var("SULION_RELEASE_DIGEST").ok(),
-            docker_policy,
-            docker_info: DockerInfo {
-                server_version: std::env::var("SULION_DOCKER_SERVER_VERSION").ok(),
-                rootless: std::env::var("SULION_DOCKER_ROOTLESS")
-                    .map(|value| value != "0" && value != "false")
-                    .unwrap_or(docker_policy == DockerPolicy::Direct),
-            },
         })
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct OperationRequest {
-    kind: String,
-    request: Value,
 }
 
 #[derive(Debug, Deserialize)]
 struct EphemeralRequest {
     kind: String,
     request: Value,
-}
-
-struct ResultCache {
-    values: HashMap<Uuid, OperationResultPayload>,
-    order: VecDeque<Uuid>,
-}
-
-impl ResultCache {
-    fn new() -> Self {
-        Self {
-            values: HashMap::new(),
-            order: VecDeque::new(),
-        }
-    }
-
-    fn get(&self, operation_id: Uuid) -> Option<OperationResultPayload> {
-        self.values.get(&operation_id).cloned()
-    }
-
-    fn insert(&mut self, operation_id: Uuid, result: OperationResultPayload) {
-        if self.values.contains_key(&operation_id) {
-            return;
-        }
-        self.values.insert(operation_id, result);
-        self.order.push_back(operation_id);
-        while self.order.len() > RESULT_CACHE_CAPACITY {
-            if let Some(operation_id) = self.order.pop_front() {
-                self.values.remove(&operation_id);
-            }
-        }
-    }
 }
 
 pub async fn run(config: NodeClientConfig, runtime: Arc<NodeRuntime>) -> anyhow::Result<()> {
@@ -149,9 +81,8 @@ pub async fn run_with_key(
     if config.node_id != runtime.node_id() {
         anyhow::bail!("node client identity does not match runtime identity");
     }
-    let cache = Arc::new(Mutex::new(ResultCache::new()));
     loop {
-        match connect_once(&config, runtime.clone(), key.clone(), cache.clone()).await {
+        match connect_once(&config, runtime.clone(), key.clone()).await {
             Ok(()) => tracing::warn!("node connection closed; reconnecting"),
             Err(error) => tracing::warn!(%error, "node connection failed; reconnecting"),
         }
@@ -163,12 +94,14 @@ async fn connect_once(
     config: &NodeClientConfig,
     runtime: Arc<NodeRuntime>,
     key: Arc<Ed25519KeyPair>,
-    cache: Arc<Mutex<ResultCache>>,
 ) -> anyhow::Result<()> {
     let (socket, _) = tokio_tungstenite::connect_async(&config.control_url).await?;
     let (mut sink, mut source) = socket.split();
     let challenge = receive_challenge(&mut source).await?;
-    let hello = signed_hello(config, &runtime, &key, &challenge);
+    if challenge.protocol_version != NODE_PROTOCOL_VERSION {
+        anyhow::bail!("control and node protocol versions differ");
+    }
+    let hello = signed_hello(&runtime, &key, &challenge);
     let mut hello_envelope = WireEnvelope::new(runtime.node_id(), runtime.boot_id(), "node.hello");
     hello_envelope.protocol_version = hello.protocol_version;
     send_node_message(
@@ -180,13 +113,8 @@ async fn connect_once(
     )
     .await?;
     let acknowledgment = receive_ack(&mut source).await?;
-    if !acknowledgment.accepted {
-        anyhow::bail!(
-            "control rejected node: {}",
-            acknowledgment
-                .reason_code
-                .unwrap_or_else(|| "unknown_reason".into())
-        );
+    if acknowledgment.protocol_version != NODE_PROTOCOL_VERSION {
+        anyhow::bail!("control acknowledged an unexpected protocol version");
     }
     tracing::info!(
         node_id = %runtime.node_id(),
@@ -208,7 +136,6 @@ async fn connect_once(
                     runtime.boot_id(),
                     runtime.live_session_ids().await,
                     true,
-                    config.observed_release_digest.clone(),
                 );
                 send_node_envelope(&mut sink, heartbeat).await?;
             }
@@ -232,10 +159,9 @@ async fn connect_once(
                         };
                         let runtime = runtime.clone();
                         let outbound = outbound_tx.clone();
-                        let cache = cache.clone();
                         tokio::spawn(async move {
                             if let Err(error) =
-                                handle_command(runtime, outbound, cache, envelope).await
+                                handle_command(runtime, outbound, envelope).await
                             {
                                 tracing::warn!(%error, "node command failed");
                             }
@@ -257,36 +183,9 @@ async fn connect_once(
 async fn handle_command(
     runtime: Arc<NodeRuntime>,
     outbound: mpsc::Sender<WireEnvelope>,
-    cache: Arc<Mutex<ResultCache>>,
     command: WireEnvelope,
 ) -> anyhow::Result<()> {
     match command.message_kind.as_str() {
-        "operation.request" => {
-            let operation_id = command
-                .operation_id
-                .ok_or_else(|| anyhow::anyhow!("operation missing operation_id"))?;
-            let cached = cache.lock().await.get(operation_id);
-            let result = match cached {
-                Some(result) => result,
-                None => {
-                    let request: OperationRequest = serde_json::from_value(command.payload)?;
-                    let result = match NodeOperationKind::parse(&request.kind) {
-                        Some(kind) => runtime.execute_operation(kind, request.request).await,
-                        None => unsupported_operation(),
-                    };
-                    cache.lock().await.insert(operation_id, result.clone());
-                    result
-                }
-            };
-            outbound
-                .send(operation_result_envelope(
-                    runtime.node_id(),
-                    runtime.boot_id(),
-                    operation_id,
-                    result,
-                )?)
-                .await?;
-        }
         "request" => {
             let request_id = command
                 .request_id
@@ -361,7 +260,6 @@ async fn handle_command(
 }
 
 fn signed_hello(
-    config: &NodeClientConfig,
     runtime: &NodeRuntime,
     key: &Ed25519KeyPair,
     challenge: &ControlChallenge,
@@ -369,22 +267,7 @@ fn signed_hello(
     let mut hello = NodeHello {
         node_id: runtime.node_id(),
         boot_id: runtime.boot_id(),
-        build_git_sha: config.build_git_sha.clone(),
         protocol_version: NODE_PROTOCOL_VERSION,
-        supported_control_min: CONTROL_PROTOCOL_MIN,
-        supported_control_max: CONTROL_PROTOCOL_MAX,
-        capabilities: vec![
-            CAPABILITY_OPERATION_PROBE.into(),
-            CAPABILITY_SESSION_RECONCILE.into(),
-            CAPABILITY_SESSION_RUNTIME.into(),
-            CAPABILITY_TERMINAL_STREAM.into(),
-            CAPABILITY_REPO_RUNTIME.into(),
-            CAPABILITY_WORKSPACE_RUNTIME.into(),
-        ],
-        docker_policy: config.docker_policy,
-        docker_info: config.docker_info.clone(),
-        path_contract_version: PATH_CONTRACT_VERSION,
-        observed_release_digest: config.observed_release_digest.clone(),
         signature: String::new(),
     };
     hello.signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -457,18 +340,9 @@ pub fn load_private_key(path: &Path) -> anyhow::Result<Ed25519KeyPair> {
         .map_err(|_| anyhow::anyhow!("invalid Ed25519 PKCS#8 key at {}", path.display()))
 }
 
-fn unsupported_operation() -> OperationResultPayload {
-    OperationResultPayload {
-        status: OperationResultStatus::Failed,
-        result: None,
-        error_code: Some("unsupported_operation".into()),
-        error_message: Some("operation is not supported by this node release".into()),
-    }
-}
-
 fn unsupported_request() -> RequestResultPayload {
     RequestResultPayload {
-        status: OperationResultStatus::Failed,
+        status: RequestResultStatus::Failed,
         result: None,
         error_code: Some("unsupported_request".into()),
         error_message: Some("request is not supported by this node release".into()),
@@ -477,8 +351,8 @@ fn unsupported_request() -> RequestResultPayload {
 
 fn ensure_request_succeeded(result: RequestResultPayload) -> anyhow::Result<()> {
     match result.status {
-        OperationResultStatus::Succeeded => Ok(()),
-        OperationResultStatus::Failed => anyhow::bail!(
+        RequestResultStatus::Succeeded => Ok(()),
+        RequestResultStatus::Failed => anyhow::bail!(
             "{}: {}",
             result.error_code.unwrap_or_else(|| "request_failed".into()),
             result

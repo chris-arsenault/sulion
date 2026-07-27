@@ -47,7 +47,6 @@ export function StatsStrip() {
   const dbSizeDisplay = formatBytes(s.db.database_size_bytes);
   const primaryNode =
     nodes.find((node) => node.connection_state === "connected") ??
-    nodes.find((node) => node.connection_state !== "revoked") ??
     nodes[0] ??
     null;
 
@@ -184,38 +183,16 @@ export function StatsStrip() {
                 </div>
                 <div>
                   <dt>protocol</dt>
-                  <dd>{formatProtocol(primaryNode)}</dd>
-                </div>
-                <div>
-                  <dt>build</dt>
-                  <dd>{shortDigest(primaryNode.build_git_sha)}</dd>
-                </div>
-                <div>
-                  <dt>docker</dt>
-                  <dd>{primaryNode.docker_policy}</dd>
+                  <dd>
+                    {primaryNode.protocol_version == null
+                      ? "unknown"
+                      : `v${primaryNode.protocol_version}`}
+                  </dd>
                 </div>
                 <div>
                   <dt>last heartbeat</dt>
                   <dd>{formatTimestamp(primaryNode.last_heartbeat_at)}</dd>
                 </div>
-                <div>
-                  <dt>observed release</dt>
-                  <dd>{shortDigest(primaryNode.observed_release_digest)}</dd>
-                </div>
-                <div>
-                  <dt>desired release</dt>
-                  <dd>{shortDigest(primaryNode.desired_release_digest)}</dd>
-                </div>
-                <div>
-                  <dt>release state</dt>
-                  <dd>{releaseStatus(primaryNode)}</dd>
-                </div>
-                {primaryNode.compatibility_error && (
-                  <div>
-                    <dt>compatibility</dt>
-                    <dd>{primaryNode.compatibility_error}</dd>
-                  </div>
-                )}
               </dl>
             ) : (
               <span className="stats-strip__empty">No node enrolled</span>
@@ -237,32 +214,6 @@ function formatTimestamp(value: string | null): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function shortDigest(value: string | null): string {
-  if (!value) return "unreported";
-  return value.length > 18 ? `${value.slice(0, 15)}…` : value;
-}
-
-function formatProtocol(node: {
-  protocol_version: number | null;
-  path_contract_version: number | null;
-}): string {
-  const protocol = node.protocol_version == null ? "?" : node.protocol_version;
-  const paths =
-    node.path_contract_version == null ? "?" : node.path_contract_version;
-  return `v${protocol} / paths v${paths}`;
-}
-
-function releaseStatus(node: {
-  desired_release_digest: string | null;
-  observed_release_digest: string | null;
-}): string {
-  if (!node.desired_release_digest) return "not pinned";
-  if (!node.observed_release_digest) return "node unreported";
-  return node.desired_release_digest === node.observed_release_digest
-    ? "matched"
-    : "mismatch";
 }
 
 function MemBar({ pct }: { pct: number }) {

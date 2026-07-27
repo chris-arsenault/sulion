@@ -59,10 +59,7 @@
   border-color: color-mix(in srgb, var(--ok-mark) 55%, var(--canvas-3));
 }
 
-.stats-strip__node[data-state="stale"],
-.stats-strip__node[data-state="disconnected"],
-.stats-strip__node[data-state="incompatible"],
-.stats-strip__node[data-state="revoked"] {
+.stats-strip__node[data-state="disconnected"] {
   color: var(--crit-fg);
 }
 

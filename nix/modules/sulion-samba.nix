@@ -82,46 +82,8 @@ in
       };
     };
 
-    services.samba-wsdd = {
-      enable = true;
-      openFirewall = false;
-      workgroup = cfg.workgroup;
-      extraOptions = [
-        "--shortlog"
-        "--ipv4only"
-      ];
-    };
-
-    services.avahi = {
-      enable = true;
-      openFirewall = false;
-      nssmdns4 = true;
-      publish = {
-        enable = true;
-        addresses = true;
-      };
-    };
-
-    environment.etc."avahi/services/sulion-smb.service".text = ''
-      <?xml version="1.0" standalone="no"?>
-      <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
-      <service-group>
-        <name replace-wildcards="yes">%h SMB</name>
-        <service>
-          <type>_smb._tcp</type>
-          <port>445</port>
-        </service>
-        <service>
-          <type>_device-info._tcp</type>
-          <port>0</port>
-          <txt-record>model=Xserve</txt-record>
-        </service>
-      </service-group>
-    '';
-
     networking.firewall.extraInputRules = ''
-      ip saddr ${host.lanCidr} tcp dport { 445, 5357 } accept comment "Sulion SMB and WSD"
-      ip saddr ${host.lanCidr} udp dport { 3702, 5353 } accept comment "Sulion WSD and mDNS"
+      ip saddr ${host.lanCidr} tcp dport 445 accept comment "Sulion SMB"
     '';
   };
 }

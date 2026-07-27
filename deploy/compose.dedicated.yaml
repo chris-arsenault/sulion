@@ -14,8 +14,7 @@ services:
       SULION_WORKSPACES_ROOT: /home/sulion/workspaces
       SULION_CLAUDE_PROJECTS: /home/sulion/.claude/projects
       SULION_CODEX_SESSIONS: /home/sulion/.codex/sessions
-      DOCKER_HOST: unix:///run/user/7321/docker.sock
-      XDG_RUNTIME_DIR: /run/user/7321
+      DOCKER_HOST: unix:///var/run/docker.sock
       HOME: /home/sulion
       SULION_SECRET_BROKER_URL: ${SULION_SECRET_BROKER_URL:-https://sulion.services.ahara.io/broker}
       SULION_RETRIEVAL_URL: ${SULION_RETRIEVAL_URL:-https://sulion.services.ahara.io/retrieval}
@@ -24,8 +23,8 @@ services:
       - ${SULION_HOME_HOST_PATH:-/home/sulion}:/home/sulion
       - ${SULION_NODE_STATE_HOST_PATH:-/var/lib/sulion/node}:/var/lib/sulion-node:ro
       - type: bind
-        source: ${SULION_ROOTLESS_DOCKER_SOCKET:-/run/user/7321/docker.sock}
-        target: /run/user/7321/docker.sock
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
         bind:
           create_host_path: false
       - sulion_run:/run/sulion

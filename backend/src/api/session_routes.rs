@@ -14,7 +14,7 @@ use super::node_proxy;
 use super::routes::{repos_root, ApiError, ApiResult};
 use crate::agent::AgentType;
 use crate::ingest::{canonical, timeline};
-use crate::node_protocol::{NodeOperationKind, NodeRequestKind};
+use crate::node_protocol::NodeRequestKind;
 use crate::node_runtime::{
     AgentRequest, ResourceRequest, SessionCreateRequest, SessionInputRequest,
     SessionLaunch as NodeSessionLaunch,
@@ -258,12 +258,10 @@ async fn create_session_on_node(
         rows: req.rows.unwrap_or(32),
         launch,
     };
-    let result = node_proxy::operation(
+    let result = node_proxy::request(
         state,
         node_id,
-        &format!("session-create:{session_id}"),
-        NodeOperationKind::SessionCreate,
-        Some(session_id),
+        NodeRequestKind::SessionCreate,
         serde_json::to_value(request).map_err(anyhow::Error::from)?,
     )
     .await?;
@@ -593,12 +591,10 @@ pub(super) async fn start_session_agent(
 
     if state.node_protocol_required {
         let node_id = node_proxy::session_node(&state, id).await?;
-        node_proxy::operation(
+        node_proxy::request(
             &state,
             node_id,
-            &format!("session-agent-start:{id}:{}", Uuid::new_v4()),
-            NodeOperationKind::SessionAgentStart,
-            Some(id),
+            NodeRequestKind::SessionAgentStart,
             serde_json::to_value(AgentRequest {
                 session_id: id,
                 agent: agent.as_str().into(),
@@ -629,12 +625,10 @@ pub(super) async fn interrupt_session_agent(
     }
     if state.node_protocol_required {
         let node_id = node_proxy::session_node(&state, id).await?;
-        node_proxy::operation(
+        node_proxy::request(
             &state,
             node_id,
-            &format!("session-agent-interrupt:{id}:{}", Uuid::new_v4()),
-            NodeOperationKind::SessionAgentInterrupt,
-            Some(id),
+            NodeRequestKind::SessionAgentInterrupt,
             serde_json::to_value(ResourceRequest { id }).map_err(anyhow::Error::from)?,
         )
         .await?;
@@ -683,7 +677,6 @@ pub(super) async fn send_session_prompt(
                 &state,
                 node_id,
                 NodeRequestKind::SessionInput,
-                Some(id),
                 serde_json::to_value(SessionInputRequest::from_bytes(id, &chunk))
                     .map_err(anyhow::Error::from)?,
             )
@@ -712,12 +705,10 @@ pub(super) async fn delete_session(
 ) -> ApiResult<StatusCode> {
     if state.node_protocol_required {
         let node_id = node_proxy::session_node(&state, id).await?;
-        node_proxy::operation(
+        node_proxy::request(
             &state,
             node_id,
-            &format!("session-delete:{id}"),
-            NodeOperationKind::SessionDelete,
-            Some(id),
+            NodeRequestKind::SessionDelete,
             serde_json::to_value(ResourceRequest { id }).map_err(anyhow::Error::from)?,
         )
         .await?;

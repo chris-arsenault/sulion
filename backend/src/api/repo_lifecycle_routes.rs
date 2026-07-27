@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::node_proxy;
 use super::routes::{repo_path, repos_root, validate_repo_name, ApiError, ApiResult};
-use crate::node_protocol::NodeOperationKind;
+use crate::node_protocol::NodeRequestKind;
 use crate::node_runtime::{RepoDeleteRequest, RepoRenameRequest};
 use crate::{git, AppState};
 
@@ -42,12 +42,10 @@ pub(super) async fn patch_repo(
 
     if state.node_protocol_required {
         let node_id = node_proxy::repo_node(&state, &old_name).await?;
-        let result = node_proxy::operation(
+        let result = node_proxy::request(
             &state,
             node_id,
-            &format!("repo-rename:{old_name}:{new_name}:{}", uuid::Uuid::new_v4()),
-            NodeOperationKind::RepoRename,
-            None,
+            NodeRequestKind::RepoRename,
             serde_json::to_value(RepoRenameRequest { old_name, new_name })
                 .map_err(anyhow::Error::from)?,
         )
@@ -82,12 +80,10 @@ pub(super) async fn delete_repo(
 
     if state.node_protocol_required {
         let node_id = node_proxy::repo_node(&state, &name).await?;
-        node_proxy::operation(
+        node_proxy::request(
             &state,
             node_id,
-            &format!("repo-delete:{name}:{}", uuid::Uuid::new_v4()),
-            NodeOperationKind::RepoDelete,
-            None,
+            NodeRequestKind::RepoDelete,
             serde_json::to_value(RepoDeleteRequest {
                 name,
                 force: q.force.unwrap_or(false),

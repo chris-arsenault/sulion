@@ -16,7 +16,7 @@ use super::device_routes::DevicePrincipal;
 use super::file_content::{self, FileResponse};
 use super::node_proxy;
 use super::routes::{repo_path, repos_root, validate_repo_name, ApiError, ApiResult};
-use crate::node_protocol::{NodeOperationKind, NodeRequestKind};
+use crate::node_protocol::NodeRequestKind;
 use crate::node_runtime::{
     RawFileResponse, RepoCreateRequest, RepoPathRequest, RepoStageRequest, RepoUploadRequest,
     StageRequest, UploadRequest,
@@ -44,12 +44,10 @@ pub(super) async fn create_repo(
     validate_repo_name(&name)?;
     if state.node_protocol_required {
         let node_id = node_proxy::default_node(&state).await?;
-        let result = node_proxy::operation(
+        let result = node_proxy::request(
             &state,
             node_id,
-            &format!("repo-create:{name}:{}", Uuid::new_v4()),
-            NodeOperationKind::RepoCreate,
-            None,
+            NodeRequestKind::RepoCreate,
             serde_json::to_value(RepoCreateRequest {
                 name,
                 git_url: req.git_url,
@@ -126,7 +124,6 @@ pub(super) async fn post_repo_refresh(
             &state,
             node_id,
             NodeRequestKind::RepoRefresh,
-            None,
             serde_json::to_value(RepoPathRequest {
                 repo: name,
                 path: None,
@@ -156,7 +153,6 @@ pub(super) async fn get_repo_dirty_paths(
             &state,
             node_id,
             NodeRequestKind::RepoDirtyPaths,
-            None,
             serde_json::to_value(RepoPathRequest {
                 repo: name,
                 path: None,
@@ -193,7 +189,6 @@ pub(super) async fn get_repo_files(
             &state,
             node_id,
             NodeRequestKind::RepoFiles,
-            None,
             serde_json::to_value(RepoPathRequest {
                 repo: name,
                 path: q.path,
@@ -273,7 +268,6 @@ pub(super) async fn get_repo_file(
             &state,
             node_id,
             NodeRequestKind::RepoFilePreview,
-            None,
             serde_json::to_value(RepoPathRequest {
                 repo: name,
                 path: Some(q.path),
@@ -306,7 +300,6 @@ pub(super) async fn get_repo_file_raw(
             &state,
             node_id,
             NodeRequestKind::RepoFileRaw,
-            None,
             serde_json::to_value(RepoPathRequest {
                 repo: name,
                 path: Some(q.path),
@@ -338,7 +331,6 @@ pub(super) async fn get_repo_file_trace(
             &state,
             node_id,
             NodeRequestKind::RepoFilePreview,
-            None,
             serde_json::to_value(RepoPathRequest {
                 repo: name.clone(),
                 path: Some(q.path),
@@ -352,7 +344,6 @@ pub(super) async fn get_repo_file_trace(
             &state,
             node_id,
             NodeRequestKind::RepoDirtyPaths,
-            None,
             serde_json::to_value(RepoPathRequest {
                 repo: name.clone(),
                 path: None,
@@ -431,7 +422,6 @@ pub(super) async fn get_repo_diff(
             &state,
             node_id,
             NodeRequestKind::RepoDiff,
-            None,
             serde_json::to_value(RepoPathRequest {
                 repo: name,
                 path: q.path,
@@ -468,7 +458,6 @@ pub(super) async fn post_repo_stage(
             &state,
             node_id,
             NodeRequestKind::RepoStage,
-            None,
             serde_json::to_value(RepoStageRequest {
                 repo: name,
                 change: StageRequest {
@@ -563,7 +552,6 @@ pub(super) async fn post_repo_upload(
                 &state,
                 node_id,
                 NodeRequestKind::RepoUpload,
-                None,
                 serde_json::to_value(RepoUploadRequest {
                     repo: name.clone(),
                     upload: UploadRequest::new(path, &bytes),
@@ -682,7 +670,6 @@ pub(super) async fn post_repo_ingest(
             &state,
             node_id,
             NodeRequestKind::RepoUpload,
-            None,
             serde_json::to_value(RepoUploadRequest {
                 repo: name.clone(),
                 upload: UploadRequest::new(rel.clone(), &body),
@@ -763,7 +750,6 @@ pub(super) async fn get_repo_raw(
             &state,
             node_id,
             NodeRequestKind::RepoFileRaw,
-            None,
             serde_json::to_value(RepoPathRequest {
                 repo: name,
                 path: Some(rel),

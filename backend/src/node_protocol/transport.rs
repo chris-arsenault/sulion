@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{post, Router};
@@ -14,7 +14,7 @@ use super::model::{
     ControlWireMessage, CreateEnrollmentTokenRequest, EnrollNodeRequest, FragmentAssembler,
     NodeWireMessage, WireEnvelope, MAX_NODE_FRAME_BYTES, NODE_PROTOCOL_VERSION,
 };
-use super::{NodeProtocolError, Registration};
+use super::NodeProtocolError;
 use crate::AppState;
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -26,12 +26,10 @@ pub fn public_router() -> Router<Arc<AppState>> {
 }
 
 pub fn admin_router() -> Router<Arc<AppState>> {
-    Router::new()
-        .route(
-            "/api/nodes/enrollment-tokens",
-            post(create_enrollment_token),
-        )
-        .route("/api/nodes/:id/revoke", post(revoke))
+    Router::new().route(
+        "/api/nodes/enrollment-tokens",
+        post(create_enrollment_token),
+    )
 }
 
 async fn create_enrollment_token(
@@ -55,14 +53,6 @@ async fn enroll(
 ) -> Result<impl IntoResponse, NodeApiError> {
     let enrolled = state.node_control.enroll(request).await?;
     Ok((StatusCode::CREATED, Json(enrolled)))
-}
-
-async fn revoke(
-    State(state): State<Arc<AppState>>,
-    Path(node_id): Path<Uuid>,
-) -> Result<StatusCode, NodeApiError> {
-    state.node_control.revoke(node_id).await?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn connect(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -98,9 +88,7 @@ async fn node_socket(state: Arc<AppState>, mut socket: WebSocket) {
             return;
         }
     };
-    let hello_node_id = hello.node_id;
-    let hello_boot_id = hello.boot_id;
-    let registration = match state
+    let connection = match state
         .node_control
         .authenticate_and_register(hello, &challenge)
         .await
@@ -112,17 +100,7 @@ async fn node_socket(state: Arc<AppState>, mut socket: WebSocket) {
             return;
         }
     };
-    match registration {
-        Registration::Rejected(ack) => {
-            if let Ok(envelope) =
-                ack_envelope(ack, challenge.challenge_id, hello_node_id, hello_boot_id)
-            {
-                let _ = send_json(&mut socket, &ControlWireMessage::Envelope { envelope }).await;
-            }
-            close_with_reason(&mut socket, 1008, "incompatible node").await;
-        }
-        Registration::Accepted(connection) => run_connection(state, socket, connection).await,
-    }
+    run_connection(state, socket, connection).await;
 }
 
 async fn receive_hello(socket: &mut WebSocket) -> Result<super::NodeHello, NodeProtocolError> {
@@ -155,7 +133,6 @@ async fn run_connection(
 ) {
     let ack = match ack_envelope(
         connection.ack.clone(),
-        Uuid::new_v4(),
         connection.node_id,
         connection.boot_id,
     ) {
@@ -262,13 +239,11 @@ async fn receive_message(
 
 fn ack_envelope(
     ack: super::model::HelloAck,
-    request_id: Uuid,
     node_id: Uuid,
     boot_id: Uuid,
 ) -> Result<WireEnvelope, NodeProtocolError> {
     let mut envelope = WireEnvelope::new(node_id, boot_id, "control.hello_ack");
     envelope.protocol_version = NODE_PROTOCOL_VERSION;
-    envelope.request_id = Some(request_id);
     envelope.payload = serde_json::to_value(ack)?;
     Ok(envelope)
 }
@@ -317,15 +292,11 @@ impl IntoResponse for NodeApiError {
             NodeProtocolError::InvalidEnrollmentToken => {
                 (StatusCode::UNAUTHORIZED, "invalid_enrollment_token")
             }
-            NodeProtocolError::Revoked | NodeProtocolError::AuthenticationFailed => {
+            NodeProtocolError::AuthenticationFailed => {
                 (StatusCode::UNAUTHORIZED, "node_authentication_failed")
             }
             NodeProtocolError::InvalidRequest(_) => (StatusCode::BAD_REQUEST, "invalid_request"),
-            NodeProtocolError::Incompatible(_) => (StatusCode::CONFLICT, "node_incompatible"),
             NodeProtocolError::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, "node_unavailable"),
-            NodeProtocolError::IdempotencyConflict => {
-                (StatusCode::CONFLICT, "idempotency_conflict")
-            }
             NodeProtocolError::Remote { .. } => (StatusCode::BAD_GATEWAY, "node_request_failed"),
             NodeProtocolError::Database(_)
             | NodeProtocolError::Serialization(_)

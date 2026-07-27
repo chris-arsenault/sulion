@@ -22,19 +22,9 @@ function nodeView(overrides: Partial<NodeView> = {}): NodeView {
   return {
     id: "00000000-0000-0000-0000-000000000001",
     display_name: "sulion-enclave",
-    credential_status: "active",
     protocol_version: 1,
-    build_git_sha: "abc123",
-    capabilities: ["operation.probe.v1"],
-    docker_policy: "direct",
-    docker_info: { server_version: "27", rootless: true },
-    path_contract_version: 1,
     boot_id: "10000000-0000-0000-0000-000000000001",
     connection_state: "connected",
-    compatibility_error: null,
-    desired_release_digest: "sha256:1234567890abcdef",
-    observed_release_digest: "sha256:1234567890abcdef",
-    drain_state: "accepting",
     connected_at: "2026-07-27T12:00:00Z",
     last_heartbeat_at: "2026-07-27T12:00:03Z",
     node_disconnected_at: null,
@@ -91,32 +81,23 @@ describe("StatsStrip", () => {
     await user.click(screen.getByLabelText(/toggle stats details/i));
     expect(screen.getByText("Development node")).toBeDefined();
     expect(screen.getByText("sulion-enclave")).toBeDefined();
-    expect(screen.getByText("direct")).toBeDefined();
-    expect(screen.getByText("v1 / paths v1")).toBeDefined();
-    expect(screen.getByText("abc123")).toBeDefined();
-    expect(screen.getAllByText("sha256:12345678…")).toHaveLength(2);
-    expect(screen.getByText("matched")).toBeDefined();
+    expect(screen.getByText("v1")).toBeDefined();
   });
 
-  it("surfaces incompatible node details and release mismatch", async () => {
+  it("surfaces a disconnected node without inventing compatibility state", async () => {
     installStatsFetch(statsPayload(), [
       nodeView({
-        connection_state: "incompatible",
-        compatibility_error: "path_contract_version",
-        desired_release_digest: "release-control",
-        observed_release_digest: "release-node",
+        connection_state: "disconnected",
+        last_heartbeat_at: null,
       }),
     ]);
     render(<StatsStrip />);
     await waitFor(() => {
-      expect(screen.getByText("incompatible")).toBeDefined();
+      expect(screen.getByText("disconnected")).toBeDefined();
     });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await user.click(screen.getByLabelText(/toggle stats details/i));
-    expect(screen.getByText("path_contract_version")).toBeDefined();
-    expect(screen.getByText("release-control")).toBeDefined();
-    expect(screen.getByText("release-node")).toBeDefined();
-    expect(screen.getByText("mismatch")).toBeDefined();
+    expect(screen.getByText("never")).toBeDefined();
   });
 
   it("shows 'stats unavailable' when the endpoint fails on first load", async () => {

@@ -8,26 +8,24 @@ Sulion module.
 
 ## Boundary
 
-The host runs two Docker daemons:
+The host runs one ordinary system Docker daemon. It runs the Sulion node-side
+containers and development containers, and the single-user `sulion` identity
+belongs to the `docker` group. The dedicated Compose role mounts
+`/var/run/docker.sock` into `sulion-node`. This is intentionally host-level
+authority on a dedicated machine; it keeps standard Docker, Compose, BuildKit,
+privileged containers, networking, and local Supabase behavior intact.
 
-- root-owned system Docker runs the Sulion node, ingester, and code-intelligence
-  containers;
-- the lingering `sulion` user owns a rootless daemon at
-  `/run/user/7321/docker.sock`.
-
-The dedicated Compose role mounts only the latter into `sulion-node`. The
-TrueNAS control plane is not present on this host, and the node-local ingester
-sees only transcript directories. The `sulion` user is intentionally not a
-member of the system `docker` group.
+The TrueNAS control plane is not present on this host, and the node-local
+ingester sees only transcript directories.
 
 Repositories live at `/home/sulion/repos` on the machine's local filesystem.
 The dedicated Compose adapter preserves `/home/sulion` inside the workbench so
-bind paths sent to the host's rootless Docker daemon resolve identically. The
+bind paths sent to the host's Docker daemon resolve identically. The
 shared OCI image still resolves UID/GID 7321 to its portable `dev` account, but
 the host login and all host-visible ownership use `sulion`; no second host user
 is created. Samba exports the repository directory as `repos`; workspaces,
-agent state, Docker state, and deployment secrets are not shared. SMB, WSD,
-mDNS, SSH, and development ports are accepted only from `192.168.66.0/24`.
+agent state, Docker state, and deployment secrets are not shared. SMB, SSH,
+and development ports are accepted only from `192.168.66.0/24`.
 The node initiates its authenticated control connection outbound; this host
 exposes no Sulion API or frontend.
 
@@ -62,7 +60,7 @@ or improvise different storage choices during installation.
 | Console | US keymap, English UTF-8 environment, no graphical desktop |
 | Interactive identity | `sulion`, UID/GID 7321, wheel and NetworkManager member |
 | Remote login | SSH keys only; root SSH and SSH passwords disabled |
-| Node startup | `sulion-stack.service` installed but disabled |
+| Node startup | enabled; skipped until its root-owned runtime files exist |
 
 No LUKS is an explicit availability choice: this node must recover from a
 power interruption without a local unlock. If physical-at-rest protection
@@ -231,7 +229,7 @@ findmnt /
 findmnt /boot
 id
 nmcli -f NAME,TYPE,DEVICE connection show --active
-systemctl --user is-active docker.service
+systemctl is-active docker.service
 docker info
 docker compose version
 docker run --rm --memory 1g --cpus 2 docker.io/library/alpine:latest true
@@ -239,13 +237,33 @@ systemctl is-enabled sulion-stack.service
 ```
 
 Expected results are hostname `sulion-enclave`, root label `nixos`, boot label
-`boot`, UID/GID 7321, an active wired connection, an active rootless Docker
-daemon, a successful limited container, and a disabled Sulion node unit.
-`systemctl is-enabled` intentionally exits nonzero while printing `disabled`.
+`boot`, UID/GID 7321, an active wired connection, an active system Docker
+daemon, a successful limited container, and an enabled Sulion node unit. The
+unit remains inactive until its runtime environment and node key exist.
 
 From another LAN machine, connect to `\\sulion-enclave\repos` on Windows or
 `smb://sulion-enclave.local/repos` on macOS and create a test directory. On the
 node it must appear under `/home/sulion/repos` owned by `sulion:sulion`.
+
+## Apply host configuration updates
+
+Test the repository flake before making it the boot default:
+
+```bash
+sudo nixos-rebuild test \
+  --flake github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#sulion-enclave
+```
+
+Verify SSH, Docker, and Samba from another LAN machine while the test
+configuration is active. Then persist it:
+
+```bash
+sudo nixos-rebuild switch \
+  --flake github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#sulion-enclave
+```
+
+Replace the branch ref with `main` after merge. Application image promotion is
+separate and uses `sulion-node-deploy` below.
 
 ## Runtime files
 
@@ -257,8 +275,7 @@ paths under `/var/lib/sulion`; provision:
   public keys for OpenSSH authentication but cannot modify them;
 - `/var/lib/sulion/config/runtime.env` with mode `0600`, using
   `deploy/dedicated.env.example` as the field contract;
-- `/var/lib/sulion/node/private-key.pk8`, owned by `root:root` with mode `0600`;
-- optional Restic credentials under `/var/lib/sulion/secrets`.
+- `/var/lib/sulion/node/private-key.pk8`, owned by `root:root` with mode `0600`.
 
 The broker database and master key remain on TrueNAS. They must not be copied
 to this host.
@@ -298,10 +315,11 @@ sudo docker run --rm --user root \
   keygen --output /var/lib/sulion-node/private-key.pk8
 ```
 
-The `sulion-stack.service` unit is installed but deliberately disabled until
-matching OCI images and the runtime env file exist. It starts only the node,
-ingester, and code-intelligence roles. Start it once; the unenrolled node will
-retry safely while the TrueNAS control plane comes online:
+The `sulion-stack.service` unit is enabled but its path conditions keep it
+inactive until matching OCI images, the runtime env file, and the node key
+exist. It starts only the node, ingester, and code-intelligence roles. Start it
+once; the unenrolled node will retry safely while the TrueNAS control plane
+comes online:
 
 ```bash
 sudo systemctl start sulion-stack.service
@@ -342,18 +360,45 @@ sudo systemctl reload sulion-stack.service
 
 The returned `node_id` must equal the checked-in ID. The TrueNAS control plane
 can then redeploy independently of `sulion-node`; browser terminals reconnect
-to the surviving PTY. Reloading `sulion-stack.service` updates only the
-node-side containers and remains session-affecting until Phase 7 adds the
-deployment drain gate.
+to the surviving PTY. Reloading `sulion-stack.service` replaces node-side
+containers and is therefore an explicit session-affecting action.
 
-At runtime `sulion-node` opens the root-only key and then drops its process,
-filesystem, PTY, and Docker work to UID/GID 7321. Agent shells therefore cannot
-read or replace the enrolled node credential, while every file they create
-still has the Samba-visible `sulion:sulion` identity on the host.
+At runtime `sulion-node` opens the root-owned key and then drops its process,
+filesystem, and PTY work to UID/GID 7321. Ordinary processes cannot read the
+key directly, while files they create retain the Samba-visible
+`sulion:sulion` identity. Direct Docker access is deliberately not an
+isolation boundary: a Docker-capable PTY has host-root-equivalent authority and
+could reach root-owned host data. The design trusts this dedicated single user;
+the broker master key remains protected by staying on TrueNAS.
+
+## Deploy a CI release
+
+CI publishes every application image under the full Git commit SHA. Node
+activation is deliberately explicit because replacing `sulion-node` terminates
+its PTYs. After confirming that no active PTY needs to survive, deploy the
+successful commit:
+
+```bash
+sudo sulion-node-deploy FULL_40_CHARACTER_GIT_SHA
+```
+
+The command accepts no mutable tags. It renders the dedicated Compose role
+with a temporary root-only environment, pulls the node, ingester, and
+code-intelligence images, records the selected SHA in `runtime.env`, applies
+the stack, and verifies that all three containers are running. It does not
+guess whether sessions are disposable and does not automatically roll back a
+failed activation.
+
+To return to a prior application release, run the same command with its
+previous known-good full SHA. NixOS host changes remain a separate
+`nixos-rebuild switch --flake ...#sulion-enclave` operation.
+
+The one-time repository copy and authority switch are documented in
+[`repository-cutover.md`](repository-cutover.md).
 
 ## Host checks
 
-Rootless Docker should work as the normal user with standard options:
+Docker should work as the normal user with standard options:
 
 ```bash
 docker info
@@ -361,22 +406,8 @@ docker compose version
 docker run --rm --memory 1g --cpus 2 docker.io/library/alpine:latest true
 ```
 
-The system daemon remains inaccessible:
-
-```bash
-DOCKER_HOST=unix:///var/run/docker.sock docker info
-# permission denied
-```
-
 LAN clients use `\\sulion-enclave\repos` on Windows or
 `smb://sulion-enclave.local/repos` on macOS.
-
-## Backups
-
-`sulion.backup` provides a low-priority asynchronous Restic timer for the local
-repository tree, Samba identity/ACL state, and enrolled node state. It is
-disabled until a TrueNAS Restic repository and root-readable credentials are
-chosen. Enabling it never mounts the repository working tree from TrueNAS.
 
 ## Tests
 
@@ -385,10 +416,9 @@ make validate-nix
 make test-nix
 ```
 
-The VM test checks stable identities, inherited POSIX ACLs, rootless Docker
-network/volume/resource-limit/bind-mount options, denial of the system Docker
-socket, authenticated SMB writes and owners, DOS xattrs, Samba macOS modules,
-and the disabled deployment unit.
+The VM test checks stable identities, inherited POSIX ACLs, ordinary Docker
+network/volume/resource-limit/bind-mount options, authenticated SMB writes and
+owners, DOS xattrs, Samba macOS modules, and the boot-enabled deployment unit.
 
 ## Repairing an existing installation
 

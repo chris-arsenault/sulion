@@ -31,13 +31,11 @@
         sulion-node = import ./nix/modules/sulion-node.nix;
         sulion-samba = import ./nix/modules/sulion-samba.nix;
         sulion-deployer = import ./nix/modules/sulion-deployer.nix;
-        sulion-backup = import ./nix/modules/sulion-backup.nix;
         default = {
           imports = [
             ./nix/modules/sulion-node.nix
             ./nix/modules/sulion-samba.nix
             ./nix/modules/sulion-deployer.nix
-            ./nix/modules/sulion-backup.nix
           ];
         };
       };

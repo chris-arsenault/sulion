@@ -9,6 +9,11 @@ let
   cfg = host.deployer;
   compose = "${pkgs.docker-compose}/bin/docker-compose";
   composeArgs = "--env-file ${cfg.envFile} -f ${cfg.source}/compose.yaml -f ${cfg.source}/deploy/compose.dedicated.yaml";
+  nodeDeploy = import ../packages/node-deploy.nix {
+    inherit pkgs;
+    source = cfg.source;
+    envFile = cfg.envFile;
+  };
 in
 {
   options.sulion.deployer = {
@@ -41,27 +46,28 @@ in
       }
     ];
 
+    environment.systemPackages = [ nodeDeploy ];
+
     systemd.services.sulion-stack = {
       description = "Sulion dedicated development-node application";
       wantedBy = lib.optional cfg.startAtBoot "multi-user.target";
       requires = [ "docker.service" ];
-      wants = [
-        "network-online.target"
-        "user@${toString host.uid}.service"
-      ];
+      wants = [ "network-online.target" ];
       after = [
         "docker.service"
         "network-online.target"
-        "user@${toString host.uid}.service"
       ];
-      unitConfig.ConditionPathExists = cfg.envFile;
+      unitConfig.ConditionPathExists = [
+        cfg.envFile
+        "/var/lib/sulion/node/private-key.pk8"
+      ];
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
         WorkingDirectory = cfg.source;
         EnvironmentFile = cfg.envFile;
         ExecStartPre = [
-          "${pkgs.coreutils}/bin/test -S ${host.rootlessSocket}"
+          "${pkgs.coreutils}/bin/test -S /var/run/docker.sock"
           "${pkgs.coreutils}/bin/test -f /var/lib/sulion/node/private-key.pk8"
         ];
         ExecStart = "${compose} ${composeArgs} up -d --remove-orphans";

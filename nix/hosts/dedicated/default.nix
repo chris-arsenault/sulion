@@ -8,7 +8,6 @@
     ../../modules/sulion-node.nix
     ../../modules/sulion-samba.nix
     ../../modules/sulion-deployer.nix
-    ../../modules/sulion-backup.nix
     ./disko.nix
     ./hardware-configuration.nix
   ];
@@ -42,16 +41,10 @@
 
     samba.enable = true;
 
-    # The unit is installed now, but remains off until the branch is released
-    # as matching OCI images and the root-readable runtime env file exists.
     deployer = {
       enable = true;
-      startAtBoot = false;
+      startAtBoot = true;
     };
-
-    # Configure a TrueNAS Restic repository and credential path before
-    # enabling. Backups are deliberately asynchronous; repos stay local.
-    backup.enable = false;
   };
 
   time.timeZone = "Etc/UTC";

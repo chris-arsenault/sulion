@@ -15,7 +15,7 @@ in
     user = lib.mkOption {
       type = lib.types.str;
       default = "sulion";
-      description = "Unix identity used by PTYs, repositories, and rootless Docker.";
+      description = "Unix identity used by PTYs, repositories, and Docker.";
     };
 
     group = lib.mkOption {
@@ -57,25 +57,19 @@ in
     lanCidr = lib.mkOption {
       type = lib.types.str;
       default = "192.168.66.0/24";
-      description = "IPv4 LAN allowed to reach SSH, SMB, discovery, and development ports.";
+      description = "IPv4 LAN allowed to reach SSH, SMB, and development ports.";
     };
 
     devPortFrom = lib.mkOption {
       type = lib.types.port;
       default = 26000;
-      description = "First LAN-published rootless development port.";
+      description = "First LAN-published development port.";
     };
 
     devPortTo = lib.mkOption {
       type = lib.types.port;
       default = 26010;
-      description = "Last LAN-published rootless development port.";
-    };
-
-    rootlessSocket = lib.mkOption {
-      type = lib.types.str;
-      default = "/run/user/${toString cfg.uid}/docker.sock";
-      description = "Rootless Docker socket mounted into the Sulion workbench.";
+      description = "Last LAN-published development port.";
     };
   };
 
@@ -92,6 +86,7 @@ in
     ];
 
     users.groups.${cfg.group}.gid = cfg.gid;
+    users.groups.docker.gid = 7322;
     users.users.${cfg.user} = {
       isNormalUser = true;
       uid = cfg.uid;
@@ -99,8 +94,8 @@ in
       home = cfg.home;
       homeMode = "0750";
       shell = pkgs.bashInteractive;
-      linger = true;
       extraGroups = [
+        "docker"
         "networkmanager"
         "wheel"
       ];
@@ -123,10 +118,6 @@ in
     virtualisation.docker = {
       enable = true;
       daemon.settings."live-restore" = true;
-      rootless = {
-        enable = true;
-        setSocketVariable = true;
-      };
     };
 
     networking.nftables.enable = true;
@@ -149,7 +140,6 @@ in
       docker
       git
       jq
-      restic
       rsync
     ];
 
@@ -162,12 +152,10 @@ in
       "d ${cfg.home}/.codex 0700 ${cfg.user} ${cfg.group} - -"
       "d ${cfg.home}/.local 0750 ${cfg.user} ${cfg.group} - -"
       "d ${cfg.home}/.local/share 0750 ${cfg.user} ${cfg.group} - -"
-      "d ${cfg.home}/.local/share/docker 0710 ${cfg.user} ${cfg.group} - -"
       "d /var/lib/sulion 0710 root ${cfg.group} - -"
       "d /var/lib/sulion/config 0710 root ${cfg.group} - -"
       "d /var/lib/sulion/config/ssh 0710 root ${cfg.group} - -"
       "f /var/lib/sulion/config/ssh/authorized_keys 0640 root ${cfg.group} - -"
-      "d /var/lib/sulion/secrets 0700 root root - -"
       "d /var/lib/sulion/node 0700 root root - -"
     ];
   };

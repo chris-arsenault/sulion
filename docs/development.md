@@ -63,10 +63,9 @@ Postgres-backed tests live in `backend/tests/*_integration.rs`, gated with `#![c
 - In Sulion PTYs, the runner automatically attaches that container to the `sulion` Docker network, and tests connect to the container name on port `5432`; no Docker socket or host port discovery is required in the PTY.
 - Do not mark backend integration tests `#[ignore]`. When adding a new target, register it in the script so the harness stays the single supported path.
 - `node_protocol_integration` exercises real WebSocket enrollment/authentication,
-  reconnect and boot reconciliation, heartbeat expiry, credential
-  rotation/revocation, incompatible-version quarantine, and loopback operation
-  replay. Do not replace those behaviors with serialized-message or
-  source-text assertions.
+  reconnect and boot reconciliation, direct loopback requests, control
+  replacement with a live PTY, and filesystem escape rejection. Do not replace
+  those behaviors with serialized-message or source-text assertions.
 
 Override the DB:
 

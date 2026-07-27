@@ -20,7 +20,7 @@ PTY shell ──► node shadow ──► node protocol ──► control WebSoc
 browser UI ──► frontend ──► control API ──► typed node operations
           └──► /broker/* ──► secret broker ──► sulion_broker Postgres
 
-PTY helpers ──► retrieval/node-local code-intel/rootless Docker
+PTY helpers ──► retrieval/node-local code-intel/dedicated-host Docker
 ```
 
 The public browser path is `sulion.services.ahara.io` → shared Ahara ALB/WAF →
@@ -227,7 +227,8 @@ compromise is equivalent to host Docker socket compromise; an agent compromise
 is bounded by runner policy.
 
 On the dedicated host, the runner is absent. `SULION_DOCKER_MODE=direct` makes
-the wrapper exec the real Docker CLI against the `sulion` user's rootless socket.
+the wrapper exec the real Docker CLI against the system daemon on that
+single-user machine.
 Only `sulion-node` receives that socket; control cannot manage either Docker
 daemon, and PTYs cannot manage the system daemon that runs Sulion.
 
@@ -240,7 +241,7 @@ contract. The production Compose selections divide the graph by ownership:
   broker, and retrieval, with no source, workspace, transcript, code-intel,
   runner, or Docker mounts;
 - `node` owns `/home/sulion`, PTYs, filesystem/worktree state, correlation, and
-  the rootless Docker socket; and
+  the dedicated host's Docker socket; and
 - `ingester` mounts only Claude and Codex transcript roots read-only.
 
 Code intelligence mounts local repos/workspaces on the node host. Broker and

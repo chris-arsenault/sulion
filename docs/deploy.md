@@ -45,8 +45,8 @@ Across the production split:
 
 - TrueNAS control uses remote-node mode and has no repo, workspace, transcript,
   home, code-intelligence, runner, or Docker bind;
-- the node alone mounts `/home/sulion`, its root-only enrolled key, the
-  correlation run directory, and the rootless Docker socket;
+- the node alone mounts `/home/sulion`, its root-owned enrolled key, the
+  correlation run directory, and the dedicated host's Docker socket;
 - the ingester mounts only the two transcript roots read-only; and
 - code intelligence reads the local repo/workspace roots on that host.
 
@@ -115,8 +115,8 @@ nginx upstream, WireGuard ingress, and Sulion deployer permissions already
 exist. The production TrueNAS deploy replaces only control-plane services: a
 backend replacement drops browser attachments, while node-owned PTYs continue
 and reconnect. Applying the combined rollback role still terminates any PTYs
-owned by that combined backend. Replacing `sulion-node` remains
-session-affecting until the Phase 7 drain gate is active.
+owned by that combined backend. Replacing `sulion-node` is an explicit
+session-affecting operation.
 
 The backend/control container owns the main `sulion` database migrations and
 Postgres-only startup repair. Node, ingester, retrieval, and code intelligence

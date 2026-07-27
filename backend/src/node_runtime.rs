@@ -18,8 +18,7 @@ use uuid::Uuid;
 
 use crate::agent::AgentType;
 use crate::node_protocol::{
-    NodeOperationKind, NodeRequestKind, OperationResultPayload, OperationResultStatus,
-    RequestResultPayload, TerminalBytesPayload, WireEnvelope,
+    NodeRequestKind, RequestResultPayload, RequestResultStatus, TerminalBytesPayload, WireEnvelope,
 };
 use crate::pty::{PtyManager, PtyMetadata, PtyWorkspaceMetadata, SpawnParams};
 use crate::repo_state::RepoStateManager;
@@ -282,106 +281,6 @@ impl NodeRuntime {
         self.pty.live_session_ids().await
     }
 
-    pub async fn execute_operation(
-        &self,
-        kind: NodeOperationKind,
-        request: Value,
-    ) -> OperationResultPayload {
-        let result = self.execute_operation_inner(kind, request).await;
-        operation_result(result)
-    }
-
-    async fn execute_operation_inner(
-        &self,
-        kind: NodeOperationKind,
-        request: Value,
-    ) -> Result<Value, RuntimeError> {
-        match kind {
-            NodeOperationKind::ProbeEcho => Ok(json!({ "echo": request })),
-            NodeOperationKind::ReconcileInventory => {
-                Ok(json!({ "live_session_ids": self.live_session_ids().await }))
-            }
-            NodeOperationKind::SessionCreate => {
-                let request: SessionCreateRequest = decode(request)?;
-                serde_json::to_value(self.create_session(request).await?)
-                    .map_err(anyhow::Error::from)
-                    .map_err(RuntimeError::Internal)
-            }
-            NodeOperationKind::SessionDelete => {
-                let request: ResourceRequest = decode(request)?;
-                self.pty.delete(request.id).await?;
-                Ok(Value::Null)
-            }
-            NodeOperationKind::SessionAgentStart => {
-                let request: AgentRequest = decode(request)?;
-                let agent = parse_agent(&request.agent)?;
-                self.pty
-                    .mark_agent_starting(request.session_id, agent.as_str())
-                    .await?;
-                self.pty
-                    .send_input(
-                        request.session_id,
-                        format!("{}\r", agent_launch_command(agent, None, false)).into_bytes(),
-                    )
-                    .await?;
-                Ok(Value::Null)
-            }
-            NodeOperationKind::SessionAgentInterrupt => {
-                let request: ResourceRequest = decode(request)?;
-                self.pty.send_input(request.id, b"\x1b".to_vec()).await?;
-                Ok(Value::Null)
-            }
-            NodeOperationKind::RepoCreate => {
-                let request: RepoCreateRequest = decode(request)?;
-                serde_json::to_value(self.create_repo(request).await?)
-                    .map_err(anyhow::Error::from)
-                    .map_err(RuntimeError::Internal)
-            }
-            NodeOperationKind::RepoRename => {
-                let request: RepoRenameRequest = decode(request)?;
-                crate::api::repo_lifecycle_routes::rename_repo_runtime(
-                    &self.pool,
-                    &self.repos_root,
-                    &request.old_name,
-                    &request.new_name,
-                )
-                .await
-                .map_err(runtime_api_error)?;
-                Ok(json!({
-                    "name": request.new_name,
-                    "path": self.repos_root.join(&request.new_name),
-                }))
-            }
-            NodeOperationKind::RepoDelete => {
-                let request: RepoDeleteRequest = decode(request)?;
-                crate::api::repo_lifecycle_routes::delete_repo_runtime(
-                    &self.pool,
-                    &self.repos_root,
-                    &request.name,
-                    request.force,
-                )
-                .await
-                .map_err(runtime_api_error)?;
-                Ok(Value::Null)
-            }
-            NodeOperationKind::WorkspaceDelete => {
-                let request: (ResourceRequest, DeleteWorkspaceOptions) = decode(request)?;
-                self.workspace_state
-                    .delete_workspace(request.0.id, request.1)
-                    .await?;
-                Ok(Value::Null)
-            }
-            NodeOperationKind::RepoRefresh
-            | NodeOperationKind::RepoStage
-            | NodeOperationKind::RepoUpload
-            | NodeOperationKind::WorkspaceRefresh
-            | NodeOperationKind::WorkspaceStage
-            | NodeOperationKind::WorkspaceUpload => Err(RuntimeError::BadRequest(
-                "non-lifecycle mutation must use a node request".into(),
-            )),
-        }
-    }
-
     pub async fn execute_request(
         &self,
         kind: NodeRequestKind,
@@ -396,11 +295,71 @@ impl NodeRuntime {
         request: Value,
     ) -> Result<Value, RuntimeError> {
         match kind {
+            NodeRequestKind::ProbeEcho => Ok(json!({ "echo": request })),
+            NodeRequestKind::SessionCreate => {
+                let request: SessionCreateRequest = decode(request)?;
+                value(self.create_session(request).await?)
+            }
+            NodeRequestKind::SessionDelete => {
+                let request: ResourceRequest = decode(request)?;
+                self.pty.delete(request.id).await?;
+                Ok(Value::Null)
+            }
+            NodeRequestKind::SessionAgentStart => {
+                let request: AgentRequest = decode(request)?;
+                let agent = parse_agent(&request.agent)?;
+                self.pty
+                    .mark_agent_starting(request.session_id, agent.as_str())
+                    .await?;
+                self.pty
+                    .send_input(
+                        request.session_id,
+                        format!("{}\r", agent_launch_command(agent, None, false)).into_bytes(),
+                    )
+                    .await?;
+                Ok(Value::Null)
+            }
+            NodeRequestKind::SessionAgentInterrupt => {
+                let request: ResourceRequest = decode(request)?;
+                self.pty.send_input(request.id, b"\x1b".to_vec()).await?;
+                Ok(Value::Null)
+            }
             NodeRequestKind::SessionInput => {
                 let request: SessionInputRequest = decode(request)?;
                 self.pty
                     .send_input(request.session_id, request.into_bytes()?)
                     .await?;
+                Ok(Value::Null)
+            }
+            NodeRequestKind::RepoCreate => {
+                let request: RepoCreateRequest = decode(request)?;
+                value(self.create_repo(request).await?)
+            }
+            NodeRequestKind::RepoRename => {
+                let request: RepoRenameRequest = decode(request)?;
+                crate::api::repo_lifecycle_routes::rename_repo_runtime(
+                    &self.pool,
+                    &self.repos_root,
+                    &request.old_name,
+                    &request.new_name,
+                )
+                .await
+                .map_err(runtime_api_error)?;
+                Ok(json!({
+                    "name": request.new_name,
+                    "path": self.repos_root.join(&request.new_name),
+                }))
+            }
+            NodeRequestKind::RepoDelete => {
+                let request: RepoDeleteRequest = decode(request)?;
+                crate::api::repo_lifecycle_routes::delete_repo_runtime(
+                    &self.pool,
+                    &self.repos_root,
+                    &request.name,
+                    request.force,
+                )
+                .await
+                .map_err(runtime_api_error)?;
                 Ok(Value::Null)
             }
             NodeRequestKind::SessionResize => {
@@ -485,6 +444,13 @@ impl NodeRuntime {
                 let request: RepoPathRequest = decode(request)?;
                 self.repo_root(&request.repo)?;
                 value(crate::repo_state::load_dirty_paths(&self.pool, &request.repo).await?)
+            }
+            NodeRequestKind::WorkspaceDelete => {
+                let request: (ResourceRequest, DeleteWorkspaceOptions) = decode(request)?;
+                self.workspace_state
+                    .delete_workspace(request.0.id, request.1)
+                    .await?;
+                Ok(Value::Null)
             }
             NodeRequestKind::WorkspaceRefresh => {
                 let request: WorkspacePathRequest = decode(request)?;
@@ -892,33 +858,16 @@ impl NodeRuntime {
     }
 }
 
-fn operation_result(result: Result<Value, RuntimeError>) -> OperationResultPayload {
-    match result {
-        Ok(result) => OperationResultPayload {
-            status: OperationResultStatus::Succeeded,
-            result: Some(result),
-            error_code: None,
-            error_message: None,
-        },
-        Err(err) => OperationResultPayload {
-            status: OperationResultStatus::Failed,
-            result: None,
-            error_code: Some(err.code().into()),
-            error_message: Some(err.to_string()),
-        },
-    }
-}
-
 fn request_result(result: Result<Value, RuntimeError>) -> RequestResultPayload {
     match result {
         Ok(result) => RequestResultPayload {
-            status: OperationResultStatus::Succeeded,
+            status: RequestResultStatus::Succeeded,
             result: Some(result),
             error_code: None,
             error_message: None,
         },
         Err(err) => RequestResultPayload {
-            status: OperationResultStatus::Failed,
+            status: RequestResultStatus::Failed,
             result: None,
             error_code: Some(err.code().into()),
             error_message: Some(err.to_string()),

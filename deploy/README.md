@@ -11,7 +11,7 @@ overlays:
   together with the standalone overlay for rollback; and
 - `compose.dedicated.yaml` runs only the development node, ingester, and code
   intelligence on the dedicated host. Only the node receives the development
-  home and direct access to the `sulion` host user's rootless Docker daemon.
+  home and direct access to the dedicated host's Docker daemon.
 
 The backend image is deliberately a shared release artifact in this phase: it
 contains the `sulion`, `sulion-node`, and `sulion-ingester` binaries plus the
@@ -30,15 +30,13 @@ docker compose \
   config
 ```
 
-The dedicated host uses two daemons. Root-owned system Docker runs the
-node-side Sulion services.
-Only `sulion-node` receives `/home/sulion` and
-`/run/user/7321/docker.sock`, owned by the `sulion` host user's rootless Docker
-daemon; it never receives `/var/run/docker.sock`. There is no control process,
-broker, retrieval service, frontend, or constrained runner on this host. The
-ingester receives only read-only Claude and Codex transcript mounts. Because
-the node uses host
-networking and mounts `/home/sulion` at the same path, ordinary Docker bind
+The dedicated host uses one system Docker daemon for both Sulion services and
+development containers. Only `sulion-node` receives `/home/sulion` and
+`/var/run/docker.sock`. This is intentional on the single-user dedicated host.
+There is no control process, broker, retrieval service, frontend, or
+constrained runner on this host. The ingester receives only read-only Claude
+and Codex transcript mounts. Because the node uses host networking and mounts
+`/home/sulion` at the same path, ordinary Docker bind
 mounts, published ports, Compose, BuildKit, and interactive commands retain
 normal Docker semantics.
 

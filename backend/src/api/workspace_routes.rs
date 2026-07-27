@@ -15,7 +15,7 @@ use super::file_content::{self, FileResponse};
 use super::node_proxy;
 use super::repo_routes::{file_trace_response, read_uploads, FileTraceResponse};
 use super::routes::{ApiError, ApiResult};
-use crate::node_protocol::{NodeOperationKind, NodeRequestKind};
+use crate::node_protocol::NodeRequestKind;
 use crate::node_runtime::{
     RawFileResponse, ResourceRequest, StageRequest, UploadRequest, WorkspacePathRequest,
     WorkspaceStageRequest, WorkspaceUploadRequest,
@@ -94,12 +94,10 @@ pub(super) async fn delete_workspace(
 ) -> ApiResult<StatusCode> {
     if state.node_protocol_required {
         let node_id = node_proxy::workspace_node(&state, id).await?;
-        node_proxy::operation(
+        node_proxy::request(
             &state,
             node_id,
-            &format!("workspace-delete:{id}"),
-            NodeOperationKind::WorkspaceDelete,
-            Some(id),
+            NodeRequestKind::WorkspaceDelete,
             serde_json::to_value((
                 ResourceRequest { id },
                 worktree::DeleteWorkspaceOptions {
@@ -136,7 +134,6 @@ pub(super) async fn post_workspace_refresh(
             &state,
             node_id,
             NodeRequestKind::WorkspaceRefresh,
-            Some(id),
             serde_json::to_value(WorkspacePathRequest {
                 workspace_id: id,
                 path: None,
@@ -170,7 +167,6 @@ pub(super) async fn get_workspace_dirty_paths(
             &state,
             node_id,
             NodeRequestKind::WorkspaceDirtyPaths,
-            Some(id),
             serde_json::to_value(WorkspacePathRequest {
                 workspace_id: id,
                 path: None,
@@ -200,7 +196,6 @@ pub(super) async fn get_workspace_files(
             &state,
             node_id,
             NodeRequestKind::WorkspaceFiles,
-            Some(id),
             serde_json::to_value(WorkspacePathRequest {
                 workspace_id: id,
                 path: q.path,
@@ -251,7 +246,6 @@ pub(super) async fn get_workspace_file(
             &state,
             node_id,
             NodeRequestKind::WorkspaceFilePreview,
-            Some(id),
             serde_json::to_value(WorkspacePathRequest {
                 workspace_id: id,
                 path: Some(q.path),
@@ -289,7 +283,6 @@ pub(super) async fn get_workspace_file_raw(
             &state,
             node_id,
             NodeRequestKind::WorkspaceFileRaw,
-            Some(id),
             serde_json::to_value(WorkspacePathRequest {
                 workspace_id: id,
                 path: Some(q.path),
@@ -331,7 +324,6 @@ pub(super) async fn get_workspace_file_trace(
             &state,
             node_id,
             NodeRequestKind::WorkspaceFilePreview,
-            Some(id),
             serde_json::to_value(WorkspacePathRequest {
                 workspace_id: id,
                 path: Some(q.path),
@@ -345,7 +337,6 @@ pub(super) async fn get_workspace_file_trace(
             &state,
             node_id,
             NodeRequestKind::WorkspaceDirtyPaths,
-            Some(id),
             serde_json::to_value(WorkspacePathRequest {
                 workspace_id: id,
                 path: None,
@@ -407,7 +398,6 @@ pub(super) async fn get_workspace_diff(
             &state,
             node_id,
             NodeRequestKind::WorkspaceDiff,
-            Some(id),
             serde_json::to_value(WorkspacePathRequest {
                 workspace_id: id,
                 path: q.path,
@@ -442,7 +432,6 @@ pub(super) async fn post_workspace_stage(
             &state,
             node_id,
             NodeRequestKind::WorkspaceStage,
-            Some(id),
             serde_json::to_value(WorkspaceStageRequest {
                 workspace_id: id,
                 change: StageRequest {
@@ -487,7 +476,6 @@ pub(super) async fn post_workspace_upload(
                 &state,
                 node_id,
                 NodeRequestKind::WorkspaceUpload,
-                Some(id),
                 serde_json::to_value(WorkspaceUploadRequest {
                     workspace_id: id,
                     upload: UploadRequest::new(path, &bytes),

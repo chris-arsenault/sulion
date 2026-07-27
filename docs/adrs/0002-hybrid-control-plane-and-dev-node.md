@@ -44,7 +44,7 @@ Sulion will support three topology roles:
 
 Docker policy is independent of topology:
 
-- `direct` gives PTYs the real CLI and a rootless development daemon;
+- `direct` gives PTYs the real CLI and the dedicated host's Docker daemon;
 - `brokered` retains the constrained runner for a shared host.
 
 The user's production target is:
@@ -73,33 +73,32 @@ dev-node application artifacts used on conventional Linux.
 
 ## Node boundary
 
-The control-to-node surface is a typed, versioned protocol rather than a
-general remote-command channel. It covers:
+The control-to-node surface is a small typed protocol rather than a general
+remote-command channel. It covers:
 
-- node registration, heartbeat, boot identity, capabilities, and release;
-- idempotent session and workspace lifecycle operations;
+- node enrollment, authentication, heartbeat, and boot identity;
+- direct session and workspace lifecycle requests;
 - terminal snapshot, output, input, resize, and reconnect streams;
 - repository, file, Git, upload, and worktree operations;
-- agent-session correlation and activity events;
-- node-local stats; and
-- deployment drain state.
+- agent-session correlation and activity events.
 
-The first deployment supports one active node, but durable rows carry
-`node_id`. Control and node releases advertise a compatibility range and must
-support rolling deployment in either order within that range.
+The deployment supports one configured node. Durable resource rows still carry
+`node_id` so ownership remains explicit. Control and node accept one exact
+protocol version and are upgraded together. The protocol does not add
+capability negotiation, release reconciliation, a durable remote-operation
+ledger, or automated drain orchestration.
 
 ## Storage and Docker boundary
 
 The dedicated host uses a real `/home/sulion` path both on the host and inside the
 node workbench. This preserves Docker bind-path and loopback semantics.
 
-Two daemons separate application control from agent-controlled workloads:
-
-- system Docker runs Sulion node-side service containers;
-- a rootless daemon owned by `sulion` runs development containers.
-
-The node workbench sees only the rootless socket. PTYs cannot manage Sulion's
-own containers, the deployer, or the broker.
+One system Docker daemon runs both the node-side services and development
+containers. The `sulion` identity and node workbench receive the ordinary
+Docker socket. This intentionally grants host-equivalent Docker authority on a
+single-user dedicated machine and preserves standard Compose, BuildKit,
+networking, volume, bind-mount, privileged-container, and local Supabase
+behavior. Shared-host deployments retain the brokered runner instead.
 
 The host exports `/home/sulion/repos` with Samba using one stable Unix/Samba
 identity, POSIX ACL and extended-attribute mapping, Windows ACL storage, and
@@ -108,9 +107,8 @@ not shared.
 
 ## Deployment boundary
 
-One CI run builds and tests component images, validates every Compose role,
-builds the NixOS configuration and VM test, and publishes a release manifest
-containing immutable digests and protocol compatibility.
+CI builds and tests component images and validates the Compose and NixOS
+configurations.
 
 Deployment consumers are replaceable:
 
@@ -118,9 +116,10 @@ Deployment consumers are replaceable:
 - A root-owned pull deployer applies the NixOS dev-node role.
 - Conventional systemd may run the same deployer and Compose bundle.
 
-The NixOS deployer never activates an editable checkout from `/home/sulion`.
-Node updates drain or wait for active PTYs. Control-plane updates may proceed
-without terminating node-owned PTYs.
+The NixOS deployer never activates an editable checkout from
+`/home/sulion/repos`. Control-plane updates may proceed without terminating
+node-owned PTYs. Node replacement is an explicit session-affecting operator
+action; the first deployment does not pretend to automate safe draining.
 
 ## Consequences
 
@@ -133,17 +132,16 @@ Positive:
 - NixOS configuration is reproducible and tested without forking the
   application packaging;
 - standalone remains a supported recovery and integration shape; and
-- a future second node is possible without replacing an unnamed singleton
-  protocol.
+- node ownership is explicit without building a scheduler.
 
 Costs:
 
 - the current backend must be split at a real ownership boundary;
 - terminal streaming gains one small LAN hop through the control plane;
 - filesystem-backed API routes need typed node equivalents;
-- session state must distinguish control disconnect, node disconnect, node
-  reboot, process exit, and deletion;
-- control and node releases require explicit protocol compatibility; and
+- session state must distinguish node disconnect, node reboot, process exit,
+  and deletion;
+- control and node protocol changes must deploy together; and
 - repository migration and Samba identity/ACL preservation need a deliberate
   cutover.
 
@@ -171,12 +169,6 @@ control plane, and control deployments would still terminate shells.
 
 That preserves the existing process layout by reintroducing network filesystem
 I/O into builds, which violates the primary storage requirement.
-
-### Give PTYs the system Docker socket
-
-Docker control is equivalent to root on the host. It would collapse the broker,
-deployer, and operating-system boundary. A separate rootless development
-daemon satisfies the anticipated workload without that authority.
 
 ### Connect browsers directly to the node
 
