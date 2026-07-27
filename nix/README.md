@@ -2,7 +2,7 @@
 
 This directory is both a reusable host adapter and the checked-in configuration
 for the dedicated Sulion machine. It assumes only x86_64, 32 GB of RAM, a UEFI
-installation, and the canonical single-user identity `dev` at UID/GID 7321.
+installation, and the canonical single-user identity `sulion` at UID/GID 7321.
 CPU model, core count, disk vendor, NIC name, and motherboard do not affect any
 Sulion module.
 
@@ -11,20 +11,25 @@ Sulion module.
 The host runs two Docker daemons:
 
 - root-owned system Docker runs the Sulion application;
-- the lingering `dev` user owns a rootless daemon at
+- the lingering `sulion` user owns a rootless daemon at
   `/run/user/7321/docker.sock`.
 
 The dedicated Compose role mounts only the latter into `sulion-node`. The
 control process has no development filesystem or Docker mount, and the
-node-local ingester sees only transcript directories. The `dev` user is
+node-local ingester sees only transcript directories. The `sulion` user is
 intentionally not a member of the system `docker` group.
 
-Repositories live at `/home/dev/repos` on the machine's local filesystem.
-Samba exports that directory as `repos`; workspaces, agent state, Docker state,
-the broker key, and deployment secrets are not shared. SMB, WSD, mDNS, the
-frontend, SSH, and development ports are accepted only from
-`192.168.66.0/24`. The system-Docker bridge has the stable name `sulion0`, and
-only that interface may reach the host-network backend on port 8080.
+Repositories live at `/home/sulion/repos` on the machine's local filesystem.
+The dedicated Compose adapter preserves `/home/sulion` inside the workbench so
+bind paths sent to the host's rootless Docker daemon resolve identically. The
+shared OCI image still resolves UID/GID 7321 to its portable `dev` account, but
+the host login and all host-visible ownership use `sulion`; no second host user
+is created. Samba exports the repository directory as `repos`; workspaces,
+agent state, Docker state, the broker key, and deployment secrets are not
+shared. SMB, WSD, mDNS, the frontend, SSH, and development ports are accepted
+only from `192.168.66.0/24`. The system-Docker bridge has the stable name
+`sulion0`, and only that interface may reach the host-network backend on port
+8080.
 
 ## Fresh installation contract
 
@@ -44,11 +49,11 @@ or improvise different storage choices during installation.
 | Other filesystems | none; `/home`, repositories, Nix, and Docker remain on root |
 | Disk encryption | none, so the dedicated node can reboot unattended |
 | Swap and hibernation | none; the machine has 32 GB RAM and does not hibernate |
-| Host name | `sulion-node` |
+| Host name | `sulion-enclave` |
 | Network | wired DHCP on `192.168.66.0/24`; no static address in the host |
 | Time zone | UTC |
 | Console | US keymap, English UTF-8 environment, no graphical desktop |
-| Interactive identity | `dev`, UID/GID 7321, wheel member |
+| Interactive identity | `sulion`, UID/GID 7321, wheel member |
 | Remote login | SSH keys only; root SSH and SSH passwords disabled |
 | Application startup | `sulion-stack.service` installed but disabled |
 
@@ -130,28 +135,28 @@ not replace it with generated UUID-based configuration for this layout.
 ### Install the repository-defined system
 
 Clone this branch directly into the target filesystem, then install its
-`sulion-dedicated` flake output:
+`sulion-enclave` flake output:
 
 ```bash
 mkdir -p /mnt/etc
 nix-shell -p git --run \
   'git clone --branch feat/dedicated-nixos-dev-node --single-branch https://github.com/chris-arsenault/sulion.git /mnt/etc/sulion'
 
-nixos-install --flake /mnt/etc/sulion#sulion-dedicated
-nixos-enter --root /mnt -c 'passwd dev'
+nixos-install --flake /mnt/etc/sulion#sulion-enclave
+nixos-enter --root /mnt -c 'passwd sulion'
 sync
 reboot
 ```
 
 `nixos-install` prompts for a root recovery password; set one even though root
-cannot log in over SSH. The separate `passwd dev` command creates the local
+cannot log in over SSH. The separate `passwd sulion` command creates the local
 console and sudo password before reboot.
 
-After removing the installer USB, log in as `dev` on the local console and add
+After removing the installer USB, log in as `sulion` on the local console and add
 the Samba password:
 
 ```bash
-sudo smbpasswd -a dev
+sudo smbpasswd -a sulion
 ```
 
 The Unix and Samba accounts represent the same single user. They may use the
@@ -161,20 +166,20 @@ not configure `force user` or create separate per-client identities.
 The first installation intentionally requires the local console because the
 repository cannot contain a personal SSH public key. Before operating the node
 remotely, add the chosen public key to
-`users.users.dev.openssh.authorizedKeys.keys` in
+`users.users.sulion.openssh.authorizedKeys.keys` in
 `nix/hosts/dedicated/default.nix`, then apply it locally:
 
 ```bash
 cd /etc/sulion
-sudo nixos-rebuild test --flake .#sulion-dedicated
-sudo nixos-rebuild switch --flake .#sulion-dedicated
+sudo nixos-rebuild test --flake .#sulion-enclave
+sudo nixos-rebuild switch --flake .#sulion-enclave
 ```
 
 Do not enable SSH password authentication as a shortcut.
 
 ### First-boot acceptance
 
-Run these as `dev`:
+Run these as `sulion`:
 
 ```bash
 hostnamectl hostname
@@ -188,14 +193,14 @@ docker run --rm --memory 1g --cpus 2 docker.io/library/alpine:latest true
 systemctl is-enabled sulion-stack.service
 ```
 
-Expected results are hostname `sulion-node`, root label `nixos`, boot label
+Expected results are hostname `sulion-enclave`, root label `nixos`, boot label
 `boot`, UID/GID 7321, an active rootless Docker daemon, a successful limited
 container, and a disabled Sulion application unit. `systemctl is-enabled`
 intentionally exits nonzero while printing `disabled`.
 
-From another LAN machine, connect to `\\sulion-node\repos` on Windows or
-`smb://sulion-node.local/repos` on macOS and create a test directory. On the
-node it must appear under `/home/dev/repos` owned by `dev:dev`.
+From another LAN machine, connect to `\\sulion-enclave\repos` on Windows or
+`smb://sulion-enclave.local/repos` on macOS and create a test directory. On the
+node it must appear under `/home/sulion/repos` owned by `sulion:sulion`.
 
 ## Runtime files
 
@@ -248,7 +253,7 @@ do not add it to `runtime.env`:
 read -rsp "Sulion access token: " SULION_ADMIN_ACCESS_TOKEN
 echo
 NODE_ENROLLMENT_TOKEN="$(
-  curl -fsS http://sulion-node:30080/api/nodes/enrollment-tokens \
+  curl -fsS http://sulion-enclave:30080/api/nodes/enrollment-tokens \
     -H "Authorization: Bearer ${SULION_ADMIN_ACCESS_TOKEN}" \
     -H "Content-Type: application/json" \
     --data '{"display_name":"dedicated NixOS node","target_node_id":"019d4f28-88ac-7a80-932c-b0f53a0708f4","ttl_seconds":300}' |
@@ -279,7 +284,7 @@ deployer can update or restart the control container independently of
 At runtime `sulion-node` opens the root-only key and then drops its process,
 filesystem, PTY, and Docker work to UID/GID 7321. Agent shells therefore cannot
 read or replace the enrolled node credential, while every file they create
-still has the Samba-visible `dev:dev` identity.
+still has the Samba-visible `sulion:sulion` identity on the host.
 
 ## Host checks
 
@@ -298,8 +303,8 @@ DOCKER_HOST=unix:///var/run/docker.sock docker info
 # permission denied
 ```
 
-LAN clients use `\\sulion-node\repos` on Windows or
-`smb://sulion-node.local/repos` on macOS.
+LAN clients use `\\sulion-enclave\repos` on Windows or
+`smb://sulion-enclave.local/repos` on macOS.
 
 ## Backups
 

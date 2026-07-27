@@ -26,13 +26,18 @@ services:
       SULION_NODE_CONTROL_URL: ws://127.0.0.1:8080/ws/nodes
       SULION_NODE_ALLOW_INSECURE_WS: "1"
       SULION_DOCKER_MODE: direct
+      SULION_REPOS_ROOT: /home/sulion/repos
+      SULION_WORKSPACES_ROOT: /home/sulion/workspaces
+      SULION_CLAUDE_PROJECTS: /home/sulion/.claude/projects
+      SULION_CODEX_SESSIONS: /home/sulion/.codex/sessions
       DOCKER_HOST: unix:///run/user/7321/docker.sock
       XDG_RUNTIME_DIR: /run/user/7321
+      HOME: /home/sulion
       SULION_SECRET_BROKER_URL: http://127.0.0.1:8081
       SULION_RETRIEVAL_URL: http://127.0.0.1:8083
       SULION_CODE_INTEL_URL: http://127.0.0.1:8084
     volumes: !override
-      - ${SULION_HOME_HOST_PATH:-/home/dev}:/home/dev
+      - ${SULION_HOME_HOST_PATH:-/home/sulion}:/home/sulion
       - ${SULION_NODE_STATE_HOST_PATH:-/var/lib/sulion/node}:/var/lib/sulion-node:ro
       - type: bind
         source: ${SULION_ROOTLESS_DOCKER_SOCKET:-/run/user/7321/docker.sock}
@@ -45,9 +50,13 @@ services:
     profiles: !reset []
     network_mode: host
     networks: !reset []
+    environment:
+      SULION_CLAUDE_PROJECTS: /home/sulion/.claude/projects
+      SULION_CODEX_SESSIONS: /home/sulion/.codex/sessions
+      HOME: /home/sulion
     volumes: !override
-      - ${SULION_HOME_HOST_PATH:-/home/dev}/.claude/projects:/home/dev/.claude/projects:ro
-      - ${SULION_HOME_HOST_PATH:-/home/dev}/.codex/sessions:/home/dev/.codex/sessions:ro
+      - ${SULION_HOME_HOST_PATH:-/home/sulion}/.claude/projects:/home/sulion/.claude/projects:ro
+      - ${SULION_HOME_HOST_PATH:-/home/sulion}/.codex/sessions:/home/sulion/.codex/sessions:ro
 
   broker:
     ports: !override
@@ -62,9 +71,11 @@ services:
   code-intel:
     ports: !override
       - "127.0.0.1:8084:8084"
+    environment:
+      SULION_CODE_INTEL_ALLOWED_ROOTS: /home/sulion/repos,/home/sulion/workspaces
     volumes: !override
-      - ${SULION_REPOS_HOST_PATH:-/home/dev/repos}:/home/dev/repos:ro
-      - ${SULION_WORKSPACES_HOST_PATH:-/home/dev/workspaces}:/home/dev/workspaces:ro
+      - ${SULION_REPOS_HOST_PATH:-/home/sulion/repos}:/home/sulion/repos:ro
+      - ${SULION_WORKSPACES_HOST_PATH:-/home/sulion/workspaces}:/home/sulion/workspaces:ro
 
   runner:
     profiles:

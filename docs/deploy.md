@@ -12,7 +12,7 @@ the root definition during the migration, and rendering it with
 The dedicated host configuration, activation boundary, secret paths, and
 box-side verification commands live in [`nix/README.md`](../nix/README.md).
 Its deployment unit consumes this same Compose graph from an immutable Nix
-store path; it never runs the editable checkout under `/home/dev/repos`.
+store path; it never runs the editable checkout under `/home/sulion/repos`.
 
 The common graph now has eight runtime service roles:
 
@@ -36,7 +36,7 @@ In the dedicated role:
 
 - control uses remote-node mode and has no repo, workspace, transcript, home,
   or Docker bind;
-- the node alone mounts `/home/dev`, its root-only enrolled key, the
+- the node alone mounts `/home/sulion`, its root-only enrolled key, the
   correlation run directory, and the rootless Docker socket;
 - the ingester mounts only the two transcript roots read-only; and
 - code intelligence reads the local repo/workspace roots on that host.

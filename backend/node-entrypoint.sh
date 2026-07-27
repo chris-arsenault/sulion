@@ -7,6 +7,7 @@ if [[ "$(id -u)" != "0" ]]; then
   exit 77
 fi
 
+NODE_HOME="${HOME:-/home/dev}"
 install -d -o dev -g dev -m 0750 /run/sulion
-runuser -u dev -- env HOME=/home/dev /opt/sulion/entrypoint.sh /usr/bin/true
+runuser -u dev -- env HOME="${NODE_HOME}" /opt/sulion/entrypoint.sh /usr/bin/true
 exec /usr/local/bin/sulion-node

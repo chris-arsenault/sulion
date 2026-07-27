@@ -51,7 +51,7 @@ The user's production target is:
 
 - TrueNAS runs the control-plane role, Postgres, embeddings, public ingress,
   and asynchronous backup storage.
-- The dedicated NixOS host runs the dev-node role with local `/home/dev`.
+- The dedicated NixOS host runs the dev-node role with local `/home/sulion`.
 - The node establishes an authenticated outbound connection to the control
   plane. The browser does not connect directly to a node.
 - The control plane authorizes and proxies typed terminal and filesystem
@@ -90,18 +90,18 @@ support rolling deployment in either order within that range.
 
 ## Storage and Docker boundary
 
-The dedicated host uses a real `/home/dev` path both on the host and inside the
+The dedicated host uses a real `/home/sulion` path both on the host and inside the
 node workbench. This preserves Docker bind-path and loopback semantics.
 
 Two daemons separate application control from agent-controlled workloads:
 
 - system Docker runs Sulion node-side service containers;
-- a rootless daemon owned by `dev` runs development containers.
+- a rootless daemon owned by `sulion` runs development containers.
 
 The node workbench sees only the rootless socket. PTYs cannot manage Sulion's
 own containers, the deployer, or the broker.
 
-The host exports `/home/dev/repos` with Samba using one stable Unix/Samba
+The host exports `/home/sulion/repos` with Samba using one stable Unix/Samba
 identity, POSIX ACL and extended-attribute mapping, Windows ACL storage, and
 macOS metadata support. Workspaces, agent state, Docker state, and secrets are
 not shared.
@@ -118,7 +118,7 @@ Deployment consumers are replaceable:
 - A root-owned pull deployer applies the NixOS dev-node role.
 - Conventional systemd may run the same deployer and Compose bundle.
 
-The NixOS deployer never activates an editable checkout from `/home/dev`.
+The NixOS deployer never activates an editable checkout from `/home/sulion`.
 Node updates drain or wait for active PTYs. Control-plane updates may proceed
 without terminating node-owned PTYs.
 

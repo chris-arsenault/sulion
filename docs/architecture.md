@@ -226,7 +226,7 @@ compromise is equivalent to host Docker socket compromise; an agent compromise
 is bounded by runner policy.
 
 On the dedicated host, the runner is absent. `SULION_DOCKER_MODE=direct` makes
-the wrapper exec the real Docker CLI against the `dev` user's rootless socket.
+the wrapper exec the real Docker CLI against the `sulion` user's rootless socket.
 Only `sulion-node` receives that socket; control cannot manage either Docker
 daemon, and PTYs cannot manage the system daemon that runs Sulion.
 
@@ -238,7 +238,7 @@ restartable roles from the shared backend/workbench image:
 
 - `backend` is control-only and mounts no source, workspace, transcript, or
   Docker paths;
-- `node` owns `/home/dev`, PTYs, filesystem/worktree state, correlation, and
+- `node` owns `/home/sulion`, PTYs, filesystem/worktree state, correlation, and
   the rootless Docker socket; and
 - `ingester` mounts only Claude and Codex transcript roots read-only.
 

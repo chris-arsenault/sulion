@@ -14,7 +14,7 @@
   ];
 
   networking = {
-    hostName = "sulion-node";
+    hostName = "sulion-enclave";
     useDHCP = lib.mkDefault true;
     firewall.extraInputRules = ''
       ip saddr ${config.sulion.lanCidr} tcp dport 22 accept comment "Sulion LAN SSH"
@@ -45,6 +45,9 @@
 
   sulion = {
     enable = true;
+    user = "sulion";
+    group = "sulion";
+    home = "/home/sulion";
     lanCidr = "192.168.66.0/24";
 
     samba.enable = true;

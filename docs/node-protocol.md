@@ -106,7 +106,7 @@ per-PTY registration/revocation flow.
 - Enrollment creates a stable node ID and a node-specific asymmetric
   credential.
 - The private credential is a root-owned host file outside the Nix store and
-  `/home/dev`. The node opens it while privileged, initializes supplementary
+  the configured development home. The node opens it while privileged, initializes supplementary
   groups, and irreversibly drops to the configured development UID/GID before
   filesystem, Docker, correlation, or PTY work begins.
 - Control stores the public identity and explicit revocation state.
@@ -325,10 +325,11 @@ settings are a rollback seam, not a second application implementation.
 
 ## Ingestion
 
-Only the node ingester reads:
+Only the node ingester reads the configured transcript roots. On
+`sulion-enclave` they are:
 
-- `/home/dev/.claude/projects`; and
-- `/home/dev/.codex/sessions`.
+- `/home/sulion/.claude/projects`; and
+- `/home/sulion/.codex/sessions`.
 
 It continues to tolerate partial lines and unknown event types. A byte offset
 advances only after the corresponding canonical/timeline transaction commits.

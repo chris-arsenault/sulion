@@ -15,7 +15,7 @@ in
     repository = lib.mkOption {
       type = lib.types.str;
       default = "";
-      example = "sftp:backup@truenas:/mnt/backups/sulion-node";
+      example = "sftp:backup@truenas:/mnt/backups/sulion-enclave";
       description = "Restic repository URL; the primary repository filesystem remains local.";
     };
 

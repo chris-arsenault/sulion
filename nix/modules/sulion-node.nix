@@ -13,13 +13,13 @@ in
 
     user = lib.mkOption {
       type = lib.types.str;
-      default = "dev";
+      default = "sulion";
       description = "Unix identity used by PTYs, repositories, and rootless Docker.";
     };
 
     group = lib.mkOption {
       type = lib.types.str;
-      default = "dev";
+      default = "sulion";
       description = "Primary Unix group for the development identity.";
     };
 
@@ -37,8 +37,8 @@ in
 
     home = lib.mkOption {
       type = lib.types.str;
-      default = "/home/dev";
-      description = "Canonical local home path, identical inside the workbench container.";
+      default = "/home/sulion";
+      description = "Canonical host home path mounted into the workbench container.";
     };
 
     reposRoot = lib.mkOption {

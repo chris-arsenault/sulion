@@ -25,11 +25,11 @@ configuration, not Sulion's only packaging format.
 
 ### Local development path
 
-- `/home/dev`, canonical repositories, isolated workspaces, package caches,
+- `/home/sulion`, canonical repositories, isolated workspaces, package caches,
   Docker state, and build outputs live on local storage on the development
   node.
 - No build or repository path may depend on an NFS or SMB mount from TrueNAS.
-- `/home/dev/repos` is exported from the development node over SMB3 for
+- `/home/sulion/repos` is exported from the development node over SMB3 for
   authenticated macOS and Windows clients.
 - The installation is single-user, but Unix ownership, POSIX ACLs, Windows
   ACLs, inheritance, DOS attributes, and macOS metadata must remain coherent.
@@ -43,7 +43,7 @@ configuration, not Sulion's only packaging format.
   mode.
 - The anticipated acceptance ceiling is the complete Scuba Sense local
   Supabase stack, including its full optional service set.
-- Development containers run in a rootless daemon owned by `dev`. Rootful-only
+- Development containers run in a rootless daemon owned by `sulion`. Rootful-only
   workloads such as device passthrough, kernel module manipulation, and
   privileged Docker-in-Docker are not acceptance requirements.
 - Sulion control-plane containers use a separate system Docker daemon. PTYs
@@ -132,7 +132,7 @@ dedicated NixOS host
   rootless dev Docker
     agent-created development containers
   Samba
-    /home/dev/repos
+    /home/sulion/repos
 ```
 
 Terminal bytes and typed commands cross the network. Repository contents,
@@ -305,7 +305,7 @@ snapshot from the node and resumes live output.
 - PTY grants remain scoped by PTY ID and expiry.
 - Node credentials and database credentials are delivered through root-owned
   systemd credentials or equivalent host-secret files, never through the Nix
-  store, Compose source, or `/home/dev`.
+  store, Compose source, or `/home/sulion`.
 - Rootless Docker control does not grant access to the system Docker daemon,
   host deployment state, or broker key.
 
@@ -313,11 +313,11 @@ snapshot from the node and resumes live output.
 
 The dedicated host's canonical paths are:
 
-- `/home/dev/repos`;
-- `/home/dev/workspaces`;
-- `/home/dev/.claude`;
-- `/home/dev/.codex`; and
-- rootless Docker state owned by `dev`.
+- `/home/sulion/repos`;
+- `/home/sulion/workspaces`;
+- `/home/sulion/.claude`;
+- `/home/sulion/.codex`; and
+- rootless Docker state owned by `sulion`.
 
 The actual host and node-container paths remain identical so Docker bind mounts
 resolve correctly in both the PTY and daemon.
@@ -325,7 +325,7 @@ resolve correctly in both the PTY and daemon.
 The host filesystem must support POSIX ACLs and extended attributes. The Samba
 share uses:
 
-- one real Unix `dev` identity with stable UID/GID;
+- one real Unix `sulion` identity with stable UID/GID;
 - one matching authenticated Samba identity;
 - `acl_xattr` while retaining system ACL mapping;
 - `fruit` and `streams_xattr` for macOS metadata;
@@ -347,14 +347,14 @@ The dedicated host runs two daemons:
 
 1. System Docker, controlled by root-owned deployment services, runs
    `sulion-node`, the ingester, and code intelligence.
-2. Rootless Docker, owned by `dev`, runs anything created from a PTY.
+2. Rootless Docker, owned by `sulion`, runs anything created from a PTY.
 
 The node container:
 
-- runs as the stable `dev` UID/GID;
+- runs as stable UID/GID 7321, which maps to `sulion` on the host;
 - uses host networking so published development ports are visible at the same
   loopback addresses expected by local tooling;
-- bind-mounts `/home/dev` at `/home/dev`;
+- bind-mounts `/home/sulion` at `/home/sulion`;
 - mounts only the rootless Docker socket;
 - uses the real Docker CLI and Compose plugin in direct mode; and
 - does not mount the system Docker socket.
@@ -427,7 +427,7 @@ Deployment consumers:
 - A root-owned pull deployer on the NixOS node applies the dev-node role.
 - Generic Linux runs the same deployer through systemd.
 
-The deployer never deploys from the editable `/home/dev/repos/sulion` checkout.
+The deployer never deploys from the editable `/home/sulion/repos/sulion` checkout.
 It consumes a verified release manifest and immutable Compose bundle.
 
 Control and node components roll independently within an advertised
@@ -573,8 +573,8 @@ Deliverables:
 
 - Root flake and reusable Sulion modules.
 - Checked-in `nix/hosts/dedicated` configuration.
-- Stable `dev` and service identities.
-- Local `/home/dev` layout.
+- Stable `sulion` and service identities.
+- Local `/home/sulion` layout.
 - System Docker plus rootless development Docker.
 - Samba ACL/macOS configuration and persistent Samba identity state.
 - Host firewall, secret-credential paths, asynchronous backup timer, and
@@ -659,7 +659,7 @@ Implementation note:
   container, waits for same-boot node reconciliation, and then exercises
   browser terminal snapshot/reconnect behavior.
 - The node key remains root-only; node startup loads it and drops to UID/GID
-  7321 before local development work. Only the node receives `/home/dev` and
+  7321 before local development work. Only the node receives `/home/sulion` and
   the rootless Docker socket. The ingester receives only read-only transcript
   roots.
 

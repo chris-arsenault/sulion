@@ -25,7 +25,7 @@
         };
       };
 
-      nixosConfigurations.sulion-dedicated = nixpkgs.lib.nixosSystem {
+      nixosConfigurations.sulion-enclave = nixpkgs.lib.nixosSystem {
         inherit system;
         modules = [ ./nix/hosts/dedicated/default.nix ];
       };
