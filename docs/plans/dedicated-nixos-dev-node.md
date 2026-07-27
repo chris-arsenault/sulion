@@ -107,7 +107,7 @@ The checked-in host configuration declares:
 - x86_64 UEFI boot with GPT, a 1 GiB ESP, and one ext4 root filesystem;
 - hostname `sulion-enclave`;
 - user/group `sulion` at 7321:7321;
-- system Docker, with `sulion` in its fixed-GID Docker group;
+- system Docker, with `sulion` in its host Docker group;
 - NetworkManager, wired DHCP, LAN-only SSH, and optional Wi-Fi;
 - `/home/sulion/repos` and `/home/sulion/workspaces`;
 - Samba on TCP 445 only, with SMB3 and `acl_xattr fruit streams_xattr`;

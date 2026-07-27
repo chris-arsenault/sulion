@@ -14,6 +14,9 @@ belongs to the `docker` group. The dedicated Compose role mounts
 `/var/run/docker.sock` into `sulion-node`. This is intentionally host-level
 authority on a dedicated machine; it keeps standard Docker, Compose, BuildKit,
 privileged containers, networking, and local Supabase behavior intact.
+The node reads the mounted socket's actual group at startup before dropping
+privileges, so the Docker GID is not hard-coded and generic Linux hosts use the
+same image.
 
 The TrueNAS control plane is not present on this host, and the node-local
 ingester sees only transcript directories.

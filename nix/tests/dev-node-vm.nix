@@ -38,7 +38,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed("test $(hostname) = sulion-enclave-test")
     machine.succeed("test $(id -u sulion) = 7321")
     machine.succeed("test $(id -g sulion) = 7321")
-    machine.succeed("test $(getent group docker | cut -d: -f3) = 7322")
+    machine.succeed("getent group docker")
     machine.succeed("id -nG sulion | tr ' ' '\\n' | grep -Fx docker")
     machine.succeed("id -nG sulion | tr ' ' '\\n' | grep -Fx networkmanager")
     machine.fail("id dev")

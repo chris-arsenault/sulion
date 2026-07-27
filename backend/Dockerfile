@@ -241,11 +241,9 @@ RUN npm install -g @anthropic-ai/claude-code @openai/codex typescript typescript
 # of the TrueNAS dataset bind-mounted at /home/dev.
 ARG DEV_UID=7321
 ARG DEV_GID=7321
-ARG HOST_DOCKER_GID=7322
 RUN groupadd --gid ${DEV_GID} dev \
-  && groupadd --gid ${HOST_DOCKER_GID} docker-host \
   && useradd --uid ${DEV_UID} --gid ${DEV_GID} --shell /bin/bash --home-dir /home/dev dev \
-  && usermod -aG rvm,docker-host dev \
+  && usermod -aG rvm dev \
   && mkdir -p /home/dev \
   && mkdir -p /run/sulion /opt/sulion/hooks /opt/sulion/bin /opt/sulion/docs \
   && echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev \

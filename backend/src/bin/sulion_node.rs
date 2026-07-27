@@ -43,6 +43,8 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn drop_node_privileges() -> anyhow::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
     if unsafe { libc::geteuid() } != 0 {
         return Ok(());
     }
@@ -60,6 +62,17 @@ fn drop_node_privileges() -> anyhow::Result<()> {
     if unsafe { libc::initgroups(user.as_ptr(), gid) } != 0 {
         return Err(anyhow::Error::from(std::io::Error::last_os_error()));
     }
+    if std::env::var("SULION_DOCKER_MODE").is_ok_and(|value| value == "direct") {
+        let docker_host =
+            std::env::var("DOCKER_HOST").unwrap_or_else(|_| "unix:///var/run/docker.sock".into());
+        let socket_path = docker_host
+            .strip_prefix("unix://")
+            .ok_or_else(|| anyhow::anyhow!("direct Docker requires a unix:// DOCKER_HOST"))?;
+        let docker_gid = std::fs::metadata(socket_path)
+            .map_err(|error| anyhow::anyhow!("read Docker socket {socket_path}: {error}"))?
+            .gid() as libc::gid_t;
+        add_supplementary_group(docker_gid)?;
+    }
     if unsafe { libc::setgid(gid) } != 0 {
         return Err(anyhow::Error::from(std::io::Error::last_os_error()));
     }
@@ -68,6 +81,24 @@ fn drop_node_privileges() -> anyhow::Result<()> {
     }
     if unsafe { libc::geteuid() } != uid || unsafe { libc::getegid() } != gid {
         anyhow::bail!("node privilege drop did not reach the configured identity");
+    }
+    Ok(())
+}
+
+fn add_supplementary_group(gid: libc::gid_t) -> anyhow::Result<()> {
+    let count = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
+    if count < 0 {
+        return Err(anyhow::Error::from(std::io::Error::last_os_error()));
+    }
+    let mut groups = vec![0 as libc::gid_t; count as usize];
+    if count > 0 && unsafe { libc::getgroups(count, groups.as_mut_ptr()) } < 0 {
+        return Err(anyhow::Error::from(std::io::Error::last_os_error()));
+    }
+    if !groups.contains(&gid) {
+        groups.push(gid);
+        if unsafe { libc::setgroups(groups.len(), groups.as_ptr()) } != 0 {
+            return Err(anyhow::Error::from(std::io::Error::last_os_error()));
+        }
     }
     Ok(())
 }

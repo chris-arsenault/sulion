@@ -86,7 +86,6 @@ in
     ];
 
     users.groups.${cfg.group}.gid = cfg.gid;
-    users.groups.docker.gid = 7322;
     users.users.${cfg.user} = {
       isNormalUser = true;
       uid = cfg.uid;
