@@ -1,12 +1,15 @@
 # Control-plane and development-node contract
 
-Status: accepted target contract; not yet shipped.
+Status: Phase 4 transport and persistence foundation shipped; development
+runtime extraction remains scheduled for Phase 5.
 
 This document defines the runtime seam selected by
-[ADR 0002](adrs/0002-hybrid-control-plane-and-dev-node.md). It is deliberately
-transport-neutral until Phase 4 chooses and proves the wire implementation.
-The semantics, ownership, authentication, and failure behavior below are not
-transport-neutral.
+[ADR 0002](adrs/0002-hybrid-control-plane-and-dev-node.md). Phase 4 selected a
+bounded JSON protocol over WebSocket for the long-lived channel and proved its
+identity, heartbeat, compatibility, replay, and reconciliation behavior. Phase
+5 adds the typed PTY, terminal-stream, repository, and workspace messages to
+that channel. The ownership and failure behavior below remains the target for
+that extraction.
 
 ## Terms
 
@@ -82,7 +85,7 @@ per-PTY registration/revocation flow.
 | Current task | Target owner | Notes |
 |---|---|---|
 | Main SQLx migrations | Control | Exactly one migration owner. |
-| Blanket PTY orphan reconciliation at API startup | Removed | Replaced by node inventory/boot reconciliation. |
+| Blanket PTY orphan reconciliation at API startup | Scoped legacy-only | During migration it touches only `node_id IS NULL`; node-owned rows use boot inventory and the control-only role has no local rows. |
 | Correlation/activity Unix socket | Node | The socket and hooks remain local to PTYs. |
 | Transcript polling | Node ingester | The only JSONL reader. |
 | Canonical/timeline repair from existing Postgres payloads | Control maintenance | Does not require transcript files. |
@@ -113,6 +116,34 @@ per-PTY registration/revocation flow.
   forwarded as node credentials.
 - A node credential authorizes only the typed node protocol. It cannot manage
   broker secrets, deploy the control plane, or perform arbitrary SQL.
+
+### Shipped enrollment lifecycle
+
+Control exposes three credential-lifecycle operations:
+
+- authenticated `POST /api/nodes/enrollment-tokens` creates a short-lived,
+  single-use token; an optional `target_node_id` makes it a rotation token;
+- public `POST /api/nodes/enroll` atomically consumes the token and registers
+  a 32-byte Ed25519 public key; and
+- authenticated `POST /api/nodes/:id/revoke` revokes the key and terminates
+  the current node connection.
+
+Only the token hash is stored. Public credential generations retain their
+fingerprint, replacement time, and revocation time for audit. Rotation
+increments the generation and invalidates the old connection before the
+replacement key may connect. Revocation cannot be reversed by the node. The
+node-side private key file and automated enrollment command arrive with the
+`sulion-node` binary in Phase 5; until then these endpoints are exercised by
+integration clients and the standalone runtime uses an explicitly marked
+internal identity.
+
+The long-lived endpoint is `GET /ws/nodes`. Control sends a fresh random
+challenge. The node signs a canonical handshake containing that challenge,
+stable node ID, boot ID, build/version range, path contract, Docker policy,
+release digest, and sorted capabilities. Control verifies the signature
+against the enrolled public key before recording any compatible connection.
+Direct deployments must expose this endpoint only through TLS (`wss`);
+production proxy wiring is part of the control-plane phase.
 
 ## Version handshake
 
@@ -159,9 +190,16 @@ sequence?
 payload
 ```
 
-The wire representation is chosen in Phase 4. The implementation must bound
-frame and payload sizes, reject unknown required fields cleanly, and tolerate
-unknown optional message kinds from a compatible newer peer.
+The wire representation is tagged JSON over WebSocket. Each frame is limited
+to 256 KiB. Protocol version 1 is the only currently accepted version and path
+contract version 1 is mandatory. Unknown message kinds from an otherwise
+compatible peer are ignored and logged; malformed required fields terminate
+that authenticated connection.
+
+Connection generations are independent from stable node and boot identity. A
+new connection gets a random `connection_id`; database updates and disconnect
+handling compare it before changing state. A delayed close from an older
+socket therefore cannot overwrite a successful reconnect.
 
 ## Operations
 
@@ -189,6 +227,14 @@ dispatch, so replay cannot create a second PTY or workspace.
 No operation accepts an arbitrary executable, host path, PID, signal, Docker
 request, or shell fragment from the public API. Agent launch variants and
 filesystem scopes are explicit protocol types.
+
+Phase 4 ships `probe_echo` and `reconcile_inventory` as non-host-mutating
+operations that exercise the complete durable dispatcher. The operation table
+preallocates the operation ID, enforces `(node_id, idempotency_key)`
+uniqueness, records every dispatch boot and attempt, and retains terminal
+result/error data. The standalone loopback node keeps the same bounded
+current-boot result cache required of the extracted node. Phase 5 extends the
+closed operation enum; it does not introduce a generic command operation.
 
 ## Terminal streams
 
@@ -247,6 +293,28 @@ No node connection:
 - read-only Postgres surfaces continue working;
 - the UI shows last heartbeat and observed release without estimating live
   process state.
+
+The legacy startup orphan pass now updates only rows with `node_id IS NULL`.
+Node-owned live rows survive a control restart. A node heartbeat may carry a
+complete live-session inventory for its current boot. A new boot marks only
+live rows owned by the previous boot dead with a `node_reboot` runtime end
+reason; heartbeat expiry records node disconnect timestamps without changing
+PTY state.
+
+## Standalone loopback
+
+The combined backend defaults to `SULION_NODE_TRANSPORT=loopback`. It enrolls
+the stable internal node
+`00000000-0000-0000-0000-000000000001`, establishes an in-memory outbound
+connection, sends heartbeats, and executes operations through the same durable
+dispatcher and result-cache rules as a remote node. Existing PTY, repository,
+workspace, and ingester calls remain in-process during Phase 4.
+
+Set `SULION_NODE_TRANSPORT=remote` on a control-only process to disable the
+internal node. `SULION_DEPLOYMENT_ROLE=control-plane` selects that default.
+For standalone deployments, `SULION_STANDALONE_NODE_ID` and
+`SULION_STANDALONE_NODE_NAME` override the stable internal identity. These
+settings are a migration seam, not a second application implementation.
 
 ## Ingestion
 

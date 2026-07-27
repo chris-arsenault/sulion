@@ -4,12 +4,16 @@ import userEvent from "@testing-library/user-event";
 
 import { StatsStrip } from "./StatsStrip";
 import { appStatePayload, jsonResponse, statsPayload } from "../test/appState";
+import type { NodeView } from "../api/types";
 
-function installStatsFetch(payload: ReturnType<typeof statsPayload>) {
+function installStatsFetch(
+  payload: ReturnType<typeof statsPayload>,
+  nodes: NodeView[] = [],
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async () =>
-      jsonResponse(appStatePayload({ stats: payload })),
+      jsonResponse(appStatePayload({ stats: payload, nodes })),
     ),
   );
 }
@@ -50,6 +54,42 @@ describe("StatsStrip", () => {
     expect(screen.getByText("1,234")).toBeDefined();
     expect(screen.getAllByText(/50.0 MB/)).toHaveLength(2);
     expect(screen.getByText((t) => t === "agent PTYs")).toBeDefined();
+  });
+
+  it("surfaces development-node connectivity and heartbeat details", async () => {
+    installStatsFetch(statsPayload(), [
+      {
+        id: "00000000-0000-0000-0000-000000000001",
+        display_name: "sulion-node",
+        credential_status: "active",
+        protocol_version: 1,
+        build_git_sha: "abc123",
+        capabilities: ["operation.probe.v1"],
+        docker_policy: "direct",
+        docker_info: { server_version: "27", rootless: true },
+        path_contract_version: 1,
+        boot_id: "10000000-0000-0000-0000-000000000001",
+        connection_state: "connected",
+        compatibility_error: null,
+        desired_release_digest: null,
+        observed_release_digest: "sha256:1234567890abcdef",
+        drain_state: "accepting",
+        connected_at: "2026-07-27T12:00:00Z",
+        last_heartbeat_at: "2026-07-27T12:00:03Z",
+        node_disconnected_at: null,
+        heartbeat_timeout_seconds: 20,
+      },
+    ]);
+    render(<StatsStrip />);
+    await waitFor(() => {
+      expect(screen.getByText("connected")).toBeDefined();
+    });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByLabelText(/toggle stats details/i));
+    expect(screen.getByText("Development node")).toBeDefined();
+    expect(screen.getByText("sulion-node")).toBeDefined();
+    expect(screen.getByText("direct")).toBeDefined();
+    expect(screen.getByText("sha256:12345678…")).toBeDefined();
   });
 
   it("shows 'stats unavailable' when the endpoint fails on first load", async () => {

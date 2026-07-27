@@ -11,6 +11,7 @@ pub struct Config {
     pub claude_projects_dir: PathBuf,
     pub codex_sessions_dir: PathBuf,
     pub correlate_sock_path: PathBuf,
+    pub standalone_node: Option<StandaloneNodeConfig>,
     pub auth: Option<AuthConfig>,
 }
 
@@ -65,6 +66,7 @@ impl Config {
             std::env::var("SULION_CORRELATE_SOCK")
                 .unwrap_or_else(|_| "/run/sulion/correlate.sock".to_string()),
         );
+        let standalone_node = StandaloneNodeConfig::from_env()?;
         let auth = AuthConfig::from_env()?;
         Ok(Self {
             listen,
@@ -75,8 +77,45 @@ impl Config {
             claude_projects_dir,
             codex_sessions_dir,
             correlate_sock_path,
+            standalone_node,
             auth,
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StandaloneNodeConfig {
+    pub node_id: uuid::Uuid,
+    pub display_name: String,
+}
+
+impl StandaloneNodeConfig {
+    fn from_env() -> anyhow::Result<Option<Self>> {
+        let default_transport = match std::env::var("SULION_DEPLOYMENT_ROLE").as_deref() {
+            Ok("control-plane") => "remote",
+            _ => "loopback",
+        };
+        let transport = std::env::var("SULION_NODE_TRANSPORT")
+            .unwrap_or_else(|_| default_transport.to_string());
+        match transport.as_str() {
+            "remote" => Ok(None),
+            "loopback" => {
+                let node_id = std::env::var("SULION_STANDALONE_NODE_ID")
+                    .unwrap_or_else(|_| "00000000-0000-0000-0000-000000000001".into())
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("SULION_STANDALONE_NODE_ID must be a UUID"))?;
+                let display_name = std::env::var("SULION_STANDALONE_NODE_NAME")
+                    .unwrap_or_else(|_| "standalone".into());
+                if display_name.trim().is_empty() {
+                    anyhow::bail!("SULION_STANDALONE_NODE_NAME must not be empty");
+                }
+                Ok(Some(Self {
+                    node_id,
+                    display_name,
+                }))
+            }
+            _ => anyhow::bail!("SULION_NODE_TRANSPORT must be loopback or remote"),
+        }
     }
 }
 

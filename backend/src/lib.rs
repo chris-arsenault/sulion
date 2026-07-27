@@ -24,6 +24,7 @@ pub mod git;
 pub mod ingest;
 pub mod library;
 pub mod metrics;
+pub mod node_protocol;
 pub mod plan_cli;
 pub mod plans;
 pub mod pty;
@@ -80,6 +81,8 @@ pub struct AppState {
     pub ws_test_hooks: Arc<WsTestHooks>,
     /// Short-lived, one-use credentials for browser WebSocket handshakes.
     pub ws_tickets: Arc<api::WsTicketStore>,
+    /// Durable development-node registry and authenticated transport.
+    pub node_control: Arc<node_protocol::NodeControl>,
     /// Optional JWT auth validator. Production wiring enables this;
     /// most unit tests keep it unset and exercise handlers directly.
     pub auth: Option<Arc<auth::AuthState>>,
@@ -118,6 +121,7 @@ impl AppState {
             repos_root.clone(),
             workspaces_root.clone(),
         );
+        let node_control = node_protocol::NodeControl::new(pool.clone());
         Arc::new(Self {
             pool,
             pty,
@@ -132,6 +136,7 @@ impl AppState {
             stats_cache: Arc::new(api::StatsCache::new()),
             ws_test_hooks: Arc::new(WsTestHooks::default()),
             ws_tickets: Arc::new(api::WsTicketStore::default()),
+            node_control,
             auth,
         })
     }

@@ -38,6 +38,7 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/api/app-state", get(app_state_routes::app_state))
         .route("/api/ws-tickets", post(ws::issue_ticket))
         .merge(routes::router())
+        .merge(crate::node_protocol::admin_router())
         .merge(device_routes::approve_router())
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -63,6 +64,7 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(health))
         .route("/ws/sessions/:id", get(ws::attach))
+        .merge(crate::node_protocol::public_router())
         .merge(protected)
         .merge(device_public)
         .merge(device_authed)

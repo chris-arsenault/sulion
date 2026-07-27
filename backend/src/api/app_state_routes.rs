@@ -19,6 +19,7 @@ use crate::AppState;
 #[derive(Serialize)]
 pub(super) struct AppStateResponse {
     generated_at: DateTime<Utc>,
+    nodes: Vec<crate::node_protocol::NodeView>,
     sessions: Vec<AppSessionView>,
     repos: Vec<AppRepoView>,
     workspaces: Vec<WorkspaceView>,
@@ -349,6 +350,11 @@ pub(super) async fn app_state(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Json<AppStateResponse>> {
     let sessions = load_sessions(&state.pool).await?;
+    let nodes = state
+        .node_control
+        .list_nodes()
+        .await
+        .map_err(|err| ApiError::Internal(anyhow::anyhow!(err)))?;
     let timeline_revisions = load_repo_timeline_revisions(&state.pool).await?;
     let repos = load_repos(&state.pool, &timeline_revisions).await?;
     let workspaces = crate::worktree::load_workspace_views(&state.pool)
@@ -371,6 +377,7 @@ pub(super) async fn app_state(
 
     Ok(Json(AppStateResponse {
         generated_at: Utc::now(),
+        nodes,
         sessions,
         repos,
         workspaces,

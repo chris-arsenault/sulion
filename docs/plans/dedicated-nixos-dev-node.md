@@ -593,6 +593,8 @@ Exit gate:
 
 ### Phase 4 — Node schema and authenticated protocol
 
+Status: implemented on `feat/dedicated-nixos-dev-node`.
+
 Deliverables:
 
 - Expand-only node registry and ownership migrations.
@@ -601,6 +603,17 @@ Deliverables:
 - Durable idempotent node-operation model.
 - Control-side node status in app state and UI.
 - Standalone loopback transport.
+
+Implementation note:
+
+- Protocol v1 uses bounded JSON WebSocket frames with Ed25519 challenge
+  authentication and generation-safe reconnects.
+- Migration `0059_dev_nodes_and_operations.sql` is expand-only: legacy local
+  ownership remains nullable while node IDs, boot IDs, runtime disconnect
+  timestamps, credential state, and operations become durable.
+- The standalone process uses the same operation dispatcher through an
+  internal loopback node; local PTY/filesystem execution is intentionally
+  retained until Phase 5.
 
 Exit gate:
 

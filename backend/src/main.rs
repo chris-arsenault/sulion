@@ -36,9 +36,9 @@ async fn main() -> anyhow::Result<()> {
     db::run_migrations(&pool).await?;
     tracing::info!("migrations applied");
 
-    // Any row still marked 'live' belongs to a shell the prior backend
-    // was supervising — the process died with its parent and nobody
-    // captured exit. Roll those to 'orphaned'.
+    // Legacy in-process live rows died with their backend. Node-owned rows
+    // are deliberately left live until the owning node reports its boot
+    // inventory, so a control-only restart cannot kill durable sessions.
     let orphaned = sulion::pty::reconcile_orphans_on_startup(&pool).await?;
     if orphaned > 0 {
         tracing::info!(count = orphaned, "reconciled orphaned PTY sessions");
@@ -56,6 +56,17 @@ async fn main() -> anyhow::Result<()> {
         ingester.clone(),
         auth,
     );
+    if let Some(node) = cfg.standalone_node.as_ref() {
+        let boot_id = state
+            .node_control
+            .start_loopback(node.node_id, &node.display_name)
+            .await?;
+        tracing::info!(
+            node_id = %node.node_id,
+            %boot_id,
+            "standalone node loopback connected"
+        );
+    }
 
     // SessionStart-hook correlation socket.
     let correlate_pool = pool.clone();
@@ -76,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(run_workspace_manager(state.workspace_state.clone()));
     tokio::spawn(sulion::api::run_stats_sampler(state.clone()));
     tokio::spawn(sulion::ingest::run_usage_backfill(pool.clone()));
+    tokio::spawn(state.node_control.clone().run_heartbeat_monitor());
 
     let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
     tracing::info!(listen = %cfg.listen, "api listener bound");

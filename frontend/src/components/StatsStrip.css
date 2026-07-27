@@ -55,6 +55,22 @@
   white-space: nowrap;
 }
 
+.stats-strip__node[data-state="connected"] {
+  border-color: color-mix(in srgb, var(--ok-mark) 55%, var(--canvas-3));
+}
+
+.stats-strip__node[data-state="stale"],
+.stats-strip__node[data-state="disconnected"],
+.stats-strip__node[data-state="incompatible"],
+.stats-strip__node[data-state="revoked"] {
+  color: var(--crit-fg);
+}
+
+.stats-strip__empty {
+  color: var(--text-lo);
+  font-style: italic;
+}
+
 .stats-strip__mem-bar {
   height: 3px;
   background: var(--canvas-3);

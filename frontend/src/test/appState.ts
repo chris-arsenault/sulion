@@ -1,5 +1,6 @@
 import type {
   AppStateResponse,
+  NodeView,
   PlanSummaryView,
   RepoView,
   SessionView,
@@ -44,12 +45,14 @@ export function statsPayload(overrides: Partial<StatsResponse> = {}): StatsRespo
 }
 
 export function appStatePayload({
+  nodes = [],
   sessions = [],
   repos = [],
   workspaces = [],
   stats = statsPayload(),
   plans = [],
 }: {
+  nodes?: NodeView[];
   sessions?: SessionView[] | Array<Record<string, unknown>>;
   repos?: RepoView[] | Array<Record<string, unknown>>;
   workspaces?: WorkspaceView[] | Array<Record<string, unknown>>;
@@ -58,6 +61,7 @@ export function appStatePayload({
 } = {}): AppStateResponse {
   return {
     generated_at: "2026-05-02T00:00:00Z",
+    nodes,
     sessions: sessions as SessionView[],
     repos: repos as RepoView[],
     workspaces: workspaces as WorkspaceView[],

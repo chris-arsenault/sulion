@@ -16,6 +16,7 @@ TEST_TARGETS=(
   workspace_integration
   pty_integration
   ws_integration
+  node_protocol_integration
   ingester_integration
 )
 INTEGRATION_FEATURE="integration-tests"

@@ -58,8 +58,9 @@ impl PtyState {
     }
 }
 
-/// On startup, any `live` rows correspond to PTYs whose processes died
-/// with the prior backend. Reconcile them to `orphaned`.
+/// On startup, legacy in-process `live` rows correspond to PTYs whose
+/// processes died with the prior backend. Node-owned PTYs outlive the
+/// control process and are reconciled by node boot inventory instead.
 pub async fn reconcile_orphans_on_startup(pool: &Pool) -> anyhow::Result<u64> {
     let result = sqlx::query(
         "UPDATE pty_sessions \
@@ -73,7 +74,7 @@ pub async fn reconcile_orphans_on_startup(pool: &Pool) -> anyhow::Result<u64> {
                  WHEN agent_runtime_state IN ('starting', 'running') THEN COALESCE(agent_runtime_ended_at, NOW()) \
                  ELSE agent_runtime_ended_at \
              END \
-         WHERE state = 'live'",
+         WHERE state = 'live' AND node_id IS NULL",
     )
     .execute(pool)
     .await?;

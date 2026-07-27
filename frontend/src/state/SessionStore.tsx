@@ -15,6 +15,7 @@ import {
 import type {
   CreateRepoRequest,
   CreateSessionRequest,
+  NodeView,
   PlanSummaryView,
   RepoView,
   SessionView,
@@ -37,6 +38,7 @@ const REPO_EXPANSION_STORAGE_KEY = "sulion.sidebar.repoExpansion.v1";
 type RepoExpansionMap = Record<string, boolean>;
 
 export interface SessionStore {
+  nodes: NodeView[];
   sessions: SessionView[];
   repos: RepoView[];
   workspaces: WorkspaceView[];
@@ -68,6 +70,7 @@ export interface SessionStore {
 function initialState(): Pick<
   SessionStore,
   | "sessions"
+  | "nodes"
   | "repos"
   | "workspaces"
   | "stats"
@@ -79,6 +82,7 @@ function initialState(): Pick<
   | "repoExpansion"
 > {
   return {
+    nodes: [],
     sessions: [],
     repos: [],
     workspaces: [],
@@ -98,18 +102,21 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
   async loadAppState() {
     try {
       const data = await getAppState();
+      const nodes = Array.isArray(data.nodes) ? data.nodes : [];
       const sessions = Array.isArray(data.sessions) ? data.sessions : [];
       const repos = Array.isArray(data.repos) ? data.repos : [];
       const workspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
       const stats = data.stats ?? null;
       const plans = Array.isArray(data.plans) ? data.plans : [];
       set((state) => {
+        const sameNodes = sameJson(state.nodes, nodes);
         const sameSessions = sameJson(state.sessions, sessions);
         const sameRepos = sameJson(state.repos, repos);
         const sameWorkspaces = sameJson(state.workspaces, workspaces);
         const sameStats = sameJson(state.stats, stats);
         const samePlans = sameJson(state.plans, plans);
         if (
+          sameNodes &&
           sameSessions &&
           sameRepos &&
           sameWorkspaces &&
@@ -121,6 +128,7 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
           return state;
         }
         return {
+          nodes: sameNodes ? state.nodes : nodes,
           sessions: sameSessions ? state.sessions : sessions,
           repos: sameRepos ? state.repos : repos,
           workspaces: sameWorkspaces ? state.workspaces : workspaces,

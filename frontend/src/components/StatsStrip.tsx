@@ -15,8 +15,9 @@ import { Tooltip } from "./ui";
 import "./StatsStrip.css";
 
 export function StatsStrip() {
-  const { stats, lastError } = useSessions(
+  const { nodes, stats, lastError } = useSessions(
     useShallow((store) => ({
+      nodes: store.nodes,
       stats: store.stats,
       lastError: store.lastError,
     })),
@@ -44,6 +45,11 @@ export function StatsStrip() {
   const memPct = memLimitMb ? Math.min(100, (memUsedMb / memLimitMb) * 100) : null;
   const cpuDisplay = `${s.process.cpu_percent.toFixed(0)}%`;
   const dbSizeDisplay = formatBytes(s.db.database_size_bytes);
+  const primaryNode =
+    nodes.find((node) => node.connection_state === "connected") ??
+    nodes.find((node) => node.connection_state !== "revoked") ??
+    nodes[0] ??
+    null;
 
   return (
     <div className="stats-strip" data-testid="stats-strip">
@@ -85,6 +91,21 @@ export function StatsStrip() {
           <span className="stats-strip__pill tabular">
             <Icon name="terminal" size={12} />
             {s.pty.live_sessions}
+          </span>
+        </Tooltip>
+        <Tooltip
+          label={
+            primaryNode
+              ? `${primaryNode.display_name}: ${nodeStatusLabel(primaryNode.connection_state)}`
+              : "No development node enrolled"
+          }
+        >
+          <span
+            className="stats-strip__pill stats-strip__node"
+            data-state={primaryNode?.connection_state ?? "none"}
+          >
+            <Icon name="activity" size={12} />
+            {primaryNode ? nodeStatusLabel(primaryNode.connection_state) : "no node"}
           </span>
         </Tooltip>
       </button>
@@ -149,10 +170,56 @@ export function StatsStrip() {
               </div>
             </dl>
           </section>
+          <section className="stats-strip__section" aria-label="Development nodes">
+            <h3 className="stats-strip__section-title">Development node</h3>
+            {primaryNode ? (
+              <dl className="stats-strip__details">
+                <div>
+                  <dt>name</dt>
+                  <dd>{primaryNode.display_name}</dd>
+                </div>
+                <div>
+                  <dt>connection</dt>
+                  <dd>{nodeStatusLabel(primaryNode.connection_state)}</dd>
+                </div>
+                <div>
+                  <dt>docker</dt>
+                  <dd>{primaryNode.docker_policy}</dd>
+                </div>
+                <div>
+                  <dt>last heartbeat</dt>
+                  <dd>{formatTimestamp(primaryNode.last_heartbeat_at)}</dd>
+                </div>
+                <div>
+                  <dt>release</dt>
+                  <dd>{shortDigest(primaryNode.observed_release_digest)}</dd>
+                </div>
+              </dl>
+            ) : (
+              <span className="stats-strip__empty">No node enrolled</span>
+            )}
+          </section>
         </div>
       )}
     </div>
   );
+}
+
+function nodeStatusLabel(state: string): string {
+  return state.replaceAll("_", " ");
+}
+
+function formatTimestamp(value: string | null): string {
+  if (!value) return "never";
+  return new Date(value).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function shortDigest(value: string | null): string {
+  if (!value) return "unreported";
+  return value.length > 18 ? `${value.slice(0, 15)}…` : value;
 }
 
 function MemBar({ pct }: { pct: number }) {
