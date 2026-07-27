@@ -13,6 +13,12 @@ The dedicated host configuration, activation boundary, secret paths, and
 box-side verification commands live in [`nix/README.md`](../nix/README.md).
 Its deployment unit consumes this same Compose graph from an immutable Nix
 store path; it never runs the editable checkout under `/home/sulion/repos`.
+Fresh hosts are installed through the flake's Disko-backed
+`bootstrap-enclave` app. Existing hosts import an administration public-key
+file with `install-admin-key` before activating the new SSH configuration.
+Those break-glass keys live only in the root-owned
+`/var/lib/sulion/config/ssh/authorized_keys`; they are not node credentials,
+broker secrets, or source-controlled host configuration.
 
 The common graph now has eight runtime service roles:
 

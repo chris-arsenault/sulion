@@ -47,9 +47,22 @@ pkgs.testers.runNixOSTest {
     machine.succeed("test $(stat -c %U:%G /home/sulion/.local/share/docker) = sulion:sulion")
     machine.succeed("test $(stat -c %U:%G /var/lib/sulion/node) = root:root")
     machine.succeed("test $(stat -c %a /var/lib/sulion/node) = 700")
+    machine.succeed("test $(stat -c %U:%G /var/lib/sulion/config/ssh) = root:root")
+    machine.succeed("test $(stat -c %a /var/lib/sulion/config/ssh) = 700")
+    machine.succeed(
+      "test $(stat -c %U:%G /var/lib/sulion/config/ssh/authorized_keys) = root:root"
+    )
+    machine.succeed("test $(stat -c %a /var/lib/sulion/config/ssh/authorized_keys) = 600")
     machine.fail("id sulion-broker")
     machine.fail("test -e /var/lib/sulion/broker")
     machine.wait_for_unit("NetworkManager.service")
+
+    machine.succeed("ssh-keygen -q -t ed25519 -N '' -f /tmp/enclave-admin")
+    machine.succeed("sulion-admin-key add /tmp/enclave-admin.pub")
+    machine.succeed("test $(wc -l </var/lib/sulion/config/ssh/authorized_keys) = 1")
+    machine.succeed("sulion-admin-key add /tmp/enclave-admin.pub")
+    machine.succeed("test $(wc -l </var/lib/sulion/config/ssh/authorized_keys) = 1")
+    machine.succeed("sulion-admin-key list | grep -F SHA256:")
 
     docker_env = "XDG_RUNTIME_DIR=/run/user/7321 DOCKER_HOST=unix:///run/user/7321/docker.sock"
     as_sulion = f"{docker_env} sudo --preserve-env=XDG_RUNTIME_DIR,DOCKER_HOST -u sulion"

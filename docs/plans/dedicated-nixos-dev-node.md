@@ -711,6 +711,8 @@ Implementation note:
 
 Deliverables:
 
+- Disko-backed bare-metal bootstrap and root-owned break-glass SSH key
+  provisioning.
 - Signed release manifest and immutable component digests.
 - Root-owned portable pull deployer.
 - Komodo control-plane deployment and NixOS node deployment from the same

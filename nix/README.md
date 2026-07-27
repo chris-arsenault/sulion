@@ -31,7 +31,14 @@ mDNS, SSH, and development ports are accepted only from `192.168.66.0/24`.
 The node initiates its authenticated control connection outbound; this host
 exposes no Sulion API or frontend.
 
-## Fresh installation contract
+SSH is a LAN-only break-glass administration path for rebuilding NixOS,
+rotating host keys, and recovering when the Sulion control plane is unavailable.
+It is not involved in normal browser terminals or node/control traffic. The
+administration key belongs on the Windows, macOS, or Linux workstation from
+which you will repair the host; only its public half is installed on the
+enclave.
+
+## Host contract
 
 This is the canonical bare-metal layout for the dedicated machine. Use the
 [NixOS 26.05 minimal x86_64 ISO](https://nixos.org/download/) and its manual
@@ -63,20 +70,134 @@ later becomes a requirement, add a reviewed TPM-backed unlock design rather
 than changing the install ad hoc. Likewise, add swap declaratively only if
 measured workloads show memory pressure.
 
+## Complete the already-installed machine
+
+Use this path for the machine that is running an earlier generation from
+`/etc/sulion`. It does not repartition or reinstall anything, and the existing
+`sulion` console/sudo password is preserved.
+
+On the workstation that will administer the enclave, generate a dedicated key
+if it does not already exist. Linux and macOS:
+
+```bash
+ssh-keygen -t ed25519 -a 64 \
+  -f ~/.ssh/sulion-enclave \
+  -C "$(whoami)@sulion-enclave"
+```
+
+Windows PowerShell:
+
+```powershell
+ssh-keygen.exe -t ed25519 -a 64 `
+  -f "$env:USERPROFILE\.ssh\sulion-enclave" `
+  -C "$env:USERNAME@sulion-enclave"
+```
+
+The file without `.pub` is the private key and never leaves that workstation.
+Copy the `.pub` file itself—not its text—into the `repos` SMB share. A USB drive
+is also acceptable if SMB is not configured yet.
+
+At the `sulion-enclave` console, connect wired Ethernet and run:
+
+```bash
+sudo git -C /etc/sulion pull --ff-only \
+  origin feat/dedicated-nixos-dev-node
+
+sudo nix run /etc/sulion#install-admin-key -- \
+  add /home/sulion/repos/sulion-enclave.pub
+
+sudo nixos-rebuild test \
+  --flake /etc/sulion#sulion-enclave
+```
+
+The key installer validates one Ed25519 public key, prints its SHA256
+fingerprint, and atomically adds it to
+`/var/lib/sulion/config/ssh/authorized_keys`. That file and its parent directory
+stay owned by root and are not part of Git.
+
+Before making the generation persistent, test from the workstation that owns
+the private key. Linux or macOS:
+
+```bash
+ssh -i ~/.ssh/sulion-enclave sulion@sulion-enclave.local
+```
+
+Windows PowerShell:
+
+```powershell
+ssh.exe -i "$env:USERPROFILE\.ssh\sulion-enclave" sulion@sulion-enclave
+```
+
+Use the DHCP address if hostname discovery is unavailable. Once the connection
+works, return to the enclave console and persist the tested generation:
+
+```bash
+sudo nixos-rebuild switch \
+  --flake /etc/sulion#sulion-enclave
+```
+
+The copied `.pub` file is not secret, but it can now be removed from the shared
+repository directory. Do not change ownership of `/etc/sulion`; it remains a
+root-owned migration checkout.
+
+After this transition, the checkout is no longer required for host updates.
+Test and activate the repository flake directly:
+
+```bash
+sudo nixos-rebuild test \
+  --flake github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#sulion-enclave
+sudo nixos-rebuild switch \
+  --flake github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#sulion-enclave
+```
+
+Replace the branch ref with `main` after the work is merged. `test` activates
+the candidate only until reboot; run `switch` only after the SSH and host checks
+pass.
+
+## Automated fresh installation
+
+The fresh-install path uses the checked-in Disko layout and one bootstrap
+command. It replaces manual partition commands, cloning into `/etc`, and
+transcribing public-key text.
+
 The firmware names vary, but set the machine to UEFI boot, disable Secure Boot
 and storage RAID, enable CPU virtualization, and select the NixOS USB's UEFI
-boot entry. Once the installer shell appears, become root and confirm that it
-really booted through UEFI:
+boot entry. Once the installer shell appears, set a temporary installer-only
+root password, then confirm UEFI and wired networking:
 
 ```bash
 sudo -i
+passwd
 test -d /sys/firmware/efi/efivars
 ip -brief address
 ```
 
-The second command must show a working wired LAN address. The installation and
-flake input both require network access. Wi-Fi is optional and configured only
-after the installed system is running.
+The final command must show a working wired LAN address. The installation and
+flake inputs require network access. The password exists only in the live
+installer and disappears when it reboots.
+
+On the administration workstation, generate the dedicated key using the
+commands in the previous section. Copy only its `.pub` file to the installer,
+then connect.
+
+Linux or macOS:
+
+```bash
+scp ~/.ssh/sulion-enclave.pub root@INSTALLER_IP:/tmp/sulion-enclave.pub
+ssh root@INSTALLER_IP
+```
+
+Windows PowerShell:
+
+```powershell
+scp.exe "$env:USERPROFILE\.ssh\sulion-enclave.pub" `
+  "root@INSTALLER_IP:/tmp/sulion-enclave.pub"
+ssh.exe root@INSTALLER_IP
+```
+
+This temporary password-authenticated connection is only to the live installer.
+The installed system permits key authentication for `sulion` and disables both
+SSH passwords and root SSH.
 
 ### Select the installation disk
 
@@ -101,99 +222,44 @@ Stop unless the final command shows exactly the disk that may be erased. Never
 use `/dev/sdX`, `/dev/nvmeXnY`, a partition path, or an unresolved shell value
 as `INSTALL_DISK`.
 
-### Erase, partition, and format
+### Preview and install
 
-The following block permanently erases `INSTALL_DISK`. It creates a 1 GiB
-FAT32 EFI System Partition and gives the remaining space to ext4:
-
-```bash
-wipefs --all "$INSTALL_DISK"
-parted --script "$INSTALL_DISK" -- mklabel gpt
-parted --script "$INSTALL_DISK" -- mkpart ESP fat32 1MiB 1025MiB
-parted --script "$INSTALL_DISK" -- set 1 esp on
-parted --script "$INSTALL_DISK" -- mkpart nixos ext4 1025MiB 100%
-partprobe "$INSTALL_DISK"
-udevadm settle
-
-export INSTALL_ESP="${INSTALL_DISK}-part1"
-export INSTALL_ROOT="${INSTALL_DISK}-part2"
-test -b "$INSTALL_ESP"
-test -b "$INSTALL_ROOT"
-
-mkfs.fat -F 32 -n boot "$INSTALL_ESP"
-mkfs.ext4 -F -L nixos -m 1 "$INSTALL_ROOT"
-
-mount /dev/disk/by-label/nixos /mnt
-mkdir -p /mnt/boot
-mount -o umask=0077 /dev/disk/by-label/boot /mnt/boot
-findmnt /mnt
-findmnt /mnt/boot
-```
-
-The checked-in hardware leaf consumes those `nixos` and `boot` filesystem
-labels and includes the normal NVMe, AHCI, SATA, and USB storage modules. Do
-not replace it with generated UUID-based configuration for this layout.
-
-### Install the repository-defined system
-
-Clone this branch directly into the target filesystem:
+First ask Disko to evaluate and print the exact plan. This builds the complete
+configuration but makes no disk changes:
 
 ```bash
-mkdir -p /mnt/etc
-nix-shell -p git --run \
-  'git clone --branch feat/dedicated-nixos-dev-node --single-branch https://github.com/chris-arsenault/sulion.git /mnt/etc/sulion'
+nix run \
+  github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#bootstrap-enclave \
+  -- \
+  --disk "$INSTALL_DISK" \
+  --key-file /tmp/sulion-enclave.pub \
+  --dry-run
 ```
 
-### Generate and authorize the SSH key
-
-Generate the key on the laptop or desktop that will initiate SSH connections,
-not on `sulion-enclave`. On Linux or macOS:
+Review the printed disk identity, public-key fingerprint, flake revision, and
+Disko commands. Then remove `--dry-run` and execute the installation:
 
 ```bash
-ssh-keygen -t ed25519 -a 64 \
-  -f ~/.ssh/sulion-enclave \
-  -C "$(whoami)@sulion-enclave"
-cat ~/.ssh/sulion-enclave.pub
+nix run \
+  github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#bootstrap-enclave \
+  -- \
+  --disk "$INSTALL_DISK" \
+  --key-file /tmp/sulion-enclave.pub
 ```
 
-On Windows PowerShell:
+The command validates that it is running as root on an x86_64 NixOS installer
+booted through UEFI, refuses partition paths and mounted disks, and requires the
+full stable disk path to be typed back before erasing. It creates the declared
+GPT/ESP/ext4 layout, installs the exact resolved flake source, places the public
+key in root-owned machine-local state, and prompts twice for the initial
+`sulion` console/sudo password. Cleartext password material is not passed to Nix
+or written into the repository.
 
-```powershell
-ssh-keygen.exe -t ed25519 -a 64 `
-  -f "$env:USERPROFILE\.ssh\sulion-enclave" `
-  -C "$env:USERNAME@sulion-enclave"
-Get-Content "$env:USERPROFILE\.ssh\sulion-enclave.pub"
-```
-
-Keep the private file named `sulion-enclave` on that client. Copy only the
-single-line `.pub` output to the installer console. Open
-`/mnt/etc/sulion/nix/hosts/dedicated/authorized-keys.nix`:
+When it reports completion:
 
 ```bash
-nano /mnt/etc/sulion/nix/hosts/dedicated/authorized-keys.nix
-```
-
-Make it a Nix list containing the complete public-key line:
-
-```nix
-[
-  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA_REPLACE_WITH_REAL_KEY client@sulion-enclave"
-]
-```
-
-Do not paste the private key. With the public key in place, install the
-`sulion-enclave` flake output:
-
-```bash
-nixos-install --flake /mnt/etc/sulion#sulion-enclave
-nixos-enter --root /mnt -c 'passwd sulion'
-sync
 reboot
 ```
-
-`nixos-install` prompts for a root recovery password; set one even though root
-cannot log in over SSH. The separate `passwd sulion` command creates the local
-console and sudo password before reboot.
 
 After removing the installer USB, log in as `sulion` on the local console and add
 the Samba password:
@@ -235,10 +301,6 @@ ssh.exe -i "$env:USERPROFILE\.ssh\sulion-enclave" sulion@sulion-enclave
 Use the machine's DHCP address if local hostname discovery is unavailable. Do
 not enable SSH password authentication as a shortcut.
 
-For an already-installed machine, put the public-key line in
-`/etc/sulion/nix/hosts/dedicated/authorized-keys.nix`, then run the same
-`nixos-rebuild test` and `nixos-rebuild switch` commands above.
-
 ### First-boot acceptance
 
 Run these as `sulion`:
@@ -270,6 +332,8 @@ node it must appear under `/home/sulion/repos` owned by `sulion:sulion`.
 The Nix store contains no runtime secrets. Activation creates root-only
 directories under `/var/lib/sulion`; provision:
 
+- `/var/lib/sulion/config/ssh/authorized_keys` with mode `0600`, managed by
+  `sulion-admin-key`;
 - `/var/lib/sulion/config/runtime.env` with mode `0600`, using
   `deploy/dedicated.env.example` as the field contract;
 - `/var/lib/sulion/node/private-key.pk8`, owned by `root:root` with mode `0600`;
@@ -277,6 +341,19 @@ directories under `/var/lib/sulion`; provision:
 
 The broker database and master key remain on TrueNAS. They must not be copied
 to this host.
+
+Manage additional break-glass administration keys as root. Commands accept
+public-key files rather than raw keys on the command line:
+
+```bash
+sudo sulion-admin-key list
+sudo sulion-admin-key add /path/to/another-workstation.pub
+sudo sulion-admin-key remove SHA256:EXACT_FINGERPRINT
+sudo sulion-admin-key replace /path/to/replacement.pub
+```
+
+The command refuses to remove the final key. `replace` is the recovery-safe way
+to rotate the only authorized key.
 
 The checked-in dedicated identity is
 `019d4f28-88ac-7a80-932c-b0f53a0708f4`. Keep that value in

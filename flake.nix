@@ -1,13 +1,30 @@
 {
   description = "Sulion dedicated development node";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+
+    disko = {
+      url = "github:nix-community/disko/ff8702b4de27f72b4c78573dfb89ec74e36abdf1";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
 
   outputs =
-    { nixpkgs, ... }:
+    {
+      self,
+      disko,
+      nixpkgs,
+      ...
+    }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
+      adminKey = import ./nix/packages/admin-key.nix { inherit pkgs; };
+      bootstrapEnclave = import ./nix/packages/bootstrap-enclave.nix {
+        inherit pkgs self;
+        diskoInstall = disko.packages.${system}.disko-install;
+      };
     in
     {
       nixosModules = {
@@ -27,11 +44,30 @@
 
       nixosConfigurations.sulion-enclave = nixpkgs.lib.nixosSystem {
         inherit system;
-        modules = [ ./nix/hosts/dedicated/default.nix ];
+        modules = [
+          disko.nixosModules.disko
+          ./nix/hosts/dedicated/default.nix
+        ];
       };
 
       checks.${system}.dev-node-vm = import ./nix/tests/dev-node-vm.nix {
         inherit nixpkgs system;
+      };
+
+      packages.${system} = {
+        admin-key = adminKey;
+        bootstrap-enclave = bootstrapEnclave;
+      };
+
+      apps.${system} = {
+        bootstrap-enclave = {
+          type = "app";
+          program = nixpkgs.lib.getExe bootstrapEnclave;
+        };
+        install-admin-key = {
+          type = "app";
+          program = nixpkgs.lib.getExe adminKey;
+        };
       };
 
       formatter.${system} = pkgs.nixfmt-tree;

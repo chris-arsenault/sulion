@@ -1,5 +1,6 @@
 {
   config,
+  lib,
   pkgs,
   ...
 }:
@@ -9,6 +10,7 @@
     ../../modules/sulion-samba.nix
     ../../modules/sulion-deployer.nix
     ../../modules/sulion-backup.nix
+    ./disko.nix
     ./hardware-configuration.nix
   ];
 
@@ -19,11 +21,12 @@
     '';
   };
 
-  users.users.sulion.openssh.authorizedKeys.keys = import ./authorized-keys.nix;
-
   services.openssh = {
     enable = true;
     openFirewall = false;
+    authorizedKeysFiles = lib.mkForce [
+      "/var/lib/sulion/config/ssh/authorized_keys"
+    ];
     settings = {
       PasswordAuthentication = false;
       PermitRootLogin = "no";

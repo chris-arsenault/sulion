@@ -6,6 +6,7 @@
 }:
 let
   cfg = config.sulion;
+  adminKey = import ../packages/admin-key.nix { inherit pkgs; };
 in
 {
   options.sulion = {
@@ -130,6 +131,7 @@ in
 
     environment.systemPackages = with pkgs; [
       acl
+      adminKey
       attr
       cifs-utils
       docker
@@ -151,6 +153,8 @@ in
       "d ${cfg.home}/.local/share/docker 0710 ${cfg.user} ${cfg.group} - -"
       "d /var/lib/sulion 0750 root root - -"
       "d /var/lib/sulion/config 0700 root root - -"
+      "d /var/lib/sulion/config/ssh 0700 root root - -"
+      "f /var/lib/sulion/config/ssh/authorized_keys 0600 root root - -"
       "d /var/lib/sulion/secrets 0700 root root - -"
       "d /var/lib/sulion/node 0700 root root - -"
     ];

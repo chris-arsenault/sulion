@@ -17,6 +17,11 @@ The boundary is:
 - the **development node** launches PTYs and ships the wrapper tools
 - the **broker** stores encrypted secret bundles and redeems active grants
 
+The host's LAN-only SSH administration keys are outside this product secret
+flow. They authorize break-glass NixOS maintenance, live in a root-owned runtime
+file on `sulion-enclave`, and are never exposed to PTYs or used for node
+authentication.
+
 ## Shape
 
 Three components participate:
