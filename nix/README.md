@@ -24,44 +24,176 @@ frontend, SSH, and development ports are accepted only from
 `192.168.66.0/24`. The system-Docker bridge has the stable name `sulion0`, and
 only that interface may reach the host-network backend on port 8080.
 
-## Installation leaf
+## Fresh installation contract
 
-The checked-in hardware leaf uses two filesystem labels:
+This is the canonical bare-metal layout for the dedicated machine. Use the
+[NixOS 26.05 minimal x86_64 ISO](https://nixos.org/download/) and its manual
+installer, not the graphical installer. The repository supplies the complete
+system configuration, so do not create a parallel `/etc/nixos/configuration.nix`
+or improvise different storage choices during installation.
 
-- `nixos` — ext4 root with ACL support;
-- `boot` — the UEFI system partition mounted at `/boot`.
+| Parameter | Chosen value |
+| --- | --- |
+| Firmware | UEFI only; GPT partition table; Secure Boot disabled |
+| Storage controller | Native AHCI or NVMe mode; firmware RAID disabled |
+| Virtualization | Intel VT-x/VT-d or AMD-V/IOMMU enabled |
+| Bootloader | systemd-boot in a 1 GiB EFI System Partition |
+| Root filesystem | ext4, label `nixos`, 1% reserved blocks, POSIX ACLs |
+| Other filesystems | none; `/home`, repositories, Nix, and Docker remain on root |
+| Disk encryption | none, so the dedicated node can reboot unattended |
+| Swap and hibernation | none; the machine has 32 GB RAM and does not hibernate |
+| Host name | `sulion-node` |
+| Network | wired DHCP on `192.168.66.0/24`; no static address in the host |
+| Time zone | UTC |
+| Console | US keymap, English UTF-8 environment, no graphical desktop |
+| Interactive identity | `dev`, UID/GID 7321, wheel member |
+| Remote login | SSH keys only; root SSH and SSH passwords disabled |
+| Application startup | `sulion-stack.service` installed but disabled |
 
-That is a portable installation contract, not a Dell-specific configuration.
-If the installed layout uses different labels, RAID, encryption, or another
-filesystem, replace only
-`nix/hosts/dedicated/hardware-configuration.nix` with the output from:
+No LUKS is an explicit availability choice: this node must recover from a
+power interruption without a local unlock. If physical-at-rest protection
+later becomes a requirement, add a reviewed TPM-backed unlock design rather
+than changing the install ad hoc. Likewise, add swap declaratively only if
+measured workloads show memory pressure.
+
+The firmware names vary, but set the machine to UEFI boot, disable Secure Boot
+and storage RAID, enable CPU virtualization, and select the NixOS USB's UEFI
+boot entry. Once the installer shell appears, become root and confirm that it
+really booted through UEFI:
 
 ```bash
-sudo nixos-generate-config --root /mnt
+sudo -i
+test -d /sys/firmware/efi/efivars
+ip -brief address
 ```
 
-The rest of the host configuration remains unchanged.
+The second command must show a working LAN address. The installation and flake
+input both require network access.
 
-Before switching, add an SSH public key for `dev` in the dedicated host
-configuration or plan to finish from the local console. Password SSH and root
-SSH are disabled.
+### Select the installation disk
 
-Evaluate and activate from a copy of this repository:
+List whole disks and their stable identifiers:
 
 ```bash
+lsblk -d -o NAME,SIZE,MODEL,SERIAL,TRAN
+ls -l /dev/disk/by-id
+```
+
+Set `INSTALL_DISK` to the one whole-disk identifier for the dedicated system
+disk. This is the only machine-specific installation value:
+
+```bash
+export INSTALL_DISK=/dev/disk/by-id/REPLACE_WITH_THE_SYSTEM_DISK
+test -b "$INSTALL_DISK"
+lsblk -o NAME,SIZE,MODEL,SERIAL,TYPE,MOUNTPOINTS "$INSTALL_DISK"
+```
+
+Stop unless the final command shows exactly the disk that may be erased. Never
+use `/dev/sdX`, `/dev/nvmeXnY`, a partition path, or an unresolved shell value
+as `INSTALL_DISK`.
+
+### Erase, partition, and format
+
+The following block permanently erases `INSTALL_DISK`. It creates a 1 GiB
+FAT32 EFI System Partition and gives the remaining space to ext4:
+
+```bash
+wipefs --all "$INSTALL_DISK"
+parted --script "$INSTALL_DISK" -- mklabel gpt
+parted --script "$INSTALL_DISK" -- mkpart ESP fat32 1MiB 1025MiB
+parted --script "$INSTALL_DISK" -- set 1 esp on
+parted --script "$INSTALL_DISK" -- mkpart nixos ext4 1025MiB 100%
+partprobe "$INSTALL_DISK"
+udevadm settle
+
+export INSTALL_ESP="${INSTALL_DISK}-part1"
+export INSTALL_ROOT="${INSTALL_DISK}-part2"
+test -b "$INSTALL_ESP"
+test -b "$INSTALL_ROOT"
+
+mkfs.fat -F 32 -n boot "$INSTALL_ESP"
+mkfs.ext4 -F -L nixos -m 1 "$INSTALL_ROOT"
+
+mount /dev/disk/by-label/nixos /mnt
+mkdir -p /mnt/boot
+mount -o umask=0077 /dev/disk/by-label/boot /mnt/boot
+findmnt /mnt
+findmnt /mnt/boot
+```
+
+The checked-in hardware leaf consumes those `nixos` and `boot` filesystem
+labels and includes the normal NVMe, AHCI, SATA, and USB storage modules. Do
+not replace it with generated UUID-based configuration for this layout.
+
+### Install the repository-defined system
+
+Clone this branch directly into the target filesystem, then install its
+`sulion-dedicated` flake output:
+
+```bash
+mkdir -p /mnt/etc
+nix-shell -p git --run \
+  'git clone --branch feat/dedicated-nixos-dev-node --single-branch https://github.com/chris-arsenault/sulion.git /mnt/etc/sulion'
+
+nixos-install --flake /mnt/etc/sulion#sulion-dedicated
+nixos-enter --root /mnt -c 'passwd dev'
+sync
+reboot
+```
+
+`nixos-install` prompts for a root recovery password; set one even though root
+cannot log in over SSH. The separate `passwd dev` command creates the local
+console and sudo password before reboot.
+
+After removing the installer USB, log in as `dev` on the local console and add
+the Samba password:
+
+```bash
+sudo smbpasswd -a dev
+```
+
+The Unix and Samba accounts represent the same single user. They may use the
+same human-entered password, but Samba stores its own credential verifier. Do
+not configure `force user` or create separate per-client identities.
+
+The first installation intentionally requires the local console because the
+repository cannot contain a personal SSH public key. Before operating the node
+remotely, add the chosen public key to
+`users.users.dev.openssh.authorizedKeys.keys` in
+`nix/hosts/dedicated/default.nix`, then apply it locally:
+
+```bash
+cd /etc/sulion
 sudo nixos-rebuild test --flake .#sulion-dedicated
 sudo nixos-rebuild switch --flake .#sulion-dedicated
 ```
 
-Then provision the two interactive identities:
+Do not enable SSH password authentication as a shortcut.
+
+### First-boot acceptance
+
+Run these as `dev`:
 
 ```bash
-sudo passwd dev
-sudo smbpasswd -a dev
+hostnamectl hostname
+findmnt /
+findmnt /boot
+id
+systemctl --user is-active docker.service
+docker info
+docker compose version
+docker run --rm --memory 1g --cpus 2 docker.io/library/alpine:latest true
+systemctl is-enabled sulion-stack.service
 ```
 
-The Unix and Samba accounts represent the same single user. Do not configure
-`force user` or create separate per-client identities.
+Expected results are hostname `sulion-node`, root label `nixos`, boot label
+`boot`, UID/GID 7321, an active rootless Docker daemon, a successful limited
+container, and a disabled Sulion application unit. `systemctl is-enabled`
+intentionally exits nonzero while printing `disabled`.
+
+From another LAN machine, connect to `\\sulion-node\repos` on Windows or
+`smb://sulion-node.local/repos` on macOS and create a test directory. On the
+node it must appear under `/home/dev/repos` owned by `dev:dev`.
 
 ## Runtime files
 
