@@ -281,6 +281,55 @@ async fn metrics_endpoint_rolls_up_usage_and_plan_flow() {
     .await
     .unwrap();
 
+    // A session that never correlated to a PTY: attribution must fall back
+    // to the transcript project hash (the tsonu-music case).
+    let orphan_session = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO claude_sessions (session_uuid, project_hash) \
+         VALUES ($1, regexp_replace($2, '[^A-Za-z0-9]', '-', 'g'))",
+    )
+    .bind(orphan_session)
+    .bind(repo_path.to_string_lossy().as_ref())
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO agent_session_usage \
+            (session_uuid, agent, input_tokens, cached_input_tokens, output_tokens, \
+             reasoning_output_tokens, total_tokens, context_tokens, model_context_window, \
+             last_byte_offset, observed_at) \
+         VALUES ($1, 'claude-code', 100, 8000, 400, 0, 8500, NULL, NULL, 10, NOW())",
+    )
+    .bind(orphan_session)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+
+    // Git activity reads the live repo registry; give the repo a commit.
+    for git_args in [
+        vec!["init", "-q"],
+        vec!["config", "user.email", "test@example.com"],
+        vec!["config", "user.name", "Test"],
+        vec!["commit", "-q", "--allow-empty", "-m", "metrics probe"],
+    ] {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo_path)
+            .args(&git_args)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {git_args:?} failed");
+    }
+    sqlx::query(
+        "INSERT INTO repo_runtime_state (repo_name, path, \"exists\", next_status_at, updated_at) \
+         VALUES ('metrics-repo', $1, TRUE, NOW(), NOW()) \
+         ON CONFLICT (repo_name) DO UPDATE SET path = EXCLUDED.path, \"exists\" = TRUE",
+    )
+    .bind(repo_path.to_string_lossy().as_ref())
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+
     let plan = sulion::plans::create(
         &h.state.pool,
         sulion::plans::CreatePlanInput {
@@ -323,18 +372,39 @@ async fn metrics_endpoint_rolls_up_usage_and_plan_flow() {
         .await
         .unwrap();
 
-    assert_eq!(metrics["usage"]["all_time"]["total_tokens"], 91_500);
-    assert_eq!(metrics["usage"]["all_time"]["cached_tokens"], 90_000);
-    assert_eq!(metrics["usage"]["all_time"]["fresh_tokens"], 1_500);
-    assert_eq!(metrics["usage"]["today"]["total_tokens"], 51_500);
-    assert_eq!(metrics["usage"]["today"]["fresh_tokens"], 500);
+    assert_eq!(metrics["usage"]["all_time"]["total_tokens"], 100_000);
+    assert_eq!(metrics["usage"]["all_time"]["cached_tokens"], 98_000);
+    assert_eq!(metrics["usage"]["all_time"]["fresh_tokens"], 2_000);
+    assert_eq!(metrics["usage"]["today"]["total_tokens"], 60_000);
+    assert_eq!(metrics["usage"]["today"]["fresh_tokens"], 1_000);
+    // Both sessions attribute to the repo — the second only via project
+    // hash — so no "(unattributed)" bucket appears.
     let repo_usage = metrics["usage"]["per_repo"]
         .as_array()
         .unwrap()
         .iter()
         .find(|row| row["repo"] == "metrics-repo")
         .unwrap();
-    assert_eq!(repo_usage["all_time"]["total_tokens"], 91_500);
+    assert_eq!(repo_usage["all_time"]["total_tokens"], 100_000);
+    assert!(
+        !metrics["usage"]["per_repo"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["repo"] == "(unattributed)"),
+        "project-hash fallback should attribute the uncorrelated session",
+    );
+
+    // Git activity comes from repo_runtime_state, not the legacy repos
+    // table, and sees the probe commit.
+    let git_repo = metrics["git"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["repo"] == "metrics-repo")
+        .expect("repo_runtime_state entry should be scanned");
+    assert_eq!(git_repo["commits_24h"], 1);
+    assert_eq!(git_repo["human_commits_7d"], 1);
 
     // Flow: first phase auto-starts in_progress (weight 3 = size l).
     assert_eq!(metrics["flow"]["wip"], 1);

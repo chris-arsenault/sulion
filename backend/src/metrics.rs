@@ -185,9 +185,34 @@ fn window(total: i64, cached: i64) -> UsageWindow {
 }
 
 async fn usage_metrics(pool: &Pool) -> anyhow::Result<UsageMetrics> {
+    // Repo attribution, most direct first:
+    // 1. the session's correlated PTY (SessionStart hook),
+    // 2. a correlated PTY anywhere up the compaction-parent lineage —
+    //    continuation sessions get fresh uuids and no new hook,
+    // 3. any PTY whose current pointer names this session,
+    // 4. the transcript project hash matched against repo paths
+    //    (covers sessions that never correlated at all).
     let rows: Vec<UsageRow> = sqlx::query_as(
-        "WITH base AS ( \
-            SELECT u.session_uuid, p.repo, \
+        "WITH RECURSIVE lineage AS ( \
+            SELECT cs.session_uuid AS origin, cs.pty_session_id, \
+                   cs.parent_session_uuid, 0 AS depth \
+            FROM claude_sessions cs \
+          UNION ALL \
+            SELECT l.origin, parent.pty_session_id, parent.parent_session_uuid, \
+                   l.depth + 1 \
+            FROM lineage l \
+            JOIN claude_sessions parent \
+              ON parent.session_uuid = l.parent_session_uuid \
+            WHERE l.pty_session_id IS NULL AND l.depth < 16 \
+         ), \
+         lineage_pty AS ( \
+            SELECT DISTINCT ON (origin) origin, pty_session_id \
+            FROM lineage WHERE pty_session_id IS NOT NULL \
+            ORDER BY origin, depth \
+         ), \
+         base AS ( \
+            SELECT u.session_uuid, \
+                   COALESCE(p_direct.repo, p_reverse.repo, hash_repo.repo_name) AS repo, \
                    u.total_tokens, u.cached_input_tokens, \
                    today_base.total_tokens AS today_base_total, \
                    today_base.cached_input_tokens AS today_base_cached, \
@@ -195,7 +220,17 @@ async fn usage_metrics(pool: &Pool) -> anyhow::Result<UsageMetrics> {
                    week_base.cached_input_tokens AS week_base_cached \
             FROM agent_session_usage u \
             LEFT JOIN claude_sessions cs ON cs.session_uuid = u.session_uuid \
-            LEFT JOIN pty_sessions p ON p.id = cs.pty_session_id \
+            LEFT JOIN lineage_pty lp ON lp.origin = u.session_uuid \
+            LEFT JOIN pty_sessions p_direct ON p_direct.id = lp.pty_session_id \
+            LEFT JOIN LATERAL ( \
+                SELECT pr.repo FROM pty_sessions pr \
+                 WHERE pr.current_claude_session_uuid = u.session_uuid \
+                 LIMIT 1) p_reverse ON TRUE \
+            LEFT JOIN LATERAL ( \
+                SELECT r.repo_name FROM repo_runtime_state r \
+                 WHERE cs.project_hash IS NOT NULL \
+                   AND regexp_replace(r.path, '[^A-Za-z0-9]', '-', 'g') = cs.project_hash \
+                 LIMIT 1) hash_repo ON TRUE \
             LEFT JOIN LATERAL ( \
                 SELECT total_tokens, cached_input_tokens FROM agent_usage_daily d \
                  WHERE d.session_uuid = u.session_uuid AND d.day < CURRENT_DATE \
@@ -298,15 +333,23 @@ async fn git_activity(pool: &Pool) -> anyhow::Result<Vec<RepoGitActivity>> {
             return Ok(cached.data.clone());
         }
     }
-    let repos: Vec<(String, String)> = sqlx::query_as("SELECT name, path FROM repos ORDER BY name")
-        .fetch_all(pool)
-        .await?;
+    // repo_runtime_state is the live registry (the 0001 `repos` table is
+    // legacy and stale in deployed databases).
+    let repos: Vec<(String, String)> = sqlx::query_as(
+        "SELECT repo_name, path FROM repo_runtime_state \
+          WHERE \"exists\" ORDER BY repo_name",
+    )
+    .fetch_all(pool)
+    .await?;
     let mut out = Vec::with_capacity(repos.len());
     for (name, path) in repos {
         match scan_repo_git(&name, Path::new(&path)).await {
             Ok(activity) => out.push(activity),
             Err(err) => {
-                tracing::debug!(repo = %name, %err, "git activity scan failed");
+                // Keep the repo visible with zeros and say why — a silent
+                // skip reads as "no activity anywhere".
+                tracing::warn!(repo = %name, %err, "git activity scan failed");
+                out.push(empty_activity(&name));
             }
         }
     }
@@ -322,6 +365,22 @@ struct CommitStat {
     insertions: i64,
     deletions: i64,
     agent: bool,
+}
+
+fn empty_activity(name: &str) -> RepoGitActivity {
+    RepoGitActivity {
+        repo: name.to_string(),
+        commits_24h: 0,
+        commits_7d: 0,
+        insertions_24h: 0,
+        deletions_24h: 0,
+        insertions_7d: 0,
+        deletions_7d: 0,
+        agent_commits_7d: 0,
+        human_commits_7d: 0,
+        last_commit_at: None,
+        daily: Vec::new(),
+    }
 }
 
 async fn scan_repo_git(name: &str, path: &Path) -> anyhow::Result<RepoGitActivity> {
@@ -386,19 +445,7 @@ async fn scan_repo_git(name: &str, path: &Path) -> anyhow::Result<RepoGitActivit
     let now = Utc::now().timestamp();
     let day_ago = now - 24 * 3600;
     let week_ago = now - 7 * 24 * 3600;
-    let mut activity = RepoGitActivity {
-        repo: name.to_string(),
-        commits_24h: 0,
-        commits_7d: 0,
-        insertions_24h: 0,
-        deletions_24h: 0,
-        insertions_7d: 0,
-        deletions_7d: 0,
-        agent_commits_7d: 0,
-        human_commits_7d: 0,
-        last_commit_at: None,
-        daily: Vec::new(),
-    };
+    let mut activity = empty_activity(name);
     let mut daily: HashMap<NaiveDate, GitDay> = HashMap::new();
     for stat in commits.values() {
         let at = Utc
@@ -442,6 +489,10 @@ async fn scan_repo_git(name: &str, path: &Path) -> anyhow::Result<RepoGitActivit
 
 async fn git_stdout(path: &Path, args: &[&str]) -> anyhow::Result<String> {
     let output = tokio::process::Command::new("git")
+        // Command-line config counts as protected, so this authorizes the
+        // read even when the mount's uid differs from the service uid.
+        .arg("-c")
+        .arg(format!("safe.directory={}", path.display()))
         .arg("-C")
         .arg(path)
         .args(args)
