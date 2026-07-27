@@ -70,91 +70,7 @@ later becomes a requirement, add a reviewed TPM-backed unlock design rather
 than changing the install ad hoc. Likewise, add swap declaratively only if
 measured workloads show memory pressure.
 
-## Complete the already-installed machine
-
-Use this path for the machine that is running an earlier generation from
-`/etc/sulion`. It does not repartition or reinstall anything, and the existing
-`sulion` console/sudo password is preserved.
-
-On the workstation that will administer the enclave, generate a dedicated key
-if it does not already exist. Linux and macOS:
-
-```bash
-ssh-keygen -t ed25519 -a 64 \
-  -f ~/.ssh/sulion-enclave \
-  -C "$(whoami)@sulion-enclave"
-```
-
-Windows PowerShell:
-
-```powershell
-ssh-keygen.exe -t ed25519 -a 64 `
-  -f "$env:USERPROFILE\.ssh\sulion-enclave" `
-  -C "$env:USERNAME@sulion-enclave"
-```
-
-The file without `.pub` is the private key and never leaves that workstation.
-Copy the `.pub` file itself—not its text—into the `repos` SMB share. A USB drive
-is also acceptable if SMB is not configured yet.
-
-At the `sulion-enclave` console, connect wired Ethernet and run:
-
-```bash
-sudo git -C /etc/sulion pull --ff-only \
-  origin feat/dedicated-nixos-dev-node
-
-sudo nix run /etc/sulion#install-admin-key -- \
-  add /home/sulion/repos/sulion-enclave.pub
-
-sudo nixos-rebuild test \
-  --flake /etc/sulion#sulion-enclave
-```
-
-The key installer validates one Ed25519 public key, prints its SHA256
-fingerprint, and atomically adds it to
-`/var/lib/sulion/config/ssh/authorized_keys`. That file and its parent directory
-stay owned by root and are not part of Git.
-
-Before making the generation persistent, test from the workstation that owns
-the private key. Linux or macOS:
-
-```bash
-ssh -i ~/.ssh/sulion-enclave sulion@sulion-enclave.local
-```
-
-Windows PowerShell:
-
-```powershell
-ssh.exe -i "$env:USERPROFILE\.ssh\sulion-enclave" sulion@sulion-enclave
-```
-
-Use the DHCP address if hostname discovery is unavailable. Once the connection
-works, return to the enclave console and persist the tested generation:
-
-```bash
-sudo nixos-rebuild switch \
-  --flake /etc/sulion#sulion-enclave
-```
-
-The copied `.pub` file is not secret, but it can now be removed from the shared
-repository directory. Do not change ownership of `/etc/sulion`; it remains a
-root-owned migration checkout.
-
-After this transition, the checkout is no longer required for host updates.
-Test and activate the repository flake directly:
-
-```bash
-sudo nixos-rebuild test \
-  --flake github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#sulion-enclave
-sudo nixos-rebuild switch \
-  --flake github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#sulion-enclave
-```
-
-Replace the branch ref with `main` after the work is merged. `test` activates
-the candidate only until reboot; run `switch` only after the SSH and host checks
-pass.
-
-## Automated fresh installation
+## Fresh installation
 
 The fresh-install path uses the checked-in Disko layout and one bootstrap
 command. It replaces manual partition commands, cloning into `/etc`, and
@@ -228,7 +144,7 @@ First ask Disko to evaluate and print the exact plan. This builds the complete
 configuration but makes no disk changes:
 
 ```bash
-nix run \
+nix --extra-experimental-features 'nix-command flakes' run \
   github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#bootstrap-enclave \
   -- \
   --disk "$INSTALL_DISK" \
@@ -240,7 +156,7 @@ Review the printed disk identity, public-key fingerprint, flake revision, and
 Disko commands. Then remove `--dry-run` and execute the installation:
 
 ```bash
-nix run \
+nix --extra-experimental-features 'nix-command flakes' run \
   github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#bootstrap-enclave \
   -- \
   --disk "$INSTALL_DISK" \
@@ -468,3 +384,9 @@ The VM test checks stable identities, inherited POSIX ACLs, rootless Docker
 network/volume/resource-limit/bind-mount options, denial of the system Docker
 socket, authenticated SMB writes and owners, DOS xattrs, Samba macOS modules,
 and the disabled deployment unit.
+
+## Repairing an existing installation
+
+The fresh-install flow above is the canonical path. If an older installation
+must instead be preserved and transitioned in place, use
+[`repair-existing-install.md`](repair-existing-install.md).
