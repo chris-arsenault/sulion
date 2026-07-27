@@ -43,3 +43,10 @@ One new binary: `src/bin/sulion-ingester.rs`. Required changes:
 - Keep Postgres shared.
 
 The real work is ownership, not YAML: decide which process owns migrations and backfills, prevent redundant projection rebuilds, and define API-readiness vs ingester-liveness separately.
+
+The accepted TrueNAS control-plane / dedicated development-node architecture
+now supplies the operational reason for this split: transcript roots move to
+the node while the browser API remains on TrueNAS. The ingester therefore runs
+on the development node, while Postgres-only projection repair and migrations
+remain control-plane responsibilities. The target protocol and failure
+semantics are specified in [`node-protocol.md`](node-protocol.md).

@@ -228,6 +228,14 @@ canonical repos under `/mnt/apps/apps/sulion/repos`, isolated worktrees under
 rules, certificate, and DNS; Ahara Infra owns the VPN reverse-proxy upstream and
 scoped WireGuard ingress. Full setup in [`deploy.md`](deploy.md).
 
+The accepted future split between this shipped control/runtime process and a
+dedicated development node is recorded in
+[`adrs/0002-hybrid-control-plane-and-dev-node.md`](adrs/0002-hybrid-control-plane-and-dev-node.md).
+Its implementation sequence lives in
+[`plans/dedicated-nixos-dev-node.md`](plans/dedicated-nixos-dev-node.md).
+Until that plan ships, this section and the runtime description above remain
+authoritative.
+
 ## Historical reasoning
 
 Kept because it still explains *why* the shape is what it is. Removed when it no longer matches the code.
