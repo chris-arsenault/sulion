@@ -50,7 +50,7 @@ or improvise different storage choices during installation.
 | Disk encryption | none, so the dedicated node can reboot unattended |
 | Swap and hibernation | none; the machine has 32 GB RAM and does not hibernate |
 | Host name | `sulion-enclave` |
-| Network | NetworkManager, wired or Wi-Fi DHCP on `192.168.66.0/24`; no static host address |
+| Network | wired DHCP on `192.168.66.0/24`; optional Wi-Fi after installation |
 | Time zone | UTC |
 | Console | US keymap, English UTF-8 environment, no graphical desktop |
 | Interactive identity | `sulion`, UID/GID 7321, wheel and NetworkManager member |
@@ -74,10 +74,9 @@ test -d /sys/firmware/efi/efivars
 ip -brief address
 ```
 
-The second command must show a working LAN address. If it does not, run
-`nmtui`, choose **Activate a connection**, select the Wi-Fi network, and enter
-its passphrase. Confirm the address with `ip -brief address` before continuing.
-The installation and flake input both require network access.
+The second command must show a working wired LAN address. The installation and
+flake input both require network access. Wi-Fi is optional and configured only
+after the installed system is running.
 
 ### Select the installation disk
 
@@ -134,29 +133,6 @@ findmnt /mnt/boot
 The checked-in hardware leaf consumes those `nixos` and `boot` filesystem
 labels and includes the normal NVMe, AHCI, SATA, and USB storage modules. Do
 not replace it with generated UUID-based configuration for this layout.
-
-### Preserve the installer Wi-Fi connection
-
-The installer and installed system have separate `/etc` trees. Merely joining
-Wi-Fi in the installer does not copy that connection into the installed
-system. If the machine will use Wi-Fi after reboot, copy the root-only
-NetworkManager profile after mounting `/mnt`:
-
-```bash
-nmcli -f NAME,TYPE,DEVICE connection show
-find /etc/NetworkManager/system-connections -maxdepth 1 -type f -print
-
-install -d -m 0700 /mnt/etc/NetworkManager/system-connections
-cp -a /etc/NetworkManager/system-connections/. \
-  /mnt/etc/NetworkManager/system-connections/
-find /mnt/etc/NetworkManager/system-connections \
-  -maxdepth 1 -type f -exec chmod 0600 {} +
-```
-
-Only do this after `nmtui` has successfully activated the intended Wi-Fi
-connection. The profile contains the network credential and must remain
-root-readable only. The checked-in host enables NetworkManager, so that
-profile is loaded automatically on every boot.
 
 ### Install the repository-defined system
 
@@ -230,8 +206,11 @@ The Unix and Samba accounts represent the same single user. They may use the
 same human-entered password, but Samba stores its own credential verifier. Do
 not configure `force user` or create separate per-client identities.
 
-If the installer Wi-Fi profile was not copied, or this is an already-installed
-machine being moved to a new network, configure it once at the local console:
+### Optional Wi-Fi
+
+The supported installation and update path is wired Ethernet. Once the current
+flake has been activated, NetworkManager and `nmtui` are available if Wi-Fi is
+also desired:
 
 ```bash
 sudo nmtui
@@ -240,33 +219,6 @@ nmcli -f NAME,TYPE,DEVICE connection show --active
 
 Choose **Activate a connection** in `nmtui`. NetworkManager stores the selected
 profile outside the Nix store and reconnects automatically after reboot.
-
-If this machine was installed from an earlier revision that did not enable
-NetworkManager, `nmtui` will not exist yet. Use temporary wired networking,
-update `/etc/sulion`, and activate the fixed configuration before joining
-Wi-Fi:
-
-```bash
-cd /etc/sulion
-git pull --ff-only
-sudo nixos-rebuild test --flake .#sulion-enclave
-sudo nixos-rebuild switch --flake .#sulion-enclave
-sudo nmtui
-```
-
-If wired networking is unavailable, boot the installer USB again, connect with
-`nmtui`, mount the existing `nixos` and `boot` labels under `/mnt`, copy the
-installer profile using the commands above, update `/mnt/etc/sulion`, and
-build the next boot generation from inside the installed system:
-
-```bash
-mount /dev/disk/by-label/nixos /mnt
-mount -o umask=0077 /dev/disk/by-label/boot /mnt/boot
-git -C /mnt/etc/sulion pull --ff-only
-nixos-enter --root /mnt -c \
-  'cd /etc/sulion && nixos-rebuild boot --flake .#sulion-enclave'
-reboot
-```
 
 From the client that owns the private key, verify SSH. On Linux or macOS:
 
@@ -305,10 +257,9 @@ systemctl is-enabled sulion-stack.service
 ```
 
 Expected results are hostname `sulion-enclave`, root label `nixos`, boot label
-`boot`, UID/GID 7321, an active wired or Wi-Fi connection, an active rootless
-Docker daemon, a successful limited container, and a disabled Sulion node
-unit. `systemctl is-enabled` intentionally exits nonzero while printing
-`disabled`.
+`boot`, UID/GID 7321, an active wired connection, an active rootless Docker
+daemon, a successful limited container, and a disabled Sulion node unit.
+`systemctl is-enabled` intentionally exits nonzero while printing `disabled`.
 
 From another LAN machine, connect to `\\sulion-enclave\repos` on Windows or
 `smb://sulion-enclave.local/repos` on macOS and create a test directory. On the
