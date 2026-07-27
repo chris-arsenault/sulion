@@ -65,6 +65,7 @@ pub struct InventoryStats {
 #[derive(sqlx::FromRow)]
 struct StatsSnapshot {
     database_size_bytes: i64,
+    live_pty_sessions: i64,
     live_agent_sessions: i64,
     event_rows: i64,
     agent_sessions: i64,
@@ -149,7 +150,11 @@ pub async fn collect_stats(state: &AppState) -> anyhow::Result<StatsResponse> {
     let process = state.stats_probe.sample().await;
     let snapshot = stats_snapshot(&state.pool).await?;
     let pty = PtyStats {
-        live_sessions: state.pty.live_count().await,
+        live_sessions: if state.node_protocol_required {
+            snapshot.live_pty_sessions.max(0) as usize
+        } else {
+            state.pty.live_count().await
+        },
         live_agent_sessions: snapshot.live_agent_sessions,
     };
     let db = DbStats {
@@ -201,6 +206,9 @@ async fn stats_snapshot(pool: &crate::db::Pool) -> sqlx::Result<StatsSnapshot> {
     sqlx::query_as(
         "SELECT
             pg_database_size(current_database())::BIGINT AS database_size_bytes,
+            (SELECT COUNT(*)::BIGINT
+               FROM pty_sessions
+              WHERE state = 'live') AS live_pty_sessions,
             (SELECT COUNT(*)::BIGINT
                FROM pty_sessions
               WHERE state = 'live' AND current_session_uuid IS NOT NULL) AS live_agent_sessions,

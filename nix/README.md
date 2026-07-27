@@ -14,8 +14,10 @@ The host runs two Docker daemons:
 - the lingering `dev` user owns a rootless daemon at
   `/run/user/7321/docker.sock`.
 
-The dedicated Compose role mounts only the latter into the workbench. The `dev`
-user is intentionally not a member of the system `docker` group.
+The dedicated Compose role mounts only the latter into `sulion-node`. The
+control process has no development filesystem or Docker mount, and the
+node-local ingester sees only transcript directories. The `dev` user is
+intentionally not a member of the system `docker` group.
 
 Repositories live at `/home/dev/repos` on the machine's local filesystem.
 Samba exports that directory as `repos`; workspaces, agent state, Docker state,
@@ -202,18 +204,82 @@ directories under `/var/lib/sulion`; provision:
 
 - `/var/lib/sulion/config/runtime.env` with mode `0600`, using
   `deploy/dedicated.env.example` as the field contract;
+- `/var/lib/sulion/node/private-key.pk8`, owned by `root:root` with mode `0600`;
 - `/var/lib/sulion/broker/master.key` as exactly 32 random bytes, owned by
   `7322:7322` with mode `0400`;
 - optional Restic credentials under `/var/lib/sulion/secrets`.
 
-The `sulion-stack.service` unit is installed but deliberately disabled during
-this phase. Do not start it until matching OCI images for this branch have been
-published. Once they exist:
+The checked-in dedicated identity is
+`019d4f28-88ac-7a80-932c-b0f53a0708f4`. Keep that value in
+`SULION_NODE_ID`; the node key, rather than hardware properties, authenticates
+the machine. Generate the key once with the exact backend image selected by
+`IMAGE_TAG`:
+
+```bash
+SULION_BACKEND_IMAGE="$(
+  sudo bash -c '
+    set -a
+    source /var/lib/sulion/config/runtime.env
+    printf "%s/backend:%s" "$SULION_IMAGE_REGISTRY" "$IMAGE_TAG"
+  '
+)"
+sudo docker pull "${SULION_BACKEND_IMAGE}"
+sudo docker run --rm --user root \
+  -v /var/lib/sulion/node:/var/lib/sulion-node \
+  --entrypoint /usr/local/bin/sulion-node \
+  "${SULION_BACKEND_IMAGE}" \
+  keygen --output /var/lib/sulion-node/private-key.pk8
+```
+
+The `sulion-stack.service` unit is installed but deliberately disabled until
+matching OCI images and the runtime env file exist. Start it once; the
+unenrolled node will retry safely while the control plane comes online:
 
 ```bash
 sudo systemctl start sulion-stack.service
 sudo systemctl status sulion-stack.service
 ```
+
+From an authenticated LAN shell, mint a five-minute token targeted to the
+checked-in node ID. Supply a current Sulion access token only to this process;
+do not add it to `runtime.env`:
+
+```bash
+read -rsp "Sulion access token: " SULION_ADMIN_ACCESS_TOKEN
+echo
+NODE_ENROLLMENT_TOKEN="$(
+  curl -fsS http://sulion-node:30080/api/nodes/enrollment-tokens \
+    -H "Authorization: Bearer ${SULION_ADMIN_ACCESS_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data '{"display_name":"dedicated NixOS node","target_node_id":"019d4f28-88ac-7a80-932c-b0f53a0708f4","ttl_seconds":300}' |
+    jq -er .token
+)"
+unset SULION_ADMIN_ACCESS_TOKEN
+```
+
+Complete enrollment on the NixOS host using the same private-key path:
+
+```bash
+sudo docker run --rm --network host --user root \
+  -v /var/lib/sulion/node:/var/lib/sulion-node:ro \
+  --entrypoint /usr/local/bin/sulion-node \
+  "${SULION_BACKEND_IMAGE}" \
+  enroll --control-url http://127.0.0.1:8080 \
+  --token "${NODE_ENROLLMENT_TOKEN}" \
+  --key /var/lib/sulion-node/private-key.pk8
+unset NODE_ENROLLMENT_TOKEN
+unset SULION_BACKEND_IMAGE
+sudo systemctl reload sulion-stack.service
+```
+
+The returned `node_id` must equal the checked-in ID. Thereafter the system
+deployer can update or restart the control container independently of
+`sulion-node`; browser terminals reconnect to the surviving PTY.
+
+At runtime `sulion-node` opens the root-only key and then drops its process,
+filesystem, PTY, and Docker work to UID/GID 7321. Agent shells therefore cannot
+read or replace the enrolled node credential, while every file they create
+still has the Samba-visible `dev:dev` identity.
 
 ## Host checks
 

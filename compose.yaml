@@ -53,6 +53,61 @@ services:
       - ${SULION_WORKSPACES_HOST_PATH:-/mnt/apps/apps/sulion/workspaces}:/home/dev/workspaces
       - sulion_run:/run/sulion
 
+  node:
+    image: ${SULION_IMAGE_REGISTRY:-ghcr.io/chris-arsenault/sulion}/backend:${IMAGE_TAG:-latest}
+    container_name: sulion-node
+    restart: unless-stopped
+    profiles:
+      - split-runtime
+    user: root
+    entrypoint:
+      - /usr/bin/dumb-init
+      - --
+      - /opt/sulion/node-entrypoint.sh
+    environment:
+      SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@${SULION_POSTGRES_HOST:-192.168.66.3}:${SULION_POSTGRES_PORT:-5432}/${SULION_DB_NAME:-sulion}"
+      SULION_NODE_ID: "${SULION_NODE_ID:-}"
+      SULION_NODE_CONTROL_URL: "${SULION_NODE_CONTROL_URL:-}"
+      SULION_NODE_PRIVATE_KEY_PATH: "/var/lib/sulion-node/private-key.pk8"
+      SULION_NODE_RUN_USER: "dev"
+      SULION_NODE_RUN_UID: "7321"
+      SULION_NODE_RUN_GID: "7321"
+      SULION_REPOS_ROOT: "/home/dev/repos"
+      SULION_WORKSPACES_ROOT: "/home/dev/workspaces"
+      SULION_CLAUDE_PROJECTS: "/home/dev/.claude/projects"
+      SULION_CODEX_SESSIONS: "/home/dev/.codex/sessions"
+      SULION_CORRELATE_SOCK: "/run/sulion/correlate.sock"
+      SULION_SECRET_BROKER_URL: "${SULION_SECRET_BROKER_URL:-http://sulion-broker:8081}"
+      SULION_SECRET_BROKER_REGISTRATION_TOKEN: "${SULION_SECRET_BROKER_REGISTRATION_TOKEN}"
+      SULION_RETRIEVAL_URL: "${SULION_RETRIEVAL_URL:-http://sulion-retrieval:8083}"
+      SULION_RETRIEVAL_TOKEN: "${SULION_RETRIEVAL_TOKEN}"
+      SULION_CODE_INTEL_URL: "${SULION_CODE_INTEL_URL:-http://sulion-code-intel:8084}"
+      SULION_CODE_INTEL_TOKEN: "${SULION_CODE_INTEL_TOKEN}"
+      SULION_DOCKER_MODE: "${SULION_DOCKER_MODE:-direct}"
+      SULION_DOCKER_ROOTLESS: "1"
+      SULION_DEV_PORT_RANGE: "${SULION_DEV_PORT_RANGE:-26000-26010}"
+      HOME: "/home/dev"
+    networks:
+      - sulion
+
+  ingester:
+    image: ${SULION_IMAGE_REGISTRY:-ghcr.io/chris-arsenault/sulion}/backend:${IMAGE_TAG:-latest}
+    container_name: sulion-ingester
+    restart: unless-stopped
+    profiles:
+      - split-runtime
+    entrypoint:
+      - /usr/bin/dumb-init
+      - --
+      - /usr/local/bin/sulion-ingester
+    environment:
+      SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@${SULION_POSTGRES_HOST:-192.168.66.3}:${SULION_POSTGRES_PORT:-5432}/${SULION_DB_NAME:-sulion}"
+      SULION_CLAUDE_PROJECTS: "/home/dev/.claude/projects"
+      SULION_CODEX_SESSIONS: "/home/dev/.codex/sessions"
+      HOME: "/home/dev"
+    networks:
+      - sulion
+
   broker:
     image: ${SULION_IMAGE_REGISTRY:-ghcr.io/chris-arsenault/sulion}/broker:${IMAGE_TAG:-latest}
     container_name: sulion-broker

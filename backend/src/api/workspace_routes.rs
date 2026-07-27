@@ -12,8 +12,14 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::file_content::{self, FileResponse};
-use super::repo_routes::{FileTraceResponse, FileTraceTouchResponse};
+use super::node_proxy;
+use super::repo_routes::{file_trace_response, read_uploads, FileTraceResponse};
 use super::routes::{ApiError, ApiResult};
+use crate::node_protocol::{NodeOperationKind, NodeRequestKind};
+use crate::node_runtime::{
+    RawFileResponse, ResourceRequest, StageRequest, UploadRequest, WorkspacePathRequest,
+    WorkspaceStageRequest, WorkspaceUploadRequest,
+};
 use crate::{git, ingest, workspace as fs_workspace, worktree, AppState};
 
 #[derive(Deserialize)]
@@ -32,7 +38,7 @@ pub(super) struct DiffQuery {
     path: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(super) struct DiffResponse {
     diff: String,
 }
@@ -43,7 +49,7 @@ pub(super) struct StageReq {
     stage: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(super) struct UploadResponse {
     path: String,
     size: u64,
@@ -86,6 +92,26 @@ pub(super) async fn delete_workspace(
     Path(id): Path<Uuid>,
     Query(q): Query<DeleteWorkspaceQuery>,
 ) -> ApiResult<StatusCode> {
+    if state.node_protocol_required {
+        let node_id = node_proxy::workspace_node(&state, id).await?;
+        node_proxy::operation(
+            &state,
+            node_id,
+            &format!("workspace-delete:{id}"),
+            NodeOperationKind::WorkspaceDelete,
+            Some(id),
+            serde_json::to_value((
+                ResourceRequest { id },
+                worktree::DeleteWorkspaceOptions {
+                    force: q.force.unwrap_or(false),
+                    delete_branch: q.delete_branch.unwrap_or(true),
+                },
+            ))
+            .map_err(anyhow::Error::from)?,
+        )
+        .await?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
     state
         .workspace_state
         .delete_workspace(
@@ -104,6 +130,23 @@ pub(super) async fn post_workspace_refresh(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
+    if state.node_protocol_required {
+        let node_id = node_proxy::workspace_node(&state, id).await?;
+        node_proxy::request(
+            &state,
+            node_id,
+            NodeRequestKind::WorkspaceRefresh,
+            Some(id),
+            serde_json::to_value(WorkspacePathRequest {
+                workspace_id: id,
+                path: None,
+                all: false,
+            })
+            .map_err(anyhow::Error::from)?,
+        )
+        .await?;
+        return Ok(StatusCode::ACCEPTED);
+    }
     let _ = state
         .workspace_state
         .load_workspace(id)
@@ -121,6 +164,25 @@ pub(super) async fn get_workspace_dirty_paths(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<worktree::WorkspaceDirtyPaths>> {
+    if state.node_protocol_required {
+        let node_id = node_proxy::workspace_node(&state, id).await?;
+        let result = node_proxy::request(
+            &state,
+            node_id,
+            NodeRequestKind::WorkspaceDirtyPaths,
+            Some(id),
+            serde_json::to_value(WorkspacePathRequest {
+                workspace_id: id,
+                path: None,
+                all: false,
+            })
+            .map_err(anyhow::Error::from)?,
+        )
+        .await?;
+        return Ok(Json(
+            serde_json::from_value(result).map_err(anyhow::Error::from)?,
+        ));
+    }
     let dirty = worktree::load_workspace_dirty_paths(&state.pool, id)
         .await
         .map_err(ApiError::Internal)?;
@@ -132,6 +194,25 @@ pub(super) async fn get_workspace_files(
     Path(id): Path<Uuid>,
     Query(q): Query<FilesQuery>,
 ) -> ApiResult<Json<fs_workspace::DirListing>> {
+    if state.node_protocol_required {
+        let node_id = node_proxy::workspace_node(&state, id).await?;
+        let result = node_proxy::request(
+            &state,
+            node_id,
+            NodeRequestKind::WorkspaceFiles,
+            Some(id),
+            serde_json::to_value(WorkspacePathRequest {
+                workspace_id: id,
+                path: q.path,
+                all: q.all.unwrap_or(false),
+            })
+            .map_err(anyhow::Error::from)?,
+        )
+        .await?;
+        return Ok(Json(
+            serde_json::from_value(result).map_err(anyhow::Error::from)?,
+        ));
+    }
     let workspace = state
         .workspace_state
         .load_workspace(id)
@@ -164,6 +245,25 @@ pub(super) async fn get_workspace_file(
     Path(id): Path<Uuid>,
     Query(q): Query<FileQuery>,
 ) -> ApiResult<Json<FileResponse>> {
+    if state.node_protocol_required {
+        let node_id = node_proxy::workspace_node(&state, id).await?;
+        let result = node_proxy::request(
+            &state,
+            node_id,
+            NodeRequestKind::WorkspaceFilePreview,
+            Some(id),
+            serde_json::to_value(WorkspacePathRequest {
+                workspace_id: id,
+                path: Some(q.path),
+                all: false,
+            })
+            .map_err(anyhow::Error::from)?,
+        )
+        .await?;
+        return Ok(Json(
+            serde_json::from_value(result).map_err(anyhow::Error::from)?,
+        ));
+    }
     let workspace = state
         .workspace_state
         .load_workspace(id)
@@ -183,6 +283,29 @@ pub(super) async fn get_workspace_file_raw(
     Query(q): Query<FileQuery>,
     headers: HeaderMap,
 ) -> ApiResult<Response> {
+    if state.node_protocol_required {
+        let node_id = node_proxy::workspace_node(&state, id).await?;
+        let result = node_proxy::request(
+            &state,
+            node_id,
+            NodeRequestKind::WorkspaceFileRaw,
+            Some(id),
+            serde_json::to_value(WorkspacePathRequest {
+                workspace_id: id,
+                path: Some(q.path),
+                all: false,
+            })
+            .map_err(anyhow::Error::from)?,
+        )
+        .await?;
+        let raw: RawFileResponse = serde_json::from_value(result).map_err(anyhow::Error::from)?;
+        let path = raw.path.clone();
+        return file_content::serve_loaded_bytes(
+            path,
+            raw.into_bytes().map_err(ApiError::Internal)?,
+            &headers,
+        );
+    }
     let workspace = state
         .workspace_state
         .load_workspace(id)
@@ -202,6 +325,52 @@ pub(super) async fn get_workspace_file_trace(
     Path(id): Path<Uuid>,
     Query(q): Query<FileQuery>,
 ) -> ApiResult<Json<FileTraceResponse>> {
+    if state.node_protocol_required {
+        let node_id = node_proxy::workspace_node(&state, id).await?;
+        let preview = node_proxy::request(
+            &state,
+            node_id,
+            NodeRequestKind::WorkspaceFilePreview,
+            Some(id),
+            serde_json::to_value(WorkspacePathRequest {
+                workspace_id: id,
+                path: Some(q.path),
+                all: false,
+            })
+            .map_err(anyhow::Error::from)?,
+        )
+        .await?;
+        let preview: FileResponse = serde_json::from_value(preview).map_err(anyhow::Error::from)?;
+        let dirty = node_proxy::request(
+            &state,
+            node_id,
+            NodeRequestKind::WorkspaceDirtyPaths,
+            Some(id),
+            serde_json::to_value(WorkspacePathRequest {
+                workspace_id: id,
+                path: None,
+                all: false,
+            })
+            .map_err(anyhow::Error::from)?,
+        )
+        .await?;
+        let dirty: worktree::WorkspaceDirtyPaths =
+            serde_json::from_value(dirty).map_err(anyhow::Error::from)?;
+        let workspace = worktree::load_workspace(&state.pool, id)
+            .await
+            .map_err(|_| ApiError::NotFound)?;
+        let touches =
+            ingest::load_repo_file_trace(&state.pool, &workspace.repo_name, &preview.path)
+                .await
+                .map_err(ApiError::Internal)?;
+        let dirty = crate::repo_state::RepoDirtyPaths {
+            repo: workspace.repo_name,
+            git_revision: dirty.git_revision,
+            dirty_by_path: dirty.dirty_by_path,
+            diff_stats_by_path: dirty.diff_stats_by_path,
+        };
+        return Ok(Json(file_trace_response(preview.path, dirty, touches)));
+    }
     let workspace = state
         .workspace_state
         .load_workspace(id)
@@ -215,29 +384,16 @@ pub(super) async fn get_workspace_file_trace(
     let touches = ingest::load_repo_file_trace(&state.pool, &workspace.repo_name, &rel)
         .await
         .map_err(ApiError::Internal)?;
-    Ok(Json(FileTraceResponse {
-        path: rel.clone(),
-        dirty: dirty.dirty_by_path.get(&rel).cloned(),
-        current_diff: dirty.diff_stats_by_path.get(&rel).cloned(),
-        touches: touches
-            .into_iter()
-            .map(|touch| FileTraceTouchResponse {
-                pty_session_id: touch.pty_session_id,
-                session_uuid: touch.session_uuid,
-                session_agent: touch.session_agent,
-                session_label: touch.session_label,
-                session_state: touch.session_state,
-                turn_id: touch.turn_id,
-                turn_preview: touch.turn_preview,
-                turn_timestamp: touch.turn_timestamp,
-                operation_type: touch.operation_type,
-                operation_category: touch.operation_category,
-                pair_id: touch.pair_id,
-                touch_kind: touch.touch_kind,
-                is_write: touch.is_write,
-            })
-            .collect(),
-    }))
+    Ok(Json(file_trace_response(
+        rel,
+        crate::repo_state::RepoDirtyPaths {
+            repo: workspace.repo_name,
+            git_revision: dirty.git_revision,
+            dirty_by_path: dirty.dirty_by_path,
+            diff_stats_by_path: dirty.diff_stats_by_path,
+        },
+        touches,
+    )))
 }
 
 pub(super) async fn get_workspace_diff(
@@ -245,6 +401,25 @@ pub(super) async fn get_workspace_diff(
     Path(id): Path<Uuid>,
     Query(q): Query<DiffQuery>,
 ) -> ApiResult<Json<DiffResponse>> {
+    if state.node_protocol_required {
+        let node_id = node_proxy::workspace_node(&state, id).await?;
+        let result = node_proxy::request(
+            &state,
+            node_id,
+            NodeRequestKind::WorkspaceDiff,
+            Some(id),
+            serde_json::to_value(WorkspacePathRequest {
+                workspace_id: id,
+                path: q.path,
+                all: false,
+            })
+            .map_err(anyhow::Error::from)?,
+        )
+        .await?;
+        return Ok(Json(
+            serde_json::from_value(result).map_err(anyhow::Error::from)?,
+        ));
+    }
     let workspace = state
         .workspace_state
         .load_workspace(id)
@@ -261,6 +436,25 @@ pub(super) async fn post_workspace_stage(
     Path(id): Path<Uuid>,
     Json(req): Json<StageReq>,
 ) -> ApiResult<StatusCode> {
+    if state.node_protocol_required {
+        let node_id = node_proxy::workspace_node(&state, id).await?;
+        node_proxy::request(
+            &state,
+            node_id,
+            NodeRequestKind::WorkspaceStage,
+            Some(id),
+            serde_json::to_value(WorkspaceStageRequest {
+                workspace_id: id,
+                change: StageRequest {
+                    path: req.path,
+                    stage: req.stage,
+                },
+            })
+            .map_err(anyhow::Error::from)?,
+        )
+        .await?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
     let workspace = state
         .workspace_state
         .load_workspace(id)
@@ -283,6 +477,32 @@ pub(super) async fn post_workspace_upload(
     Query(q): Query<UploadQuery>,
     mut multipart: Multipart,
 ) -> ApiResult<Json<UploadResponse>> {
+    if state.node_protocol_required {
+        let node_id = node_proxy::workspace_node(&state, id).await?;
+        let directory = q.path.unwrap_or_default();
+        let uploads = read_uploads(&mut multipart, &directory).await?;
+        let mut first = None;
+        for (path, bytes) in uploads {
+            let result = node_proxy::request(
+                &state,
+                node_id,
+                NodeRequestKind::WorkspaceUpload,
+                Some(id),
+                serde_json::to_value(WorkspaceUploadRequest {
+                    workspace_id: id,
+                    upload: UploadRequest::new(path, &bytes),
+                })
+                .map_err(anyhow::Error::from)?,
+            )
+            .await?;
+            if first.is_none() {
+                first = Some(serde_json::from_value(result).map_err(anyhow::Error::from)?);
+            }
+        }
+        return first
+            .map(Json)
+            .ok_or_else(|| ApiError::BadRequest("no file field".into()));
+    }
     let workspace = state
         .workspace_state
         .load_workspace(id)

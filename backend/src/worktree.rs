@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::db::Pool;
@@ -24,7 +24,7 @@ use git_ops::{
     run_git_checked, status_fingerprint, unmerged_branch_commit_count,
 };
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceRecord {
     pub id: Uuid,
     pub repo_name: String,
@@ -40,7 +40,7 @@ pub struct WorkspaceRecord {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceView {
     pub id: Uuid,
     pub repo_name: String,
@@ -57,7 +57,7 @@ pub struct WorkspaceView {
     pub git: RepoGitSummary,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceDirtyPaths {
     pub workspace_id: Uuid,
     pub git_revision: i64,
@@ -65,7 +65,7 @@ pub struct WorkspaceDirtyPaths {
     pub diff_stats_by_path: HashMap<String, DiffStat>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct DeleteWorkspaceOptions {
     pub force: bool,
     pub delete_branch: bool,
@@ -116,6 +116,17 @@ impl WorkspaceManager {
         repo_name: &str,
         repo_path: &Path,
     ) -> anyhow::Result<WorkspaceRecord> {
+        self.ensure_main_workspace_owned(repo_name, repo_path, None, None)
+            .await
+    }
+
+    pub async fn ensure_main_workspace_owned(
+        &self,
+        repo_name: &str,
+        repo_path: &Path,
+        requested_id: Option<Uuid>,
+        node_id: Option<Uuid>,
+    ) -> anyhow::Result<WorkspaceRecord> {
         validate_repo_name(repo_name)?;
         let branch = current_branch(repo_path).await.unwrap_or(None);
         let head = rev_parse(repo_path, "HEAD").await.ok();
@@ -134,31 +145,33 @@ impl WorkspaceManager {
                     "UPDATE workspaces \
                         SET path = $2, branch_name = $3, base_ref = $3, base_sha = $4, \
                             merge_target = $3, state = 'active', next_status_at = NOW(), \
-                            updated_at = NOW() \
+                            node_id = COALESCE(node_id, $5), updated_at = NOW() \
                       WHERE id = $1",
                 )
                 .bind(id)
                 .bind(repo_path.to_string_lossy().as_ref())
                 .bind(branch.as_deref())
                 .bind(head.as_deref())
+                .bind(node_id)
                 .execute(&self.pool)
                 .await
                 .with_context(|| format!("update main workspace for {repo_name}"))?;
                 self.load_workspace(id).await
             }
             None => {
-                let id = Uuid::new_v4();
+                let id = requested_id.unwrap_or_else(Uuid::new_v4);
                 sqlx::query(
                     "INSERT INTO workspaces \
                         (id, repo_name, kind, path, branch_name, base_ref, base_sha, merge_target, \
-                         state, next_status_at, created_at, updated_at) \
-                     VALUES ($1, $2, 'main', $3, $4, $4, $5, $4, 'active', NOW(), NOW(), NOW())",
+                         state, next_status_at, created_at, updated_at, node_id) \
+                     VALUES ($1, $2, 'main', $3, $4, $4, $5, $4, 'active', NOW(), NOW(), NOW(), $6)",
                 )
                 .bind(id)
                 .bind(repo_name)
                 .bind(repo_path.to_string_lossy().as_ref())
                 .bind(branch.as_deref())
                 .bind(head.as_deref())
+                .bind(node_id)
                 .execute(&self.pool)
                 .await
                 .with_context(|| format!("insert main workspace for {repo_name}"))?;
@@ -170,6 +183,16 @@ impl WorkspaceManager {
     pub async fn create_worktree_workspace(
         &self,
         repo_name: &str,
+    ) -> anyhow::Result<WorkspaceRecord> {
+        self.create_worktree_workspace_owned(repo_name, Uuid::new_v4(), None)
+            .await
+    }
+
+    pub async fn create_worktree_workspace_owned(
+        &self,
+        repo_name: &str,
+        id: Uuid,
+        node_id: Option<Uuid>,
     ) -> anyhow::Result<WorkspaceRecord> {
         validate_repo_name(repo_name)?;
         let repo_path = self.repos_root.join(repo_name);
@@ -189,7 +212,6 @@ impl WorkspaceManager {
         let base_sha = rev_parse(&repo_path, "HEAD")
             .await
             .context("isolated workspace requires an existing HEAD commit")?;
-        let id = Uuid::new_v4();
         let short = id.simple().to_string();
         let short = &short[..12];
         let branch_name = format!("sulion/{}/{}", branch_component(repo_name), short);
@@ -223,8 +245,8 @@ impl WorkspaceManager {
         sqlx::query(
             "INSERT INTO workspaces \
                 (id, repo_name, kind, path, branch_name, base_ref, base_sha, merge_target, \
-                 state, next_status_at, created_at, updated_at) \
-             VALUES ($1, $2, 'worktree', $3, $4, $5, $6, $5, 'active', NOW(), NOW(), NOW())",
+                 state, next_status_at, created_at, updated_at, node_id) \
+             VALUES ($1, $2, 'worktree', $3, $4, $5, $6, $5, 'active', NOW(), NOW(), NOW(), $7)",
         )
         .bind(id)
         .bind(repo_name)
@@ -232,6 +254,7 @@ impl WorkspaceManager {
         .bind(&branch_name)
         .bind(&base_ref)
         .bind(&base_sha)
+        .bind(node_id)
         .execute(&self.pool)
         .await
         .with_context(|| format!("insert worktree workspace for {repo_name}"))?;

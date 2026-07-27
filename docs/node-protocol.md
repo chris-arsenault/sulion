@@ -105,8 +105,10 @@ per-PTY registration/revocation flow.
 - The node initiates the connection to an authenticated control endpoint.
 - Enrollment creates a stable node ID and a node-specific asymmetric
   credential.
-- The private credential is delivered as a root-owned systemd credential or
-  equivalent host secret and is not stored in the Nix store or `/home/dev`.
+- The private credential is a root-owned host file outside the Nix store and
+  `/home/dev`. The node opens it while privileged, initializes supplementary
+  groups, and irreversibly drops to the configured development UID/GID before
+  filesystem, Docker, correlation, or PTY work begins.
 - Control stores the public identity and explicit revocation state.
 - Every new connection proves stable node identity and sends a fresh node boot
   ID.
@@ -132,10 +134,11 @@ Only the token hash is stored. Public credential generations retain their
 fingerprint, replacement time, and revocation time for audit. Rotation
 increments the generation and invalidates the old connection before the
 replacement key may connect. Revocation cannot be reversed by the node. The
-node-side private key file and automated enrollment command arrive with the
-`sulion-node` binary in Phase 5; until then these endpoints are exercised by
-integration clients and the standalone runtime uses an explicitly marked
-internal identity.
+`sulion-node keygen` and `sulion-node enroll` commands implement the node-side
+lifecycle. The dedicated NixOS runbook fixes the target node ID, keeps the key
+root-only under `/var/lib/sulion/node`, and uses a five-minute single-use
+enrollment token. The standalone runtime retains an explicitly marked internal
+identity.
 
 The long-lived endpoint is `GET /ws/nodes`. Control sends a fresh random
 challenge. The node signs a canonical handshake containing that challenge,
@@ -191,10 +194,13 @@ payload
 ```
 
 The wire representation is tagged JSON over WebSocket. Each frame is limited
-to 256 KiB. Protocol version 1 is the only currently accepted version and path
-contract version 1 is mandatory. Unknown message kinds from an otherwise
-compatible peer are ignored and logged; malformed required fields terminate
-that authenticated connection.
+to 256 KiB. Large bounded responses and uploads are split into typed
+`protocol.fragment` envelopes, base64 encoded in 180 KiB chunks, and
+reassembled under a 96 MiB aggregate cap with bounded concurrent groups.
+Protocol version 1 is the only currently accepted version and path contract
+version 1 is mandatory. Unknown message kinds from an otherwise compatible
+peer are ignored and logged; malformed required fields terminate that
+authenticated connection.
 
 Connection generations are independent from stable node and boot identity. A
 new connection gets a random `connection_id`; database updates and disconnect
@@ -228,13 +234,13 @@ No operation accepts an arbitrary executable, host path, PID, signal, Docker
 request, or shell fragment from the public API. Agent launch variants and
 filesystem scopes are explicit protocol types.
 
-Phase 4 ships `probe_echo` and `reconcile_inventory` as non-host-mutating
-operations that exercise the complete durable dispatcher. The operation table
-preallocates the operation ID, enforces `(node_id, idempotency_key)`
-uniqueness, records every dispatch boot and attempt, and retains terminal
-result/error data. The standalone loopback node keeps the same bounded
-current-boot result cache required of the extracted node. Phase 5 extends the
-closed operation enum; it does not introduce a generic command operation.
+`probe_echo` and `reconcile_inventory` exercise the durable dispatcher without
+host mutation. Phase 5 adds closed session, agent, repo, workspace, file, Git,
+upload, and terminal request types; there is still no generic command
+operation. The operation table preallocates IDs, enforces
+`(node_id, idempotency_key)` uniqueness, records every dispatch boot and
+attempt, and retains terminal result/error data. Both transports keep a bounded
+current-boot result cache.
 
 ## Terminal streams
 
@@ -301,20 +307,21 @@ live rows owned by the previous boot dead with a `node_reboot` runtime end
 reason; heartbeat expiry records node disconnect timestamps without changing
 PTY state.
 
-## Standalone loopback
+## Standalone loopback and extracted runtime
 
-The combined backend defaults to `SULION_NODE_TRANSPORT=loopback`. It enrolls
+The portable combined backend defaults to `SULION_NODE_TRANSPORT=loopback`. It enrolls
 the stable internal node
 `00000000-0000-0000-0000-000000000001`, establishes an in-memory outbound
-connection, sends heartbeats, and executes operations through the same durable
-dispatcher and result-cache rules as a remote node. Existing PTY, repository,
-workspace, and ingester calls remain in-process during Phase 4.
+connection, sends heartbeats, and executes the same `NodeRuntime` operation,
+request, and terminal-stream implementation used by `sulion-node`.
 
 Set `SULION_NODE_TRANSPORT=remote` on a control-only process to disable the
 internal node. `SULION_DEPLOYMENT_ROLE=control-plane` selects that default.
+In this mode API handlers never fall back to the local `PtyManager` or
+filesystem managers.
 For standalone deployments, `SULION_STANDALONE_NODE_ID` and
 `SULION_STANDALONE_NODE_NAME` override the stable internal identity. These
-settings are a migration seam, not a second application implementation.
+settings are a rollback seam, not a second application implementation.
 
 ## Ingestion
 

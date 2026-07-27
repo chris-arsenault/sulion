@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use axum::body::Body;
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::routes::{ApiError, ApiResult};
 use crate::workspace;
@@ -29,7 +29,7 @@ pub const RAW_MAX_BYTES: u64 = 25 * 1024 * 1024; // 25 MiB
 /// Metadata for a file preview. `content` carries inlined UTF-8 text; it is
 /// `None` for binary files, oversized text, and any file whose bytes should be
 /// fetched from the raw-byte route instead.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct FileResponse {
     pub path: String,
     pub size: u64,
@@ -170,8 +170,16 @@ pub async fn serve_bytes(
         )));
     }
     let bytes = tokio::fs::read(&abs).await?;
-    let mime = mime_or_octet(content_type(&norm));
+    serve_loaded_bytes(norm, bytes, headers)
+}
 
+pub fn serve_loaded_bytes(
+    norm: String,
+    bytes: Vec<u8>,
+    headers: &HeaderMap,
+) -> ApiResult<Response> {
+    let size = bytes.len() as u64;
+    let mime = mime_or_octet(content_type(&norm));
     match parse_range(headers.get(header::RANGE), size) {
         Some(Ok((start, end))) => {
             let slice = bytes[start as usize..=end as usize].to_vec();

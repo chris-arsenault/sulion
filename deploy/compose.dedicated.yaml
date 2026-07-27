@@ -4,22 +4,50 @@ services:
     ports: !reset []
     networks: !reset []
     environment:
-      SULION_DEPLOYMENT_ROLE: standalone
+      SULION_DEPLOYMENT_ROLE: control-plane
+      SULION_NODE_TRANSPORT: remote
+      SULION_DOCKER_MODE: none
+      SULION_REPOS_ROOT: /var/empty/sulion/repos
+      SULION_WORKSPACES_ROOT: /var/empty/sulion/workspaces
+      SULION_CLAUDE_PROJECTS: /var/empty/sulion/claude-projects
+      SULION_CODEX_SESSIONS: /var/empty/sulion/codex-sessions
+      SULION_SECRET_BROKER_URL: http://127.0.0.1:8081
+      SULION_SECRET_BROKER_REGISTRATION_TOKEN: !reset null
+      SULION_RETRIEVAL_URL: http://127.0.0.1:8083
+      SULION_CODE_INTEL_URL: http://127.0.0.1:8084
+      SULION_RUNNER_URL: ""
+    volumes: !reset []
+
+  node:
+    profiles: !reset []
+    network_mode: host
+    networks: !reset []
+    environment:
+      SULION_NODE_CONTROL_URL: ws://127.0.0.1:8080/ws/nodes
+      SULION_NODE_ALLOW_INSECURE_WS: "1"
       SULION_DOCKER_MODE: direct
       DOCKER_HOST: unix:///run/user/7321/docker.sock
       XDG_RUNTIME_DIR: /run/user/7321
       SULION_SECRET_BROKER_URL: http://127.0.0.1:8081
       SULION_RETRIEVAL_URL: http://127.0.0.1:8083
       SULION_CODE_INTEL_URL: http://127.0.0.1:8084
-      SULION_RUNNER_URL: ""
     volumes: !override
       - ${SULION_HOME_HOST_PATH:-/home/dev}:/home/dev
+      - ${SULION_NODE_STATE_HOST_PATH:-/var/lib/sulion/node}:/var/lib/sulion-node:ro
       - type: bind
         source: ${SULION_ROOTLESS_DOCKER_SOCKET:-/run/user/7321/docker.sock}
         target: /run/user/7321/docker.sock
         bind:
           create_host_path: false
       - sulion_run:/run/sulion
+
+  ingester:
+    profiles: !reset []
+    network_mode: host
+    networks: !reset []
+    volumes: !override
+      - ${SULION_HOME_HOST_PATH:-/home/dev}/.claude/projects:/home/dev/.claude/projects:ro
+      - ${SULION_HOME_HOST_PATH:-/home/dev}/.codex/sessions:/home/dev/.codex/sessions:ro
 
   broker:
     ports: !override

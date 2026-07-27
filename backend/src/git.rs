@@ -18,7 +18,7 @@ pub struct Commit {
     pub committed_at: String, // ISO 8601
 }
 
-#[derive(Debug, Serialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct GitStatus {
     pub branch: Option<String>,
     pub uncommitted_count: usize,
@@ -32,7 +32,7 @@ pub struct GitStatus {
     pub diff_stats_by_path: HashMap<String, DiffStat>,
 }
 
-#[derive(Debug, Serialize, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
 pub struct DiffStat {
     pub additions: usize,
     pub deletions: usize,

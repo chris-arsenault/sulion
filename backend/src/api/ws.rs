@@ -21,8 +21,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast::error::RecvError, mpsc, Mutex};
 use uuid::Uuid;
 
+use super::node_proxy;
 use super::routes::{ApiError, ApiResult};
 use crate::auth::AuthenticatedUser;
+use crate::node_protocol::{TerminalAttachment, TerminalEvent};
 use crate::pty::PtySession;
 use crate::AppState;
 
@@ -95,7 +97,27 @@ pub async fn issue_ticket(
     Extension(_user): Extension<AuthenticatedUser>,
     Json(body): Json<IssueTicketRequest>,
 ) -> ApiResult<Json<IssueTicketResponse>> {
-    if state.pty.get(body.session_id).await.is_none() {
+    let metadata = crate::pty::read_meta(&state.pool, body.session_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if metadata.state != crate::pty::PtyState::Live {
+        return Err(ApiError::NotFound);
+    }
+    if state.node_protocol_required {
+        let node_id = node_proxy::session_node(&state, body.session_id).await?;
+        let connected = state
+            .node_control
+            .list_nodes()
+            .await
+            .map_err(node_proxy::map_error)?
+            .iter()
+            .any(|node| node.id == node_id && node.connection_state == "connected");
+        if !connected {
+            return Err(ApiError::Unavailable(
+                "development node is unavailable".into(),
+            ));
+        }
+    } else if state.pty.get(body.session_id).await.is_none() {
         return Err(ApiError::NotFound);
     }
     let ticket = state
@@ -147,6 +169,20 @@ pub async fn attach(
     if !state.ws_tickets.consume(&ticket, id).await {
         return unauthorized();
     }
+    if state.node_protocol_required {
+        let node_id = match node_proxy::session_node(&state, id).await {
+            Ok(node_id) => node_id,
+            Err(error) => return error.into_response(),
+        };
+        let attachment = match state.node_control.open_terminal(node_id, id).await {
+            Ok(attachment) => attachment,
+            Err(error) => return node_proxy::map_error(error).into_response(),
+        };
+        let ws_test_hooks = state.ws_test_hooks.clone();
+        return ws
+            .protocols([WS_PROTOCOL])
+            .on_upgrade(move |socket| handle_node_socket(socket, id, attachment, ws_test_hooks));
+    }
     let Some(session) = state.pty.get(id).await else {
         return (axum::http::StatusCode::NOT_FOUND, "no such session").into_response();
     };
@@ -176,6 +212,103 @@ fn unauthorized() -> Response {
         Json(serde_json::json!({ "error": "unauthorized" })),
     )
         .into_response()
+}
+
+async fn handle_node_socket(
+    socket: WebSocket,
+    session_id: Uuid,
+    attachment: TerminalAttachment,
+    ws_test_hooks: Arc<crate::WsTestHooks>,
+) {
+    let (sender, mut events) = attachment.into_parts();
+    let close_sender = sender.clone();
+    let (mut tx, mut rx) = socket.split();
+    let mut drop_ws_rx = ws_test_hooks.subscribe(session_id).await;
+    let (control_tx, mut control_rx) = mpsc::channel::<ServerMsg>(8);
+
+    let outbound = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                event = events.recv() => {
+                    match event {
+                        Some(TerminalEvent::Snapshot(bytes) | TerminalEvent::Output(bytes)) => {
+                            if tx.send(Message::Binary(bytes)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Some(TerminalEvent::Ready) => {
+                            let ready = serde_json::to_string(&ServerMsg::Ready).unwrap();
+                            if tx.send(Message::Text(ready)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Some(TerminalEvent::Dead(exit)) => {
+                            let dead = serde_json::to_string(&ServerMsg::Dead { exit }).unwrap();
+                            let _ = tx.send(Message::Text(dead)).await;
+                            let _ = tx.send(Message::Close(None)).await;
+                            break;
+                        }
+                        Some(TerminalEvent::Disconnected) | None => {
+                            let _ = tx.send(Message::Close(None)).await;
+                            break;
+                        }
+                    }
+                }
+                _ = drop_ws_rx.recv() => {
+                    let _ = tx.send(Message::Close(None)).await;
+                    break;
+                }
+                Some(message) = control_rx.recv() => {
+                    let Ok(message) = serde_json::to_string(&message) else {
+                        continue;
+                    };
+                    if tx.send(Message::Text(message)).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    let input_sender = sender.clone();
+    let inbound = tokio::spawn(async move {
+        while let Some(message) = rx.next().await {
+            let Ok(message) = message else {
+                break;
+            };
+            let result = match message {
+                Message::Text(text) => match serde_json::from_str::<ClientMsg>(&text) {
+                    Ok(ClientMsg::Input { data }) => input_sender.send_input(data.as_bytes()).await,
+                    Ok(ClientMsg::Resize { cols, rows }) => input_sender.resize(cols, rows).await,
+                    Ok(ClientMsg::Ping) => {
+                        if control_tx.send(ServerMsg::Pong).await.is_err() {
+                            break;
+                        }
+                        Ok(())
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "bad WS text message");
+                        Ok(())
+                    }
+                },
+                Message::Binary(bytes) => input_sender.send_input(&bytes).await,
+                Message::Close(_) => break,
+                Message::Ping(_) | Message::Pong(_) => Ok(()),
+            };
+            if let Err(error) = result {
+                tracing::warn!(%error, %session_id, "node terminal input failed");
+                break;
+            }
+        }
+    });
+
+    let mut outbound = outbound;
+    let mut inbound = inbound;
+    tokio::select! {
+        _ = &mut outbound => inbound.abort(),
+        _ = &mut inbound => outbound.abort(),
+    }
+    close_sender.close().await;
 }
 
 async fn handle_socket(

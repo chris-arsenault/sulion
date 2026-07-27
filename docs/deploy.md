@@ -14,14 +14,35 @@ box-side verification commands live in [`nix/README.md`](../nix/README.md).
 Its deployment unit consumes this same Compose graph from an immutable Nix
 store path; it never runs the editable checkout under `/home/dev/repos`.
 
-Sulion now has six services:
+The common graph now has eight runtime service roles:
 
-- `backend` — main API + PTY runtime
+- `backend` — main API/control plane; also hosts the loopback runtime only in
+  portable standalone mode
+- `node` — dedicated PTY, shadow-emulator, correlation, repo, worktree, file,
+  Git, upload, and direct-Docker runtime
+- `ingester` — sole node-local Claude/Codex JSONL reader
 - `broker` — secret broker, separate container and UID
 - `retrieval` — agent-facing transcript/timeline retrieval API
 - `code-intel` — agent-facing structural source navigation API
 - `runner` — constrained Docker command broker, only service with the host Docker socket
 - `frontend` — static UI + reverse proxy
+
+`node` and `ingester` are profile-gated in the common graph and activated by
+`deploy/compose.dedicated.yaml`. All three Rust processes currently use the
+same workbench image with different entry points; CI still builds that large
+artifact once.
+
+In the dedicated role:
+
+- control uses remote-node mode and has no repo, workspace, transcript, home,
+  or Docker bind;
+- the node alone mounts `/home/dev`, its root-only enrolled key, the
+  correlation run directory, and the rootless Docker socket;
+- the ingester mounts only the two transcript roots read-only; and
+- code intelligence reads the local repo/workspace roots on that host.
+
+The current TrueNAS overlay remains a combined standalone deployment until
+Phase 6 introduces the control-plane-only Komodo role.
 
 ## One-time cross-repo registration
 
@@ -98,12 +119,16 @@ No manual Komodo UI setup. No manual SSM puts.
 
 Deploy `ahara-infra` before the first Sulion edge deployment so the internal
 nginx upstream, WireGuard ingress, and Sulion deployer permissions already
-exist. Run the Sulion deployment from outside a Sulion PTY: replacing the
-backend container terminates every active shell.
+exist. Run a TrueNAS/standalone deployment from outside a Sulion PTY:
+replacing that combined backend still terminates its active shells. In the
+dedicated role, replacing only `backend` drops browser attachments while
+node-owned PTYs continue; replacing `node` remains a session-affecting
+operation.
 
-The backend container owns the main `sulion` database migrations. Retrieval and
-code-intelligence do not run the shared SQLx migrations; they wait in-app for
-the backend-applied migration set before starting their API/background loops.
+The backend/control container owns the main `sulion` database migrations and
+Postgres-only startup repair. Node, ingester, retrieval, and code intelligence
+do not run the shared SQLx migrations; they wait in-app for the
+backend-applied migration set before starting their loops.
 
 ## Retrieval Search
 

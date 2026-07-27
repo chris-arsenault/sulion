@@ -136,4 +136,8 @@ else
   fi
 fi
 
+if (( $# > 0 )); then
+  exec "$@"
+fi
+
 exec /usr/local/bin/sulion

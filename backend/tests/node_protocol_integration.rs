@@ -13,8 +13,12 @@ use sulion::node_protocol::model::{
 };
 use sulion::node_protocol::{
     heartbeat_envelope, EnrollNodeRequest, NodeControl, NodeHello, NodeOperationKind,
-    CAPABILITY_OPERATION_PROBE, CONTROL_PROTOCOL_MAX, CONTROL_PROTOCOL_MIN, NODE_PROTOCOL_VERSION,
-    PATH_CONTRACT_VERSION,
+    NodeRequestKind, TerminalEvent, CAPABILITY_OPERATION_PROBE, CONTROL_PROTOCOL_MAX,
+    CONTROL_PROTOCOL_MIN, NODE_PROTOCOL_VERSION, PATH_CONTRACT_VERSION,
+};
+use sulion::node_runtime::{
+    NodeRuntime, RepoCreateRequest, RepoPathRequest, ResourceRequest, SessionCreateRequest,
+    SessionLaunch,
 };
 use sulion::{app, db, AppState};
 use tokio::net::TcpListener;
@@ -144,7 +148,7 @@ async fn send_hello(
     let message = NodeWireMessage::Hello { envelope, hello };
     socket
         .send(Message::Text(
-            serde_json::to_string(&message).expect("hello json").into(),
+            serde_json::to_string(&message).expect("hello json"),
         ))
         .await?;
     socket.next().await.expect("handshake response")
@@ -185,9 +189,7 @@ async fn send_heartbeat(
     let envelope = heartbeat_envelope(node_id, boot_id, live_session_ids, true, None);
     socket
         .send(Message::Text(
-            serde_json::to_string(&NodeWireMessage::Envelope { envelope })
-                .expect("heartbeat json")
-                .into(),
+            serde_json::to_string(&NodeWireMessage::Envelope { envelope }).expect("heartbeat json"),
         ))
         .await
         .expect("send heartbeat");
@@ -420,6 +422,168 @@ async fn loopback_replays_duplicate_operations_without_duplicate_effects() {
 }
 
 #[tokio::test]
+async fn extracted_runtime_preserves_a_pty_and_snapshot_across_control_replacement() {
+    let pool = fresh_pool().await;
+    let root = tempfile::tempdir().expect("runtime root");
+    let repos_root = root.path().join("repos");
+    let workspaces_root = root.path().join("workspaces");
+    std::fs::create_dir_all(&repos_root).expect("repos root");
+    std::fs::create_dir_all(&workspaces_root).expect("workspaces root");
+    let node_id = Uuid::new_v4();
+    let boot_id = Uuid::new_v4();
+    let runtime = NodeRuntime::new(node_id, boot_id, pool.clone(), repos_root, workspaces_root);
+    let first_control = NodeControl::new(pool.clone());
+    first_control
+        .start_runtime_loopback(runtime.clone(), "runtime-test")
+        .await
+        .expect("connect extracted runtime");
+
+    first_control
+        .request_operation_and_wait(
+            node_id,
+            "repo:create:restart-test",
+            NodeOperationKind::RepoCreate,
+            None,
+            serde_json::to_value(RepoCreateRequest {
+                name: "restart-test".into(),
+                git_url: None,
+            })
+            .unwrap(),
+        )
+        .await
+        .expect("create repo through node");
+
+    let session_id = Uuid::new_v4();
+    let workspace_id = Uuid::new_v4();
+    first_control
+        .request_operation_and_wait(
+            node_id,
+            &format!("session:create:{session_id}"),
+            NodeOperationKind::SessionCreate,
+            Some(session_id),
+            serde_json::to_value(SessionCreateRequest {
+                session_id,
+                allocated_workspace_id: workspace_id,
+                existing_workspace_id: None,
+                repo: "restart-test".into(),
+                working_dir: None,
+                workspace_mode: "main".into(),
+                cols: 100,
+                rows: 30,
+                launch: SessionLaunch::Shell,
+            })
+            .unwrap(),
+        )
+        .await
+        .expect("create session through node");
+
+    let first_attachment = first_control
+        .open_terminal(node_id, session_id)
+        .await
+        .expect("first terminal attach");
+    let (first_sender, mut first_events) = first_attachment.into_parts();
+    wait_for_terminal_ready(&mut first_events).await;
+    first_sender
+        .send_input(b"printf 'CONTROL_RESTART_SENTINEL\\n'\r")
+        .await
+        .expect("write terminal marker");
+    wait_for_terminal_text(&mut first_events, b"CONTROL_RESTART_SENTINEL").await;
+    first_sender.close().await;
+
+    let replacement_control = NodeControl::new(pool.clone());
+    replacement_control
+        .start_runtime_loopback(runtime.clone(), "runtime-test")
+        .await
+        .expect("reconnect runtime to replacement control");
+    assert_eq!(runtime.pty().live_count().await, 1);
+
+    let replacement_attachment = replacement_control
+        .open_terminal(node_id, session_id)
+        .await
+        .expect("replacement terminal attach");
+    let (replacement_sender, mut replacement_events) = replacement_attachment.into_parts();
+    wait_for_terminal_text(&mut replacement_events, b"CONTROL_RESTART_SENTINEL").await;
+    replacement_sender.close().await;
+
+    replacement_control
+        .request_operation_and_wait(
+            node_id,
+            &format!("session:delete:{session_id}"),
+            NodeOperationKind::SessionDelete,
+            Some(session_id),
+            serde_json::to_value(ResourceRequest { id: session_id }).unwrap(),
+        )
+        .await
+        .expect("delete node session");
+}
+
+#[tokio::test]
+async fn node_file_requests_reject_traversal_and_symlink_escapes() {
+    let pool = fresh_pool().await;
+    let root = tempfile::tempdir().expect("runtime root");
+    let repos_root = root.path().join("repos");
+    let workspaces_root = root.path().join("workspaces");
+    std::fs::create_dir_all(&repos_root).expect("repos root");
+    std::fs::create_dir_all(&workspaces_root).expect("workspaces root");
+    let node_id = Uuid::new_v4();
+    let runtime = NodeRuntime::new(
+        node_id,
+        Uuid::new_v4(),
+        pool.clone(),
+        repos_root.clone(),
+        workspaces_root,
+    );
+    let control = NodeControl::new(pool);
+    control
+        .start_runtime_loopback(runtime, "filesystem-test")
+        .await
+        .expect("connect runtime");
+    control
+        .request_operation_and_wait(
+            node_id,
+            "repo:create:filesystem-test",
+            NodeOperationKind::RepoCreate,
+            None,
+            serde_json::to_value(RepoCreateRequest {
+                name: "filesystem-test".into(),
+                git_url: None,
+            })
+            .unwrap(),
+        )
+        .await
+        .expect("create repo");
+
+    let outside = root.path().join("outside.txt");
+    std::fs::write(&outside, "outside").expect("outside fixture");
+    std::os::unix::fs::symlink(&outside, repos_root.join("filesystem-test/link.txt"))
+        .expect("symlink fixture");
+
+    for path in ["../outside.txt", "link.txt"] {
+        let error = control
+            .request(
+                node_id,
+                NodeRequestKind::RepoFileRaw,
+                None,
+                serde_json::to_value(RepoPathRequest {
+                    repo: "filesystem-test".into(),
+                    path: Some(path.into()),
+                    all: false,
+                })
+                .unwrap(),
+            )
+            .await
+            .expect_err("escaped path must fail");
+        assert!(
+            matches!(
+                error,
+                sulion::node_protocol::NodeProtocolError::Remote { .. }
+            ),
+            "unexpected error for {path}: {error}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn heartbeat_expiry_marks_connectivity_stale_without_killing_sessions() {
     let pool = fresh_pool().await;
     let (base, state) = start_server(pool.clone()).await;
@@ -555,4 +719,45 @@ async fn wait_for_operation(
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!("operation did not complete");
+}
+
+async fn wait_for_terminal_ready(events: &mut tokio::sync::mpsc::Receiver<TerminalEvent>) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match tokio::time::timeout_at(deadline, events.recv())
+            .await
+            .expect("terminal ready timeout")
+            .expect("terminal event stream closed")
+        {
+            TerminalEvent::Ready => return,
+            TerminalEvent::Dead(code) => panic!("terminal died before ready: {code:?}"),
+            TerminalEvent::Disconnected => panic!("terminal disconnected before ready"),
+            TerminalEvent::Snapshot(_) | TerminalEvent::Output(_) => {}
+        }
+    }
+}
+
+async fn wait_for_terminal_text(
+    events: &mut tokio::sync::mpsc::Receiver<TerminalEvent>,
+    needle: &[u8],
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut bytes = Vec::new();
+    loop {
+        match tokio::time::timeout_at(deadline, events.recv())
+            .await
+            .expect("terminal output timeout")
+            .expect("terminal event stream closed")
+        {
+            TerminalEvent::Snapshot(chunk) | TerminalEvent::Output(chunk) => {
+                bytes.extend(chunk);
+                if bytes.windows(needle.len()).any(|window| window == needle) {
+                    return;
+                }
+            }
+            TerminalEvent::Ready => {}
+            TerminalEvent::Dead(code) => panic!("terminal died before marker: {code:?}"),
+            TerminalEvent::Disconnected => panic!("terminal disconnected before marker"),
+        }
+    }
 }

@@ -10,9 +10,15 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::node_proxy;
 use super::routes::{repos_root, ApiError, ApiResult};
 use crate::agent::AgentType;
 use crate::ingest::{canonical, timeline};
+use crate::node_protocol::{NodeOperationKind, NodeRequestKind};
+use crate::node_runtime::{
+    AgentRequest, ResourceRequest, SessionCreateRequest, SessionInputRequest,
+    SessionLaunch as NodeSessionLaunch,
+};
 use crate::pty::{self, AgentRuntimeMetadata, PtyMetadata, PtyWorkspaceMetadata, SpawnParams};
 use crate::worktree::WorkspaceRecord;
 use crate::AppState;
@@ -175,6 +181,9 @@ pub(super) async fn create_session(
     if req.repo.is_empty() {
         return Err(ApiError::BadRequest("repo must not be empty".into()));
     }
+    if state.node_protocol_required {
+        return create_session_on_node(&state, req).await;
+    }
 
     // Resolve the repo root for fixture lookup. Workspace creation is
     // intentionally deferred until after all launch/resume validation
@@ -203,6 +212,9 @@ pub(super) async fn create_session(
     }
 
     let params = SpawnParams {
+        id: None,
+        node_id: None,
+        node_boot_id: None,
         repo: req.repo.clone(),
         working_dir,
         workspace: Some(pty_workspace_metadata(&workspace_record)),
@@ -219,6 +231,113 @@ pub(super) async fn create_session(
         .await
         .map_err(ApiError::Internal)?;
     Ok((StatusCode::CREATED, Json(SessionView::from(meta))))
+}
+
+async fn create_session_on_node(
+    state: &AppState,
+    req: CreateSessionReq,
+) -> ApiResult<(StatusCode, Json<SessionView>)> {
+    let workspace_mode = requested_workspace_mode(&req).to_string();
+    validate_workspace_request(&req, &workspace_mode)?;
+    let launch = resolve_protocol_launch(&req)?;
+    let working_dir = req
+        .working_dir
+        .as_deref()
+        .map(|path| protocol_working_dir(&req.repo, path))
+        .transpose()?;
+    let node_id = node_proxy::default_node(state).await?;
+    let session_id = Uuid::new_v4();
+    let request = SessionCreateRequest {
+        session_id,
+        allocated_workspace_id: Uuid::new_v4(),
+        existing_workspace_id: req.workspace_id,
+        repo: req.repo,
+        working_dir,
+        workspace_mode,
+        cols: req.cols.unwrap_or(120),
+        rows: req.rows.unwrap_or(32),
+        launch,
+    };
+    let result = node_proxy::operation(
+        state,
+        node_id,
+        &format!("session-create:{session_id}"),
+        NodeOperationKind::SessionCreate,
+        Some(session_id),
+        serde_json::to_value(request).map_err(anyhow::Error::from)?,
+    )
+    .await?;
+    let metadata: PtyMetadata = serde_json::from_value(result).map_err(anyhow::Error::from)?;
+    Ok((StatusCode::CREATED, Json(SessionView::from(metadata))))
+}
+
+fn resolve_protocol_launch(req: &CreateSessionReq) -> ApiResult<NodeSessionLaunch> {
+    let fixture = req
+        .e2e_fixture
+        .as_deref()
+        .map(str::trim)
+        .filter(|fixture| !fixture.is_empty());
+    let resume_session_uuid = req.resume_session_uuid.or(req.claude_resume_uuid);
+    let resume_agent = req
+        .resume_agent
+        .as_deref()
+        .or_else(|| resume_session_uuid.map(|_| "claude-code"));
+    if fixture.is_some() && (resume_session_uuid.is_some() || req.launch_agent.is_some()) {
+        return Err(ApiError::BadRequest(
+            "e2e_fixture cannot be combined with agent launch/resume".into(),
+        ));
+    }
+    if resume_session_uuid.is_some() && req.launch_agent.is_some() {
+        return Err(ApiError::BadRequest(
+            "launch_agent cannot be combined with resume_session_uuid".into(),
+        ));
+    }
+    if let Some(fixture) = fixture {
+        if fixture != crate::e2e::MOCK_TERMINAL_FIXTURE {
+            return Err(ApiError::BadRequest(format!(
+                "unknown e2e fixture {fixture}"
+            )));
+        }
+        if !crate::e2e::fixtures_enabled() {
+            return Err(ApiError::BadRequest(
+                "e2e fixtures are disabled on this control plane".into(),
+            ));
+        }
+        return Ok(NodeSessionLaunch::MockTerminal);
+    }
+    if let Some(session_id) = resume_session_uuid {
+        let agent = resume_agent.ok_or_else(|| {
+            ApiError::BadRequest("resume_agent is required when resume_session_uuid is set".into())
+        })?;
+        let agent = parse_launch_agent(agent)?;
+        return Ok(NodeSessionLaunch::Agent {
+            agent: agent.as_str().into(),
+            resume_session_uuid: Some(session_id),
+        });
+    }
+    if let Some(agent) = req.launch_agent.as_deref() {
+        let agent = parse_launch_agent(agent)?;
+        return Ok(NodeSessionLaunch::Agent {
+            agent: agent.as_str().into(),
+            resume_session_uuid: None,
+        });
+    }
+    Ok(NodeSessionLaunch::Shell)
+}
+
+fn protocol_working_dir(repo: &str, value: &str) -> ApiResult<String> {
+    let path = StdPath::new(value);
+    if !path.is_absolute() {
+        return Ok(value.to_string());
+    }
+    let canonical_root = PathBuf::from("/home/dev/repos").join(repo);
+    path.strip_prefix(&canonical_root)
+        .map(|relative| relative.to_string_lossy().into_owned())
+        .map_err(|_| {
+            ApiError::BadRequest(
+                "absolute working_dir must be inside the canonical repo path".into(),
+            )
+        })
 }
 
 struct SessionLaunch {
@@ -472,6 +591,23 @@ pub(super) async fn start_session_agent(
         )));
     }
 
+    if state.node_protocol_required {
+        let node_id = node_proxy::session_node(&state, id).await?;
+        node_proxy::operation(
+            &state,
+            node_id,
+            &format!("session-agent-start:{id}:{}", Uuid::new_v4()),
+            NodeOperationKind::SessionAgentStart,
+            Some(id),
+            serde_json::to_value(AgentRequest {
+                session_id: id,
+                agent: agent.as_str().into(),
+            })
+            .map_err(anyhow::Error::from)?,
+        )
+        .await?;
+        return Ok(StatusCode::ACCEPTED);
+    }
     state.pty.mark_agent_starting(id, agent.as_str()).await?;
     let command = format!("{}\r", default_agent_launch_command(agent, false));
     state.pty.send_input(id, command.into_bytes()).await?;
@@ -490,6 +626,19 @@ pub(super) async fn interrupt_session_agent(
     }
     if !matches!(meta.agent_runtime.state.as_str(), "starting" | "running") {
         return Err(ApiError::BadRequest("agent is not running".into()));
+    }
+    if state.node_protocol_required {
+        let node_id = node_proxy::session_node(&state, id).await?;
+        node_proxy::operation(
+            &state,
+            node_id,
+            &format!("session-agent-interrupt:{id}:{}", Uuid::new_v4()),
+            NodeOperationKind::SessionAgentInterrupt,
+            Some(id),
+            serde_json::to_value(ResourceRequest { id }).map_err(anyhow::Error::from)?,
+        )
+        .await?;
+        return Ok(StatusCode::ACCEPTED);
     }
     state.pty.send_input(id, agent_interrupt_input()).await?;
     Ok(StatusCode::ACCEPTED)
@@ -517,6 +666,11 @@ pub(super) async fn send_session_prompt(
     if meta.agent_runtime.state != "running" {
         return Err(ApiError::BadRequest("agent is not running".into()));
     }
+    let node_id = if state.node_protocol_required {
+        Some(node_proxy::session_node(&state, id).await?)
+    } else {
+        None
+    };
     for (index, chunk) in prompt_input_chunks(&req.text).into_iter().enumerate() {
         if index > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(
@@ -524,7 +678,19 @@ pub(super) async fn send_session_prompt(
             ))
             .await;
         }
-        state.pty.send_input(id, chunk).await?;
+        if let Some(node_id) = node_id {
+            node_proxy::request(
+                &state,
+                node_id,
+                NodeRequestKind::SessionInput,
+                Some(id),
+                serde_json::to_value(SessionInputRequest::from_bytes(id, &chunk))
+                    .map_err(anyhow::Error::from)?,
+            )
+            .await?;
+        } else {
+            state.pty.send_input(id, chunk).await?;
+        }
     }
     crate::activity::set(
         &state.pool,
@@ -544,6 +710,19 @@ pub(super) async fn delete_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
+    if state.node_protocol_required {
+        let node_id = node_proxy::session_node(&state, id).await?;
+        node_proxy::operation(
+            &state,
+            node_id,
+            &format!("session-delete:{id}"),
+            NodeOperationKind::SessionDelete,
+            Some(id),
+            serde_json::to_value(ResourceRequest { id }).map_err(anyhow::Error::from)?,
+        )
+        .await?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
     state.pty.delete(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -31,6 +31,14 @@ path = "src/bin/sulion_retrieval.rs"
 name = "sulion-code-intel"
 path = "src/bin/sulion_code_intel.rs"
 
+[[bin]]
+name = "sulion-node"
+path = "src/bin/sulion_node.rs"
+
+[[bin]]
+name = "sulion-ingester"
+path = "src/bin/sulion_ingester.rs"
+
 [dependencies]
 axum = { version = "0.7", features = ["ws", "multipart"] }
 tokio = { version = "1", features = ["full"] }
@@ -78,10 +86,10 @@ tree-sitter-rust = "0.24"
 tree-sitter-toml-ng = "0.7"
 tree-sitter-typescript = "0.23"
 tree-sitter-yaml = "0.7"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-tokio-tungstenite = "0.24"
 http = "1"
 tempfile = "3"
 syn = { version = "2", features = ["full", "visit"] }

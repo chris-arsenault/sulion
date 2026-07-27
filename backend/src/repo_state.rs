@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::db::Pool;
 use crate::git::{self, DiffStat, GitStatus};
@@ -14,7 +14,7 @@ const REPO_SCAN_INTERVAL: Duration = Duration::from_secs(30);
 const REPO_STATUS_CADENCE_SECS: i32 = 30;
 const REPO_STATUS_ERROR_CADENCE_SECS: i32 = 90;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoGitSummary {
     pub revision: i64,
     pub branch: Option<String>,
@@ -26,7 +26,7 @@ pub struct RepoGitSummary {
     pub status_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoDirtyPaths {
     pub repo: String,
     pub git_revision: i64,

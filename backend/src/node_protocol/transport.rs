@@ -11,8 +11,8 @@ use futures::StreamExt;
 use uuid::Uuid;
 
 use super::model::{
-    ControlWireMessage, CreateEnrollmentTokenRequest, EnrollNodeRequest, NodeWireMessage,
-    WireEnvelope, MAX_NODE_FRAME_BYTES, NODE_PROTOCOL_VERSION,
+    ControlWireMessage, CreateEnrollmentTokenRequest, EnrollNodeRequest, FragmentAssembler,
+    NodeWireMessage, WireEnvelope, MAX_NODE_FRAME_BYTES, NODE_PROTOCOL_VERSION,
 };
 use super::{NodeProtocolError, Registration};
 use crate::AppState;
@@ -180,6 +180,7 @@ async fn run_connection(
         return;
     }
 
+    let mut fragments = FragmentAssembler::default();
     loop {
         tokio::select! {
             changed = connection.canceled.changed() => {
@@ -193,17 +194,19 @@ async fn run_connection(
                     close_gracefully(&mut socket, 1001, "connection superseded").await;
                     break;
                 };
-                if send_json(
-                    &mut socket,
-                    &ControlWireMessage::Envelope { envelope },
-                ).await.is_err() {
+                if send_control_envelope(&mut socket, envelope).await.is_err() {
                     break;
                 }
             }
             inbound = socket.next() => {
                 match inbound {
                     Some(Ok(Message::Text(text))) => {
-                        if receive_message(&state, connection.connection_id, &text).await.is_err() {
+                        if receive_message(
+                            &state,
+                            connection.connection_id,
+                            &mut fragments,
+                            &text,
+                        ).await.is_err() {
                             close_with_reason(&mut socket, 1008, "invalid node message").await;
                             break;
                         }
@@ -236,16 +239,25 @@ async fn run_connection(
 async fn receive_message(
     state: &AppState,
     connection_id: Uuid,
+    fragments: &mut FragmentAssembler,
     text: &str,
 ) -> Result<(), NodeProtocolError> {
     let message: NodeWireMessage = serde_json::from_str(text)?;
     let NodeWireMessage::Envelope { envelope } = message else {
         return Err(NodeProtocolError::AuthenticationFailed);
     };
-    state
-        .node_control
-        .receive_envelope(connection_id, envelope)
-        .await
+    let envelope = fragments
+        .push(envelope)
+        .map_err(|error| NodeProtocolError::InvalidRequest(error.to_string()))?;
+    match envelope {
+        Some(envelope) => {
+            state
+                .node_control
+                .receive_envelope(connection_id, envelope)
+                .await
+        }
+        None => Ok(()),
+    }
 }
 
 fn ack_envelope(
@@ -264,6 +276,14 @@ fn ack_envelope(
 async fn send_json<T: serde::Serialize>(socket: &mut WebSocket, value: &T) -> Result<(), ()> {
     let text = serde_json::to_string(value).map_err(|_| ())?;
     socket.send(Message::Text(text)).await.map_err(|_| ())
+}
+
+async fn send_control_envelope(socket: &mut WebSocket, envelope: WireEnvelope) -> Result<(), ()> {
+    let fragments = super::model::fragment_envelope(&envelope).map_err(|_| ())?;
+    for envelope in fragments {
+        send_json(socket, &ControlWireMessage::Envelope { envelope }).await?;
+    }
+    Ok(())
 }
 
 async fn close_with_reason(socket: &mut WebSocket, code: u16, reason: &'static str) {
@@ -306,6 +326,7 @@ impl IntoResponse for NodeApiError {
             NodeProtocolError::IdempotencyConflict => {
                 (StatusCode::CONFLICT, "idempotency_conflict")
             }
+            NodeProtocolError::Remote { .. } => (StatusCode::BAD_GATEWAY, "node_request_failed"),
             NodeProtocolError::Database(_)
             | NodeProtocolError::Serialization(_)
             | NodeProtocolError::Cryptography(_) => {

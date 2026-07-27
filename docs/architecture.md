@@ -6,18 +6,20 @@ Pointers into the code are the source of truth. This doc exists to orient a read
 
 ## Shape
 
-One Rust backend, one React frontend, one Rust secret broker, one Rust retrieval
-service, one Rust code-intelligence service, one Rust Docker runner, two
-Postgres databases, and several explicitly mounted TrueNAS datasets.
+Sulion has a durable control plane and a machine-local development runtime.
+The dedicated deployment runs the API/control process, `sulion-node`, and
+`sulion-ingester` as separate processes. The portable standalone role can
+still run their ownership logic through an in-process loopback node for
+TrueNAS and generic-Linux rollback.
 
 ```
-PTY shell ──► xterm.js               (live: WebSocket bytes, no scrollback)
-           └► JSONL file ──► ingester ──► Postgres ──► REST/WS ──► timeline pane
+PTY shell ──► node shadow ──► node protocol ──► control WebSocket ──► xterm.js
+           └► JSONL file ──► node ingester ──► Postgres ──► timeline pane
 
-browser UI ──► frontend ──► backend ──► PTY runtime
+browser UI ──► frontend ──► control API ──► typed node operations
           └──► /broker/* ──► secret broker ──► sulion_broker Postgres
 
-PTY helpers ──► retrieval/code-intel/runner services ──► Postgres or mounts
+PTY helpers ──► retrieval/node-local code-intel/rootless Docker
 ```
 
 The public browser path is `sulion.services.ahara.io` → shared Ahara ALB/WAF →
@@ -58,7 +60,7 @@ The UI's primary object is the PTY session. The timeline defaults to the current
 
 The backend injects `SULION_PTY_ID=<pty_id>` into the PTY's environment. A
 `SessionStart` hook posts `{pty_id, agent_session_uuid}` to
-`/run/sulion/correlate.sock`; the backend records the association in Postgres
+`/run/sulion/correlate.sock`; the node records the association in Postgres
 and updates the current-agent-session pointer on every new invocation. The same
 socket accepts typed published-plan and activity commands from the `sulion`
 CLI; both socket and REST paths call shared services.
@@ -78,7 +80,9 @@ Dead PTYs are marked in the UI and cannot be resurrected. "Orphaned" agent sessi
 
 ## Ingestion
 
-JSONL is source of truth. Postgres is the query layer. The ingester owns the boundary — see [`ingestion.md`](ingestion.md) for why and for the future runtime-split plan.
+JSONL is source of truth. Postgres is the query layer. In the dedicated role,
+the separate node-local ingester owns the boundary; control has no transcript
+mount. See [`ingestion.md`](ingestion.md).
 
 Code boundary:
 
@@ -123,9 +127,12 @@ The **secrets tab** is the env-bundle setup surface. PTY-scoped grants with TTL 
 
 ## Backend surface
 
-REST management (`GET/POST/PATCH/DELETE` on sessions, repos, plans, timeline,
-library, git, stats) plus WebSocket attach for live PTY streaming and event
-push. See `backend/src/api/routes.rs` for the authoritative route table.
+The control process owns REST management (`GET/POST/PATCH/DELETE` on sessions,
+repos, plans, timeline, library, git, stats), durable operations, and browser
+WebSockets. Session, terminal, repo, file, Git, upload, and workspace handlers
+resolve the durable node owner and use closed protocol request types; they do
+not open local repository paths in remote-node mode. See
+`backend/src/api/routes.rs` and `backend/src/api/node_proxy.rs`.
 
 Repo-scoped filesystem/git routes target the canonical checkout. Workspace-scoped
 routes under `/api/workspaces/:id/*` target the session-bound checkout/worktree.
@@ -133,15 +140,16 @@ Deleting an isolated workspace removes the Git worktree registration, optionally
 deletes its Sulion branch, and marks the workspace row deleted; main workspaces
 are not deletable.
 
-WebSocket attach sends a snapshot rendered from the shadow `vt100` emulator on
-connect, then live-streams bytes. The browser first exchanges its Cognito JWT
+WebSocket attach asks the owning node for a snapshot rendered from its
+continuously fed shadow `vt100` emulator, then bridges live bytes through
+control. The browser first exchanges its Cognito JWT
 for a 30-second, single-use ticket and carries that ticket in the WebSocket
 subprotocol header, keeping credentials out of request URLs and access logs. An
 application ping/pong keeps idle terminals alive through the ALB. Inbound:
 keystrokes and `TIOCSWINSZ` resize. Multi-viewer is mirrored; inbound is
 last-writer-wins (single-user tool).
 
-The backend also launches PTYs with Sulion-managed wrapper tools on `PATH`:
+The node launches PTYs with Sulion-managed wrapper tools on `PATH`:
 
 - `cl` / `co` for correlated Claude/Codex startup
 - `sulion-retrieve` for transcript/timeline retrieval
@@ -149,7 +157,7 @@ The backend also launches PTYs with Sulion-managed wrapper tools on `PATH`:
 - `sulion plan` / `sulion activity` for published progress and operational state
 - `with-cred` for general env-bundle injection
 - `aws` as a wrapper over the real AWS CLI
-- `docker` as a constrained runner client
+- `docker` as either the real CLI in direct mode or a constrained runner client
 
 `with-cred` and `aws` are the only supported secret-consumption paths. Credential grants are scoped to a PTY and secret, not to a specific wrapper. The backend does not own the broker master key and does not expose any alternate secret-injection mechanism.
 
@@ -201,7 +209,7 @@ headers from the PTY environment. Scope is inferred from cwd. See
 [`code-intel.md`](code-intel.md) and
 [`adrs/0001-code-intelligence-agent-tool.md`](adrs/0001-code-intelligence-agent-tool.md).
 
-## Container Runner
+## Container Runner and direct Docker
 
 The runner is a separate Rust service and container. It is the only Sulion
 container with the host Docker socket mounted. PTYs see a `docker` wrapper that
@@ -217,24 +225,30 @@ The runner is intentionally a command broker, not a Docker API proxy. A runner
 compromise is equivalent to host Docker socket compromise; an agent compromise
 is bounded by runner policy.
 
+On the dedicated host, the runner is absent. `SULION_DOCKER_MODE=direct` makes
+the wrapper exec the real Docker CLI against the `dev` user's rootless socket.
+Only `sulion-node` receives that socket; control cannot manage either Docker
+daemon, and PTYs cannot manage the system daemon that runs Sulion.
+
 ## Deployment shape
 
-Docker Compose, orchestrated by Komodo, on TrueNAS. Six images (`backend`,
-`broker`, `retrieval`, `code-intel`, `runner`, `frontend`), shared TrueNAS
-Postgres at `192.168.66.3:5432`, backend state under `/mnt/apps/apps/sulion`,
-canonical repos under `/mnt/apps/apps/sulion/repos`, isolated worktrees under
-`/mnt/apps/apps/sulion/workspaces`, and broker key material under
-`/mnt/apps/apps/sulion-broker`. Project Terraform owns the public ALB listener
-rules, certificate, and DNS; Ahara Infra owns the VPN reverse-proxy upstream and
-scoped WireGuard ingress. Full setup in [`deploy.md`](deploy.md).
+OCI images plus the common Compose graph remain the portable application
+contract. The Phase 5 dedicated NixOS overlay starts three independently
+restartable roles from the shared backend/workbench image:
 
-The accepted future split between this shipped control/runtime process and a
-dedicated development node is recorded in
-[`adrs/0002-hybrid-control-plane-and-dev-node.md`](adrs/0002-hybrid-control-plane-and-dev-node.md).
-Its implementation sequence lives in
-[`plans/dedicated-nixos-dev-node.md`](plans/dedicated-nixos-dev-node.md).
-Until that plan ships, this section and the runtime description above remain
-authoritative.
+- `backend` is control-only and mounts no source, workspace, transcript, or
+  Docker paths;
+- `node` owns `/home/dev`, PTYs, filesystem/worktree state, correlation, and
+  the rootless Docker socket; and
+- `ingester` mounts only Claude and Codex transcript roots read-only.
+
+Code intelligence mounts local repos/workspaces on the node host. Broker and
+retrieval remain durable services backed by TrueNAS Postgres. The current
+TrueNAS overlay remains the standalone rollback deployment until the
+control-plane-only role lands in Phase 6. Full setup is in
+[`deploy.md`](deploy.md); the decision and remaining sequence are in
+[`adrs/0002-hybrid-control-plane-and-dev-node.md`](adrs/0002-hybrid-control-plane-and-dev-node.md)
+and [`plans/dedicated-nixos-dev-node.md`](plans/dedicated-nixos-dev-node.md).
 
 ## Historical reasoning
 

@@ -42,6 +42,8 @@ pkgs.testers.runNixOSTest {
     machine.succeed("test $(stat -c %U:%G /home/dev/.local) = dev:dev")
     machine.succeed("test $(stat -c %U:%G /home/dev/.local/share) = dev:dev")
     machine.succeed("test $(stat -c %U:%G /home/dev/.local/share/docker) = dev:dev")
+    machine.succeed("test $(stat -c %U:%G /var/lib/sulion/node) = root:root")
+    machine.succeed("test $(stat -c %a /var/lib/sulion/node) = 700")
 
     docker_env = "XDG_RUNTIME_DIR=/run/user/7321 DOCKER_HOST=unix:///run/user/7321/docker.sock"
     as_dev = f"{docker_env} sudo --preserve-env=XDG_RUNTIME_DIR,DOCKER_HOST -u dev"
@@ -91,6 +93,9 @@ pkgs.testers.runNixOSTest {
     machine.succeed("getfattr -n user.DOSATTRIB /home/dev/repos/from-smb/hostname.txt")
 
     machine.succeed("systemctl cat sulion-stack.service | grep -F /run/user/7321/docker.sock")
+    machine.succeed(
+      "systemctl cat sulion-stack.service | grep -F /var/lib/sulion/node/private-key.pk8"
+    )
     machine.succeed("systemctl cat sulion-stack.service | grep -F compose.dedicated.yaml")
     machine.fail("systemctl is-enabled sulion-stack.service")
     machine.succeed(

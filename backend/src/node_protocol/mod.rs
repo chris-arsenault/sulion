@@ -1,3 +1,4 @@
+pub mod client;
 mod loopback;
 pub mod model;
 mod store;
@@ -12,16 +13,18 @@ use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, watch, RwLock};
+use tokio::sync::{mpsc, oneshot, watch, RwLock};
 use uuid::Uuid;
 
 pub use model::{
     CreateEnrollmentTokenRequest, DockerInfo, DockerPolicy, EnrollNodeRequest, EnrollNodeResponse,
-    EnrollmentToken, NodeHello, NodeOperationKind, NodeOperationView, NodeView,
-    OperationResultPayload, OperationResultStatus, WireEnvelope, CAPABILITY_OPERATION_PROBE,
-    CAPABILITY_SESSION_RECONCILE, CONTROL_PROTOCOL_MAX, CONTROL_PROTOCOL_MIN,
-    DEFAULT_HEARTBEAT_INTERVAL_SECS, DEFAULT_HEARTBEAT_TIMEOUT_SECS, MAX_NODE_FRAME_BYTES,
-    NODE_PROTOCOL_VERSION, PATH_CONTRACT_VERSION,
+    EnrollmentToken, NodeHello, NodeOperationKind, NodeOperationView, NodeRequestKind, NodeView,
+    OperationResultPayload, OperationResultStatus, RequestResultPayload, TerminalBytesPayload,
+    TerminalDeadPayload, TerminalResizePayload, WireEnvelope, CAPABILITY_OPERATION_PROBE,
+    CAPABILITY_REPO_RUNTIME, CAPABILITY_SESSION_RECONCILE, CAPABILITY_SESSION_RUNTIME,
+    CAPABILITY_TERMINAL_STREAM, CAPABILITY_WORKSPACE_RUNTIME, CONTROL_PROTOCOL_MAX,
+    CONTROL_PROTOCOL_MIN, DEFAULT_HEARTBEAT_INTERVAL_SECS, DEFAULT_HEARTBEAT_TIMEOUT_SECS,
+    MAX_NODE_FRAME_BYTES, NODE_PROTOCOL_VERSION, PATH_CONTRACT_VERSION,
 };
 pub use transport::{admin_router, public_router};
 
@@ -51,6 +54,8 @@ pub enum NodeProtocolError {
     Incompatible(String),
     #[error("node is unavailable")]
     Unavailable,
+    #[error("node request failed ({code}): {message}")]
+    Remote { code: String, message: String },
     #[error("idempotency key was reused with a different operation")]
     IdempotencyConflict,
     #[error("database: {0}")]
@@ -71,8 +76,70 @@ pub(crate) enum ConnectionAcceptance {
 pub struct NodeControl {
     store: NodeStore,
     active: Arc<RwLock<HashMap<Uuid, ActiveConnection>>>,
+    request_waiters: Arc<RwLock<HashMap<Uuid, oneshot::Sender<RequestResultPayload>>>>,
+    terminal_streams: Arc<RwLock<HashMap<Uuid, mpsc::Sender<TerminalEvent>>>>,
     heartbeat_interval_seconds: u64,
     heartbeat_timeout_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalEvent {
+    Snapshot(Vec<u8>),
+    Output(Vec<u8>),
+    Ready,
+    Dead(Option<i32>),
+    Disconnected,
+}
+
+pub struct TerminalAttachment {
+    sender: TerminalSender,
+    pub events: mpsc::Receiver<TerminalEvent>,
+}
+
+#[derive(Clone)]
+pub struct TerminalSender {
+    control: Arc<NodeControl>,
+    pub node_id: Uuid,
+    pub session_id: Uuid,
+    pub stream_id: Uuid,
+}
+
+impl TerminalAttachment {
+    pub fn into_parts(self) -> (TerminalSender, mpsc::Receiver<TerminalEvent>) {
+        (self.sender, self.events)
+    }
+}
+
+impl TerminalSender {
+    pub async fn send_input(&self, bytes: &[u8]) -> Result<(), NodeProtocolError> {
+        let mut envelope = WireEnvelope::new(
+            self.node_id,
+            self.control.active_boot(self.node_id).await?,
+            "terminal.input",
+        );
+        envelope.session_id = Some(self.session_id);
+        envelope.stream_id = Some(self.stream_id);
+        envelope.payload = serde_json::to_value(TerminalBytesPayload::from_bytes(bytes))?;
+        self.control.send_envelope(self.node_id, envelope).await
+    }
+
+    pub async fn resize(&self, cols: u16, rows: u16) -> Result<(), NodeProtocolError> {
+        let mut envelope = WireEnvelope::new(
+            self.node_id,
+            self.control.active_boot(self.node_id).await?,
+            "terminal.resize",
+        );
+        envelope.session_id = Some(self.session_id);
+        envelope.stream_id = Some(self.stream_id);
+        envelope.payload = serde_json::to_value(TerminalResizePayload { cols, rows })?;
+        self.control.send_envelope(self.node_id, envelope).await
+    }
+
+    pub async fn close(&self) {
+        self.control
+            .close_terminal(self.node_id, self.stream_id)
+            .await;
+    }
 }
 
 #[derive(Clone)]
@@ -130,6 +197,8 @@ impl NodeControl {
         Arc::new(Self {
             store: NodeStore::new(pool, heartbeat_timeout_seconds),
             active: Arc::new(RwLock::new(HashMap::new())),
+            request_waiters: Arc::new(RwLock::new(HashMap::new())),
+            terminal_streams: Arc::new(RwLock::new(HashMap::new())),
             heartbeat_interval_seconds,
             heartbeat_timeout_seconds,
         })
@@ -190,6 +259,127 @@ impl NodeControl {
             .ok_or(NodeProtocolError::NotFound)
     }
 
+    pub async fn request_operation_and_wait(
+        &self,
+        node_id: Uuid,
+        idempotency_key: &str,
+        kind: NodeOperationKind,
+        resource_id: Option<Uuid>,
+        payload: Value,
+    ) -> Result<Value, NodeProtocolError> {
+        let operation = self
+            .request_operation(node_id, idempotency_key, kind, resource_id, payload)
+            .await?;
+        let operation_id = operation.operation_id;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let operation = self
+                .operation(operation_id)
+                .await?
+                .ok_or(NodeProtocolError::NotFound)?;
+            match operation.status.as_str() {
+                "succeeded" => return Ok(operation.result.unwrap_or(Value::Null)),
+                "failed" | "canceled" => {
+                    return Err(NodeProtocolError::Remote {
+                        code: operation
+                            .error_code
+                            .unwrap_or_else(|| "operation_failed".into()),
+                        message: operation
+                            .error_message
+                            .unwrap_or_else(|| "node operation failed".into()),
+                    })
+                }
+                _ => {}
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(NodeProtocolError::Unavailable);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    pub async fn request(
+        &self,
+        node_id: Uuid,
+        kind: NodeRequestKind,
+        resource_id: Option<Uuid>,
+        payload: Value,
+    ) -> Result<Value, NodeProtocolError> {
+        let boot_id = self.active_boot(node_id).await?;
+        let request_id = Uuid::new_v4();
+        let (response_tx, response_rx) = oneshot::channel();
+        self.request_waiters
+            .write()
+            .await
+            .insert(request_id, response_tx);
+        let mut envelope = WireEnvelope::new(node_id, boot_id, "request");
+        envelope.request_id = Some(request_id);
+        envelope.payload = json!({
+            "kind": kind.as_str(),
+            "resource_id": resource_id,
+            "request": payload,
+        });
+        if let Err(err) = self.send_envelope(node_id, envelope).await {
+            self.request_waiters.write().await.remove(&request_id);
+            return Err(err);
+        }
+        let response = tokio::time::timeout(std::time::Duration::from_secs(60), response_rx)
+            .await
+            .map_err(|_| NodeProtocolError::Unavailable)?
+            .map_err(|_| NodeProtocolError::Unavailable)?;
+        match response.status {
+            OperationResultStatus::Succeeded => Ok(response.result.unwrap_or(Value::Null)),
+            OperationResultStatus::Failed => Err(NodeProtocolError::Remote {
+                code: response
+                    .error_code
+                    .unwrap_or_else(|| "request_failed".into()),
+                message: response
+                    .error_message
+                    .unwrap_or_else(|| "node request failed".into()),
+            }),
+        }
+    }
+
+    pub async fn open_terminal(
+        self: &Arc<Self>,
+        node_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<TerminalAttachment, NodeProtocolError> {
+        let boot_id = self.active_boot(node_id).await?;
+        let stream_id = Uuid::new_v4();
+        let (events_tx, events_rx) = mpsc::channel(256);
+        self.terminal_streams
+            .write()
+            .await
+            .insert(stream_id, events_tx);
+        let mut envelope = WireEnvelope::new(node_id, boot_id, "terminal.attach");
+        envelope.session_id = Some(session_id);
+        envelope.stream_id = Some(stream_id);
+        if let Err(err) = self.send_envelope(node_id, envelope).await {
+            self.terminal_streams.write().await.remove(&stream_id);
+            return Err(err);
+        }
+        Ok(TerminalAttachment {
+            sender: TerminalSender {
+                control: self.clone(),
+                node_id,
+                session_id,
+                stream_id,
+            },
+            events: events_rx,
+        })
+    }
+
+    pub async fn first_available_node(&self) -> Result<Uuid, NodeProtocolError> {
+        self.active
+            .read()
+            .await
+            .keys()
+            .copied()
+            .min()
+            .ok_or(NodeProtocolError::Unavailable)
+    }
+
     pub async fn operation(
         &self,
         operation_id: Uuid,
@@ -243,6 +433,14 @@ impl NodeControl {
         display_name: &str,
     ) -> Result<Uuid, NodeProtocolError> {
         loopback::start(self.clone(), node_id, display_name).await
+    }
+
+    pub async fn start_runtime_loopback(
+        self: &Arc<Self>,
+        runtime: Arc<crate::node_runtime::NodeRuntime>,
+        display_name: &str,
+    ) -> Result<Uuid, NodeProtocolError> {
+        loopback::start_runtime(self.clone(), runtime, display_name).await
     }
 
     pub async fn active_connection_count(&self) -> usize {
@@ -433,6 +631,18 @@ impl NodeControl {
                     .complete_operation(envelope.node_id, operation_id, &payload)
                     .await?;
             }
+            "request.result" => {
+                let request_id = envelope.request_id.ok_or_else(|| {
+                    NodeProtocolError::InvalidRequest("request.result requires request_id".into())
+                })?;
+                let payload: RequestResultPayload = serde_json::from_value(envelope.payload)?;
+                if let Some(waiter) = self.request_waiters.write().await.remove(&request_id) {
+                    let _ = waiter.send(payload);
+                }
+            }
+            "terminal.snapshot" | "terminal.output" | "terminal.ready" | "terminal.dead" => {
+                self.receive_terminal_event(envelope).await?;
+            }
             _ => {
                 tracing::debug!(
                     kind = %envelope.message_kind,
@@ -473,6 +683,18 @@ impl NodeControl {
             active.remove(&node_id);
         }
         drop(active);
+        let streams = self
+            .terminal_streams
+            .read()
+            .await
+            .iter()
+            .map(|(id, sender)| (*id, sender.clone()))
+            .collect::<Vec<_>>();
+        for (stream_id, sender) in streams {
+            if sender.try_send(TerminalEvent::Disconnected).is_err() {
+                self.terminal_streams.write().await.remove(&stream_id);
+            }
+        }
         if let Err(err) = self.store.disconnect(node_id, boot_id, connection_id).await {
             tracing::warn!(%err, %node_id, "failed to record node disconnect");
         }
@@ -482,6 +704,86 @@ impl NodeControl {
         if let Some(connection) = self.active.write().await.remove(&node_id) {
             let _ = connection.cancel.send(true);
         }
+    }
+
+    async fn active_boot(&self, node_id: Uuid) -> Result<Uuid, NodeProtocolError> {
+        self.active
+            .read()
+            .await
+            .get(&node_id)
+            .map(|connection| connection.boot_id)
+            .ok_or(NodeProtocolError::Unavailable)
+    }
+
+    async fn send_envelope(
+        &self,
+        node_id: Uuid,
+        envelope: WireEnvelope,
+    ) -> Result<(), NodeProtocolError> {
+        let connection = self
+            .active
+            .read()
+            .await
+            .get(&node_id)
+            .cloned()
+            .ok_or(NodeProtocolError::Unavailable)?;
+        connection
+            .outbound
+            .send(envelope)
+            .await
+            .map_err(|_| NodeProtocolError::Unavailable)
+    }
+
+    async fn close_terminal(&self, node_id: Uuid, stream_id: Uuid) {
+        self.terminal_streams.write().await.remove(&stream_id);
+        let Ok(boot_id) = self.active_boot(node_id).await else {
+            return;
+        };
+        let mut envelope = WireEnvelope::new(node_id, boot_id, "terminal.detach");
+        envelope.stream_id = Some(stream_id);
+        let _ = self.send_envelope(node_id, envelope).await;
+    }
+
+    async fn receive_terminal_event(
+        &self,
+        envelope: WireEnvelope,
+    ) -> Result<(), NodeProtocolError> {
+        let stream_id = envelope.stream_id.ok_or_else(|| {
+            NodeProtocolError::InvalidRequest("terminal event requires stream_id".into())
+        })?;
+        let event = match envelope.message_kind.as_str() {
+            "terminal.snapshot" => TerminalEvent::Snapshot(
+                serde_json::from_value::<TerminalBytesPayload>(envelope.payload)?
+                    .into_bytes()
+                    .map_err(|err| NodeProtocolError::InvalidRequest(err.to_string()))?,
+            ),
+            "terminal.output" => TerminalEvent::Output(
+                serde_json::from_value::<TerminalBytesPayload>(envelope.payload)?
+                    .into_bytes()
+                    .map_err(|err| NodeProtocolError::InvalidRequest(err.to_string()))?,
+            ),
+            "terminal.ready" => TerminalEvent::Ready,
+            "terminal.dead" => {
+                let payload: TerminalDeadPayload = serde_json::from_value(envelope.payload)
+                    .unwrap_or(TerminalDeadPayload { exit_code: None });
+                TerminalEvent::Dead(payload.exit_code)
+            }
+            _ => return Ok(()),
+        };
+        let sender = self.terminal_streams.read().await.get(&stream_id).cloned();
+        let Some(sender) = sender else {
+            return Ok(());
+        };
+        if sender.try_send(event).is_err() {
+            self.terminal_streams.write().await.remove(&stream_id);
+            let Ok(boot_id) = self.active_boot(envelope.node_id).await else {
+                return Ok(());
+            };
+            let mut detach = WireEnvelope::new(envelope.node_id, boot_id, "terminal.detach");
+            detach.stream_id = Some(stream_id);
+            let _ = self.send_envelope(envelope.node_id, detach).await;
+        }
+        Ok(())
     }
 }
 
@@ -549,7 +851,14 @@ fn compatibility_reason(hello: &NodeHello) -> Result<(), String> {
 }
 
 fn accepted_capabilities(declared: &[String]) -> Vec<String> {
-    let supported = [CAPABILITY_OPERATION_PROBE, CAPABILITY_SESSION_RECONCILE];
+    let supported = [
+        CAPABILITY_OPERATION_PROBE,
+        CAPABILITY_SESSION_RECONCILE,
+        CAPABILITY_SESSION_RUNTIME,
+        CAPABILITY_TERMINAL_STREAM,
+        CAPABILITY_REPO_RUNTIME,
+        CAPABILITY_WORKSPACE_RUNTIME,
+    ];
     supported
         .into_iter()
         .filter(|capability| declared.iter().any(|declared| declared == capability))

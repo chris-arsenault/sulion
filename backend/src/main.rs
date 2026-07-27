@@ -48,19 +48,28 @@ async fn main() -> anyhow::Result<()> {
     let ingester_cfg = IngesterConfig::new(cfg.claude_projects_dir.clone())
         .with_codex_sessions_dir(cfg.codex_sessions_dir.clone());
 
-    let state = AppState::new_with_auth(
+    let state = AppState::new_with_auth_and_node_mode(
         pool.clone(),
         cfg.repos_root.clone(),
         cfg.workspaces_root.clone(),
         cfg.library_root.clone(),
         ingester.clone(),
         auth,
+        true,
     );
     if let Some(node) = cfg.standalone_node.as_ref() {
+        let runtime = sulion::node_runtime::NodeRuntime::new(
+            node.node_id,
+            uuid::Uuid::new_v4(),
+            pool.clone(),
+            cfg.repos_root.clone(),
+            cfg.workspaces_root.clone(),
+        );
         let boot_id = state
             .node_control
-            .start_loopback(node.node_id, &node.display_name)
+            .start_runtime_loopback(runtime.clone(), &node.display_name)
             .await?;
+        runtime.run_background_managers().await;
         tracing::info!(
             node_id = %node.node_id,
             %boot_id,
@@ -68,23 +77,25 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    // SessionStart-hook correlation socket.
-    let correlate_pool = pool.clone();
-    let correlate_sock = cfg.correlate_sock_path.clone();
-    tokio::spawn(async move {
-        if let Err(err) = sulion::correlate::run(correlate_pool, correlate_sock).await {
-            tracing::error!(%err, "correlate socket exited");
-        }
-    });
-
     let maintenance_pool = pool.clone();
-    let maintenance_ingester = ingester.clone();
     tokio::spawn(async move {
-        run_startup_maintenance(maintenance_ingester, maintenance_pool, ingester_cfg).await;
+        run_control_maintenance(maintenance_pool).await;
     });
 
-    tokio::spawn(run_repo_state_manager(state.repo_state.clone()));
-    tokio::spawn(run_workspace_manager(state.workspace_state.clone()));
+    if cfg.standalone_node.is_some() {
+        let correlate_pool = pool.clone();
+        let correlate_sock = cfg.correlate_sock_path.clone();
+        tokio::spawn(async move {
+            if let Err(err) = sulion::correlate::run(correlate_pool, correlate_sock).await {
+                tracing::error!(%err, "correlate socket exited");
+            }
+        });
+        tokio::spawn(run_ingester_supervisor(
+            ingester.clone(),
+            pool.clone(),
+            ingester_cfg,
+        ));
+    }
     tokio::spawn(sulion::api::run_stats_sampler(state.clone()));
     tokio::spawn(sulion::ingest::run_usage_backfill(pool.clone()));
     tokio::spawn(state.node_control.clone().run_heartbeat_monitor());
@@ -123,11 +134,7 @@ async fn dispatch_cli(argv: &[std::ffi::OsString]) -> anyhow::Result<Option<i32>
     Ok(Some(code))
 }
 
-async fn run_startup_maintenance(
-    ingester: std::sync::Arc<Ingester>,
-    pool: db::Pool,
-    cfg: IngesterConfig,
-) {
+async fn run_control_maintenance(pool: db::Pool) {
     match sulion::ingest::run_required_startup_maintenance(&pool).await {
         Ok(stats) => {
             tracing::info!(
@@ -140,35 +147,6 @@ async fn run_startup_maintenance(
             tracing::warn!(%err, "startup transcript maintenance failed");
         }
     }
-
-    tracing::info!(
-        claude_projects = %cfg.claude_projects_dir.display(),
-        codex_sessions = ?cfg.codex_sessions_dir,
-        "ingester starting after startup maintenance",
-    );
-    run_ingester_supervisor(ingester, pool, cfg).await;
-}
-
-async fn run_repo_state_manager(repo_state: std::sync::Arc<sulion::repo_state::RepoStateManager>) {
-    if let Err(err) = repo_state.sync_repos_once().await {
-        tracing::warn!(%err, "initial repo state sync failed");
-    }
-    if let Err(err) = repo_state.reconcile_due_once(4).await {
-        tracing::warn!(%err, "initial repo state reconcile failed");
-    }
-    repo_state.run().await;
-}
-
-async fn run_workspace_manager(
-    workspace_state: std::sync::Arc<sulion::worktree::WorkspaceManager>,
-) {
-    if let Err(err) = workspace_state.sync_main_workspaces_once().await {
-        tracing::warn!(%err, "initial workspace sync failed");
-    }
-    if let Err(err) = workspace_state.reconcile_due_once(4).await {
-        tracing::warn!(%err, "initial workspace reconcile failed");
-    }
-    workspace_state.run().await;
 }
 
 async fn run_ingester_supervisor(

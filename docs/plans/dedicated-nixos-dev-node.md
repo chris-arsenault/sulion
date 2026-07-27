@@ -624,6 +624,8 @@ Exit gate:
 
 ### Phase 5 — Extract the development runtime
 
+Status: implemented on `feat/dedicated-nixos-dev-node`.
+
 Deliverables:
 
 - `sulion-node` binary/image owning PTYs, shadow emulation, correlation, and
@@ -644,6 +646,22 @@ Exit gate:
 - Network interruption followed by recovery produces no duplicate or missing
   ingested events.
 - Neither control nor frontend mounts local source or transcript paths.
+
+Implementation note:
+
+- `sulion-node` and `sulion-ingester` are separate binaries and services in the
+  dedicated overlay. They currently share the workbench OCI artifact with
+  control to avoid rebuilding the large toolchain image.
+- The remote control path uses typed durable mutations, ephemeral bounded
+  requests, fragmented large payloads, and terminal streams. There is no
+  generic remote shell command.
+- The real E2E stack enrolls a node, seeds node-owned PTYs, restarts the control
+  container, waits for same-boot node reconciliation, and then exercises
+  browser terminal snapshot/reconnect behavior.
+- The node key remains root-only; node startup loads it and drops to UID/GID
+  7321 before local development work. Only the node receives `/home/dev` and
+  the rootless Docker socket. The ingester receives only read-only transcript
+  roots.
 
 ### Phase 6 — TrueNAS control-plane deployment
 

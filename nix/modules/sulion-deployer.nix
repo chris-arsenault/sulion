@@ -29,7 +29,7 @@ in
     startAtBoot = lib.mkOption {
       type = lib.types.bool;
       default = false;
-      description = "Start the transitional combined Sulion stack automatically at boot.";
+      description = "Start the split Sulion control and development-node stack automatically at boot.";
     };
   };
 
@@ -42,7 +42,7 @@ in
     ];
 
     systemd.services.sulion-stack = {
-      description = "Sulion dedicated-host Compose application";
+      description = "Sulion dedicated-host control and development-node application";
       wantedBy = lib.optional cfg.startAtBoot "multi-user.target";
       requires = [ "docker.service" ];
       wants = [
@@ -60,7 +60,10 @@ in
         RemainAfterExit = true;
         WorkingDirectory = cfg.source;
         EnvironmentFile = cfg.envFile;
-        ExecStartPre = "${pkgs.coreutils}/bin/test -S ${host.rootlessSocket}";
+        ExecStartPre = [
+          "${pkgs.coreutils}/bin/test -S ${host.rootlessSocket}"
+          "${pkgs.coreutils}/bin/test -f /var/lib/sulion/node/private-key.pk8"
+        ];
         ExecStart = "${compose} ${composeArgs} up -d --remove-orphans";
         ExecReload = "${compose} ${composeArgs} up -d --remove-orphans";
         ExecStop = "${compose} ${composeArgs} stop";

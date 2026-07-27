@@ -8,21 +8,21 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::git::DiffStat;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DirEntryView {
     pub name: String,
-    pub kind: &'static str, // "file" | "dir"
+    pub kind: String, // "file" | "dir"
     pub size: u64,
     pub mtime: Option<String>, // ISO 8601
     pub dirty: Option<String>, // 2-char status code, if any
     pub diff: Option<DiffStat>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DirListing {
     pub path: String, // canonicalized repo-relative path
     pub entries: Vec<DirEntryView>,
@@ -173,7 +173,7 @@ pub async fn list_dir(
 
         entries.push(DirEntryView {
             name,
-            kind,
+            kind: kind.to_string(),
             size: meta.len(),
             mtime,
             dirty,
@@ -182,7 +182,7 @@ pub async fn list_dir(
     }
 
     // Sort: directories first, then files, alphabetical within groups.
-    entries.sort_by(|a, b| match (a.kind, b.kind) {
+    entries.sort_by(|a, b| match (a.kind.as_str(), b.kind.as_str()) {
         ("dir", "file") => std::cmp::Ordering::Less,
         ("file", "dir") => std::cmp::Ordering::Greater,
         _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),

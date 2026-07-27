@@ -8,10 +8,13 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use super::node_proxy;
 use super::routes::{repo_path, repos_root, validate_repo_name, ApiError, ApiResult};
+use crate::node_protocol::NodeOperationKind;
+use crate::node_runtime::{RepoDeleteRequest, RepoRenameRequest};
 use crate::{git, AppState};
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub(super) struct RepoView {
     name: String,
     path: String,
@@ -37,6 +40,22 @@ pub(super) async fn patch_repo(
     let new_name = req.name.trim().to_string();
     validate_repo_name(&new_name)?;
 
+    if state.node_protocol_required {
+        let node_id = node_proxy::repo_node(&state, &old_name).await?;
+        let result = node_proxy::operation(
+            &state,
+            node_id,
+            &format!("repo-rename:{old_name}:{new_name}:{}", uuid::Uuid::new_v4()),
+            NodeOperationKind::RepoRename,
+            None,
+            serde_json::to_value(RepoRenameRequest { old_name, new_name })
+                .map_err(anyhow::Error::from)?,
+        )
+        .await?;
+        return Ok(Json(
+            serde_json::from_value(result).map_err(anyhow::Error::from)?,
+        ));
+    }
     let root = repos_root(&state)?;
     let old_path = repo_path(&state, &old_name)?;
     if old_name == new_name {
@@ -46,32 +65,7 @@ pub(super) async fn patch_repo(
         }));
     }
 
-    ensure_no_live_repo_sessions(&state.pool, &old_name, "rename").await?;
-    ensure_no_active_repo_worktrees(&state.pool, &old_name, "rename").await?;
-    ensure_repo_name_available(&state.pool, &new_name).await?;
-
-    let new_path = root.join(&new_name);
-    if new_path.exists() {
-        return Err(ApiError::BadRequest(format!(
-            "repo already exists: {}",
-            new_path.display()
-        )));
-    }
-
-    tokio::fs::rename(&old_path, &new_path).await?;
-    if let Err(err) =
-        rename_repo_records(&state.pool, &old_name, &new_name, &old_path, &new_path).await
-    {
-        if let Err(rollback_err) = tokio::fs::rename(&new_path, &old_path).await {
-            tracing::error!(
-                repo = %old_name,
-                new_repo = %new_name,
-                %rollback_err,
-                "failed to roll back repo directory rename after database error",
-            );
-        }
-        return Err(ApiError::Internal(err));
-    }
+    let new_path = rename_repo_runtime(&state.pool, &root, &old_name, &new_name).await?;
 
     Ok(Json(RepoView {
         name: new_name,
@@ -85,18 +79,93 @@ pub(super) async fn delete_repo(
     Query(q): Query<DeleteRepoQuery>,
 ) -> ApiResult<StatusCode> {
     validate_repo_name(&name)?;
-    let path = repo_path(&state, &name)?;
 
-    ensure_no_live_repo_sessions(&state.pool, &name, "delete").await?;
-    ensure_no_active_repo_worktrees(&state.pool, &name, "delete").await?;
-    ensure_repo_clean_for_delete(&path, q.force.unwrap_or(false)).await?;
-
-    tokio::fs::remove_dir_all(&path).await?;
-    mark_repo_deleted_records(&state.pool, &name, &path)
-        .await
-        .map_err(ApiError::Internal)?;
+    if state.node_protocol_required {
+        let node_id = node_proxy::repo_node(&state, &name).await?;
+        node_proxy::operation(
+            &state,
+            node_id,
+            &format!("repo-delete:{name}:{}", uuid::Uuid::new_v4()),
+            NodeOperationKind::RepoDelete,
+            None,
+            serde_json::to_value(RepoDeleteRequest {
+                name,
+                force: q.force.unwrap_or(false),
+            })
+            .map_err(anyhow::Error::from)?,
+        )
+        .await?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    delete_repo_runtime(
+        &state.pool,
+        &state.repos_root,
+        &name,
+        q.force.unwrap_or(false),
+    )
+    .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn rename_repo_runtime(
+    pool: &crate::db::Pool,
+    root: &StdPath,
+    old_name: &str,
+    new_name: &str,
+) -> ApiResult<std::path::PathBuf> {
+    validate_repo_name(old_name)?;
+    validate_repo_name(new_name)?;
+    let old_path = root.join(old_name);
+    if !old_path.is_dir() {
+        return Err(ApiError::NotFound);
+    }
+    if old_name == new_name {
+        return Ok(old_path);
+    }
+    ensure_no_live_repo_sessions(pool, old_name, "rename").await?;
+    ensure_no_active_repo_worktrees(pool, old_name, "rename").await?;
+    ensure_repo_name_available(pool, new_name).await?;
+    let new_path = root.join(new_name);
+    if new_path.exists() {
+        return Err(ApiError::BadRequest(format!(
+            "repo already exists: {}",
+            new_path.display()
+        )));
+    }
+    tokio::fs::rename(&old_path, &new_path).await?;
+    if let Err(err) = rename_repo_records(pool, old_name, new_name, &old_path, &new_path).await {
+        if let Err(rollback_err) = tokio::fs::rename(&new_path, &old_path).await {
+            tracing::error!(
+                repo = %old_name,
+                new_repo = %new_name,
+                %rollback_err,
+                "failed to roll back repo directory rename after database error",
+            );
+        }
+        return Err(ApiError::Internal(err));
+    }
+    Ok(new_path)
+}
+
+pub(crate) async fn delete_repo_runtime(
+    pool: &crate::db::Pool,
+    root: &StdPath,
+    name: &str,
+    force: bool,
+) -> ApiResult<()> {
+    validate_repo_name(name)?;
+    let path = root.join(name);
+    if !path.is_dir() {
+        return Err(ApiError::NotFound);
+    }
+    ensure_no_live_repo_sessions(pool, name, "delete").await?;
+    ensure_no_active_repo_worktrees(pool, name, "delete").await?;
+    ensure_repo_clean_for_delete(&path, force).await?;
+    tokio::fs::remove_dir_all(&path).await?;
+    mark_repo_deleted_records(pool, name, &path)
+        .await
+        .map_err(ApiError::Internal)
 }
 
 async fn ensure_no_live_repo_sessions(

@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
+use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use uuid::Uuid;
 
@@ -25,7 +26,7 @@ const BROADCAST_CAPACITY: usize = 4096;
 /// Size of each PTY read. Larger = fewer syscalls, smaller = lower latency.
 const READ_CHUNK: usize = 8192;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PtyState {
     Live,
     Dead,
@@ -81,7 +82,7 @@ pub async fn reconcile_orphans_on_startup(pool: &Pool) -> anyhow::Result<u64> {
     Ok(result.rows_affected())
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PtyMetadata {
     pub id: Uuid,
     pub repo: String,
@@ -108,7 +109,7 @@ pub struct PtyMetadata {
     pub agent_runtime: AgentRuntimeMetadata,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PtyWorkspaceMetadata {
     pub id: Uuid,
     pub repo_name: String,
@@ -120,7 +121,7 @@ pub struct PtyWorkspaceMetadata {
     pub merge_target: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRuntimeMetadata {
     pub agent: Option<String>,
     pub state: String,
@@ -170,8 +171,11 @@ pub struct PtyManager {
     sessions: RwLock<HashMap<Uuid, Arc<PtySession>>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpawnParams {
+    pub id: Option<Uuid>,
+    pub node_id: Option<Uuid>,
+    pub node_boot_id: Option<Uuid>,
     pub repo: String,
     pub working_dir: PathBuf,
     pub workspace: Option<PtyWorkspaceMetadata>,
@@ -185,6 +189,9 @@ pub struct SpawnParams {
 impl Default for SpawnParams {
     fn default() -> Self {
         Self {
+            id: None,
+            node_id: None,
+            node_boot_id: None,
             repo: String::new(),
             working_dir: PathBuf::from("."),
             workspace: None,
@@ -211,10 +218,25 @@ impl PtyManager {
         self.sessions.read().await.len()
     }
 
+    pub async fn live_session_ids(&self) -> Vec<Uuid> {
+        let mut ids = self
+            .sessions
+            .read()
+            .await
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
+    }
+
     /// Spawn a new PTY + shell. Persists a pty_sessions row and starts
     /// reader / writer / supervisor tasks.
     pub async fn spawn(self: &Arc<Self>, params: SpawnParams) -> anyhow::Result<PtyMetadata> {
-        let id = Uuid::new_v4();
+        let id = params.id.unwrap_or_else(Uuid::new_v4);
+        if self.sessions.read().await.contains_key(&id) {
+            anyhow::bail!("PTY session {id} is already live");
+        }
         let secret_broker_key_path = crate::secret_pty::prepare_pty_credential(id).await?;
         let pty_system = portable_pty::native_pty_system();
         let pair = pty_system
@@ -307,8 +329,20 @@ impl PtyManager {
         sqlx::query(
             "INSERT INTO pty_sessions \
                 (id, repo, working_dir, state, created_at, \
-                 agent_runtime_agent, agent_runtime_state, agent_runtime_started_at, workspace_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                 agent_runtime_agent, agent_runtime_state, agent_runtime_started_at, workspace_id, \
+                 node_id, node_boot_id, node_disconnected_at, runtime_end_reason, ended_at, exit_code) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, NULL, NULL, NULL) \
+             ON CONFLICT (id) DO UPDATE SET \
+                 repo = EXCLUDED.repo, working_dir = EXCLUDED.working_dir, \
+                 state = EXCLUDED.state, created_at = EXCLUDED.created_at, \
+                 agent_runtime_agent = EXCLUDED.agent_runtime_agent, \
+                 agent_runtime_state = EXCLUDED.agent_runtime_state, \
+                 agent_runtime_started_at = EXCLUDED.agent_runtime_started_at, \
+                 agent_runtime_ended_at = NULL, agent_runtime_exit_code = NULL, \
+                 workspace_id = EXCLUDED.workspace_id, node_id = EXCLUDED.node_id, \
+                 node_boot_id = EXCLUDED.node_boot_id, node_disconnected_at = NULL, \
+                 runtime_end_reason = NULL, ended_at = NULL, exit_code = NULL \
+             WHERE pty_sessions.state <> 'live'",
         )
         .bind(meta.id)
         .bind(&meta.repo)
@@ -319,6 +353,8 @@ impl PtyManager {
         .bind(&meta.agent_runtime.state)
         .bind(meta.agent_runtime.started_at)
         .bind(meta.workspace.as_ref().map(|workspace| workspace.id))
+        .bind(params.node_id)
+        .bind(params.node_boot_id)
         .execute(&self.pool)
         .await?;
 

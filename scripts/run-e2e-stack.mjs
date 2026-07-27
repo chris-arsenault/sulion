@@ -24,17 +24,22 @@ const E2E_BROKER_REGISTRATION_TOKEN = "sulion-e2e-registration-token";
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sulion-e2e-"));
 const containerPaths = {
-  reposRoot: "/tmp/sulion-e2e/repos",
-  libraryRoot: "/tmp/sulion-e2e/library",
-  claudeProjects: "/tmp/sulion-e2e/claude-projects",
-  codexSessions: "/tmp/sulion-e2e/codex-sessions",
+  reposRoot: "/home/dev/repos",
+  workspacesRoot: "/home/dev/workspaces",
+  libraryRoot: "/home/dev/.sulion/library",
+  claudeProjects: "/home/dev/.claude/projects",
+  codexSessions: "/home/dev/.codex/sessions",
 };
 
 let dockerNetworkName = "";
 let dbContainerName = "";
 let backendContainerName = "";
+let nodeContainerName = "";
+let ingesterContainerName = "";
 let brokerContainerName = "";
 let authContainerName = "";
+let nodeVolumeName = "";
+let nodeKeyVolumeName = "";
 let frontendProcess = null;
 let shuttingDown = false;
 let e2eAccessToken = "";
@@ -52,6 +57,10 @@ async function main() {
     await waitForHttp(`${BROKER_BASE_URL}/health`, 120_000);
     startBackendContainer(dbUrl);
     await waitForHttp(`${BACKEND_BASE_URL}/health`, 180_000);
+    const nodeId = await enrollNode();
+    startNodeContainer(dbUrl, nodeId);
+    startIngesterContainer(dbUrl);
+    await waitForNode(nodeId, 60_000);
 
     runCommand(
       "seed",
@@ -61,7 +70,7 @@ async function main() {
         "-e",
         `SULION_E2E_DB_URL=${dbUrl}`,
         "-e",
-        "SULION_E2E_BASE_URL=http://127.0.0.1:8080",
+        `SULION_E2E_BASE_URL=http://${backendContainerName}:8080`,
         "-e",
         `SULION_REPOS_ROOT=${containerPaths.reposRoot}`,
         "-e",
@@ -70,11 +79,17 @@ async function main() {
         `SULION_CLAUDE_PROJECTS=${containerPaths.claudeProjects}`,
         "-e",
         `SULION_CODEX_SESSIONS=${containerPaths.codexSessions}`,
-        backendContainerName,
+        nodeContainerName,
         "/usr/local/bin/e2e_seed",
       ],
       { cwd: REPO_ROOT },
     );
+
+    runCommand("restart-control", "docker", ["restart", backendContainerName], {
+      cwd: REPO_ROOT,
+    });
+    await waitForHttp(`${BACKEND_BASE_URL}/health`, 60_000);
+    await waitForNode(nodeId, 60_000);
 
     frontendProcess = startProcess(
       "frontend",
@@ -107,7 +122,7 @@ function cleanupStaleResources() {
     "bash",
     [
       "-lc",
-      "docker ps -a --format '{{.Names}}' | rg '^sulion-e2e-(auth|backend|broker|db)-' || true",
+      "docker ps -a --format '{{.Names}}' | rg '^sulion-e2e-(auth|backend|broker|db|ingester|node)-' || true",
     ],
     { cwd: REPO_ROOT, encoding: "utf8" },
   );
@@ -143,6 +158,10 @@ function prepareBackendDist() {
       "--bin",
       "sulion",
       "--bin",
+      "sulion-node",
+      "--bin",
+      "sulion-ingester",
+      "--bin",
       "e2e_seed",
       "--bin",
       "sulion-broker",
@@ -155,6 +174,14 @@ function prepareBackendDist() {
   copyExecutable(
     path.join(REPO_ROOT, "backend", "target", "debug", "sulion"),
     path.join(distDir, "sulion"),
+  );
+  copyExecutable(
+    path.join(REPO_ROOT, "backend", "target", "debug", "sulion-node"),
+    path.join(distDir, "sulion-node"),
+  );
+  copyExecutable(
+    path.join(REPO_ROOT, "backend", "target", "debug", "sulion-ingester"),
+    path.join(distDir, "sulion-ingester"),
   );
   copyExecutable(
     path.join(REPO_ROOT, "backend", "target", "debug", "e2e_seed"),
@@ -353,13 +380,19 @@ function startBackendContainer(dbUrl) {
     "-e",
     "SULION_LISTEN=0.0.0.0:8080",
     "-e",
-    `SULION_REPOS_ROOT=${containerPaths.reposRoot}`,
+    "SULION_DEPLOYMENT_ROLE=control-plane",
     "-e",
-    `SULION_LIBRARY_ROOT=${containerPaths.libraryRoot}`,
+    "SULION_NODE_TRANSPORT=remote",
     "-e",
-    `SULION_CLAUDE_PROJECTS=${containerPaths.claudeProjects}`,
+    "SULION_REPOS_ROOT=/var/empty/sulion/repos",
     "-e",
-    `SULION_CODEX_SESSIONS=${containerPaths.codexSessions}`,
+    "SULION_WORKSPACES_ROOT=/var/empty/sulion/workspaces",
+    "-e",
+    "SULION_CLAUDE_PROJECTS=/var/empty/sulion/claude-projects",
+    "-e",
+    "SULION_CODEX_SESSIONS=/var/empty/sulion/codex-sessions",
+    "-e",
+    "SULION_LIBRARY_ROOT=/var/empty/sulion/library",
     "-e",
     "SULION_ENABLE_E2E_FIXTURES=1",
     "-e",
@@ -373,6 +406,217 @@ function startBackendContainer(dbUrl) {
   args.push(BACKEND_IMAGE);
 
   runCommand("docker-run-backend", "docker", args, { cwd: REPO_ROOT });
+}
+
+async function enrollNode() {
+  const tokenResponse = await fetch(`${BACKEND_BASE_URL}/api/nodes/enrollment-tokens`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${e2eAccessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      display_name: "e2e development node",
+      target_node_id: null,
+      ttl_seconds: 300,
+    }),
+  });
+  if (!tokenResponse.ok) {
+    throw new Error(
+      `node enrollment-token request failed with HTTP ${tokenResponse.status}: ${await tokenResponse.text()}`,
+    );
+  }
+  const enrollmentToken = await tokenResponse.json();
+
+  nodeVolumeName = `sulion-e2e-node-home-${process.pid}`;
+  nodeKeyVolumeName = `sulion-e2e-node-key-${process.pid}`;
+  runCommand("docker-volume-node-home", "docker", ["volume", "create", nodeVolumeName], {
+    cwd: REPO_ROOT,
+  });
+  runCommand("docker-volume-node-key", "docker", ["volume", "create", nodeKeyVolumeName], {
+    cwd: REPO_ROOT,
+  });
+  runCommand(
+    "initialize-node-home",
+    "docker",
+    [
+      "run",
+      "--rm",
+      "--user",
+      "root",
+      "-v",
+      `${nodeVolumeName}:/home/dev`,
+      "--entrypoint",
+      "chown",
+      BACKEND_IMAGE,
+      "-R",
+      "7321:7321",
+      "/home/dev",
+    ],
+    { cwd: REPO_ROOT },
+  );
+  runCommand(
+    "node-keygen",
+    "docker",
+    [
+      "run",
+      "--rm",
+      "--user",
+      "root",
+      "-v",
+      `${nodeKeyVolumeName}:/var/lib/sulion-node`,
+      "--entrypoint",
+      "/usr/local/bin/sulion-node",
+      BACKEND_IMAGE,
+      "keygen",
+      "--output",
+      "/var/lib/sulion-node/private-key.pk8",
+    ],
+    { cwd: REPO_ROOT },
+  );
+  const enrollment = runCommandCaptured(
+    "node-enroll",
+    "docker",
+    [
+      "run",
+      "--rm",
+      "--network",
+      dockerNetworkName,
+      "--user",
+      "root",
+      "-v",
+      `${nodeKeyVolumeName}:/var/lib/sulion-node:ro`,
+      "--entrypoint",
+      "/usr/local/bin/sulion-node",
+      BACKEND_IMAGE,
+      "enroll",
+      "--control-url",
+      `http://${backendContainerName}:8080`,
+      "--token",
+      enrollmentToken.token,
+      "--key",
+      "/var/lib/sulion-node/private-key.pk8",
+    ],
+    { cwd: REPO_ROOT },
+  );
+  return JSON.parse(enrollment).node_id;
+}
+
+function startNodeContainer(dbUrl, nodeId) {
+  nodeContainerName = `sulion-e2e-node-${process.pid}`;
+  runCommand(
+    "docker-run-node",
+    "docker",
+    [
+      "run",
+      "--rm",
+      "-d",
+      "--name",
+      nodeContainerName,
+      "--user",
+      "root",
+      "--network",
+      dockerNetworkName,
+      "-e",
+      `SULION_DB_URL=${dbUrl}`,
+      "-e",
+      `SULION_NODE_ID=${nodeId}`,
+      "-e",
+      `SULION_NODE_CONTROL_URL=ws://${backendContainerName}:8080/ws/nodes`,
+      "-e",
+      "SULION_NODE_PRIVATE_KEY_PATH=/var/lib/sulion-node/private-key.pk8",
+      "-e",
+      "SULION_NODE_RUN_USER=dev",
+      "-e",
+      "SULION_NODE_RUN_UID=7321",
+      "-e",
+      "SULION_NODE_RUN_GID=7321",
+      "-e",
+      "SULION_NODE_ALLOW_INSECURE_WS=1",
+      "-e",
+      "SULION_DOCKER_MODE=none",
+      "-e",
+      `SULION_REPOS_ROOT=${containerPaths.reposRoot}`,
+      "-e",
+      `SULION_WORKSPACES_ROOT=${containerPaths.workspacesRoot}`,
+      "-e",
+      `SULION_CLAUDE_PROJECTS=${containerPaths.claudeProjects}`,
+      "-e",
+      `SULION_CODEX_SESSIONS=${containerPaths.codexSessions}`,
+      "-e",
+      "SULION_ENABLE_E2E_FIXTURES=1",
+      "-e",
+      `SULION_SECRET_BROKER_URL=http://${brokerContainerName}:8081`,
+      "-e",
+      `SULION_SECRET_BROKER_REGISTRATION_TOKEN=${E2E_BROKER_REGISTRATION_TOKEN}`,
+      "-v",
+      `${nodeVolumeName}:/home/dev`,
+      "-v",
+      `${nodeKeyVolumeName}:/var/lib/sulion-node:ro`,
+      "--entrypoint",
+      "/usr/bin/dumb-init",
+      BACKEND_IMAGE,
+      "--",
+      "/opt/sulion/node-entrypoint.sh",
+    ],
+    { cwd: REPO_ROOT },
+  );
+}
+
+function startIngesterContainer(dbUrl) {
+  ingesterContainerName = `sulion-e2e-ingester-${process.pid}`;
+  runCommand(
+    "docker-run-ingester",
+    "docker",
+    [
+      "run",
+      "--rm",
+      "-d",
+      "--name",
+      ingesterContainerName,
+      "--network",
+      dockerNetworkName,
+      "-e",
+      `SULION_DB_URL=${dbUrl}`,
+      "-e",
+      `SULION_CLAUDE_PROJECTS=${containerPaths.claudeProjects}`,
+      "-e",
+      `SULION_CODEX_SESSIONS=${containerPaths.codexSessions}`,
+      "-v",
+      `${nodeVolumeName}:/home/dev:ro`,
+      "--entrypoint",
+      "/usr/bin/dumb-init",
+      BACKEND_IMAGE,
+      "--",
+      "/usr/local/bin/sulion-ingester",
+    ],
+    { cwd: REPO_ROOT },
+  );
+}
+
+async function waitForNode(nodeId, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const response = await fetch(`${BACKEND_BASE_URL}/api/app-state`, {
+        headers: { authorization: `Bearer ${e2eAccessToken}` },
+      });
+      if (response.ok) {
+        const state = await response.json();
+        if (
+          state.nodes?.some(
+            (node) => node.id === nodeId && node.connection_state === "connected",
+          )
+        ) {
+          return;
+        }
+      }
+    } catch {
+      // node or control is still converging
+    }
+    await sleep(250);
+  }
+  throw new Error(`timed out waiting for development node ${nodeId}`);
 }
 
 function startProcess(label, command, args, options) {
@@ -399,6 +643,19 @@ function runCommand(label, command, args, options) {
     return;
   }
   throw new Error(`${label} failed with status ${result.status ?? "unknown"}`);
+}
+
+function runCommandCaptured(label, command, args, options) {
+  const result = spawnSync(command, args, {
+    ...options,
+    encoding: "utf8",
+  });
+  if (result.status === 0) {
+    return result.stdout;
+  }
+  throw new Error(
+    `${label} failed with status ${result.status ?? "unknown"}: ${result.stderr}`,
+  );
 }
 
 async function ensureDb() {
@@ -489,6 +746,14 @@ async function cleanup() {
     spawnSync("docker", ["rm", "-f", backendContainerName], { stdio: "ignore" });
     backendContainerName = "";
   }
+  if (nodeContainerName) {
+    spawnSync("docker", ["rm", "-f", nodeContainerName], { stdio: "ignore" });
+    nodeContainerName = "";
+  }
+  if (ingesterContainerName) {
+    spawnSync("docker", ["rm", "-f", ingesterContainerName], { stdio: "ignore" });
+    ingesterContainerName = "";
+  }
   if (brokerContainerName) {
     spawnSync("docker", ["rm", "-f", brokerContainerName], { stdio: "ignore" });
     brokerContainerName = "";
@@ -504,6 +769,14 @@ async function cleanup() {
   if (dockerNetworkName) {
     spawnSync("docker", ["network", "rm", dockerNetworkName], { stdio: "ignore" });
     dockerNetworkName = "";
+  }
+  if (nodeVolumeName) {
+    spawnSync("docker", ["volume", "rm", "-f", nodeVolumeName], { stdio: "ignore" });
+    nodeVolumeName = "";
+  }
+  if (nodeKeyVolumeName) {
+    spawnSync("docker", ["volume", "rm", "-f", nodeKeyVolumeName], { stdio: "ignore" });
+    nodeKeyVolumeName = "";
   }
 
   fs.rmSync(tmpRoot, { recursive: true, force: true });

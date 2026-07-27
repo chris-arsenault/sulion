@@ -167,6 +167,7 @@ in
       "d /var/lib/sulion 0750 root root - -"
       "d /var/lib/sulion/config 0700 root root - -"
       "d /var/lib/sulion/secrets 0700 root root - -"
+      "d /var/lib/sulion/node 0700 root root - -"
       "d /var/lib/sulion/broker 0750 sulion-broker sulion-broker - -"
     ];
   };
