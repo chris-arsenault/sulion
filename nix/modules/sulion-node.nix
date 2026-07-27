@@ -108,6 +108,18 @@ in
 
     security.sudo.wheelNeedsPassword = true;
 
+    services.openssh = {
+      enable = true;
+      openFirewall = false;
+      authorizedKeysFiles = lib.mkForce [
+        "/var/lib/sulion/config/ssh/authorized_keys"
+      ];
+      settings = {
+        PasswordAuthentication = false;
+        PermitRootLogin = "no";
+      };
+    };
+
     virtualisation.docker = {
       enable = true;
       daemon.settings."live-restore" = true;
@@ -151,10 +163,10 @@ in
       "d ${cfg.home}/.local 0750 ${cfg.user} ${cfg.group} - -"
       "d ${cfg.home}/.local/share 0750 ${cfg.user} ${cfg.group} - -"
       "d ${cfg.home}/.local/share/docker 0710 ${cfg.user} ${cfg.group} - -"
-      "d /var/lib/sulion 0750 root root - -"
-      "d /var/lib/sulion/config 0700 root root - -"
-      "d /var/lib/sulion/config/ssh 0700 root root - -"
-      "f /var/lib/sulion/config/ssh/authorized_keys 0600 root root - -"
+      "d /var/lib/sulion 0710 root ${cfg.group} - -"
+      "d /var/lib/sulion/config 0710 root ${cfg.group} - -"
+      "d /var/lib/sulion/config/ssh 0710 root ${cfg.group} - -"
+      "f /var/lib/sulion/config/ssh/authorized_keys 0640 root ${cfg.group} - -"
       "d /var/lib/sulion/secrets 0700 root root - -"
       "d /var/lib/sulion/node 0700 root root - -"
     ];

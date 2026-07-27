@@ -1,6 +1,5 @@
 {
   config,
-  lib,
   pkgs,
   ...
 }:
@@ -19,18 +18,6 @@
     firewall.extraInputRules = ''
       ip saddr ${config.sulion.lanCidr} tcp dport 22 accept comment "Sulion LAN SSH"
     '';
-  };
-
-  services.openssh = {
-    enable = true;
-    openFirewall = false;
-    authorizedKeysFiles = lib.mkForce [
-      "/var/lib/sulion/config/ssh/authorized_keys"
-    ];
-    settings = {
-      PasswordAuthentication = false;
-      PermitRootLogin = "no";
-    };
   };
 
   nix.settings.experimental-features = [

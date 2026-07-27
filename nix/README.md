@@ -249,11 +249,12 @@ node it must appear under `/home/sulion/repos` owned by `sulion:sulion`.
 
 ## Runtime files
 
-The Nix store contains no runtime secrets. Activation creates root-only
-directories under `/var/lib/sulion`; provision:
+The Nix store contains no runtime secrets. Activation creates root-controlled
+paths under `/var/lib/sulion`; provision:
 
-- `/var/lib/sulion/config/ssh/authorized_keys` with mode `0600`, managed by
-  `sulion-admin-key`;
+- `/var/lib/sulion/config/ssh/authorized_keys`, owned by `root:sulion` with
+  mode `0640` and managed by `sulion-admin-key`; the `sulion` user can read
+  public keys for OpenSSH authentication but cannot modify them;
 - `/var/lib/sulion/config/runtime.env` with mode `0600`, using
   `deploy/dedicated.env.example` as the field contract;
 - `/var/lib/sulion/node/private-key.pk8`, owned by `root:root` with mode `0600`;

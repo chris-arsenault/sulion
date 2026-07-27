@@ -2,6 +2,7 @@
 set -euo pipefail
 
 readonly target=${SULION_ADMIN_AUTHORIZED_KEYS_FILE:-/var/lib/sulion/config/ssh/authorized_keys}
+readonly target_group=${SULION_ADMIN_AUTHORIZED_KEYS_GROUP:-sulion}
 
 usage() {
   cat <<'EOF'
@@ -42,18 +43,18 @@ esac
 
 [[ ${EUID} -eq 0 ]] || die "run this command through sudo"
 target_dir=$(dirname "$target")
-install -d -m 0700 -o root -g root "$target_dir"
+install -d -m 0710 -o root -g "$target_group" "$target_dir"
 exec 9>"${target}.lock"
 chmod 0600 "${target}.lock"
 flock 9
 
 [[ ! -L "$target" ]] || die "authorized-key path must not be a symlink: $target"
 if [[ ! -e "$target" ]]; then
-  install -m 0600 -o root -g root /dev/null "$target"
+  install -m 0640 -o root -g "$target_group" /dev/null "$target"
 fi
 [[ -f "$target" ]] || die "authorized-key path is not a regular file: $target"
-chown root:root "$target"
-chmod 0600 "$target"
+chown "root:${target_group}" "$target"
+chmod 0640 "$target"
 
 case "$command_name" in
   add | replace)
@@ -73,8 +74,8 @@ case "$command_name" in
       grep -Ev '^[[:space:]]*(#|$)' "$target" >"$output_file" || true
     fi
     printf '%s\n' "$key_line" >>"$output_file"
-    chown root:root "$output_file"
-    chmod 0600 "$output_file"
+    chown "root:${target_group}" "$output_file"
+    chmod 0640 "$output_file"
     mv -f "$output_file" "$target"
     printf '%s key: %s\n' \
       "$([[ "$command_name" == add ]] && printf 'Authorized' || printf 'Replaced with')" \
@@ -99,8 +100,8 @@ case "$command_name" in
     done <"$target"
     ((removed > 0)) || die "fingerprint is not authorized: $requested_fingerprint"
     [[ -s "$output_file" ]] || die "refusing to remove the final administration key; replace it first"
-    chown root:root "$output_file"
-    chmod 0600 "$output_file"
+    chown "root:${target_group}" "$output_file"
+    chmod 0640 "$output_file"
     mv -f "$output_file" "$target"
     printf 'Removed key: %s\n' "$requested_fingerprint"
     ;;

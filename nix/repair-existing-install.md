@@ -53,8 +53,9 @@ sudo nixos-rebuild test \
 
 The key installer validates one Ed25519 public key, prints its SHA256
 fingerprint, and atomically adds it to
-`/var/lib/sulion/config/ssh/authorized_keys`. That file and its parent directory
-stay owned by root and are not part of Git.
+`/var/lib/sulion/config/ssh/authorized_keys`. Root retains write control; the
+`sulion` group receives only the path traversal and public-key read access that
+OpenSSH needs while authenticating as `sulion`. The file is not part of Git.
 
 Before making the generation persistent, test from the workstation that owns
 the private key.
