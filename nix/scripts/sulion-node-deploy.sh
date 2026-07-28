@@ -48,8 +48,12 @@ chmod 0600 "${candidate}"
 sed "s/^IMAGE_TAG=.*/IMAGE_TAG=${tag}/" "${env_file}" > "${candidate}"
 
 # The delivered file comes last so control-plane values win over host defaults.
+# The project name is pinned: the default derives from the Nix store source
+# path, which changes every rebuild and collides with the previous
+# generation's fixed container names.
 compose=(
   "${compose_bin}"
+  --project-name sulion
   --env-file "${candidate}"
   --env-file "${delivered_file}"
   -f "${source_root}/compose.yaml"

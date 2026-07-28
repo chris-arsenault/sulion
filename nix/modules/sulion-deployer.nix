@@ -9,9 +9,39 @@ let
   cfg = host.deployer;
   compose = "${pkgs.docker-compose}/bin/docker-compose";
   # The delivered file is listed last so control-plane values win over the
-  # host-generated defaults beside them.
+  # host-generated defaults beside them. The project name is pinned because
+  # the default derives from the source directory — a Nix store path that
+  # changes every rebuild — and a changed project collides with the fixed
+  # container names of the previous generation's containers.
   envFileArgs = "--env-file ${cfg.bootstrapEnvFile} --env-file ${cfg.deliveredEnvFile}";
-  composeArgs = "${envFileArgs} -f ${cfg.source}/compose.yaml -f ${cfg.source}/deploy/compose.dedicated.yaml";
+  composeArgs = "--project-name sulion ${envFileArgs} -f ${cfg.source}/compose.yaml -f ${cfg.source}/deploy/compose.dedicated.yaml";
+  # Removes containers and the network left by a previous generation's
+  # project name, which `up` cannot adopt and would otherwise collide with.
+  # Only resources that belong to a stale Sulion project are touched, and the
+  # stack recreates everything it removes, so this is a migration, not a
+  # teardown of foreign state.
+  stackAdopt = pkgs.writeShellApplication {
+    name = "sulion-stack-adopt";
+    runtimeInputs = [ pkgs.docker ];
+    text = ''
+      for name in sulion-node sulion-ingester sulion-code-intel; do
+        project="$(docker inspect --format \
+          '{{ index .Config.Labels "com.docker.compose.project" }}' \
+          "$name" 2>/dev/null)" || continue
+        if [ "$project" != "sulion" ]; then
+          echo "removing $name owned by stale compose project '$project'"
+          docker rm -f "$name"
+        fi
+      done
+      project="$(docker network inspect --format \
+        '{{ index .Labels "com.docker.compose.project" }}' \
+        sulion 2>/dev/null)" || exit 0
+      if [ "$project" != "sulion" ] && [ -n "$project" ]; then
+        echo "removing network sulion owned by stale compose project '$project'"
+        docker network rm sulion || true
+      fi
+    '';
+  };
   nodeDeploy = import ../packages/node-deploy.nix {
     inherit pkgs;
     source = cfg.source;
@@ -225,6 +255,7 @@ in
       nodeBootstrap
       nodeDeploy
       nodeUpdate
+      stackAdopt
     ];
 
     # Generates the host half of the runtime environment. Without this the node
@@ -264,6 +295,7 @@ in
         ];
         ExecStartPre = [
           "${pkgs.coreutils}/bin/test -S /var/run/docker.sock"
+          "${stackAdopt}/bin/sulion-stack-adopt"
         ];
         ExecStart = "${compose} ${composeArgs} up -d --remove-orphans";
         ExecReload = "${compose} ${composeArgs} up -d --remove-orphans";

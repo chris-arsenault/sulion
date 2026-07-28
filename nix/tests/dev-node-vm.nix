@@ -162,6 +162,15 @@ pkgs.testers.runNixOSTest {
     machine.fail("systemctl cat sulion-node-tunnel.path")
     machine.fail("test -e /var/lib/sulion/node/wg0.conf")
 
+    # The compose project name must not derive from the Nix store path: it
+    # changes every rebuild and collides with the previous generation's fixed
+    # container names. The adopt pre-step clears stale-generation leftovers.
+    machine.succeed(
+      "systemctl cat sulion-stack.service | grep -F -- '--project-name sulion'"
+    )
+    machine.succeed("systemctl cat sulion-stack.service | grep -F sulion-stack-adopt")
+    machine.succeed("sulion-stack-adopt")
+
     machine.succeed("systemctl cat sulion-stack.service | grep -F /var/run/docker.sock")
     machine.succeed("systemctl cat sulion-stack.service | grep -F compose.dedicated.yaml")
     machine.succeed(
