@@ -280,6 +280,10 @@ impl NodeControl {
         self.active.read().await.len()
     }
 
+    pub async fn is_connected(&self, node_id: Uuid) -> bool {
+        self.active.read().await.contains_key(&node_id)
+    }
+
     pub(crate) fn challenge(&self) -> Result<model::ControlChallenge, NodeProtocolError> {
         Ok(model::ControlChallenge {
             challenge_id: Uuid::new_v4(),

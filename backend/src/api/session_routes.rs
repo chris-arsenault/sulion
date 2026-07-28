@@ -412,15 +412,36 @@ pub(super) async fn delete_session(
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
     if state.node_protocol_required {
-        let node_id = node_proxy::session_node(&state, id).await?;
-        node_proxy::request(
-            &state,
-            node_id,
-            NodeRequestKind::SessionDelete,
-            serde_json::to_value(ResourceRequest { id }).map_err(anyhow::Error::from)?,
-        )
-        .await?;
-        return Ok(StatusCode::NO_CONTENT);
+        let (node_id, session_state): (Option<Uuid>, String) =
+            sqlx::query_as("SELECT node_id, state FROM pty_sessions WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&state.pool)
+                .await?
+                .ok_or(ApiError::NotFound)?;
+        // Forward only when the owning node is connected and can reap the
+        // process. Husks — orphaned or ended sessions, including rows from
+        // the legacy local runtime or a node identity that no longer exists
+        // — have no process anywhere, and refusing to delete them strands
+        // them in the sidebar forever (the resume flow deletes the husk it
+        // replaces).
+        match node_id {
+            Some(node_id) if state.node_control.is_connected(node_id).await => {
+                node_proxy::request(
+                    &state,
+                    node_id,
+                    NodeRequestKind::SessionDelete,
+                    serde_json::to_value(ResourceRequest { id }).map_err(anyhow::Error::from)?,
+                )
+                .await?;
+                return Ok(StatusCode::NO_CONTENT);
+            }
+            _ if session_state == "live" => {
+                return Err(ApiError::Unavailable(
+                    "session's development node is not connected".into(),
+                ));
+            }
+            _ => {}
+        }
     }
     state.pty.delete(id).await?;
     Ok(StatusCode::NO_CONTENT)

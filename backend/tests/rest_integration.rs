@@ -1586,3 +1586,102 @@ async fn published_plan_lifecycle_projects_into_app_state() {
         .unwrap();
     assert!(final_session["current_plan"].is_null());
 }
+
+/// Node-protocol mode: deleting a husk must not require a reachable node.
+/// Sessions from the legacy local runtime (node_id NULL) or from a node
+/// identity that no longer connects have no process anywhere; DELETE removes
+/// the row directly. Only live sessions still demand their owning node.
+#[tokio::test]
+async fn node_mode_delete_removes_husks_without_a_connected_node() {
+    let pool = fresh_pool().await;
+    let tmp_repos = tempfile::tempdir().unwrap();
+    let state = AppState::new_with_auth_and_node_mode(
+        pool.clone(),
+        tmp_repos.path().to_path_buf(),
+        tmp_repos.path().join(".workspaces"),
+        tmp_repos.path().join(".library"),
+        std::sync::Arc::new(sulion::ingest::Ingester::new()),
+        None,
+        true,
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = app(state.clone());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    let stale_node = Uuid::new_v4();
+    sqlx::query("INSERT INTO dev_nodes (id, display_name, connection_state) VALUES ($1, 'gone', 'disconnected')")
+        .bind(stale_node)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let legacy_husk = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pty_sessions (id, repo, working_dir, state, created_at) \
+         VALUES ($1, 'r', '/tmp', 'orphaned', NOW())",
+    )
+    .bind(legacy_husk)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let stale_node_husk = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pty_sessions (id, repo, working_dir, state, node_id, created_at) \
+         VALUES ($1, 'r', '/tmp', 'orphaned', $2, NOW())",
+    )
+    .bind(stale_node_husk)
+    .bind(stale_node)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let live_on_stale_node = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pty_sessions (id, repo, working_dir, state, node_id, created_at) \
+         VALUES ($1, 'r', '/tmp', 'live', $2, NOW())",
+    )
+    .bind(live_on_stale_node)
+    .bind(stale_node)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    for husk in [legacy_husk, stale_node_husk] {
+        let resp = client
+            .delete(format!("{base}/api/sessions/{husk}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 204, "husk {husk} must delete without a node");
+        let (row_state,): (String,) =
+            sqlx::query_as("SELECT state FROM pty_sessions WHERE id = $1")
+                .bind(husk)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(row_state, "deleted");
+    }
+
+    let resp = client
+        .delete(format!("{base}/api/sessions/{live_on_stale_node}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        503,
+        "live session on a disconnected node must refuse deletion"
+    );
+    let (row_state,): (String,) = sqlx::query_as("SELECT state FROM pty_sessions WHERE id = $1")
+        .bind(live_on_stale_node)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(row_state, "live");
+}

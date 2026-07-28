@@ -12,6 +12,12 @@ All notable user-visible changes to Sulion are recorded here.
   releases bindings duplicated before the fix, including ingester-discovered
   sessions that never had an authoritative PTY link: every session keeps only
   its most recent claimant.
+- Deleting a husk — an orphaned or ended session — no longer requires its
+  development node to be reachable. Sessions from the legacy local runtime or
+  from a node identity that no longer exists have no process anywhere, so
+  DELETE removes the row directly; only live sessions still demand their
+  owning node. This unblocks **Resume with new PTY**, which replaces the husk
+  it resumes from and previously left it stranded beside the successor.
 
 ### One identity: sulion
 
