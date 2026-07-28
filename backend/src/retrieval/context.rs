@@ -156,7 +156,7 @@ pub(super) fn clean_opt(value: Option<String>) -> Option<String> {
 }
 
 pub(super) fn infer_repo_from_cwd(cwd: &str) -> Option<String> {
-    for prefix in ["/home/dev/repos/", "/home/dev/workspaces/"] {
+    for prefix in ["/home/sulion/repos/", "/home/sulion/workspaces/"] {
         if let Some(rest) = cwd.strip_prefix(prefix) {
             let repo = rest.split('/').next()?.trim();
             if !repo.is_empty() {

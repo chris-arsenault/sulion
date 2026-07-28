@@ -60,13 +60,13 @@ fn workspace_postgres_key_is_stable_and_container_safe() {
     assert_eq!(
         postgres_key(
             Some("18bd1823-5ed0-4160-85c5-c8a7a3e03d7b"),
-            &PathBuf::from("/home/dev/repos/sulion")
+            &PathBuf::from("/home/sulion/repos/sulion")
         ),
         "ws-18bd1823-5ed0-4160-85c5-c8a7a3e03d7b"
     );
     assert_eq!(
-        postgres_key(None, &PathBuf::from("/home/dev/repos/sulion")),
-        postgres_key(None, &PathBuf::from("/home/dev/repos/sulion"))
+        postgres_key(None, &PathBuf::from("/home/sulion/repos/sulion")),
+        postgres_key(None, &PathBuf::from("/home/sulion/repos/sulion"))
     );
 }
 

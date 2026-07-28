@@ -28,7 +28,7 @@ pub(super) async fn sessions_route(
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
     let rows = sqlx::query(
         "SELECT cs.session_uuid, cs.agent, cs.pty_session_id, \
-                COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo, \
+                COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/sulion/repos/%' THEN split_part(substr(asm.cwd, length('/home/sulion/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/sulion/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/sulion/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo, \
                 asm.model, asm.cwd, cs.started_at, \
                 COALESCE(tss.turn_count, 0)::BIGINT AS turn_count, \
                 COALESCE(tss.total_event_count, 0)::BIGINT AS total_event_count, \
@@ -37,7 +37,7 @@ pub(super) async fn sessions_route(
            LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
            LEFT JOIN agent_session_metadata asm ON asm.session_uuid = cs.session_uuid \
            LEFT JOIN timeline_session_state tss ON tss.session_uuid = cs.session_uuid \
-          WHERE ($1::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $1) \
+          WHERE ($1::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/sulion/repos/%' THEN split_part(substr(asm.cwd, length('/home/sulion/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/sulion/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/sulion/workspaces/') + 1), '/', 1) ELSE NULL END) = $1) \
             AND ($2::TEXT IS NULL OR cs.agent = $2) \
           ORDER BY tss.latest_event_at DESC NULLS LAST, cs.started_at DESC \
           LIMIT $3",
@@ -143,7 +143,7 @@ pub(super) async fn facets_route(
            FROM claude_sessions cs \
            LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
            LEFT JOIN agent_session_metadata asm ON asm.session_uuid = cs.session_uuid \
-          WHERE ($1::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $1) \
+          WHERE ($1::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/sulion/repos/%' THEN split_part(substr(asm.cwd, length('/home/sulion/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/sulion/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/sulion/workspaces/') + 1), '/', 1) ELSE NULL END) = $1) \
           GROUP BY cs.agent \
           ORDER BY count DESC",
     )
@@ -157,7 +157,7 @@ pub(super) async fn facets_route(
            JOIN claude_sessions cs ON cs.session_uuid = o.session_uuid \
            LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
            LEFT JOIN agent_session_metadata asm ON asm.session_uuid = cs.session_uuid \
-          WHERE ($1::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $1) \
+          WHERE ($1::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/sulion/repos/%' THEN split_part(substr(asm.cwd, length('/home/sulion/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/sulion/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/sulion/workspaces/') + 1), '/', 1) ELSE NULL END) = $1) \
             AND ($2::TIMESTAMPTZ IS NULL OR tt.end_timestamp >= $2) \
             AND ($3::TIMESTAMPTZ IS NULL OR tt.end_timestamp <= $3) \
           GROUP BY COALESCE(o.operation_category, 'other') \

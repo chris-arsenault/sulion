@@ -189,7 +189,7 @@ async fn lexical_search(
                AND b.text IS NOT NULL \
                AND b.text ILIKE '%' || $1 || '%' \
                AND ($2::UUID IS NULL OR e.session_uuid = $2) \
-               AND ($3::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $3) \
+               AND ($3::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/sulion/repos/%' THEN split_part(substr(asm.cwd, length('/home/sulion/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/sulion/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/sulion/workspaces/') + 1), '/', 1) ELSE NULL END) = $3) \
                AND ($4::TEXT IS NULL OR cs.agent = $4) \
                AND ($5::TEXT IS NULL OR asm.model = $5) \
                AND ($6::TIMESTAMPTZ IS NULL OR e.timestamp >= $6) \
@@ -317,7 +317,7 @@ async fn lexical_tool_search(
                 AND text ILIKE '%' || $1 || '%' \
                 AND source_kind = ANY($2) \
                 AND ($3::UUID IS NULL OR session_uuid = $3) \
-                AND ($4::TEXT IS NULL OR COALESCE(pty_repo, CASE WHEN cwd LIKE '/home/dev/repos/%' THEN split_part(substr(cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $4) \
+                AND ($4::TEXT IS NULL OR COALESCE(pty_repo, CASE WHEN cwd LIKE '/home/sulion/repos/%' THEN split_part(substr(cwd, length('/home/sulion/repos/') + 1), '/', 1) WHEN cwd LIKE '/home/sulion/workspaces/%' THEN split_part(substr(cwd, length('/home/sulion/workspaces/') + 1), '/', 1) ELSE NULL END) = $4) \
                 AND ($5::TEXT IS NULL OR agent = $5) \
                 AND ($6::TEXT IS NULL OR model = $6) \
                 AND ($7::TIMESTAMPTZ IS NULL OR timestamp >= $7) \

@@ -565,7 +565,7 @@ fn env_optional(key: &str) -> Option<String> {
 
 fn infer_repo(cwd: &str) -> Option<String> {
     let path = Path::new(cwd);
-    for prefix in ["/home/dev/repos", "/home/dev/workspaces"] {
+    for prefix in ["/home/sulion/repos", "/home/sulion/workspaces"] {
         if let Ok(rest) = path.strip_prefix(prefix) {
             if let Some(component) = rest.components().next() {
                 let repo = component.as_os_str().to_string_lossy();
@@ -647,7 +647,7 @@ mod tests {
     #[test]
     fn infers_repo_from_workspace_path() {
         assert_eq!(
-            infer_repo("/home/dev/workspaces/sulion/abc"),
+            infer_repo("/home/sulion/workspaces/sulion/abc"),
             Some("sulion".to_string())
         );
     }

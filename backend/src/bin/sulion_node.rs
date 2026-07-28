@@ -154,7 +154,7 @@ fn drop_node_privileges() -> anyhow::Result<()> {
     if unsafe { libc::geteuid() } != 0 {
         return Ok(());
     }
-    let user = std::env::var("SULION_NODE_RUN_USER").unwrap_or_else(|_| "dev".into());
+    let user = std::env::var("SULION_NODE_RUN_USER").unwrap_or_else(|_| "sulion".into());
     let uid: libc::uid_t = std::env::var("SULION_NODE_RUN_UID")
         .map_err(|_| anyhow::anyhow!("root node requires SULION_NODE_RUN_UID"))?
         .parse()

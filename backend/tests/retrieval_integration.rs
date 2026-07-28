@@ -846,7 +846,7 @@ async fn seed_retrieval_fixture(pool: &db::Pool) -> Uuid {
     .unwrap();
     sqlx::query(
         "INSERT INTO agent_session_metadata (session_uuid, agent, model, cwd) \
-         VALUES ($1, 'codex', 'test-model', '/home/dev/repos/sulion')",
+         VALUES ($1, 'codex', 'test-model', '/home/sulion/repos/sulion')",
     )
     .bind(session_uuid)
     .execute(pool)
@@ -981,7 +981,7 @@ async fn seed_empty_session(pool: &db::Pool, repo: &str) -> Uuid {
          VALUES ($1, 'codex', 'test-model', $2)",
     )
     .bind(session_uuid)
-    .bind(format!("/home/dev/repos/{repo}"))
+    .bind(format!("/home/sulion/repos/{repo}"))
     .execute(pool)
     .await
     .unwrap();

@@ -17,6 +17,6 @@ ENV SULION_RUNNER_DOCKER_BIN=/usr/bin/docker
 COPY dist/sulion-runner /usr/local/bin/sulion-runner
 RUN chmod +x /usr/local/bin/sulion-runner
 
-WORKDIR /home/dev
+WORKDIR /home/sulion
 EXPOSE 8082
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/sulion-runner"]

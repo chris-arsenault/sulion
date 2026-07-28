@@ -21,7 +21,7 @@ pub mod parser;
 pub mod structural;
 pub mod symbols;
 
-const DEFAULT_ALLOWED_ROOTS: &str = "/home/dev/repos,/home/dev/workspaces";
+const DEFAULT_ALLOWED_ROOTS: &str = "/home/sulion/repos,/home/sulion/workspaces";
 const BACKGROUND_INDEX_SECONDS: u64 = 300;
 
 #[derive(Debug, Clone)]
@@ -168,12 +168,12 @@ mod tests {
 
     #[test]
     fn parse_allowed_roots_trims_and_skips_empty_entries() {
-        let roots = parse_allowed_roots(" /home/dev/repos, ,/home/dev/workspaces ").unwrap();
+        let roots = parse_allowed_roots(" /home/sulion/repos, ,/home/sulion/workspaces ").unwrap();
         assert_eq!(
             roots,
             vec![
-                PathBuf::from("/home/dev/repos"),
-                PathBuf::from("/home/dev/workspaces")
+                PathBuf::from("/home/sulion/repos"),
+                PathBuf::from("/home/sulion/workspaces")
             ]
         );
     }

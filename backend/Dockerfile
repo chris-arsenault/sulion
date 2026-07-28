@@ -201,7 +201,7 @@ RUN dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.rep
   && rm -rf /var/cache/dnf
 
 # Ruby via RVM for PTYs working on Ruby projects. Installed multi-user under
-# /usr/local/rvm so the toolchain is shared; the `dev` user joins the `rvm`
+# /usr/local/rvm so the toolchain is shared; the `sulion` user joins the `rvm`
 # group below so it can install gems/rubies and `rvm use` other versions
 # (RVM's shell integration loads from /etc/profile.d/rvm.sh in login shells).
 # The default ruby/gem/bundle wrappers are symlinked into /usr/local/bin so
@@ -239,18 +239,20 @@ RUN dnf install -y --setopt=install_weak_deps=False \
 RUN npm install -g @anthropic-ai/claude-code @openai/codex typescript typescript-language-server
 
 # 7321 is a deliberately unusual UID/GID to avoid colliding with the
-# ~1000 range that most consumer apps claim. Must match the ownership
-# of the TrueNAS dataset bind-mounted at /home/dev.
+# ~1000 range that most consumer apps claim. Must match the ownership of the
+# bind-mounted home dataset. One identity everywhere: the account is named
+# `sulion` in the image, on the dedicated host, and in every mounted path —
+# no per-role aliasing, because dual naming has produced real bugs.
 ARG DEV_UID=7321
 ARG DEV_GID=7321
-RUN groupadd --gid ${DEV_GID} dev \
-  && useradd --uid ${DEV_UID} --gid ${DEV_GID} --shell /bin/bash --home-dir /home/dev dev \
-  && usermod -aG rvm dev \
-  && mkdir -p /home/dev \
+RUN groupadd --gid ${DEV_GID} sulion \
+  && useradd --uid ${DEV_UID} --gid ${DEV_GID} --shell /bin/bash --home-dir /home/sulion sulion \
+  && usermod -aG rvm sulion \
+  && mkdir -p /home/sulion \
   && mkdir -p /run/sulion /opt/sulion/hooks /opt/sulion/bin /opt/sulion/docs \
-  && echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev \
-  && chmod 0440 /etc/sudoers.d/dev \
-  && chown -R dev:dev /home/dev /run/sulion
+  && echo 'sulion ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/sulion \
+  && chmod 0440 /etc/sudoers.d/sulion \
+  && chown -R sulion:sulion /home/sulion /run/sulion
 
 COPY dist/sulion /usr/local/bin/sulion
 COPY dist/sulion-node /usr/local/bin/sulion-node
@@ -270,8 +272,8 @@ COPY hooks/activity-hook.sh /opt/sulion/hooks/activity-hook.sh
 COPY entrypoint.sh /opt/sulion/entrypoint.sh
 COPY node-entrypoint.sh /opt/sulion/node-entrypoint.sh
 RUN chmod +x /usr/local/bin/sulion /usr/local/bin/sulion-node /usr/local/bin/sulion-ingester /opt/sulion/bin/sulion-agent /opt/sulion/bin/cl /opt/sulion/bin/co /opt/sulion/bin/docker /opt/sulion/bin/docker-compose /opt/sulion/bin/aws /opt/sulion/bin/with-cred /opt/sulion/bin/sulion-retrieve /opt/sulion/bin/sulion-code /opt/sulion/hooks/session-start.sh /opt/sulion/hooks/activity-hook.sh /opt/sulion/entrypoint.sh /opt/sulion/node-entrypoint.sh
-USER dev
-WORKDIR /home/dev
+USER sulion
+WORKDIR /home/sulion
 
 EXPOSE 8080
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "/opt/sulion/entrypoint.sh"]

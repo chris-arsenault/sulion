@@ -47,13 +47,13 @@ fn patch_request_is_diff_only_command_shape() {
     .unwrap();
     let request = parsed
         .command
-        .request("/home/dev/repos/sulion", &parsed.budget);
+        .request("/home/sulion/repos/sulion", &parsed.budget);
 
     assert_eq!(request.method, "POST");
     assert_eq!(request.path, "/v1/patch");
     assert_eq!(request.query.len(), 0);
     let body = request.body.unwrap();
-    assert_eq!(body["cwd"], "/home/dev/repos/sulion");
+    assert_eq!(body["cwd"], "/home/sulion/repos/sulion");
     assert_eq!(body["lang"], "rust");
     assert_eq!(body["rewrite"], "bar($A)");
     assert_eq!(body["path"], "backend/src");
@@ -106,7 +106,7 @@ fn pack_hint_uses_range_for_semantic_result_ids() {
 #[test]
 fn infers_repo_from_workspace_path() {
     assert_eq!(
-        infer_repo("/home/dev/workspaces/sulion/branch"),
+        infer_repo("/home/sulion/workspaces/sulion/branch"),
         Some("sulion".to_string())
     );
 }

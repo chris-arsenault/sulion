@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# sulion container entrypoint. Runs as the `dev` user (set via
+# sulion container entrypoint. Runs as the `sulion` user (set via
 # USER in the Dockerfile). Self-provisions the dataset layout so the
 # TrueNAS operator only has to create the dataset and chown it to
-# the dev UID — nothing else.
+# the sulion UID — nothing else.
 #
 # All state lives under $HOME (which is bind-mounted from the dataset
 # root), so anything created here persists across container restarts.
@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-HOME_DIR="${HOME:-/home/dev}"
+HOME_DIR="${HOME:-/home/sulion}"
 export PATH="${HOME_DIR}/.local/bin:/opt/sulion/bin:${PATH}"
 
 mkdir -p \

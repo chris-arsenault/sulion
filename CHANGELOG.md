@@ -4,6 +4,14 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### One identity: sulion
+
+- Retired the image's portable `dev` account and every `/home/dev` path. UID
+  7321 is `sulion` with home `/home/sulion` in the image, in every deployment
+  role, and in every stored path; a data migration rewrites rows from the
+  `/home/dev` era so no query or tool ever branches on which era wrote a path.
+  PTY prompts, file ownership, and the host login now all agree.
+
 ### One-click development-node enrollment
 
 - A dedicated node now bootstraps itself. It boots holding nothing but its

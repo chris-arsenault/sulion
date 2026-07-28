@@ -18,7 +18,7 @@ Three deploy fixes shipped in commit `aa4eb59` and **work**. Two real problems r
 
 ## Live state observed (post-deploy)
 
-`sulion-code --json status` for root `/home/dev/repos/sulion`:
+`sulion-code --json status` for root `/home/sulion/repos/sulion`:
 
 - `file_count=274`, `pending_file_count=274`, `symbol_count=2700`, `failed_file_count=0`
 - `freshness=stale`, `latest_job = cancelled/manual` started `2026-06-13T07:26:37` (the
@@ -38,7 +38,7 @@ Three deploy fixes shipped in commit `aa4eb59` and **work**. Two real problems r
    live (44ms).**
 2. **File discovery / read access** (`compose.yaml` + `code-intel/Dockerfile`): the
    container now runs as **uid/gid 7321** (the dev user that owns the ZFS datasets) instead
-   of 7324. Previously it failed every cycle with `read dir /home/dev/repos` because the
+   of 7324. Previously it failed every cycle with `read dir /home/sulion/repos` because the
    repos root is mode `771` (NFSv4 ACL; uid 7324 = `everyone@` = traverse-but-not-list).
    As owner it reads fine. **Verified**: file_count went 82 → 274. Mount stays `:ro`.
 3. **LSP binaries present** (`code-intel/Dockerfile`): added `rust-analyzer` (GitHub

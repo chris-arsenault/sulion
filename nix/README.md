@@ -24,9 +24,9 @@ ingester sees only transcript directories.
 Repositories live at `/home/sulion/repos` on the machine's local filesystem.
 The dedicated Compose adapter preserves `/home/sulion` inside the workbench so
 bind paths sent to the host's Docker daemon resolve identically. The
-shared OCI image still resolves UID/GID 7321 to its portable `dev` account, but
-the host login and all host-visible ownership use `sulion`; no second host user
-is created. Samba exports the repository directory as `repos`; workspaces,
+shared OCI image ships UID/GID 7321 as the `sulion` account with home
+`/home/sulion` — one identity in the image, on the host, and in every mounted
+path; no per-role aliasing and no second host user. Samba exports the repository directory as `repos`; workspaces,
 agent state, Docker state, and deployment secrets are not shared. SMB, SSH,
 and development ports are accepted only from `192.168.66.0/24`.
 The node initiates its authenticated control connection outbound; this host

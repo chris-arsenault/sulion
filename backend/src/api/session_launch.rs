@@ -78,7 +78,7 @@ pub(super) fn protocol_working_dir(repo: &str, value: &str) -> ApiResult<String>
     if !path.is_absolute() {
         return Ok(value.to_string());
     }
-    let canonical_root = PathBuf::from("/home/dev/repos").join(repo);
+    let canonical_root = PathBuf::from("/home/sulion/repos").join(repo);
     path.strip_prefix(&canonical_root)
         .map(|relative| relative.to_string_lossy().into_owned())
         .map_err(|_| {

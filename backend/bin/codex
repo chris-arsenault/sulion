@@ -12,7 +12,7 @@ if [[ -z "${SULION_PTY_ID:-}" ]]; then
   exec "${REAL_CODEX}" "$@"
 fi
 
-SESSIONS_DIR="${SULION_CODEX_SESSIONS:-${HOME:-/home/dev}/.codex/sessions}"
+SESSIONS_DIR="${SULION_CODEX_SESSIONS:-${HOME:-/home/sulion}/.codex/sessions}"
 CORRELATE_SOCK="${SULION_CORRELATE_SOCK:-/run/sulion/correlate.sock}"
 
 exec /usr/local/bin/sulion codex-launcher \

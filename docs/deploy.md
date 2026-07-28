@@ -61,7 +61,7 @@ Sulion needs three cross-repo infra registrations in `ahara-infra`:
 - `infrastructure/terraform/services/db-migrate-truenas.tf` needs a `sulion` entry in `truenas_db_stacks` with `app` and `broker` database registrations so the shared migration Lambda provisions both databases and publishes `/ahara/truenas-db/sulion/app/{username,password}` plus `/ahara/truenas-db/sulion/broker/{username,password}`.
 - `infrastructure/terraform/network/locals.tf` registers `sulion.services.ahara.io` as an `internal` reverse-proxy upstream at `192.168.66.3:30080`, with buffering disabled and WebSocket upgrades enabled. `internal` means Ahara Infra owns nginx and WireGuard ingress while Sulion Terraform owns the public ALB resources. Port `30081/tcp` is deliberately **not** registered: it is the backend's encrypted LAN-only node endpoint (control channel plus broker/retrieval gateway), and routing it publicly would undo the node pairing boundary.
 
-Sulion also carries project-local Terraform under [`infrastructure/terraform/`](</home/dev/repos/sulion/infrastructure/terraform>) that creates its `sulion.services.ahara.io` ALB listener rules, ACM certificate, Route53 records, Cognito app client, and publishes:
+Sulion also carries project-local Terraform under [`infrastructure/terraform/`](</home/sulion/repos/sulion/infrastructure/terraform>) that creates its `sulion.services.ahara.io` ALB listener rules, ACM certificate, Route53 records, Cognito app client, and publishes:
 
 - `/ahara/cognito/clients/sulion-app`
 - `/ahara/auth-trigger/clients/sulion`
@@ -85,7 +85,7 @@ the production control-plane I/O path.
 
 UID/GID **7321** is deliberately off the 1000-series consumer range. Pinned in `backend/Dockerfile` via the `DEV_UID` / `DEV_GID` build args; change both together or not at all.
 
-The broker runs as **7322:7322**, configured in [`broker/Dockerfile`](</home/dev/repos/sulion/broker/Dockerfile>).
+The broker runs as **7322:7322**, configured in [`broker/Dockerfile`](</home/sulion/repos/sulion/broker/Dockerfile>).
 
 The standalone overlay bind-mounts each legacy dataset explicitly because a
 plain Docker bind does not follow nested ZFS datasets under its parent.
@@ -107,9 +107,9 @@ The broker container mounts this dataset read-only at `/var/lib/sulion-broker`. 
 Push to `main`. The shared ahara CI workflow builds all Sulion images, pushes to GHCR, and the `deploy-truenas` action:
 
 1. Invokes `ahara-db-migrate-truenas` with `stack_name: "sulion"` → creates every registered Sulion database and publishes `/ahara/truenas-db/sulion/app/{username,password}` plus `/ahara/truenas-db/sulion/broker/{username,password}` to SSM.
-2. Runs `terraform apply` in [`infrastructure/terraform/`](</home/dev/repos/sulion/infrastructure/terraform>) → creates the Sulion edge listener rules/certificate/DNS and Cognito app client, then publishes `/ahara/cognito/clients/sulion-app` plus `/ahara/auth-trigger/clients/sulion`.
+2. Runs `terraform apply` in [`infrastructure/terraform/`](</home/sulion/repos/sulion/infrastructure/terraform>) → creates the Sulion edge listener rules/certificate/DNS and Cognito app client, then publishes `/ahara/cognito/clients/sulion-app` plus `/ahara/auth-trigger/clients/sulion`.
 3. Creates (or reuses) the `sulion` Komodo stack pointed at this repo's `compose.yaml`.
-4. Resolves the SSM paths declared in [`secret-paths.yml`](</home/dev/repos/sulion/secret-paths.yml>), sets them as Komodo stack env vars, and deploys.
+4. Resolves the SSM paths declared in [`secret-paths.yml`](</home/sulion/repos/sulion/secret-paths.yml>), sets them as Komodo stack env vars, and deploys.
 5. Advances the `node-release` branch after the shared workflow succeeds. The
    root-owned timer on `sulion-enclave` polls that branch and deploys the same
    commit's node, ingester, and code-intelligence images.
@@ -194,7 +194,7 @@ The PTY helper is `sulion-code`; the full command contract is in
 
 The following paths apply only when restoring the standalone TrueNAS rollback
 role. SSH into TrueNAS; the legacy dataset root is the container's
-`/home/dev/`:
+`/home/sulion/`:
 
 - SSH keys: `/mnt/apps/apps/sulion/.ssh/` (private keys chmod 0600)
 - Git identity: `/mnt/apps/apps/sulion/.gitconfig`

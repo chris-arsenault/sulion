@@ -245,7 +245,7 @@ Common envelope:
   "root": {
     "kind": "workspace",
     "name": "sulion",
-    "path": "/home/dev/workspaces/sulion/example"
+    "path": "/home/sulion/workspaces/sulion/example"
   },
   "freshness": "fresh",
   "confidence": "syntactic",

@@ -74,8 +74,19 @@ struct LauncherEnv {
     cwd: PathBuf,
 }
 
+/// Path of the `sulion` CLI binary, for commands composed into PTY shells.
+///
+/// Never bare `current_exe()`: on the dedicated node the calling process is
+/// `sulion-node`, and a launch command built from that path would boot a
+/// second node inside the PTY — which promptly dies asking for
+/// `SULION_NODE_CONTROL_URL` — instead of dispatching the CLI. The CLI ships
+/// beside whichever binary is running, so resolve the sibling by name.
 pub fn binary_path() -> PathBuf {
-    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("sulion"))
+    match std::env::current_exe() {
+        Ok(path) if path.file_name().is_some_and(|name| name == "sulion") => path,
+        Ok(path) => path.with_file_name("sulion"),
+        Err(_) => PathBuf::from("sulion"),
+    }
 }
 
 pub fn parse_launcher_args(args: &[OsString]) -> anyhow::Result<LauncherConfig> {
@@ -355,6 +366,17 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn binary_path_always_names_the_cli_binary() {
+        // The test harness's own current_exe is not named "sulion", which is
+        // exactly the sulion-node situation: the resolved path must still
+        // point at the sibling CLI, never at the calling binary.
+        assert_eq!(
+            binary_path().file_name().and_then(|name| name.to_str()),
+            Some("sulion")
+        );
+    }
 
     #[test]
     fn parse_launcher_args_requires_type_and_collects_agent_args() {

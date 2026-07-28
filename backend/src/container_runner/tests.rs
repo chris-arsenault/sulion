@@ -4,7 +4,7 @@ fn test_config() -> RunnerConfig {
     RunnerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         docker_bin: "docker".into(),
-        allowed_roots: vec!["/home/dev/repos".into()],
+        allowed_roots: vec!["/home/sulion/repos".into()],
         default_memory: Some("1g".into()),
         default_cpus: Some("1".into()),
         default_pids_limit: Some("128".into()),
@@ -12,14 +12,14 @@ fn test_config() -> RunnerConfig {
 }
 
 fn prepare(request: &DockerCommandRequest) -> Result<PreparedDockerArgs, RunnerError> {
-    prepare_docker_args(request, &test_config(), Path::new("/home/dev/repos/app"))
+    prepare_docker_args(request, &test_config(), Path::new("/home/sulion/repos/app"))
 }
 
 #[test]
 fn run_injects_labels_and_limits() {
     let request = DockerCommandRequest {
         pty_id: Some("pty-1".into()),
-        cwd: "/home/dev/repos/app".into(),
+        cwd: "/home/sulion/repos/app".into(),
         argv: vec!["run".into(), "--rm".into(), "alpine".into(), "true".into()],
     };
     let prepared = prepare(&request).unwrap();
@@ -57,7 +57,7 @@ fn run_denies_privileged_and_mounts() {
     ] {
         let request = DockerCommandRequest {
             pty_id: None,
-            cwd: "/home/dev/repos/app".into(),
+            cwd: "/home/sulion/repos/app".into(),
             argv: args.into_iter().map(str::to_string).collect(),
         };
         assert!(prepare(&request).is_err());
@@ -75,7 +75,7 @@ fn run_denies_resource_limit_overrides() {
     ] {
         let request = DockerCommandRequest {
             pty_id: None,
-            cwd: "/home/dev/repos/app".into(),
+            cwd: "/home/sulion/repos/app".into(),
             argv: args.into_iter().map(str::to_string).collect(),
         };
         assert!(prepare(&request).is_err());
@@ -86,7 +86,7 @@ fn run_denies_resource_limit_overrides() {
 fn build_injects_labels_and_preserves_context() {
     let request = DockerCommandRequest {
         pty_id: Some("pty-2".into()),
-        cwd: "/home/dev/repos/app".into(),
+        cwd: "/home/sulion/repos/app".into(),
         argv: vec!["build".into(), "-t".into(), "local/app".into(), ".".into()],
     };
     let prepared = prepare(&request).unwrap();
@@ -106,7 +106,7 @@ fn build_denies_host_output_flags() {
     ] {
         let request = DockerCommandRequest {
             pty_id: None,
-            cwd: "/home/dev/repos/app".into(),
+            cwd: "/home/sulion/repos/app".into(),
             argv: args.into_iter().map(str::to_string).collect(),
         };
         assert!(prepare(&request).is_err());
@@ -117,7 +117,7 @@ fn build_denies_host_output_flags() {
 fn logs_denies_follow_mode() {
     let request = DockerCommandRequest {
         pty_id: None,
-        cwd: "/home/dev/repos/app".into(),
+        cwd: "/home/sulion/repos/app".into(),
         argv: vec!["logs".into(), "--follow".into(), "container".into()],
     };
     assert!(prepare(&request).is_err());
@@ -127,7 +127,7 @@ fn logs_denies_follow_mode() {
 fn ps_is_label_filtered() {
     let request = DockerCommandRequest {
         pty_id: None,
-        cwd: "/home/dev/repos/app".into(),
+        cwd: "/home/sulion/repos/app".into(),
         argv: vec!["ps".into(), "-a".into()],
     };
     let prepared = prepare(&request).unwrap();
@@ -174,7 +174,7 @@ fn compose_uses_sulion_network_override() {
 fn compose_denies_exec() {
     let request = DockerCommandRequest {
         pty_id: None,
-        cwd: "/home/dev/repos/app".into(),
+        cwd: "/home/sulion/repos/app".into(),
         argv: vec!["compose".into(), "exec".into(), "app".into(), "sh".into()],
     };
     assert!(prepare(&request).is_err());
@@ -184,7 +184,7 @@ fn compose_denies_exec() {
 fn compose_version_does_not_require_compose_file() {
     let request = DockerCommandRequest {
         pty_id: None,
-        cwd: "/home/dev/repos/app".into(),
+        cwd: "/home/sulion/repos/app".into(),
         argv: vec!["compose".into(), "--version".into()],
     };
     let prepared = prepare(&request).unwrap();

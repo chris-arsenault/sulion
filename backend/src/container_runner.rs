@@ -42,7 +42,7 @@ impl RunnerConfig {
             std::env::var("SULION_RUNNER_DOCKER_BIN").unwrap_or_else(|_| "docker".to_string()),
         );
         let allowed_roots = std::env::var("SULION_RUNNER_ALLOWED_ROOTS")
-            .unwrap_or_else(|_| "/home/dev/repos".to_string())
+            .unwrap_or_else(|_| "/home/sulion/repos".to_string())
             .split(',')
             .map(str::trim)
             .filter(|value| !value.is_empty())

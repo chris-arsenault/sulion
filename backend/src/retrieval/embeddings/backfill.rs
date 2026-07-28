@@ -265,7 +265,7 @@ async fn load_event_backfill_sources(
             END AS source_kind, \
             ('event:' || e.session_uuid::TEXT || ':' || e.byte_offset::TEXT || ':' || b.ord::TEXT) AS source_key, \
             e.session_uuid, e.byte_offset, b.ord AS block_ord, tt.turn_id, NULL::INT AS operation_ord, \
-            COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
+            COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/sulion/repos/%' THEN split_part(substr(asm.cwd, length('/home/sulion/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/sulion/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/sulion/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
             CASE WHEN b.kind = 'tool_result' THEN left(b.text, 1000) ELSE b.text END AS text \
            FROM event_blocks b \
            JOIN events e ON e.session_uuid = b.session_uuid AND e.byte_offset = b.byte_offset \
@@ -288,7 +288,7 @@ async fn load_event_backfill_sources(
                 OR (b.kind = 'tool_result' AND COALESCE(b.is_error, FALSE)) \
             ) \
             AND ($1::UUID IS NULL OR e.session_uuid = $1) \
-            AND ($2::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $2) \
+            AND ($2::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/sulion/repos/%' THEN split_part(substr(asm.cwd, length('/home/sulion/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/sulion/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/sulion/workspaces/') + 1), '/', 1) ELSE NULL END) = $2) \
             AND ( \
                 $3::UUID IS NULL \
                 OR e.session_uuid > $3 \
@@ -321,7 +321,7 @@ async fn load_operation_backfill_sources(
             CASE WHEN o.result_is_error OR o.is_error THEN 'tool_error' ELSE 'tool_result' END AS source_kind, \
             ('operation:' || o.session_uuid::TEXT || ':' || o.turn_id::TEXT || ':' || o.operation_ord::TEXT || ':result') AS source_key, \
             o.session_uuid, NULL::BIGINT AS byte_offset, NULL::INT AS block_ord, o.turn_id, o.operation_ord, \
-            COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
+            COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/sulion/repos/%' THEN split_part(substr(asm.cwd, length('/home/sulion/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/sulion/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/sulion/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
             CASE WHEN o.result_is_error OR o.is_error \
                  THEN left(concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT), 1000) \
                  ELSE concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT) END AS text \
@@ -333,7 +333,7 @@ async fn load_operation_backfill_sources(
             AND length(trim(concat_ws(' ', o.name, o.result_content, o.result_payload::TEXT))) > 0 \
             AND (o.result_is_error OR o.is_error OR o.name = 'agent') \
             AND ($1::UUID IS NULL OR o.session_uuid = $1) \
-            AND ($2::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $2) \
+            AND ($2::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/sulion/repos/%' THEN split_part(substr(asm.cwd, length('/home/sulion/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/sulion/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/sulion/workspaces/') + 1), '/', 1) ELSE NULL END) = $2) \
             AND ( \
                 $3::UUID IS NULL \
                 OR o.session_uuid > $3 \
@@ -347,7 +347,7 @@ async fn load_operation_backfill_sources(
             'tool_call' AS source_kind, \
             ('operation:' || o.session_uuid::TEXT || ':' || o.turn_id::TEXT || ':' || o.operation_ord::TEXT || ':call') AS source_key, \
             o.session_uuid, NULL::BIGINT AS byte_offset, NULL::INT AS block_ord, o.turn_id, o.operation_ord, \
-            COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
+            COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/sulion/repos/%' THEN split_part(substr(asm.cwd, length('/home/sulion/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/sulion/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/sulion/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
             concat_ws(' ', o.name, o.raw_name, o.operation_type, o.operation_category, left(o.input::TEXT, 300)) AS text \
            FROM timeline_operations o \
            JOIN claude_sessions cs ON cs.session_uuid = o.session_uuid \
@@ -356,7 +356,7 @@ async fn load_operation_backfill_sources(
           WHERE o.input IS NOT NULL \
             AND length(trim(concat_ws(' ', o.name, o.raw_name, o.operation_type, o.operation_category, o.input::TEXT))) > 0 \
             AND ($1::UUID IS NULL OR o.session_uuid = $1) \
-            AND ($2::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/dev/repos/%' THEN split_part(substr(asm.cwd, length('/home/dev/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/dev/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/dev/workspaces/') + 1), '/', 1) ELSE NULL END) = $2) \
+            AND ($2::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/sulion/repos/%' THEN split_part(substr(asm.cwd, length('/home/sulion/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/sulion/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/sulion/workspaces/') + 1), '/', 1) ELSE NULL END) = $2) \
             AND ( \
                 $3::UUID IS NULL \
                 OR o.session_uuid > $3 \

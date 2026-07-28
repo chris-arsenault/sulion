@@ -21,8 +21,8 @@ pub(super) fn configure_pty_environment(
 ) {
     cmd.env_clear();
 
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/dev".to_string());
-    let user = std::env::var("USER").unwrap_or_else(|_| "dev".to_string());
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/sulion".to_string());
+    let user = std::env::var("USER").unwrap_or_else(|_| "sulion".to_string());
     cmd.env("HOME", &home);
     cmd.env("USER", &user);
     cmd.env("LOGNAME", &user);
@@ -60,7 +60,7 @@ pub(super) fn configure_pty_environment(
             "SULION_CANONICAL_REPO",
             std::env::var("SULION_REPOS_ROOT")
                 .map(|root| PathBuf::from(root).join(&workspace.repo_name))
-                .unwrap_or_else(|_| PathBuf::from("/home/dev/repos").join(&workspace.repo_name))
+                .unwrap_or_else(|_| PathBuf::from("/home/sulion/repos").join(&workspace.repo_name))
                 .to_string_lossy()
                 .as_ref(),
         );

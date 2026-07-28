@@ -24,11 +24,11 @@ const E2E_BROKER_REGISTRATION_TOKEN = "sulion-e2e-registration-token";
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sulion-e2e-"));
 const containerPaths = {
-  reposRoot: "/home/dev/repos",
-  workspacesRoot: "/home/dev/workspaces",
-  libraryRoot: "/home/dev/.sulion/library",
-  claudeProjects: "/home/dev/.claude/projects",
-  codexSessions: "/home/dev/.codex/sessions",
+  reposRoot: "/home/sulion/repos",
+  workspacesRoot: "/home/sulion/workspaces",
+  libraryRoot: "/home/sulion/.sulion/library",
+  claudeProjects: "/home/sulion/.claude/projects",
+  codexSessions: "/home/sulion/.codex/sessions",
 };
 
 let dockerNetworkName = "";
@@ -450,13 +450,13 @@ async function enrollNode() {
       "--user",
       "root",
       "-v",
-      `${nodeVolumeName}:/home/dev`,
+      `${nodeVolumeName}:/home/sulion`,
       "--entrypoint",
       "chown",
       BACKEND_IMAGE,
       "-R",
       "7321:7321",
-      "/home/dev",
+      "/home/sulion",
     ],
     { cwd: REPO_ROOT },
   );
@@ -531,7 +531,7 @@ function startNodeContainer(dbUrl, nodeId) {
       "-e",
       "SULION_NODE_PRIVATE_KEY_PATH=/var/lib/sulion-node/private-key.pk8",
       "-e",
-      "SULION_NODE_RUN_USER=dev",
+      "SULION_NODE_RUN_USER=sulion",
       "-e",
       "SULION_NODE_RUN_UID=7321",
       "-e",
@@ -555,7 +555,7 @@ function startNodeContainer(dbUrl, nodeId) {
       "-e",
       `SULION_SECRET_BROKER_REGISTRATION_TOKEN=${E2E_BROKER_REGISTRATION_TOKEN}`,
       "-v",
-      `${nodeVolumeName}:/home/dev`,
+      `${nodeVolumeName}:/home/sulion`,
       "-v",
       `${nodeKeyVolumeName}:/var/lib/sulion-node:ro`,
       "--entrypoint",
@@ -588,7 +588,7 @@ function startIngesterContainer(dbUrl) {
       "-e",
       `SULION_CODEX_SESSIONS=${containerPaths.codexSessions}`,
       "-v",
-      `${nodeVolumeName}:/home/dev:ro`,
+      `${nodeVolumeName}:/home/sulion:ro`,
       "--entrypoint",
       "/usr/bin/dumb-init",
       BACKEND_IMAGE,

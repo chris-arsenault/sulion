@@ -1,12 +1,12 @@
 # Sulion PTY Toolset
 
 This file is baked into the Sulion backend image at `/opt/sulion/docs/toolset.md`.
-It lives outside `/home/dev`, so it is not hidden by the workspace bind mount and
+It lives outside `/home/sulion`, so it is not hidden by the workspace bind mount and
 updates whenever the image updates.
 
 ## Shell
 
-PTY sessions run as user `dev` in `/home/dev`. The workspace and repos are
+PTY sessions run as user `sulion` in `/home/sulion`. The workspace and repos are
 bind-mounted there, so user state persists across image updates.
 
 Useful defaults:
