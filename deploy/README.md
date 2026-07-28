@@ -28,11 +28,13 @@ avoids duplicating the large workbench image while preserving independently
 restartable processes. A later image optimization may make the control image
 smaller without changing the runtime boundary.
 
-Render a role before applying it:
+Render a role before applying it. The dedicated host keeps host-owned and
+control-plane-delivered values in separate files, delivered last so it wins:
 
 ```bash
 docker compose \
-  --env-file /var/lib/sulion/config/runtime.env \
+  --env-file /var/lib/sulion/config/bootstrap.env \
+  --env-file /var/lib/sulion/node/delivered.env \
   -f compose.yaml \
   -f deploy/compose.dedicated.yaml \
   config
@@ -48,6 +50,11 @@ and Codex transcript mounts. Because the node uses host networking and mounts
 mounts, published ports, Compose, BuildKit, and interactive commands retain
 normal Docker semantics.
 
-Copy `dedicated.env.example` to the root-readable runtime path and replace every
-placeholder through the host's secret provisioning path. Do not commit the
-result.
+On the NixOS enclave neither file is written by hand: `sulion-node-bootstrap`
+generates the host half, and `sulion-node` writes the delivered half itself
+once an operator approves its identity key in the UI. See
+[`../nix/README.md`](../nix/README.md).
+
+`dedicated.env.example` documents the complete field contract for a generic
+Linux node that is *not* using the NixOS bootstrap. Such a host must be given
+the shared credentials some other way; do not commit the result.

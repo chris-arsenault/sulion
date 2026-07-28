@@ -22,6 +22,7 @@ mod plan_routes;
 pub(crate) mod repo_lifecycle_routes;
 mod repo_routes;
 mod routes;
+mod session_launch;
 mod session_routes;
 mod stats;
 mod timeline_routes;

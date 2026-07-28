@@ -395,6 +395,11 @@ function startBackendContainer(dbUrl) {
     "SULION_LIBRARY_ROOT=/var/empty/sulion/library",
     "-e",
     "SULION_ENABLE_E2E_FIXTURES=1",
+    // The suite's node lives on an ephemeral Docker network, not the dedicated
+    // LAN, so the node source boundary is explicitly disabled here rather than
+    // inheriting the production default.
+    "-e",
+    "SULION_NODE_LAN_CIDR=",
     "-e",
     `SULION_SECRET_BROKER_URL=http://${brokerContainerName}:8081`,
     "-e",

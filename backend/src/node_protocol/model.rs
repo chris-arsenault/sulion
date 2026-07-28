@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 pub const NODE_PROTOCOL_VERSION: u32 = 1;
+/// LAN the dedicated node must connect from. Node sockets arriving from any
+/// other source are refused before a challenge is issued.
+pub const DEFAULT_NODE_LAN_CIDR: &str = "192.168.66.0/24";
 pub const DEDICATED_NODE_ID: Uuid = Uuid::from_u128(0x019d4f28_88ac_7a80_932c_b0f53a0708f4);
 pub const DEFAULT_HEARTBEAT_INTERVAL_SECS: u64 = 5;
 pub const DEFAULT_HEARTBEAT_TIMEOUT_SECS: u64 = 20;
@@ -29,6 +32,14 @@ pub struct NodeHello {
     pub protocol_version: u32,
     #[serde(default)]
     pub public_key: Option<String>,
+    /// Node-chosen freshness. Control signs over it, so a proof captured from
+    /// one connection cannot be replayed into another.
+    #[serde(default)]
+    pub node_nonce: String,
+    /// WireGuard public key offered for peering. Present from the first
+    /// cleartext enrollment; control returns the peering once approved.
+    #[serde(default)]
+    pub tunnel_public_key: Option<String>,
     pub signature: String,
 }
 
@@ -46,6 +57,14 @@ impl NodeHello {
         if let Some(public_key) = &self.public_key {
             fields.push(public_key.clone());
         }
+        // Appended rather than inserted so an older node's signature, which
+        // covers neither field, still verifies against the same construction.
+        if !self.node_nonce.is_empty() {
+            fields.push(self.node_nonce.clone());
+        }
+        if let Some(tunnel_public_key) = &self.tunnel_public_key {
+            fields.push(tunnel_public_key.clone());
+        }
         fields.join("\n").into_bytes()
     }
 
@@ -60,6 +79,101 @@ impl NodeHello {
 pub struct HelloAck {
     pub protocol_version: u32,
     pub heartbeat_interval_secs: u64,
+    /// Control's proof that it holds the identity this node pinned. Absent
+    /// only from the in-process loopback runtime, which has no network peer to
+    /// impersonate. A node that has pinned a key treats absence as a refusal,
+    /// so this cannot be stripped to force a downgrade.
+    #[serde(default)]
+    pub control_proof: Option<ControlHelloProof>,
+    /// WireGuard peering granted to this node, present once it is approved.
+    #[serde(default)]
+    pub tunnel: Option<TunnelPeering>,
+}
+
+/// Control's signature over the handshake, carrying the key that made it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ControlHelloProof {
+    pub public_key: String,
+    pub signature: String,
+}
+
+impl ControlHelloProof {
+    pub fn signing_payload(&self, challenge: &ControlChallenge, hello: &NodeHello) -> Vec<u8> {
+        [
+            "sulion-control-handshake-v1",
+            &challenge.challenge_id.to_string(),
+            &challenge.nonce,
+            &hello.node_nonce,
+            &hello.node_id.to_string(),
+            &hello.boot_id.to_string(),
+            &hello.protocol_version.to_string(),
+            &self.public_key,
+        ]
+        .join("\n")
+        .into_bytes()
+    }
+
+    pub fn decode_signature(&self) -> anyhow::Result<Vec<u8>> {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(&self.signature)
+            .map_err(|err| anyhow::anyhow!("invalid control proof encoding: {err}"))
+    }
+}
+
+/// The WireGuard peering control grants an approved node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TunnelPeering {
+    /// Control's WireGuard public key.
+    pub control_public_key: String,
+    /// Address this node takes on the tunnel, in CIDR form.
+    pub node_address: String,
+    /// Control's address on the tunnel; the node's only allowed destination.
+    pub control_address: String,
+    /// `host:port` the node dials to establish the tunnel.
+    pub endpoint: String,
+    /// Control URL reachable once the tunnel is up. The node moves to this for
+    /// everything past enrollment, so session traffic never crosses cleartext.
+    pub control_url: String,
+}
+
+/// Signing payload binding a configuration digest to the node it is sent to.
+pub fn config_signing_payload(digest: &str, node_nonce: &str) -> Vec<u8> {
+    ["sulion-node-config-v1", digest, node_nonce]
+        .join("\n")
+        .into_bytes()
+}
+
+/// Runtime configuration the control plane hands to an approved node.
+///
+/// Sent as `control.node_config` immediately after the handshake acknowledgment,
+/// so a node that holds only its identity key can reach a running state without
+/// any secret having been placed on it by hand.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeConfigPayload {
+    pub digest: String,
+    pub values: std::collections::BTreeMap<String, String>,
+    /// Control's signature over the digest, bound to the receiving node's
+    /// nonce. Separate from the handshake proof so the payload stays
+    /// tamper-evident on a connection that is authenticated but not encrypted.
+    #[serde(default)]
+    pub signature: Option<String>,
+}
+
+impl NodeConfigPayload {
+    /// The "nothing to deliver" reply. Sent so a node on a deployment that
+    /// configures its nodes some other way learns that immediately instead of
+    /// waiting for a timeout.
+    pub fn empty() -> Self {
+        Self {
+            digest: String::new(),
+            values: Default::default(),
+            signature: None,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -406,6 +520,8 @@ mod tests {
             node_id: Uuid::nil(),
             boot_id: Uuid::nil(),
             protocol_version: 1,
+            node_nonce: "node-nonce".into(),
+            tunnel_public_key: None,
             public_key: Some("public-key".into()),
             signature: String::new(),
         }

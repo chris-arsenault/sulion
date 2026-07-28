@@ -1,8 +1,13 @@
 pub mod client;
+pub mod config;
+pub mod identity;
+mod lan;
 mod loopback;
 pub mod model;
+pub mod pin;
 mod store;
 mod transport;
+pub mod tunnel;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -16,13 +21,19 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, watch, RwLock};
 use uuid::Uuid;
 
+pub use config::NodeRuntimeConfig;
+pub use identity::ControlIdentity;
+pub use lan::{NodeLanGuard, NodeSourcePolicy, SourceRefusal};
 pub use model::{
-    NodeHello, NodeRequestKind, NodeView, RequestResultPayload, RequestResultStatus,
-    TerminalBytesPayload, TerminalDeadPayload, TerminalResizePayload, WireEnvelope,
-    DEDICATED_NODE_ID, DEFAULT_HEARTBEAT_INTERVAL_SECS, DEFAULT_HEARTBEAT_TIMEOUT_SECS,
+    ControlHelloProof, NodeConfigPayload, NodeHello, NodeRequestKind, NodeView,
+    RequestResultPayload, RequestResultStatus, TerminalBytesPayload, TerminalDeadPayload,
+    TerminalResizePayload, TunnelPeering, WireEnvelope, DEDICATED_NODE_ID,
+    DEFAULT_HEARTBEAT_INTERVAL_SECS, DEFAULT_HEARTBEAT_TIMEOUT_SECS, DEFAULT_NODE_LAN_CIDR,
     MAX_NODE_FRAME_BYTES, NODE_PROTOCOL_VERSION,
 };
+pub use pin::{ControlPin, PinOutcome};
 pub use transport::{admin_router, public_router};
+pub use tunnel::{ApprovedPeer, TunnelPolicy};
 
 use model::HelloAck;
 use store::NodeStore;
@@ -51,7 +62,6 @@ pub enum NodeProtocolError {
     Cryptography(String),
 }
 
-#[derive(Clone)]
 pub struct NodeControl {
     store: NodeStore,
     active: Arc<RwLock<HashMap<Uuid, ActiveConnection>>>,
@@ -59,6 +69,18 @@ pub struct NodeControl {
     terminal_streams: Arc<RwLock<HashMap<Uuid, mpsc::Sender<TerminalEvent>>>>,
     heartbeat_interval_seconds: u64,
     heartbeat_timeout_seconds: u64,
+    /// Runtime configuration handed to a node once it authenticates. Unset
+    /// leaves nodes to their own environment, which is how the portable
+    /// standalone deployment and the integration suite run.
+    delivered_config: std::sync::OnceLock<NodeRuntimeConfig>,
+    /// Source-address boundary for inbound node sockets. Unset admits every
+    /// source; the control plane applies its policy during startup.
+    source_policy: std::sync::OnceLock<NodeSourcePolicy>,
+    /// Signing identity a node pins on first pairing. Unset on the loopback
+    /// and test paths, which have no network peer to impersonate.
+    identity: std::sync::OnceLock<ControlIdentity>,
+    /// WireGuard peering offered to approved nodes.
+    tunnel: std::sync::OnceLock<tunnel::TunnelPolicy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +155,9 @@ pub(crate) struct RegisteredConnection {
     pub(crate) connection_id: Uuid,
     pub(crate) node_id: Uuid,
     pub(crate) boot_id: Uuid,
+    /// Bound into the configuration signature so a payload cannot be replayed
+    /// onto a different connection.
+    pub(crate) node_nonce: String,
     pub(crate) ack: HelloAck,
     pub(crate) outbound: mpsc::Receiver<WireEnvelope>,
     pub(crate) canceled: watch::Receiver<bool>,
@@ -167,11 +192,34 @@ impl NodeControl {
             terminal_streams: Arc::new(RwLock::new(HashMap::new())),
             heartbeat_interval_seconds,
             heartbeat_timeout_seconds,
+            delivered_config: std::sync::OnceLock::new(),
+            source_policy: std::sync::OnceLock::new(),
+            identity: std::sync::OnceLock::new(),
+            tunnel: std::sync::OnceLock::new(),
         })
     }
 
+    /// Approves a node's pending identity, and its offered tunnel key with it.
+    ///
+    /// One press accepts both, so an operator never has to reason about them
+    /// separately, and a node cannot rotate its tunnel key unnoticed.
     pub async fn approve_pairing(&self, node_id: Uuid) -> Result<(), NodeProtocolError> {
-        self.store.approve_pairing(node_id).await?;
+        let address = match self.tunnel_policy() {
+            Some(policy) => {
+                let taken = self
+                    .store
+                    .taken_tunnel_addresses()
+                    .await?
+                    .into_iter()
+                    .filter_map(|address| address.parse().ok())
+                    .collect::<Vec<_>>();
+                Some(policy.allocate(&taken)?.to_string())
+            }
+            None => None,
+        };
+        self.store
+            .approve_pairing(node_id, address.as_deref())
+            .await?;
         self.cancel_active(node_id).await;
         Ok(())
     }
@@ -220,36 +268,6 @@ impl NodeControl {
         }
     }
 
-    pub async fn open_terminal(
-        self: &Arc<Self>,
-        node_id: Uuid,
-        session_id: Uuid,
-    ) -> Result<TerminalAttachment, NodeProtocolError> {
-        let boot_id = self.active_boot(node_id).await?;
-        let stream_id = Uuid::new_v4();
-        let (events_tx, events_rx) = mpsc::channel(256);
-        self.terminal_streams
-            .write()
-            .await
-            .insert(stream_id, events_tx);
-        let mut envelope = WireEnvelope::new(node_id, boot_id, "terminal.attach");
-        envelope.session_id = Some(session_id);
-        envelope.stream_id = Some(stream_id);
-        if let Err(err) = self.send_envelope(node_id, envelope).await {
-            self.terminal_streams.write().await.remove(&stream_id);
-            return Err(err);
-        }
-        Ok(TerminalAttachment {
-            sender: TerminalSender {
-                control: self.clone(),
-                node_id,
-                session_id,
-                stream_id,
-            },
-            events: events_rx,
-        })
-    }
-
     pub async fn first_available_node(&self) -> Result<Uuid, NodeProtocolError> {
         self.active
             .read()
@@ -258,46 +276,6 @@ impl NodeControl {
             .copied()
             .min()
             .ok_or(NodeProtocolError::Unavailable)
-    }
-
-    pub async fn expire_heartbeats_at(
-        &self,
-        now: DateTime<Utc>,
-    ) -> Result<usize, NodeProtocolError> {
-        let expired = self.store.expire_heartbeats(now).await?;
-        if expired.is_empty() {
-            return Ok(0);
-        }
-        let mut active = self.active.write().await;
-        for (node_id, _boot_id, connection_id) in &expired {
-            if active
-                .get(node_id)
-                .is_some_and(|connection| connection.connection_id == *connection_id)
-            {
-                if let Some(connection) = active.remove(node_id) {
-                    let _ = connection.cancel.send(true);
-                }
-            }
-        }
-        Ok(expired.len())
-    }
-
-    pub async fn run_heartbeat_monitor(self: Arc<Self>) {
-        let cadence = std::time::Duration::from_secs(
-            self.heartbeat_interval_seconds
-                .clamp(1, self.heartbeat_timeout_seconds),
-        );
-        let mut interval = tokio::time::interval(cadence);
-        loop {
-            interval.tick().await;
-            match self.expire_heartbeats_at(Utc::now()).await {
-                Ok(count) if count > 0 => {
-                    tracing::warn!(count, "development node heartbeat expired");
-                }
-                Ok(_) => {}
-                Err(err) => tracing::warn!(%err, "node heartbeat expiry check failed"),
-            }
-        }
     }
 
     pub async fn start_loopback(
@@ -363,18 +341,35 @@ impl NodeControl {
             .verify(&hello.signing_payload(challenge), &signature)
             .map_err(|_| NodeProtocolError::AuthenticationFailed)?;
 
+        let offered_tunnel_key = hello
+            .tunnel_public_key
+            .as_deref()
+            .map(tunnel::decode_tunnel_public_key)
+            .transpose()?;
+
         if let Some(offered_public_key) = offered_public_key {
             let approved = credential
                 .as_ref()
                 .and_then(|credential| credential.public_key.as_deref());
             if approved != Some(offered_public_key.as_slice()) {
                 self.store
-                    .request_pairing(hello.node_id, &offered_public_key)
+                    .request_pairing(
+                        hello.node_id,
+                        &offered_public_key,
+                        offered_tunnel_key.as_deref(),
+                    )
                     .await?;
                 return Err(NodeProtocolError::PairingRequired);
             }
         }
-        self.register(hello).await
+
+        // Proving control's identity is what lets an already-paired node refuse
+        // anything else that answers on this address.
+        let proof = self
+            .identity()
+            .map(|identity| identity.prove_handshake(challenge, &hello));
+        let peering = self.peering_for(hello.node_id).await;
+        self.register(hello, proof, peering).await
     }
 
     pub(crate) async fn register_internal(
@@ -382,10 +377,15 @@ impl NodeControl {
         hello: NodeHello,
     ) -> Result<RegisteredConnection, NodeProtocolError> {
         validate_hello(&hello)?;
-        self.register(hello).await
+        self.register(hello, None, None).await
     }
 
-    async fn register(&self, hello: NodeHello) -> Result<RegisteredConnection, NodeProtocolError> {
+    async fn register(
+        &self,
+        hello: NodeHello,
+        proof: Option<ControlHelloProof>,
+        tunnel: Option<model::TunnelPeering>,
+    ) -> Result<RegisteredConnection, NodeProtocolError> {
         if hello.protocol_version != NODE_PROTOCOL_VERSION {
             return Err(NodeProtocolError::AuthenticationFailed);
         }
@@ -406,18 +406,35 @@ impl NodeControl {
             connection_id,
             node_id: hello.node_id,
             boot_id: hello.boot_id,
-            ack: self.hello_ack(),
+            ack: self.hello_ack(proof, tunnel),
+            node_nonce: hello.node_nonce.clone(),
             outbound: outbound_rx,
             canceled: cancel_rx,
         };
         Ok(registered)
     }
 
-    fn hello_ack(&self) -> HelloAck {
+    /// Builds the acknowledgment, signing it when this control plane has an
+    /// identity and attaching the peering an approved node has been granted.
+    fn hello_ack(
+        &self,
+        proof: Option<ControlHelloProof>,
+        tunnel: Option<model::TunnelPeering>,
+    ) -> HelloAck {
         HelloAck {
             protocol_version: NODE_PROTOCOL_VERSION,
             heartbeat_interval_secs: self.heartbeat_interval_seconds,
+            control_proof: proof,
+            tunnel,
         }
+    }
+
+    pub(crate) fn identity(&self) -> Option<&ControlIdentity> {
+        self.identity.get()
+    }
+
+    pub(crate) fn tunnel_policy(&self) -> Option<&tunnel::TunnelPolicy> {
+        self.tunnel.get()
     }
 
     pub(crate) async fn receive_envelope(
@@ -543,6 +560,82 @@ impl NodeControl {
             .await
             .map_err(|_| NodeProtocolError::Unavailable)
     }
+}
+
+/// Liveness: expiring connections whose node stopped heartbeating.
+impl NodeControl {
+    pub async fn expire_heartbeats_at(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<usize, NodeProtocolError> {
+        let expired = self.store.expire_heartbeats(now).await?;
+        if expired.is_empty() {
+            return Ok(0);
+        }
+        let mut active = self.active.write().await;
+        for (node_id, _boot_id, connection_id) in &expired {
+            if active
+                .get(node_id)
+                .is_some_and(|connection| connection.connection_id == *connection_id)
+            {
+                if let Some(connection) = active.remove(node_id) {
+                    let _ = connection.cancel.send(true);
+                }
+            }
+        }
+        Ok(expired.len())
+    }
+
+    pub async fn run_heartbeat_monitor(self: Arc<Self>) {
+        let cadence = std::time::Duration::from_secs(
+            self.heartbeat_interval_seconds
+                .clamp(1, self.heartbeat_timeout_seconds),
+        );
+        let mut interval = tokio::time::interval(cadence);
+        loop {
+            interval.tick().await;
+            match self.expire_heartbeats_at(Utc::now()).await {
+                Ok(count) if count > 0 => {
+                    tracing::warn!(count, "development node heartbeat expired");
+                }
+                Ok(_) => {}
+                Err(err) => tracing::warn!(%err, "node heartbeat expiry check failed"),
+            }
+        }
+    }
+}
+
+/// Terminal stream plumbing between browser attachers and the owning node.
+impl NodeControl {
+    pub async fn open_terminal(
+        self: &Arc<Self>,
+        node_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<TerminalAttachment, NodeProtocolError> {
+        let boot_id = self.active_boot(node_id).await?;
+        let stream_id = Uuid::new_v4();
+        let (events_tx, events_rx) = mpsc::channel(256);
+        self.terminal_streams
+            .write()
+            .await
+            .insert(stream_id, events_tx);
+        let mut envelope = WireEnvelope::new(node_id, boot_id, "terminal.attach");
+        envelope.session_id = Some(session_id);
+        envelope.stream_id = Some(stream_id);
+        if let Err(err) = self.send_envelope(node_id, envelope).await {
+            self.terminal_streams.write().await.remove(&stream_id);
+            return Err(err);
+        }
+        Ok(TerminalAttachment {
+            sender: TerminalSender {
+                control: self.clone(),
+                node_id,
+                session_id,
+                stream_id,
+            },
+            events: events_rx,
+        })
+    }
 
     async fn close_terminal(&self, node_id: Uuid, stream_id: Uuid) {
         self.terminal_streams.write().await.remove(&stream_id);
@@ -594,6 +687,98 @@ impl NodeControl {
             let _ = self.send_envelope(envelope.node_id, detach).await;
         }
         Ok(())
+    }
+}
+
+/// Deployment policy: what this control plane proves about itself, what it
+/// is willing to hand a node, and where a node may connect from.
+impl NodeControl {
+    /// Applies the deployment's node admission and delivery policy.
+    ///
+    /// Called once during control-plane startup. Every other construction path
+    /// (tests, loopback, standalone) leaves the policy unset, which admits any
+    /// source and delivers no configuration.
+    pub fn apply_policy(
+        &self,
+        delivered_config: Option<NodeRuntimeConfig>,
+        source_policy: NodeSourcePolicy,
+        identity: Option<ControlIdentity>,
+        tunnel: Option<TunnelPolicy>,
+    ) -> anyhow::Result<()> {
+        if let Some(delivered_config) = delivered_config {
+            self.delivered_config
+                .set(delivered_config)
+                .map_err(|_| anyhow::anyhow!("node runtime configuration is already applied"))?;
+        }
+        if let Some(identity) = identity {
+            self.identity
+                .set(identity)
+                .map_err(|_| anyhow::anyhow!("control identity is already applied"))?;
+        }
+        if let Some(tunnel) = tunnel {
+            self.tunnel
+                .set(tunnel)
+                .map_err(|_| anyhow::anyhow!("tunnel policy is already applied"))?;
+        }
+        self.source_policy
+            .set(source_policy)
+            .map_err(|_| anyhow::anyhow!("node source boundary is already applied"))
+    }
+
+    pub(crate) fn source_policy(&self) -> &NodeSourcePolicy {
+        self.source_policy
+            .get()
+            .unwrap_or(&lan::UNRESTRICTED_POLICY)
+    }
+
+    pub(crate) fn delivered_config(&self) -> Option<&NodeRuntimeConfig> {
+        self.delivered_config.get()
+    }
+}
+
+/// Tunnel-facing behaviour, split out to keep the primary implementation
+/// block within the structure limits.
+impl NodeControl {
+    /// Whether credentials may cross this connection.
+    ///
+    /// When a tunnel is configured, they may not leave it. Enrollment happens
+    /// on a cleartext hop by necessity — the tunnel cannot exist before the
+    /// keys are exchanged — so that hop is allowed to carry public keys and
+    /// nothing else. A deployment with no tunnel keeps its previous behaviour.
+    pub(crate) fn may_deliver_credentials(&self, client: Option<std::net::IpAddr>) -> bool {
+        let Some(policy) = self.tunnel_policy() else {
+            return true;
+        };
+        match client {
+            Some(std::net::IpAddr::V4(address)) => policy.contains(address),
+            _ => false,
+        }
+    }
+
+    /// Peers the tunnel sidecar should configure.
+    pub async fn approved_peers(&self) -> Result<Vec<ApprovedPeer>, NodeProtocolError> {
+        Ok(self
+            .store
+            .approved_peers()
+            .await?
+            .into_iter()
+            .filter_map(|(node_id, public_key, address)| {
+                Some(ApprovedPeer {
+                    node_id,
+                    public_key: tunnel::encode_tunnel_key(&public_key),
+                    address: address.parse().ok()?,
+                })
+            })
+            .collect())
+    }
+
+    /// The peering an approved node should use, if the deployment runs a tunnel
+    /// and this node has been granted an address.
+    async fn peering_for(&self, node_id: Uuid) -> Option<model::TunnelPeering> {
+        let policy = self.tunnel_policy()?;
+        let assigned = self.store.tunnel_assignment(node_id).await.ok()??;
+        let address = assigned.parse().ok()?;
+        Some(policy.peering_for(address))
     }
 }
 

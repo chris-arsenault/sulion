@@ -80,8 +80,106 @@ or separate enrollment service.
 The long-lived endpoint is `GET /ws/nodes`. Control sends a random challenge.
 The node signs the challenge, stable node ID, fresh boot ID, and exact protocol
 version. Control verifies the enrolled public key before accepting messages.
-Production transport uses TLS at
-`wss://sulion.services.ahara.io/ws/nodes`.
+
+Nodes reach `/ws/nodes` on the backend's own LAN-bound port,
+`192.168.66.3:30081`, not through the frontend proxy — which returns 404 for
+that path — and no upstream registration points at it, so a node can never pair
+over the public reverse proxy.
+
+That port is for **enrollment only**. Everything past it runs inside a
+WireGuard tunnel terminated in the control process's own network namespace by
+the `node-tunnel` sidecar, which holds `NET_ADMIN` so the control plane does
+not. Because `wg0` is an interface the control process binds directly, there is
+no forwarding or address translation in the path and a node's real tunnel
+address is what the source check sees.
+
+The tunnel cannot exist before the two ends know each other's keys, so first
+contact is staged:
+
+```text
+1st connect   cleartext, 192.168.66.3:30081   node offers its WireGuard public key
+              → PairingRequired, operator approves in the UI
+2nd connect   cleartext                        control returns the peering; no credentials
+              → node writes wg0.conf, host brings the interface up
+3rd connect   ws://10.88.0.1:8080/ws/nodes     credentials delivered over the tunnel
+thereafter    tunnel only
+```
+
+Credentials are refused on any connection that did not arrive from the tunnel
+subnet, so they never cross the cleartext hop — that hop carries public keys and
+the peering, and nothing else. Approving a node accepts its identity key and its
+tunnel key together and allocates its tunnel address, so one press does all of
+it and a node cannot rotate its tunnel key unnoticed.
+
+`AllowedIPs` on the node side is control's single address, not the subnet: the
+tunnel exists to reach the control plane, and nodes have no business routing to
+each other through it. The sidecar reconciles the approved-peer set every few
+seconds, so revoking an approval removes the peer rather than leaving a working
+interface until the next restart.
+
+Connecting directly is what makes the boundary checkable: the backend sees each
+node's real address and refuses any source outside `SULION_NODE_LAN_CIDR`
+before issuing a challenge. Docker preserves the source address for off-host
+clients, which every node is. A forwarded `X-Real-IP` is honoured only from a
+peer inside `SULION_NODE_TRUSTED_PROXY_CIDR`, which is unset in this deployment
+and therefore trusts nobody; it exists for a deployment that does front the node
+port with a proxy.
+
+The handshake runs both ways. The node signs control's challenge, and control
+signs back over that challenge, the node's own nonce, and its identity, in
+`control.hello_ack`:
+
+```text
+control.hello_ack
+  control_proof.public_key   — control's Ed25519 identity
+  control_proof.signature    — over challenge, node nonce, node and boot id
+```
+
+A node records that key the first time it pairs and requires it on every later
+connection. A different key — or a missing proof, which would otherwise be a
+free downgrade — is refused outright. First pairing is therefore the one moment
+a node can be captured, which is accepted because the machine is being
+installed by hand at that point. The pin lives at
+`/var/lib/sulion-node/control-key.pub`, root-owned, and survives container
+replacement, release upgrades, and `nixos-rebuild`.
+
+Recovering from a legitimately replaced control plane is deliberate:
+
+```bash
+sudo rm /var/lib/sulion/node/control-key.pub
+sudo systemctl reload sulion-stack.service
+```
+
+The control identity itself lives in the `control_identity` table, so it
+survives redeploys without a new dataset. Anything able to read it can already
+read the credentials control hands out.
+
+Approval is also the node's only bootstrap. A node holds nothing but its
+identity key, so once control accepts the handshake it sends
+`control.node_config` immediately after `control.hello_ack`:
+
+```text
+control.node_config
+  digest   — SHA-256 over the canonical key=value rendering
+  values   — the forwarded environment map
+```
+
+`values` carries a fixed key list (database credentials, retrieval token,
+broker registration token). **Both ends enforce that list.** The receiving check
+is the one that matters: the file the node writes is consumed as a Compose
+`--env-file` and as `EnvironmentFile=` for a root systemd unit, where Compose
+interpolates it into image references, bind-mount sources, and the
+privilege-drop identity. An unexpected key is refused outright rather than
+filtered, because its presence means the peer is not the control plane this
+node expects.
+
+`signature` covers the digest and is bound to the connection's node nonce, so
+the payload stays tamper-evident even though the channel is not yet encrypted,
+and cannot be lifted onto another connection. The node writes the map plus
+`SULION_NODE_CONFIG_DIGEST` to root-owned host state and its host activates the
+stack around it. A node whose
+own environment already carries the delivered digest simply proceeds. Nothing
+is copied between machines and no token is handled by hand.
 
 ## Wire format
 

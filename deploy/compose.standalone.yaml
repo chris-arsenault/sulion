@@ -11,7 +11,10 @@ services:
       SULION_SECRET_BROKER_REGISTRATION_TOKEN: ${SULION_SECRET_BROKER_REGISTRATION_TOKEN}
       SULION_CODE_INTEL_URL: http://sulion-code-intel:8084
       SULION_RUNNER_URL: http://sulion-runner:8082
-    ports:
+    # Replaced, not extended: this role hosts the node runtime in-process, so
+    # there is no remote node and the LAN node control port would be surface
+    # with nothing on the other end of it.
+    ports: !override
       - "${SULION_DEV_BIND_ADDRESS:-192.168.66.3}:${SULION_DEV_PORT_RANGE:-26000-26010}:${SULION_DEV_PORT_RANGE:-26000-26010}"
     volumes:
       - ${SULION_HOME_HOST_PATH:-/mnt/apps/apps/sulion}:/home/dev
@@ -24,3 +27,9 @@ services:
 
   runner:
     profiles: !reset []
+
+  # This role hosts the node runtime in-process, so there is no remote node to
+  # build a tunnel to.
+  node-tunnel:
+    profiles:
+      - control-plane

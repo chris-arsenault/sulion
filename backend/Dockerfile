@@ -45,6 +45,8 @@ RUN dnf install -y --setopt=install_weak_deps=False dnf-plugins-core epel-releas
     unzip \
     libgomp \
     socat \
+    iproute \
+    wireguard-tools \
   && dnf clean all \
   && rm -rf /var/cache/dnf \
   && ln -sf /usr/bin/python3.12 /usr/local/bin/python3 \

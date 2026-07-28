@@ -13,10 +13,13 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
+use super::config::NodeRuntimeConfig;
 use super::model::{
-    ControlChallenge, ControlWireMessage, FragmentAssembler, HelloAck, NodeWireMessage,
-    RequestResultPayload, TerminalBytesPayload, TerminalResizePayload,
+    ControlChallenge, ControlWireMessage, FragmentAssembler, HelloAck, NodeConfigPayload,
+    NodeWireMessage, RequestResultPayload, TerminalBytesPayload, TerminalResizePayload,
+    TunnelPeering,
 };
+use super::pin::{ControlPin, PinOutcome};
 use super::{
     heartbeat_envelope, NodeHello, NodeRequestKind, RequestResultStatus, WireEnvelope,
     NODE_PROTOCOL_VERSION,
@@ -24,12 +27,21 @@ use super::{
 use crate::node_runtime::{NodeRuntime, SessionInputRequest, SessionResizeRequest};
 
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
+/// Cadence for re-attempting enrollment. Long enough that an unapproved node
+/// waiting on a human is not a busy loop, short enough that clicking approve
+/// feels immediate.
+const ENROLL_BACKOFF: Duration = Duration::from_secs(5);
+/// How long to wait for `control.node_config` after the acknowledgment before
+/// concluding this deployment delivers no configuration.
+const CONFIG_WAIT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct NodeClientConfig {
     pub control_url: String,
     pub node_id: Uuid,
     pub private_key_path: PathBuf,
+    /// WireGuard public key offered for peering, once this node has one.
+    pub tunnel_public_key: Option<String>,
 }
 
 impl NodeClientConfig {
@@ -54,10 +66,16 @@ impl NodeClientConfig {
             std::env::var("SULION_NODE_PRIVATE_KEY_PATH")
                 .map_err(|_| anyhow::anyhow!("SULION_NODE_PRIVATE_KEY_PATH must be set"))?,
         );
+        // Generated on first boot and persisted beside the identity key, so
+        // the peering an operator approved keeps matching across restarts.
+        let tunnel_keypair =
+            super::tunnel::TunnelKeypair::load_or_create(&super::tunnel::node_key_path())?;
+        let tunnel_public_key = Some(tunnel_keypair.public_key());
         Ok(Self {
             control_url,
             node_id,
             private_key_path,
+            tunnel_public_key,
         })
     }
 }
@@ -72,6 +90,205 @@ pub async fn run(config: NodeClientConfig, runtime: Arc<NodeRuntime>) -> anyhow:
     let key = Arc::new(load_private_key(&config.private_key_path)?);
     run_with_key(config, runtime, key).await
 }
+
+/// Result of one enrollment handshake.
+enum EnrollOutcome {
+    Delivered(NodeConfigPayload, Option<TunnelPeering>),
+    /// Authenticated, but nothing was delivered — either this deployment
+    /// forwards no configuration, or credentials are being withheld until the
+    /// connection arrives over the tunnel whose peering is carried here.
+    NoConfiguration(Option<TunnelPeering>),
+    /// Control closed the handshake, with its stated reason. Normally this is
+    /// "node approval required" and the node is waiting on a human; anything
+    /// else means the peer would not accept this node at all.
+    Rejected(String),
+}
+
+/// What one enrollment established.
+pub struct Enrollment {
+    /// Delivered credentials, withheld until the connection arrives over the
+    /// tunnel.
+    pub config: Option<NodeRuntimeConfig>,
+    /// Peering granted once the node is approved. Present before the config is,
+    /// because the tunnel has to exist before credentials will cross it.
+    pub peering: Option<TunnelPeering>,
+}
+
+/// Obtains runtime configuration over the authenticated channel before the node
+/// has any credentials of its own.
+///
+/// This is the whole bootstrap: the node proves possession of its identity key,
+/// an operator approves the fingerprint once in the UI, and the configuration
+/// that would otherwise have been copied onto the machine by hand arrives here.
+/// Blocks until approval, so a freshly installed enclave simply waits.
+///
+/// `url` moves from the cleartext bootstrap address to the tunnel address as
+/// soon as one has been granted, so only public keys ever cross cleartext.
+pub async fn await_runtime_config(
+    config: &NodeClientConfig,
+    key: &Ed25519KeyPair,
+    boot_id: Uuid,
+    url: &str,
+) -> Enrollment {
+    let mut announced: Option<String> = None;
+    loop {
+        match enroll_once(config, key, boot_id, url).await {
+            Ok(EnrollOutcome::Delivered(payload, peering)) => {
+                match NodeRuntimeConfig::accept(payload) {
+                    Ok(delivered) => {
+                        return Enrollment {
+                            config: Some(delivered),
+                            peering,
+                        }
+                    }
+                    Err(error) => {
+                        // Never write a payload this node did not expect; treat
+                        // it as a hostile or misconfigured peer and retry.
+                        tracing::error!(%error, "rejected delivered node configuration");
+                    }
+                }
+            }
+            Ok(EnrollOutcome::NoConfiguration(peering)) => {
+                return Enrollment {
+                    config: None,
+                    peering,
+                }
+            }
+            Ok(EnrollOutcome::Rejected(reason)) => {
+                // Logged once per distinct reason: this loop runs until a human
+                // acts or the other end is upgraded, and repeating either
+                // message every few seconds would bury everything else.
+                if announced.as_deref() != Some(reason.as_str()) {
+                    if reason == "node approval required" {
+                        tracing::info!(
+                            node_id = %config.node_id,
+                            "awaiting operator approval; approve this node in the Sulion \
+                             stats panel",
+                        );
+                    } else {
+                        tracing::warn!(
+                            node_id = %config.node_id,
+                            %reason,
+                            "control plane refused this node's handshake; retrying. If the \
+                             control plane is still on an older release this clears once it \
+                             is deployed",
+                        );
+                    }
+                    announced = Some(reason);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "node enrollment attempt failed; retrying");
+            }
+        }
+        tokio::time::sleep(ENROLL_BACKOFF).await;
+    }
+}
+
+async fn enroll_once(
+    config: &NodeClientConfig,
+    key: &Ed25519KeyPair,
+    boot_id: Uuid,
+    url: &str,
+) -> anyhow::Result<EnrollOutcome> {
+    let (socket, _) = tokio_tungstenite::connect_async(url).await?;
+    let (mut sink, mut source) = socket.split();
+    let challenge = receive_challenge(&mut source).await?;
+    if challenge.protocol_version != NODE_PROTOCOL_VERSION {
+        anyhow::bail!("control and node protocol versions differ");
+    }
+    let node_nonce = super::random_url_token(32)?;
+    let hello = signed_hello(
+        config.node_id,
+        boot_id,
+        key,
+        &challenge,
+        node_nonce.clone(),
+        config.tunnel_public_key.clone(),
+    );
+    let mut hello_envelope = WireEnvelope::new(config.node_id, boot_id, "node.hello");
+    hello_envelope.protocol_version = hello.protocol_version;
+    send_node_message(
+        &mut sink,
+        NodeWireMessage::Hello {
+            envelope: hello_envelope,
+            hello: hello.clone(),
+        },
+    )
+    .await?;
+
+    // An unapproved node is closed out right after its hello, which is the
+    // normal first-boot path rather than an error.
+    let acknowledgment = match receive_ack(&mut source).await {
+        Ok(acknowledgment) => {
+            if acknowledgment.protocol_version != NODE_PROTOCOL_VERSION {
+                anyhow::bail!("control acknowledged an unexpected protocol version");
+            }
+            acknowledgment
+        }
+        Err(error) => {
+            if let Some(closed) = error.downcast_ref::<ControlClosed>() {
+                return Ok(EnrollOutcome::Rejected(closed.0.clone()));
+            }
+            return Err(error);
+        }
+    };
+
+    // Everything past this point is only safe if this really is the control
+    // plane that paired the node, so establish that before reading any of it.
+    let pin = ControlPin::from_env();
+    match pin.verify(acknowledgment.control_proof.as_ref(), &challenge, &hello)? {
+        PinOutcome::Matched => {}
+        PinOutcome::FirstPairing(public_key) => {
+            pin.record(&public_key)?;
+            tracing::info!(
+                control_key = %public_key,
+                path = %pin.path().display(),
+                "pinned the control plane that paired this node",
+            );
+        }
+        PinOutcome::Unauthenticated => {
+            tracing::warn!("control plane offered no identity; connection is unauthenticated");
+        }
+    }
+    let peering = acknowledgment.tunnel.clone();
+
+    let mut fragments = FragmentAssembler::default();
+    let deadline = tokio::time::Instant::now() + CONFIG_WAIT;
+    loop {
+        let frame = match tokio::time::timeout_at(deadline, source.next()).await {
+            Err(_) => return Ok(EnrollOutcome::NoConfiguration(peering)),
+            Ok(None) => return Ok(EnrollOutcome::Rejected("connection closed".into())),
+            Ok(Some(frame)) => frame?,
+        };
+        let Message::Text(text) = frame else {
+            continue;
+        };
+        let ControlWireMessage::Envelope { envelope } = serde_json::from_str(&text)? else {
+            anyhow::bail!("unexpected control challenge after authentication");
+        };
+        let Some(envelope) = fragments.push(envelope)? else {
+            continue;
+        };
+        if envelope.message_kind == "control.node_config" {
+            let payload: NodeConfigPayload = serde_json::from_value(envelope.payload)?;
+            if payload.is_empty() {
+                return Ok(EnrollOutcome::NoConfiguration(peering));
+            }
+            // The handshake authenticated the peer; this authenticates the
+            // payload itself, which matters while the channel is not encrypted.
+            pin.verify_config(&payload.digest, &node_nonce, payload.signature.as_deref())?;
+            return Ok(EnrollOutcome::Delivered(payload, peering));
+        }
+    }
+}
+
+/// The control plane hung up during the handshake. Carries the reason so the
+/// node can say whether it is waiting on a human or being rejected, which are
+/// very different things to be looking at in a log.
+#[derive(Debug, thiserror::Error)]
+#[error("control closed the node connection: {0}")]
+struct ControlClosed(String);
 
 pub async fn run_with_key(
     config: NodeClientConfig,
@@ -101,7 +318,15 @@ async fn connect_once(
     if challenge.protocol_version != NODE_PROTOCOL_VERSION {
         anyhow::bail!("control and node protocol versions differ");
     }
-    let hello = signed_hello(&runtime, &key, &challenge);
+    let node_nonce = super::random_url_token(32)?;
+    let hello = signed_hello(
+        runtime.node_id(),
+        runtime.boot_id(),
+        &key,
+        &challenge,
+        node_nonce.clone(),
+        config.tunnel_public_key.clone(),
+    );
     let mut hello_envelope = WireEnvelope::new(runtime.node_id(), runtime.boot_id(), "node.hello");
     hello_envelope.protocol_version = hello.protocol_version;
     send_node_message(
@@ -219,6 +444,25 @@ async fn handle_command(
                 runtime.close_terminal(stream_id).await;
             }
         }
+        "control.node_config" => {
+            // Delivered again on every connection. By this point the process has
+            // dropped to the unprivileged runtime identity and can no longer
+            // write root-owned node state, so a rotation is reported and picked
+            // up by the enrollment stage on the next start.
+            let payload: NodeConfigPayload = serde_json::from_value(command.payload)?;
+            if payload.is_empty() {
+                return Ok(());
+            }
+            let delivered = NodeRuntimeConfig::accept(payload)?;
+            if !delivered.matches_current_env() {
+                tracing::warn!(
+                    digest = %delivered.digest(),
+                    keys = ?delivered.key_names(),
+                    "control plane delivered new node configuration; \
+                     it is applied when sulion-node next starts",
+                );
+            }
+        }
         "terminal.input" => {
             let session_id = command
                 .session_id
@@ -260,13 +504,18 @@ async fn handle_command(
 }
 
 fn signed_hello(
-    runtime: &NodeRuntime,
+    node_id: Uuid,
+    boot_id: Uuid,
     key: &Ed25519KeyPair,
     challenge: &ControlChallenge,
+    node_nonce: String,
+    tunnel_public_key: Option<String>,
 ) -> NodeHello {
     let mut hello = NodeHello {
-        node_id: runtime.node_id(),
-        boot_id: runtime.boot_id(),
+        node_id,
+        boot_id,
+        node_nonce,
+        tunnel_public_key,
         protocol_version: NODE_PROTOCOL_VERSION,
         public_key: Some(
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.public_key().as_ref()),
@@ -302,8 +551,17 @@ where
     let frame = tokio::time::timeout(Duration::from_secs(10), source.next())
         .await
         .map_err(|_| anyhow::anyhow!("control acknowledgment timed out"))?
-        .ok_or_else(|| anyhow::anyhow!("control closed before acknowledgment"))??;
+        .ok_or_else(|| ControlClosed("connection closed".into()))??;
     let Message::Text(text) = frame else {
+        // A close here is the control plane declining to acknowledge: either
+        // this node is not approved yet, or it was rejected outright.
+        if let Message::Close(frame) = &frame {
+            let reason = frame
+                .as_ref()
+                .map(|frame| frame.reason.to_string())
+                .unwrap_or_else(|| "no reason given".into());
+            return Err(ControlClosed(reason).into());
+        }
         anyhow::bail!("control acknowledgment must be text");
     };
     let ControlWireMessage::Envelope { envelope } =

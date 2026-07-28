@@ -39,6 +39,10 @@ path = "src/bin/sulion_node.rs"
 name = "sulion-ingester"
 path = "src/bin/sulion_ingester.rs"
 
+[[bin]]
+name = "sulion-node-tunnel"
+path = "src/bin/sulion_node_tunnel.rs"
+
 [dependencies]
 axum = { version = "0.7", features = ["ws", "multipart"] }
 tokio = { version = "1", features = ["full"] }
@@ -87,6 +91,10 @@ tree-sitter-toml-ng = "0.7"
 tree-sitter-typescript = "0.23"
 tree-sitter-yaml = "0.7"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+# WireGuard keys are raw X25519. ring only exposes ephemeral agreement keys,
+# which cannot be persisted, and a node's tunnel key has to outlive its process.
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

@@ -10,3 +10,7 @@ frontend/playwright-report/
 .env.local
 *.log
 .DS_Store
+
+# nix build output symlink
+result
+result-*

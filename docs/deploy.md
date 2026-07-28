@@ -24,12 +24,14 @@ Those break-glass keys live only in the root-owned
 `/var/lib/sulion/config/ssh/authorized_keys`; they are not node credentials,
 broker secrets, or source-controlled host configuration.
 
-The common graph now has eight runtime service roles:
+The common graph now has nine runtime service roles:
 
 - `backend` — main API/control plane; also hosts the loopback runtime only in
   portable standalone mode
 - `node` — dedicated PTY, shadow-emulator, correlation, repo, worktree, file,
   Git, upload, and direct-Docker runtime
+- `node-tunnel` — WireGuard endpoint for the node channel, sharing the control
+  process's network namespace and holding the `NET_ADMIN` it must not
 - `ingester` — sole node-local Claude/Codex JSONL reader
 - `broker` — secret broker, separate container and UID
 - `retrieval` — agent-facing transcript/timeline retrieval API
@@ -59,7 +61,7 @@ Sulion needs three cross-repo infra registrations in `ahara-infra`:
 
 - `infrastructure/terraform/control/project-sulion.tf` grants the deployer role enough IAM to create the Sulion Cognito app client, publish SSM parameters, manage the project-owned ALB listener/certificate/DNS, and deploy the Komodo stack.
 - `infrastructure/terraform/services/db-migrate-truenas.tf` needs a `sulion` entry in `truenas_db_stacks` with `app` and `broker` database registrations so the shared migration Lambda provisions both databases and publishes `/ahara/truenas-db/sulion/app/{username,password}` plus `/ahara/truenas-db/sulion/broker/{username,password}`.
-- `infrastructure/terraform/network/locals.tf` registers `sulion.services.ahara.io` as an `internal` reverse-proxy upstream at `192.168.66.3:30080`, with buffering disabled and WebSocket upgrades enabled. `internal` means Ahara Infra owns nginx and WireGuard ingress while Sulion Terraform owns the public ALB resources.
+- `infrastructure/terraform/network/locals.tf` registers `sulion.services.ahara.io` as an `internal` reverse-proxy upstream at `192.168.66.3:30080`, with buffering disabled and WebSocket upgrades enabled. `internal` means Ahara Infra owns nginx and WireGuard ingress while Sulion Terraform owns the public ALB resources. Ports `30081/tcp` and `51820/udp` are deliberately **not** registered: they are the backend's LAN-only development-node enrollment port and WireGuard endpoint, and routing either publicly would undo the node pairing boundary.
 
 Sulion also carries project-local Terraform under [`infrastructure/terraform/`](</home/dev/repos/sulion/infrastructure/terraform>) that creates its `sulion.services.ahara.io` ALB listener rules, ACM certificate, Route53 records, Cognito app client, and publishes:
 
@@ -220,14 +222,19 @@ available, while filesystem and PTY mutations return `503`.
 UI is at `https://sulion.services.ahara.io/`. The frontend blocks on Cognito
 sign-in. Browser REST and broker-management requests carry the Cognito token;
 PTY WebSockets use a short-lived, one-use ticket minted by an authenticated
-request. The node establishes `wss://sulion.services.ahara.io/ws/nodes`
-outbound and uses service-authenticated `/broker` and `/retrieval` routes.
+request. The node establishes `ws://192.168.66.3:30081/ws/nodes` outbound on
+the LAN and uses service-authenticated `/broker` and `/retrieval` routes over
+the public hostname.
 
 ## Networking
 
 The public path is shared Ahara ALB/WAF → EC2 nginx → WireGuard → the frontend
 published on `192.168.66.3:30080`. The direct LAN URL remains available for
-operations and rollback. Development ports `26000-26010` are published by
+operations and rollback. Development-node pairing does not use that path at
+all: the frontend returns 404 for `/ws/nodes`, and nodes instead reach the
+backend directly on `192.168.66.3:30081`, which no upstream registration points
+at. Because that hop has no proxy in it, the backend sees each node's real
+address and enforces the node LAN on it. Development ports `26000-26010` are published by
 workloads on `sulion-enclave`, not by the TrueNAS backend. A process in a
 Sulion PTY must bind `0.0.0.0` on one of those ports to be reachable from the
 LAN, for example:

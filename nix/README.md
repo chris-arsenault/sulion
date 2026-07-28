@@ -63,7 +63,7 @@ or improvise different storage choices during installation.
 | Console | US keymap, English UTF-8 environment, no graphical desktop |
 | Interactive identity | `sulion`, UID/GID 7321, wheel and NetworkManager member |
 | Remote login | SSH keys only; root SSH and SSH passwords disabled |
-| Node startup | enabled; skipped until its root-owned runtime files exist |
+| Node startup | enabled at boot; waits in the UI for one approval |
 
 No LUKS is an explicit availability choice: this node must recover from a
 power interruption without a local unlock. If physical-at-rest protection
@@ -242,7 +242,7 @@ systemctl is-enabled sulion-stack.service
 Expected results are hostname `sulion-enclave`, root label `nixos`, boot label
 `boot`, UID/GID 7321, an active wired connection, an active system Docker
 daemon, a successful limited container, and an enabled Sulion node unit. The
-unit remains inactive until its runtime environment exists.
+unit starts at boot and waits for its one approval in the UI.
 
 From another LAN machine, connect to `\\sulion-enclave\repos` on Windows or
 `smb://sulion-enclave.local/repos` on macOS and create a test directory. On the
@@ -270,19 +270,48 @@ independently through the node release poller below.
 
 ## Runtime files
 
-The Nix store contains no runtime secrets. Activation creates root-controlled
-paths under `/var/lib/sulion`; provision:
+The Nix store contains no runtime secrets, and **nothing here is provisioned by
+hand**. Activation creates root-controlled paths under `/var/lib/sulion` and
+the machine fills them in itself:
 
+- `/var/lib/sulion/config/bootstrap.env`, written by
+  `sulion-node-bootstrap.service` at every boot. It holds only values this
+  repository already knows — node ID, control URL, host paths, registry, dev
+  port range — plus the current release SHA and a machine-local code
+  intelligence token. No shared credential appears here.
+- `/var/lib/sulion/config/code-intel.token`, generated once with mode `0600`.
+  The node and code-intelligence containers talk over this host's loopback
+  only, so their shared secret never leaves the machine and is never compared
+  against the control plane.
+- `/var/lib/sulion/node/private-key.pk8`, created on the first node start and
+  retained as the machine identity.
+- `/var/lib/sulion/node/control-key.pub`, the control plane this node paired
+  with. Written on first pairing and required to match on every connection
+  after, so a machine that later answers on the same address cannot take the
+  node over. If the control plane is legitimately replaced, delete this file to
+  re-enter first-pairing and approve the node again.
+- `/var/lib/sulion/node/tunnel-private.key`, this host's WireGuard key,
+  generated on first boot. Its public half is offered during pairing and
+  approved along with the identity key.
+- `/var/lib/sulion/node/wg0.conf`, rendered by `sulion-node` from the peering
+  the control plane granted. `sulion-node-tunnel.path` applies it, bringing the
+  interface up with `wg-quick` or reloading it in place with `wg syncconf` so a
+  rotation does not drop live sessions.
+- `/var/lib/sulion/node/delivered.env`, written by `sulion-node` itself after
+  an operator approves it and **only over the tunnel**. This is where the database credentials, retrieval
+  token, and broker registration token arrive, over the authenticated node
+  channel. Mode `0600`, root-only, and unreadable by the `sulion` user.
 - `/var/lib/sulion/config/ssh/authorized_keys`, owned by `root:sulion` with
   mode `0640` and managed by `sulion-admin-key`; the `sulion` user can read
-  public keys for OpenSSH authentication but cannot modify them;
-- `/var/lib/sulion/config/runtime.env` with mode `0600`, using
-  `deploy/dedicated.env.example` as the field contract;
-- `/var/lib/sulion/node/private-key.pk8`, created automatically on the first
-  node start and retained as the machine identity.
+  public keys for OpenSSH authentication but cannot modify them.
+
+Compose reads `bootstrap.env` and `delivered.env` as two `--env-file`
+arguments, delivered last so control-plane values win. They are kept apart on
+purpose: the host owns one, the control plane owns the other, and neither
+rewrites the other in place.
 
 The broker database and master key remain on TrueNAS. They must not be copied
-to this host.
+to this host, and the control plane does not forward them.
 
 Manage additional break-glass administration keys as root. Commands accept
 public-key files rather than raw keys on the command line:
@@ -298,24 +327,47 @@ The command refuses to remove the final key. `replace` is the recovery-safe way
 to rotate the only authorized key.
 
 The checked-in dedicated identity is
-`019d4f28-88ac-7a80-932c-b0f53a0708f4`. Keep that value in
-`SULION_NODE_ID`; the node key, rather than hardware properties, authenticates
-the machine.
+`019d4f28-88ac-7a80-932c-b0f53a0708f4`. The node key, rather than hardware
+properties, authenticates the machine.
 
-The `sulion-stack.service` unit starts only the node, ingester, and
-code-intelligence roles. On its first start, the node creates the root-owned
-identity key and sends its public-key fingerprint to the control plane:
+## Bringing a node up
 
-```bash
-sudo systemctl start sulion-stack.service
-sudo systemctl status sulion-stack.service
-```
+There is one step, and it happens in the browser.
+
+Boot the machine. `sulion-node-bootstrap.service` writes the host environment
+and resolves the current release; `sulion-stack.service` starts the node,
+ingester, and code-intelligence roles. The node creates its root-owned identity
+key and its WireGuard key, connects to the control plane's LAN-bound node port,
+and submits its fingerprint. It has no credentials yet, so it waits.
 
 Open the authenticated Sulion UI, expand the stats panel, and find
 `sulion-enclave` under **Development node**. It shows `pending`, the submitted
-fingerprint, and an **Approve node** button. Approval stores that key; the node
-reconnects automatically within a few seconds. Nothing is copied between
-machines and no access token is handled manually.
+fingerprint, and an **Approve node** button. Press it.
+
+Approval accepts both keys and allocates the node a tunnel address. On the next
+reconnect — a few seconds — the control plane returns the peering. The node
+writes `wg0.conf`, `sulion-node-tunnel.path` brings the interface up, and the
+node reconnects over the tunnel. Only then are credentials delivered: they are
+refused on any connection that did not arrive through it. The node writes
+`delivered.env`, `sulion-node-activate.path` notices, and the stack comes up
+around the new values.
+
+Nothing is copied between machines, no credential is typed on the enclave, and
+nothing but public keys ever crosses the cleartext hop.
+
+To watch it happen:
+
+```bash
+journalctl -fu sulion-stack.service -u sulion-node-activate.service \
+  -u sulion-node-tunnel.service
+docker logs -f sulion-node
+sudo wg show wg0
+```
+
+Before approval the node logs `awaiting operator approval` every few seconds.
+After approval it logs `wrote delivered node runtime configuration`, then
+`delivered configuration is newer than this container's environment` once,
+before the host rebuilds it.
 
 The TrueNAS control plane can then redeploy independently of `sulion-node`;
 browser terminals reconnect to the surviving PTY. Reloading
@@ -356,7 +408,7 @@ sudo sulion-node-deploy FULL_40_CHARACTER_GIT_SHA
 The command accepts no mutable tags. It renders the dedicated Compose role
 with a temporary root-only environment, pulls the node, ingester, and
 code-intelligence images, applies the stack, verifies that all three containers
-are running, and then records the selected SHA in `runtime.env`. A failed
+are running, and then records the selected SHA in `bootstrap.env`. A failed
 activation leaves the previous SHA recorded so the poller retries. NixOS host
 changes remain a separate
 `nixos-rebuild switch --flake ...#sulion-enclave` operation.

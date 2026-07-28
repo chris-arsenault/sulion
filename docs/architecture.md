@@ -28,6 +28,14 @@ EC2 nginx → WireGuard → the TrueNAS-published frontend port. The frontend
 container remains the same-origin boundary for static assets, `/api`, `/ws`,
 `/broker`, and `/retrieval`; it is not split onto CloudFront.
 
+The development-node channel is not on that path. The frontend returns 404 for
+`/ws/nodes`; nodes reach the backend directly on a LAN-bound port that no
+upstream registration references, and the control plane refuses node sockets
+originating outside the node LAN. A node's
+identity key plus one operator approval is its entire bootstrap: the control
+plane forwards the credentials it needs over that channel, so a node holds no
+secret before it is approved. See [node-protocol.md](node-protocol.md).
+
 The live pane shows "now." All review happens in the structured timeline, sourced from the ingested transcript, not the terminal buffer.
 
 The broker exists to keep secret storage and unlock state out of the PTY runtime and out of the main backend. General app data lives in the main `sulion` database; encrypted secret bundles and grant state live in the separate `sulion_broker` database.

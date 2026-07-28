@@ -615,13 +615,38 @@ async fn flow_metrics(pool: &Pool) -> anyhow::Result<FlowMetrics> {
     .fetch_all(pool)
     .await?;
 
-    // Transition history per phase: seeded pending at creation, then every
-    // recorded status-bearing event in order.
+    let transitions = phase_transitions(&phases, &events);
+    let now = Utc::now();
+    let days = daily_window(now);
+    let completion = completion_stats(&phases, now);
+
+    Ok(FlowMetrics {
+        wip: phases
+            .iter()
+            .filter(|phase| phase.status == "in_progress")
+            .count() as i64,
+        blocked: phases
+            .iter()
+            .filter(|phase| phase.status == "blocked")
+            .count() as i64,
+        throughput_weeks: completion.throughput_weeks,
+        cycle_time_hours_p50: completion.cycle_time_hours_p50,
+        cfd: cumulative_flow(&phases, &transitions, &days, now),
+        burndowns: plan_burndowns(&plans, &phases, &transitions, &days, now),
+    })
+}
+
+/// Status history per phase: a seeded `pending` at creation, then every
+/// recorded status-bearing event in order.
+fn phase_transitions(
+    phases: &[FlowPhase],
+    events: &[FlowEvent],
+) -> HashMap<Uuid, Vec<(DateTime<Utc>, String)>> {
     let mut transitions: HashMap<Uuid, Vec<(DateTime<Utc>, String)>> = HashMap::new();
-    for phase in &phases {
+    for phase in phases {
         transitions.insert(phase.id, vec![(phase.created_at, "pending".to_string())]);
     }
-    for event in &events {
+    for event in events {
         let (Some(phase_id), Some(to_status)) = (event.phase_id, event.to_status.as_deref()) else {
             continue;
         };
@@ -634,48 +659,68 @@ async fn flow_metrics(pool: &Pool) -> anyhow::Result<FlowMetrics> {
             }
         }
     }
+    transitions
+}
 
-    let now = Utc::now();
+fn daily_window(now: DateTime<Utc>) -> Vec<NaiveDate> {
     let today = now.date_naive();
-    let days: Vec<NaiveDate> = (0..DAILY_WINDOW_DAYS)
+    (0..DAILY_WINDOW_DAYS)
         .rev()
         .filter_map(|back| today.checked_sub_days(chrono::Days::new(back as u64)))
-        .collect();
-    let day_end = |day: NaiveDate| -> DateTime<Utc> {
-        let next = day.checked_add_days(chrono::Days::new(1)).unwrap_or(day);
-        Utc.from_utc_datetime(&next.and_hms_opt(0, 0, 0).unwrap_or_default())
-            .min(now)
-    };
+        .collect()
+}
 
-    // Cumulative flow across every tracked plan.
-    let mut cfd = Vec::with_capacity(days.len());
-    for &day in &days {
-        let at = day_end(day);
-        let mut bucket = CfdDay {
-            day,
-            ..CfdDay::default()
-        };
-        for phase in &phases {
-            let weight = size_weight(phase.size.as_deref());
-            let Some(status) = transitions
-                .get(&phase.id)
-                .and_then(|history| status_at(history, at))
-            else {
-                continue;
+/// End of `day`, clamped to now so the current day reflects only elapsed time.
+fn day_end(day: NaiveDate, now: DateTime<Utc>) -> DateTime<Utc> {
+    let next = day.checked_add_days(chrono::Days::new(1)).unwrap_or(day);
+    Utc.from_utc_datetime(&next.and_hms_opt(0, 0, 0).unwrap_or_default())
+        .min(now)
+}
+
+/// Cumulative flow across every tracked plan.
+fn cumulative_flow(
+    phases: &[FlowPhase],
+    transitions: &HashMap<Uuid, Vec<(DateTime<Utc>, String)>>,
+    days: &[NaiveDate],
+    now: DateTime<Utc>,
+) -> Vec<CfdDay> {
+    days.iter()
+        .map(|&day| {
+            let at = day_end(day, now);
+            let mut bucket = CfdDay {
+                day,
+                ..CfdDay::default()
             };
-            match status {
-                "pending" => bucket.pending += weight,
-                "in_progress" => bucket.in_progress += weight,
-                "blocked" => bucket.blocked += weight,
-                "completed" => bucket.completed += weight,
-                "skipped" => bucket.skipped += weight,
-                _ => {}
+            for phase in phases {
+                let weight = size_weight(phase.size.as_deref());
+                let Some(status) = transitions
+                    .get(&phase.id)
+                    .and_then(|history| status_at(history, at))
+                else {
+                    continue;
+                };
+                match status {
+                    "pending" => bucket.pending += weight,
+                    "in_progress" => bucket.in_progress += weight,
+                    "blocked" => bucket.blocked += weight,
+                    "completed" => bucket.completed += weight,
+                    "skipped" => bucket.skipped += weight,
+                    _ => {}
+                }
             }
-        }
-        cfd.push(bucket);
-    }
+            bucket
+        })
+        .collect()
+}
 
-    // Burndown per open plan.
+/// Remaining weight over time, per open plan.
+fn plan_burndowns(
+    plans: &[FlowPlan],
+    phases: &[FlowPhase],
+    transitions: &HashMap<Uuid, Vec<(DateTime<Utc>, String)>>,
+    days: &[NaiveDate],
+    now: DateTime<Utc>,
+) -> Vec<PlanBurndown> {
     let mut burndowns = Vec::new();
     for plan in plans.iter().filter(|plan| plan.status == "active") {
         let plan_phases: Vec<&FlowPhase> = phases
@@ -689,30 +734,32 @@ async fn flow_metrics(pool: &Pool) -> anyhow::Result<FlowMetrics> {
             .iter()
             .map(|phase| size_weight(phase.size.as_deref()))
             .sum();
-        let mut series = Vec::with_capacity(days.len());
-        for &day in &days {
-            let at = day_end(day);
-            let mut total = 0i64;
-            let mut done = 0i64;
-            for phase in &plan_phases {
-                if phase.created_at > at {
-                    continue;
+        let series = days
+            .iter()
+            .map(|&day| {
+                let at = day_end(day, now);
+                let mut total = 0i64;
+                let mut done = 0i64;
+                for phase in &plan_phases {
+                    if phase.created_at > at {
+                        continue;
+                    }
+                    let weight = size_weight(phase.size.as_deref());
+                    total += weight;
+                    let status = transitions
+                        .get(&phase.id)
+                        .and_then(|history| status_at(history, at));
+                    if matches!(status, Some("completed") | Some("skipped")) {
+                        done += weight;
+                    }
                 }
-                let weight = size_weight(phase.size.as_deref());
-                total += weight;
-                let status = transitions
-                    .get(&phase.id)
-                    .and_then(|history| status_at(history, at));
-                if matches!(status, Some("completed") | Some("skipped")) {
-                    done += weight;
+                BurndownDay {
+                    day,
+                    remaining_weight: total - done,
+                    total_weight: total,
                 }
-            }
-            series.push(BurndownDay {
-                day,
-                remaining_weight: total - done,
-                total_weight: total,
-            });
-        }
+            })
+            .collect();
         burndowns.push(PlanBurndown {
             plan_id: plan.id,
             repo: plan.repo_name.clone(),
@@ -721,20 +768,20 @@ async fn flow_metrics(pool: &Pool) -> anyhow::Result<FlowMetrics> {
             days: series,
         });
     }
+    burndowns
+}
 
-    // Point-in-time counts and completion stats straight from phases.
-    let wip = phases
-        .iter()
-        .filter(|phase| phase.status == "in_progress")
-        .count() as i64;
-    let blocked = phases
-        .iter()
-        .filter(|phase| phase.status == "blocked")
-        .count() as i64;
+struct CompletionStats {
+    throughput_weeks: Vec<ThroughputWeek>,
+    cycle_time_hours_p50: Option<f64>,
+}
 
+/// Weekly completed weight over the last four weeks, and median cycle time over
+/// the last thirty days.
+fn completion_stats(phases: &[FlowPhase], now: DateTime<Utc>) -> CompletionStats {
     let mut throughput: HashMap<NaiveDate, i64> = HashMap::new();
     let four_weeks_ago = now - chrono::Duration::days(28);
-    for phase in &phases {
+    for phase in phases {
         let Some(completed_at) = phase.completed_at else {
             continue;
         };
@@ -771,20 +818,13 @@ async fn flow_metrics(pool: &Pool) -> anyhow::Result<FlowMetrics> {
         })
         .collect();
     cycle_hours.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let cycle_time_hours_p50 = if cycle_hours.is_empty() {
-        None
-    } else {
-        Some(cycle_hours[cycle_hours.len() / 2])
-    };
+    let cycle_time_hours_p50 =
+        (!cycle_hours.is_empty()).then(|| cycle_hours[cycle_hours.len() / 2]);
 
-    Ok(FlowMetrics {
-        wip,
-        blocked,
+    CompletionStats {
         throughput_weeks,
         cycle_time_hours_p50,
-        cfd,
-        burndowns,
-    })
+    }
 }
 
 #[cfg(test)]

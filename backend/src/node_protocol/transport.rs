@@ -1,9 +1,10 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, Path, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{post, Router};
 use axum::Json;
@@ -11,8 +12,8 @@ use futures::StreamExt;
 use uuid::Uuid;
 
 use super::model::{
-    ControlWireMessage, FragmentAssembler, NodeWireMessage, WireEnvelope, MAX_NODE_FRAME_BYTES,
-    NODE_PROTOCOL_VERSION,
+    ControlWireMessage, FragmentAssembler, NodeConfigPayload, NodeWireMessage, WireEnvelope,
+    MAX_NODE_FRAME_BYTES, NODE_PROTOCOL_VERSION,
 };
 use super::NodeProtocolError;
 use crate::AppState;
@@ -35,13 +36,39 @@ async fn approve_pairing(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn connect(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn connect(
+    ws: WebSocketUpgrade,
+    peer: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    // Admission happens before the challenge, so an off-LAN caller learns
+    // nothing about the handshake. It fails closed when the source cannot be
+    // established rather than treating an unknown address as local.
+    let forwarded = headers
+        .get("x-real-ip")
+        .and_then(|value| value.to_str().ok());
+    let client = match state
+        .node_control
+        .source_policy()
+        .admit(peer.map(|ConnectInfo(peer)| peer.ip()), forwarded)
+    {
+        Ok(client) => {
+            tracing::debug!(%client, "node socket admitted");
+            client
+        }
+        Err(refusal) => {
+            tracing::warn!(%refusal, "node socket refused");
+            return (StatusCode::FORBIDDEN, "node source address not permitted").into_response();
+        }
+    };
     ws.max_message_size(MAX_NODE_FRAME_BYTES)
         .max_frame_size(MAX_NODE_FRAME_BYTES)
-        .on_upgrade(move |socket| node_socket(state, socket))
+        .on_upgrade(move |socket| node_socket(state, socket, client))
+        .into_response()
 }
 
-async fn node_socket(state: Arc<AppState>, mut socket: WebSocket) {
+async fn node_socket(state: Arc<AppState>, mut socket: WebSocket, client: std::net::IpAddr) {
     let challenge = match state.node_control.challenge() {
         Ok(challenge) => challenge,
         Err(err) => {
@@ -86,7 +113,7 @@ async fn node_socket(state: Arc<AppState>, mut socket: WebSocket) {
             return;
         }
     };
-    run_connection(state, socket, connection).await;
+    run_connection(state, socket, connection, client).await;
 }
 
 async fn receive_hello(socket: &mut WebSocket) -> Result<super::NodeHello, NodeProtocolError> {
@@ -116,6 +143,7 @@ async fn run_connection(
     state: Arc<AppState>,
     mut socket: WebSocket,
     mut connection: super::RegisteredConnection,
+    client: std::net::IpAddr,
 ) {
     let ack = match ack_envelope(
         connection.ack.clone(),
@@ -132,6 +160,18 @@ async fn run_connection(
         .await
         .is_err()
     {
+        state
+            .node_control
+            .disconnected(
+                connection.node_id,
+                connection.boot_id,
+                connection.connection_id,
+            )
+            .await;
+        return;
+    }
+
+    if !deliver_node_config(&state, &connection, client, &mut socket).await {
         state
             .node_control
             .disconnected(
@@ -197,6 +237,66 @@ async fn run_connection(
             connection.connection_id,
         )
         .await;
+}
+
+/// Hands an authenticated node the runtime configuration it would otherwise
+/// need pre-provisioned. Returns whether the connection is still usable.
+///
+/// Always sends something, with an empty map when there is nothing to deliver,
+/// so a node never waits out a timeout to learn that. Credentials are withheld
+/// entirely from a connection that did not arrive over the tunnel.
+async fn deliver_node_config(
+    state: &Arc<AppState>,
+    connection: &super::RegisteredConnection,
+    client: std::net::IpAddr,
+    socket: &mut WebSocket,
+) -> bool {
+    let may_deliver = state.node_control.may_deliver_credentials(Some(client));
+    if !may_deliver {
+        tracing::info!(
+            node_id = %connection.node_id,
+            %client,
+            "withholding credentials until this node connects over the tunnel",
+        );
+    }
+    let payload = match state
+        .node_control
+        .delivered_config()
+        .filter(|_| may_deliver)
+    {
+        Some(config) => {
+            tracing::info!(
+                node_id = %connection.node_id,
+                digest = %config.digest(),
+                keys = ?config.key_names(),
+                "delivering node runtime configuration",
+            );
+            let mut payload = config.payload();
+            // Signed separately from the handshake and bound to this
+            // connection's nonce, so the payload stays tamper-evident and
+            // cannot be lifted onto another connection.
+            payload.signature = state
+                .node_control
+                .identity()
+                .map(|identity| identity.sign_config(&payload.digest, &connection.node_nonce));
+            payload
+        }
+        None => NodeConfigPayload::empty(),
+    };
+
+    let mut envelope = WireEnvelope::new(
+        connection.node_id,
+        connection.boot_id,
+        "control.node_config",
+    );
+    match serde_json::to_value(payload) {
+        Ok(payload) => envelope.payload = payload,
+        Err(err) => {
+            tracing::error!(%err, "failed to encode node runtime configuration");
+            return false;
+        }
+    }
+    send_control_envelope(socket, envelope).await.is_ok()
 }
 
 async fn receive_message(

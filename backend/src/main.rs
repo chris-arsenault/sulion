@@ -57,6 +57,7 @@ async fn main() -> anyhow::Result<()> {
         auth,
         true,
     );
+    apply_node_policy(&state).await?;
     if let Some(node) = cfg.standalone_node.as_ref() {
         let runtime = sulion::node_runtime::NodeRuntime::new(
             node.node_id,
@@ -102,8 +103,52 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
     tracing::info!(listen = %cfg.listen, "api listener bound");
-    axum::serve(listener, app(state)).await?;
+    // ConnectInfo is what the node LAN guard reads, so the node socket must be
+    // served through a make-service that carries the peer address.
+    axum::serve(
+        listener,
+        app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
+}
+
+/// Applies the node admission boundary and the runtime configuration this
+/// control plane hands to nodes it has already authenticated.
+async fn apply_node_policy(state: &AppState) -> anyhow::Result<()> {
+    let source_policy = sulion::node_protocol::NodeSourcePolicy::from_env()?;
+    if source_policy.is_unrestricted() {
+        tracing::warn!("node LAN boundary disabled; SULION_NODE_LAN_CIDR is empty");
+    }
+    let delivered_config = sulion::node_protocol::NodeRuntimeConfig::from_env()?;
+    match delivered_config.as_ref() {
+        Some(config) => tracing::info!(
+            digest = %config.digest(),
+            keys = ?config.key_names(),
+            "node runtime configuration ready for delivery",
+        ),
+        None => tracing::warn!(
+            "no node runtime configuration to deliver; approved nodes must be \
+             configured out of band"
+        ),
+    }
+    // A node pins this identity the first time it pairs and refuses any later
+    // peer that cannot sign for it.
+    let identity = sulion::node_protocol::ControlIdentity::load_or_create(&state.pool).await?;
+    tracing::info!(control_key = %identity.public_key(), "control plane identity ready");
+
+    let tunnel = sulion::node_protocol::TunnelPolicy::load(&state.pool).await?;
+    match tunnel.as_ref() {
+        Some(tunnel) => tracing::info!(
+            control_address = %tunnel.control_address(),
+            "node tunnel peering available",
+        ),
+        None => tracing::warn!("no node tunnel configured; the node channel is not encrypted"),
+    }
+
+    state
+        .node_control
+        .apply_policy(delivered_config, source_policy, Some(identity), tunnel)
 }
 
 async fn dispatch_cli(argv: &[std::ffi::OsString]) -> anyhow::Result<Option<i32>> {

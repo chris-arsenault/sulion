@@ -4,6 +4,41 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### One-click development-node enrollment
+
+- A dedicated node now bootstraps itself. It boots holding nothing but its
+  Ed25519 identity key, waits for a single **Approve node** press in the stats
+  panel, and receives its database credentials, retrieval token, and broker
+  registration token over that authenticated channel. Installing a node no
+  longer involves writing an environment file or copying credentials between
+  machines.
+- The host half of the node environment is generated on the machine, including
+  a code intelligence token that never leaves it, and the current release is
+  resolved at boot rather than pinned by hand.
+- `sulion-stack.service` no longer skips silently when configuration is
+  missing, which previously left a freshly installed host inert with only an
+  unmet-condition line in the journal.
+- A node now authenticates the control plane, not just the reverse. Control
+  signs the handshake with its own identity, and a node records that identity
+  the first time it pairs and refuses every later connection that cannot sign
+  for it — including one that simply omits the signature. Recovering from a
+  legitimately replaced control plane means deleting the pin deliberately.
+- Delivered configuration is signed and bound to the connection it was sent on,
+  and the node enforces the forwarded-key allowlist on receipt rather than
+  trusting the sender to have applied it.
+- The node channel is now encrypted end to end by a Sulion-owned WireGuard
+  tunnel. Its control end terminates inside the control process's own network
+  namespace, so there is no forwarding in the path and the control container
+  gains no privileges; its node end is a NixOS-managed interface. Approving a
+  node accepts its tunnel key and allocates its address in the same press, and
+  credentials are refused on any connection that did not arrive through the
+  tunnel — so terminal bytes, file contents, and credentials never cross the
+  LAN in the clear.
+- Node pairing is confined to the LAN. The public reverse proxy returns 404 for
+  the node channel, nodes reach the control plane on a LAN-bound port instead,
+  and the control plane refuses node connections originating outside the node
+  LAN. Approving a node remains available from anywhere.
+
 ### Published plans and terminal overview
 
 - Added durable repo-scoped published plans with ordered phases, status notes,

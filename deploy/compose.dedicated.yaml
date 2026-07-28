@@ -3,12 +3,21 @@ services:
     profiles:
       - control-plane
 
+  # The tunnel's control end lives with the control plane; the node end is a
+  # NixOS interface on this host, not a container.
+  node-tunnel:
+    profiles:
+      - control-plane
+
   node:
     profiles: !reset []
     network_mode: host
     networks: !reset []
     environment:
-      SULION_NODE_CONTROL_URL: ${SULION_NODE_CONTROL_URL:-wss://sulion.services.ahara.io/ws/nodes}
+      # The control plane's LAN-bound node port, not its public hostname. Node
+      # traffic never leaves the LAN and never crosses the public proxy.
+      SULION_NODE_CONTROL_URL: ${SULION_NODE_CONTROL_URL:-ws://192.168.66.3:30081/ws/nodes}
+      SULION_NODE_ALLOW_INSECURE_WS: "${SULION_NODE_ALLOW_INSECURE_WS:-1}"
       SULION_DOCKER_MODE: direct
       SULION_REPOS_ROOT: /home/sulion/repos
       SULION_WORKSPACES_ROOT: /home/sulion/workspaces

@@ -22,11 +22,16 @@ if [[ ! "${tag}" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 
 env_file="${SULION_DEPLOY_ENV_FILE:?missing SULION_DEPLOY_ENV_FILE}"
+delivered_file="${SULION_DEPLOY_DELIVERED_ENV_FILE:?missing SULION_DEPLOY_DELIVERED_ENV_FILE}"
 source_root="${SULION_DEPLOY_SOURCE:?missing SULION_DEPLOY_SOURCE}"
 compose_bin="${SULION_COMPOSE_BIN:?missing SULION_COMPOSE_BIN}"
 
 if [[ ! -f "${env_file}" ]]; then
   echo "runtime environment does not exist: ${env_file}" >&2
+  exit 66
+fi
+if [[ ! -f "${delivered_file}" ]]; then
+  echo "delivered environment does not exist: ${delivered_file}" >&2
   exit 66
 fi
 if [[ "$(grep -c '^IMAGE_TAG=' "${env_file}")" -ne 1 ]]; then
@@ -42,9 +47,11 @@ trap cleanup EXIT
 chmod 0600 "${candidate}"
 sed "s/^IMAGE_TAG=.*/IMAGE_TAG=${tag}/" "${env_file}" > "${candidate}"
 
+# The delivered file comes last so control-plane values win over host defaults.
 compose=(
   "${compose_bin}"
   --env-file "${candidate}"
+  --env-file "${delivered_file}"
   -f "${source_root}/compose.yaml"
   -f "${source_root}/deploy/compose.dedicated.yaml"
 )
