@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 pub const NODE_PROTOCOL_VERSION: u32 = 1;
+pub const DEDICATED_NODE_ID: Uuid = Uuid::from_u128(0x019d4f28_88ac_7a80_932c_b0f53a0708f4);
 pub const DEFAULT_HEARTBEAT_INTERVAL_SECS: u64 = 5;
 pub const DEFAULT_HEARTBEAT_TIMEOUT_SECS: u64 = 20;
 pub const MAX_NODE_FRAME_BYTES: usize = 256 * 1024;
@@ -26,12 +27,14 @@ pub struct NodeHello {
     pub node_id: Uuid,
     pub boot_id: Uuid,
     pub protocol_version: u32,
+    #[serde(default)]
+    pub public_key: Option<String>,
     pub signature: String,
 }
 
 impl NodeHello {
     pub fn signing_payload(&self, challenge: &ControlChallenge) -> Vec<u8> {
-        [
+        let mut fields = vec![
             "sulion-node-handshake-v1".to_string(),
             challenge.challenge_id.to_string(),
             challenge.nonce.clone(),
@@ -39,9 +42,11 @@ impl NodeHello {
             self.node_id.to_string(),
             self.boot_id.to_string(),
             self.protocol_version.to_string(),
-        ]
-        .join("\n")
-        .into_bytes()
+        ];
+        if let Some(public_key) = &self.public_key {
+            fields.push(public_key.clone());
+        }
+        fields.join("\n").into_bytes()
     }
 
     pub fn decode_signature(&self) -> anyhow::Result<Vec<u8>> {
@@ -370,7 +375,7 @@ pub enum RequestResultStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeView {
     pub id: Uuid,
     pub display_name: String,
@@ -381,33 +386,7 @@ pub struct NodeView {
     pub last_heartbeat_at: Option<DateTime<Utc>>,
     pub node_disconnected_at: Option<DateTime<Utc>>,
     pub heartbeat_timeout_seconds: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EnrollmentToken {
-    pub token: String,
-    pub expires_at: DateTime<Utc>,
-    pub target_node_id: Uuid,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct CreateEnrollmentTokenRequest {
-    pub display_name: String,
-    pub target_node_id: Uuid,
-    pub ttl_seconds: Option<u64>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct EnrollNodeRequest {
-    pub token: String,
-    pub public_key: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EnrollNodeResponse {
-    pub node_id: Uuid,
-    pub display_name: String,
-    pub protocol_version: u32,
+    pub pending_key_fingerprint: Option<String>,
 }
 
 #[cfg(test)]
@@ -427,6 +406,7 @@ mod tests {
             node_id: Uuid::nil(),
             boot_id: Uuid::nil(),
             protocol_version: 1,
+            public_key: Some("public-key".into()),
             signature: String::new(),
         }
     }
@@ -436,6 +416,13 @@ mod tests {
         let first = hello();
         let mut changed = first.clone();
         changed.boot_id = Uuid::new_v4();
+        assert_ne!(
+            first.signing_payload(&challenge()),
+            changed.signing_payload(&challenge())
+        );
+
+        let mut changed = first.clone();
+        changed.public_key = Some("replacement-key".into());
         assert_ne!(
             first.signing_payload(&challenge()),
             changed.signing_payload(&challenge())

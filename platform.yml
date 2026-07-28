@@ -5,9 +5,13 @@ stack:
   - typescript
   - terraform
 truenas: true
+# TrueNAS topology selector:
+#   compose.yaml                            = split control plane
+#   deploy/compose.truenas-standalone.yaml = combined TrueNAS host
 truenas_compose_path: compose.yaml
 truenas_compose_check_paths:
   - compose.yaml
+  - deploy/compose.truenas-standalone.yaml
 images:
   - backend
   - broker

@@ -242,7 +242,7 @@ systemctl is-enabled sulion-stack.service
 Expected results are hostname `sulion-enclave`, root label `nixos`, boot label
 `boot`, UID/GID 7321, an active wired connection, an active system Docker
 daemon, a successful limited container, and an enabled Sulion node unit. The
-unit remains inactive until its runtime environment and node key exist.
+unit remains inactive until its runtime environment exists.
 
 From another LAN machine, connect to `\\sulion-enclave\repos` on Windows or
 `smb://sulion-enclave.local/repos` on macOS and create a test directory. On the
@@ -278,7 +278,8 @@ paths under `/var/lib/sulion`; provision:
   public keys for OpenSSH authentication but cannot modify them;
 - `/var/lib/sulion/config/runtime.env` with mode `0600`, using
   `deploy/dedicated.env.example` as the field contract;
-- `/var/lib/sulion/node/private-key.pk8`, owned by `root:root` with mode `0600`.
+- `/var/lib/sulion/node/private-key.pk8`, created automatically on the first
+  node start and retained as the machine identity.
 
 The broker database and master key remain on TrueNAS. They must not be copied
 to this host.
@@ -299,72 +300,27 @@ to rotate the only authorized key.
 The checked-in dedicated identity is
 `019d4f28-88ac-7a80-932c-b0f53a0708f4`. Keep that value in
 `SULION_NODE_ID`; the node key, rather than hardware properties, authenticates
-the machine. Generate the key once with the exact backend image selected by
-`IMAGE_TAG`:
+the machine.
 
-```bash
-SULION_BACKEND_IMAGE="$(
-  sudo bash -c '
-    set -a
-    source /var/lib/sulion/config/runtime.env
-    printf "%s/backend:%s" "$SULION_IMAGE_REGISTRY" "$IMAGE_TAG"
-  '
-)"
-sudo docker pull "${SULION_BACKEND_IMAGE}"
-sudo docker run --rm --user root \
-  -v /var/lib/sulion/node:/var/lib/sulion-node \
-  --entrypoint /usr/local/bin/sulion-node \
-  "${SULION_BACKEND_IMAGE}" \
-  keygen --output /var/lib/sulion-node/private-key.pk8
-```
-
-The `sulion-stack.service` unit is enabled but its path conditions keep it
-inactive until matching OCI images, the runtime env file, and the node key
-exist. It starts only the node, ingester, and code-intelligence roles. Start it
-once; the unenrolled node will retry safely while the TrueNAS control plane
-comes online:
+The `sulion-stack.service` unit starts only the node, ingester, and
+code-intelligence roles. On its first start, the node creates the root-owned
+identity key and sends its public-key fingerprint to the control plane:
 
 ```bash
 sudo systemctl start sulion-stack.service
 sudo systemctl status sulion-stack.service
 ```
 
-From an authenticated LAN shell, mint a five-minute token targeted to the
-checked-in node ID. Supply a current Sulion access token only to this process;
-do not add it to `runtime.env`:
+Open the authenticated Sulion UI, expand the stats panel, and find
+`sulion-enclave` under **Development node**. It shows `pending`, the submitted
+fingerprint, and an **Approve node** button. Approval stores that key; the node
+reconnects automatically within a few seconds. Nothing is copied between
+machines and no access token is handled manually.
 
-```bash
-read -rsp "Sulion access token: " SULION_ADMIN_ACCESS_TOKEN
-echo
-NODE_ENROLLMENT_TOKEN="$(
-  curl -fsS https://sulion.services.ahara.io/api/nodes/enrollment-tokens \
-    -H "Authorization: Bearer ${SULION_ADMIN_ACCESS_TOKEN}" \
-    -H "Content-Type: application/json" \
-    --data '{"display_name":"dedicated NixOS node","target_node_id":"019d4f28-88ac-7a80-932c-b0f53a0708f4","ttl_seconds":300}' |
-    jq -er .token
-)"
-unset SULION_ADMIN_ACCESS_TOKEN
-```
-
-Complete enrollment on the NixOS host using the same private-key path:
-
-```bash
-sudo docker run --rm --network host --user root \
-  -v /var/lib/sulion/node:/var/lib/sulion-node:ro \
-  --entrypoint /usr/local/bin/sulion-node \
-  "${SULION_BACKEND_IMAGE}" \
-  enroll --control-url https://sulion.services.ahara.io \
-  --token "${NODE_ENROLLMENT_TOKEN}" \
-  --key /var/lib/sulion-node/private-key.pk8
-unset NODE_ENROLLMENT_TOKEN
-unset SULION_BACKEND_IMAGE
-sudo systemctl reload sulion-stack.service
-```
-
-The returned `node_id` must equal the checked-in ID. The TrueNAS control plane
-can then redeploy independently of `sulion-node`; browser terminals reconnect
-to the surviving PTY. Reloading `sulion-stack.service` replaces node-side
-containers and is therefore an explicit session-affecting action.
+The TrueNAS control plane can then redeploy independently of `sulion-node`;
+browser terminals reconnect to the surviving PTY. Reloading
+`sulion-stack.service` replaces node-side containers and is therefore an
+explicit session-affecting action.
 
 At runtime `sulion-node` opens the root-owned key and then drops its process,
 filesystem, and PTY work to UID/GID 7321. Ordinary processes cannot read the

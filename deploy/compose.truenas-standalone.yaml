@@ -1,0 +1,10 @@
+# Single-file Komodo entry point for combined TrueNAS host operation.
+#
+# platform.yml normally selects ../compose.yaml for control-plane operation.
+# Selecting this file merges the same graph with the existing standalone and
+# TrueNAS host-policy overlays.
+include:
+  - path:
+      - ../compose.yaml
+      - ./compose.standalone.yaml
+      - ./compose.truenas.yaml

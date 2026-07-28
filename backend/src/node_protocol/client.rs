@@ -8,7 +8,7 @@ use base64::Engine;
 use futures::{SinkExt, StreamExt};
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
@@ -268,6 +268,9 @@ fn signed_hello(
         node_id: runtime.node_id(),
         boot_id: runtime.boot_id(),
         protocol_version: NODE_PROTOCOL_VERSION,
+        public_key: Some(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.public_key().as_ref()),
+        ),
         signature: String::new(),
     };
     hello.signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -362,7 +365,7 @@ fn ensure_request_succeeded(result: RequestResultPayload) -> anyhow::Result<()> 
     }
 }
 
-pub fn generate_private_key(path: &Path) -> anyhow::Result<String> {
+pub fn generate_private_key(path: &Path) -> anyhow::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -377,33 +380,7 @@ pub fn generate_private_key(path: &Path) -> anyhow::Result<String> {
         .mode(0o600)
         .open(path)?;
     file.write_all(document.as_ref())?;
-    let key = Ed25519KeyPair::from_pkcs8(document.as_ref())
+    Ed25519KeyPair::from_pkcs8(document.as_ref())
         .map_err(|_| anyhow::anyhow!("generated key could not be parsed"))?;
-    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.public_key().as_ref()))
-}
-
-pub async fn enroll(
-    control_http_url: &str,
-    token: &str,
-    private_key_path: &Path,
-) -> anyhow::Result<super::EnrollNodeResponse> {
-    let key = load_private_key(private_key_path)?;
-    let public_key =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.public_key().as_ref());
-    let response = reqwest::Client::new()
-        .post(format!(
-            "{}/api/nodes/enroll",
-            control_http_url.trim_end_matches('/')
-        ))
-        .json(&json!({"token": token, "public_key": public_key}))
-        .send()
-        .await?;
-    if !response.status().is_success() {
-        anyhow::bail!(
-            "node enrollment failed with HTTP {}: {}",
-            response.status(),
-            response.text().await.unwrap_or_default()
-        );
-    }
-    Ok(response.json().await?)
+    Ok(())
 }

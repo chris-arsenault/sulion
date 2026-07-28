@@ -10,7 +10,7 @@ use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{json, Value};
 use sulion::node_protocol::model::{ControlChallenge, ControlWireMessage, NodeWireMessage};
 use sulion::node_protocol::{
-    heartbeat_envelope, EnrollNodeRequest, NodeControl, NodeHello, NodeRequestKind, TerminalEvent,
+    heartbeat_envelope, NodeControl, NodeHello, NodeRequestKind, TerminalEvent, DEDICATED_NODE_ID,
     NODE_PROTOCOL_VERSION,
 };
 use sulion::node_runtime::{
@@ -64,22 +64,6 @@ fn generate_keypair() -> Ed25519KeyPair {
     Ed25519KeyPair::from_pkcs8(document.as_ref()).expect("parse key")
 }
 
-async fn enroll(control: &NodeControl, keypair: &Ed25519KeyPair, node_id: Uuid) {
-    let token = control
-        .create_enrollment_token("test-node", node_id, Some(300))
-        .await
-        .expect("create enrollment token");
-    let enrolled = control
-        .enroll(EnrollNodeRequest {
-            token: token.token,
-            public_key: base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .encode(keypair.public_key().as_ref()),
-        })
-        .await
-        .expect("enroll");
-    assert_eq!(enrolled.node_id, node_id);
-}
-
 async fn open_socket(http_base: &str) -> ClientSocket {
     let ws_base = http_base.replacen("http://", "ws://", 1);
     tokio_tungstenite::connect_async(format!("{ws_base}/ws/nodes"))
@@ -113,11 +97,45 @@ fn signed_hello(
         node_id,
         boot_id,
         protocol_version: NODE_PROTOCOL_VERSION,
+        public_key: Some(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(keypair.public_key().as_ref()),
+        ),
         signature: String::new(),
     };
     hello.signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(keypair.sign(&hello.signing_payload(challenge)).as_ref());
     hello
+}
+
+async fn request_pairing(http_base: &str, keypair: &Ed25519KeyPair, node_id: Uuid) {
+    let boot_id = Uuid::new_v4();
+    let mut socket = open_socket(http_base).await;
+    let challenge = receive_challenge(&mut socket).await;
+    let hello = signed_hello(keypair, &challenge, node_id, boot_id);
+    let envelope = sulion::node_protocol::WireEnvelope::new(node_id, boot_id, "node.hello");
+    socket
+        .send(Message::Text(
+            serde_json::to_string(&NodeWireMessage::Hello { envelope, hello }).expect("hello json"),
+        ))
+        .await
+        .expect("send pairing hello");
+    let response = socket
+        .next()
+        .await
+        .expect("pairing response")
+        .expect("pairing response read");
+    let Message::Close(Some(frame)) = response else {
+        panic!("expected pairing-required close frame");
+    };
+    assert_eq!(frame.reason, "node approval required");
+}
+
+async fn pair_and_approve(http_base: &str, control: &NodeControl, keypair: &Ed25519KeyPair) {
+    request_pairing(http_base, keypair, DEDICATED_NODE_ID).await;
+    control
+        .approve_pairing(DEDICATED_NODE_ID)
+        .await
+        .expect("approve pairing");
 }
 
 async fn connect_node(
@@ -191,42 +209,32 @@ async fn control_stays_ready_and_refuses_local_mutations_without_the_node() {
 }
 
 #[tokio::test]
-async fn fixed_node_enrollment_authenticates_one_connection() {
+async fn fixed_node_pairing_is_approved_in_the_control_plane() {
     let pool = fresh_pool().await;
     let (base, state) = start_server(pool, false).await;
     let keypair = generate_keypair();
-    let node_id = Uuid::new_v4();
+    request_pairing(&base, &keypair, DEDICATED_NODE_ID).await;
+    let pending = state.node_control.list_nodes().await.unwrap().remove(0);
+    assert_eq!(pending.id, DEDICATED_NODE_ID);
+    assert_eq!(pending.connection_state, "pending");
+    assert!(pending
+        .pending_key_fingerprint
+        .as_deref()
+        .is_some_and(|value| value.starts_with("SHA256:")));
 
-    let token_response = reqwest::Client::new()
-        .post(format!("{base}/api/nodes/enrollment-tokens"))
-        .json(&json!({
-            "display_name": "sulion-enclave",
-            "target_node_id": node_id,
-            "ttl_seconds": 300,
-        }))
+    let approved = reqwest::Client::new()
+        .post(format!("{base}/api/nodes/{DEDICATED_NODE_ID}/approve"))
         .send()
         .await
-        .expect("token request");
-    assert_eq!(token_response.status(), reqwest::StatusCode::CREATED);
-    let token: Value = token_response.json().await.expect("token json");
+        .expect("approve pairing request");
+    assert_eq!(approved.status(), reqwest::StatusCode::NO_CONTENT);
 
-    let enrolled = reqwest::Client::new()
-        .post(format!("{base}/api/nodes/enroll"))
-        .json(&json!({
-            "token": token["token"],
-            "public_key": base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .encode(keypair.public_key().as_ref()),
-        }))
-        .send()
-        .await
-        .expect("enroll request");
-    assert_eq!(enrolled.status(), reqwest::StatusCode::CREATED);
-
-    let _socket = connect_node(&base, &keypair, node_id, Uuid::new_v4()).await;
+    let _socket = connect_node(&base, &keypair, DEDICATED_NODE_ID, Uuid::new_v4()).await;
     assert_eq!(state.node_control.active_connection_count().await, 1);
     let node = state.node_control.list_nodes().await.unwrap().remove(0);
-    assert_eq!(node.id, node_id);
+    assert_eq!(node.id, DEDICATED_NODE_ID);
     assert_eq!(node.connection_state, "connected");
+    assert_eq!(node.pending_key_fingerprint, None);
 }
 
 #[tokio::test]
@@ -234,8 +242,8 @@ async fn same_boot_reconnect_preserves_sessions_and_new_boot_ends_them() {
     let pool = fresh_pool().await;
     let (base, state) = start_server(pool.clone(), false).await;
     let keypair = generate_keypair();
-    let node_id = Uuid::new_v4();
-    enroll(&state.node_control, &keypair, node_id).await;
+    let node_id = DEDICATED_NODE_ID;
+    pair_and_approve(&base, &state.node_control, &keypair).await;
     let first_boot = Uuid::new_v4();
     let mut socket = connect_node(&base, &keypair, node_id, first_boot).await;
     let session_id = Uuid::new_v4();

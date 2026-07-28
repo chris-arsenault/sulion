@@ -122,6 +122,12 @@ export function getAppState(): Promise<AppStateResponse> {
   return request<AppStateResponse>("/api/app-state");
 }
 
+export function approveNodePairing(id: string): Promise<void> {
+  return request<void>(`/api/nodes/${id}/approve`, {
+    method: "POST",
+  });
+}
+
 export function createSession(body: CreateSessionRequest): Promise<SessionView> {
   return request<SessionView>("/api/sessions", {
     method: "POST",

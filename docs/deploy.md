@@ -7,7 +7,10 @@ TrueNAS control-plane selection. It starts only frontend, backend/control,
 broker, and retrieval. Small role overlays live in
 [`deploy/`](../deploy/README.md): the dedicated overlay selects the NixOS
 node-side services, while the standalone overlay (plus the TrueNAS policy
-overlay on that host) restores the previous combined deployment for rollback.
+overlay on that host) restores the previous combined deployment. Komodo accepts
+one Compose path, so
+[`deploy/compose.truenas-standalone.yaml`](../deploy/compose.truenas-standalone.yaml)
+merges the combined TrueNAS model into one deployable entry point.
 
 The dedicated host configuration, activation boundary, secret paths, and
 box-side verification commands live in [`nix/README.md`](../nix/README.md).
@@ -45,7 +48,7 @@ Across the production split:
 
 - TrueNAS control uses remote-node mode and has no repo, workspace, transcript,
   home, code-intelligence, runner, or Docker bind;
-- the node alone mounts `/home/sulion`, its root-owned enrolled key, the
+- the node alone mounts `/home/sulion`, its root-owned identity key, the
   correlation run directory, and the dedicated host's Docker socket;
 - the ingester mounts only the two transcript roots read-only; and
 - code intelligence reads the local repo/workspace roots on that host.
@@ -112,6 +115,22 @@ Push to `main`. The shared ahara CI workflow builds all Sulion images, pushes to
    commit's node, ingester, and code-intelligence images.
 
 No manual Komodo UI setup. No manual SSM puts.
+
+The single TrueNAS topology selector is `truenas_compose_path` in
+[`platform.yml`](../platform.yml):
+
+```yaml
+# Split deployment: TrueNAS control plane plus sulion-enclave.
+truenas_compose_path: compose.yaml
+
+# Combined host operation: all development services return to TrueNAS.
+truenas_compose_path: deploy/compose.truenas-standalone.yaml
+```
+
+Changing that one value and pushing `main` is sufficient to switch the Komodo
+stack between the two supported TrueNAS roles. CI renders both paths on every
+change. Postgres and the preserved TrueNAS home, repo, and workspace datasets
+are shared by both roles; the role switch does not restore or transform them.
 
 Deploy `ahara-infra` before the first Sulion edge deployment so the internal
 nginx upstream, WireGuard ingress, and Sulion deployer permissions already
@@ -221,6 +240,7 @@ Those dev ports are direct LAN exposure and are not routed through Sulion auth.
 
 The standalone stack also creates the internal Docker network `sulion`;
 runner-launched containers join that network automatically. Public listener
-rules apply ALB JWT validation to browser routes. Node enrollment, the node
-WebSocket, signed broker redemption/PTY registration, and bearer-authenticated
-retrieval are application-authenticated machine routes.
+rules apply ALB JWT validation to browser routes. Node pairing approval is a
+browser-authenticated action. The node WebSocket, signed broker redemption/PTY
+registration, and bearer-authenticated retrieval are
+application-authenticated machine routes.

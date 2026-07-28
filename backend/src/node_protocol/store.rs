@@ -4,13 +4,9 @@ use ring::digest;
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
-use super::model::{EnrollNodeRequest, EnrollNodeResponse, EnrollmentToken, NodeHello, NodeView};
+use super::model::{NodeHello, NodeView, DEDICATED_NODE_ID};
 use super::NodeProtocolError;
 use crate::db::Pool;
-
-const DEFAULT_ENROLLMENT_TTL_SECONDS: u64 = 900;
-const MIN_ENROLLMENT_TTL_SECONDS: u64 = 60;
-const MAX_ENROLLMENT_TTL_SECONDS: u64 = 86_400;
 
 #[derive(Clone)]
 pub(crate) struct NodeStore {
@@ -26,101 +22,66 @@ impl NodeStore {
         }
     }
 
-    pub(crate) async fn create_enrollment_token(
+    pub(crate) async fn request_pairing(
         &self,
-        display_name: &str,
-        target_node_id: Uuid,
-        ttl_seconds: Option<u64>,
-    ) -> Result<EnrollmentToken, NodeProtocolError> {
-        let display_name = validate_display_name(display_name)?;
-        let ttl_seconds = ttl_seconds.unwrap_or(DEFAULT_ENROLLMENT_TTL_SECONDS);
-        if !(MIN_ENROLLMENT_TTL_SECONDS..=MAX_ENROLLMENT_TTL_SECONDS).contains(&ttl_seconds) {
-            return Err(NodeProtocolError::InvalidRequest(format!(
-                "ttl_seconds must be between {MIN_ENROLLMENT_TTL_SECONDS} and {MAX_ENROLLMENT_TTL_SECONDS}"
-            )));
+        node_id: Uuid,
+        public_key: &[u8],
+    ) -> Result<(), NodeProtocolError> {
+        if node_id != DEDICATED_NODE_ID || public_key.len() != 32 {
+            return Err(NodeProtocolError::AuthenticationFailed);
         }
 
-        let mut tx = self.pool.begin().await?;
-        let node = sqlx::query(
-            "INSERT INTO dev_nodes (id, display_name, credential_kind) \
-             VALUES ($1, $2, 'ed25519') \
+        sqlx::query(
+            "INSERT INTO dev_nodes \
+                (id, display_name, credential_kind, pending_public_key, \
+                 connection_state, enrolled_at) \
+             VALUES ($1, 'sulion-enclave', 'ed25519', $2, 'pending', NULL) \
              ON CONFLICT (id) DO UPDATE SET \
-                display_name = EXCLUDED.display_name, updated_at = NOW() \
-             WHERE dev_nodes.credential_kind = 'ed25519'",
+                pending_public_key = EXCLUDED.pending_public_key, \
+                connection_state = CASE \
+                    WHEN dev_nodes.public_key IS NULL THEN 'pending' \
+                    ELSE dev_nodes.connection_state \
+                END, \
+                updated_at = NOW() \
+             WHERE dev_nodes.credential_kind = 'ed25519' \
+               AND dev_nodes.pending_public_key IS DISTINCT FROM EXCLUDED.pending_public_key",
         )
-        .bind(target_node_id)
-        .bind(&display_name)
-        .execute(&mut *tx)
+        .bind(node_id)
+        .bind(public_key)
+        .execute(&self.pool)
         .await?;
-        if node.rows_affected() == 0 {
-            return Err(NodeProtocolError::InvalidRequest(
-                "node ID belongs to the standalone runtime".into(),
-            ));
-        }
-
-        let token = super::random_url_token(32)?;
-        let expires_at: DateTime<Utc> = sqlx::query_scalar(
-            "INSERT INTO dev_node_enrollment_tokens \
-                (id, token_hash, display_name, target_node_id, expires_at) \
-             VALUES ($1, $2, $3, $4, NOW() + make_interval(secs => $5::INT)) \
-             RETURNING expires_at",
-        )
-        .bind(Uuid::new_v4())
-        .bind(token_hash(&token))
-        .bind(&display_name)
-        .bind(target_node_id)
-        .bind(ttl_seconds as i32)
-        .fetch_one(&mut *tx)
-        .await?;
-        tx.commit().await?;
-
-        Ok(EnrollmentToken {
-            token,
-            expires_at,
-            target_node_id,
-        })
+        Ok(())
     }
 
-    pub(crate) async fn enroll(
-        &self,
-        request: EnrollNodeRequest,
-    ) -> Result<EnrollNodeResponse, NodeProtocolError> {
-        let public_key = decode_public_key(&request.public_key)?;
+    pub(crate) async fn approve_pairing(&self, node_id: Uuid) -> Result<(), NodeProtocolError> {
         let mut tx = self.pool.begin().await?;
-        let token = consume_enrollment_token(&mut tx, &request.token).await?;
-        let display_name: String = sqlx::query_scalar(
-            "UPDATE dev_nodes SET public_key = $2, \
+        let approved: Uuid = sqlx::query_scalar(
+            "UPDATE dev_nodes SET public_key = pending_public_key, pending_public_key = NULL, \
                     connection_id = NULL, connection_state = 'enrolled', \
-                    node_disconnected_at = NOW(), updated_at = NOW() \
+                    enrolled_at = NOW(), node_disconnected_at = NOW(), updated_at = NOW() \
               WHERE id = $1 AND credential_kind = 'ed25519' \
-          RETURNING display_name",
+                AND pending_public_key IS NOT NULL \
+          RETURNING id",
         )
-        .bind(token.target_node_id)
-        .bind(&public_key)
+        .bind(node_id)
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(NodeProtocolError::NotFound)?;
-        mark_sessions_disconnected(&mut tx, token.target_node_id).await?;
+        mark_sessions_disconnected(&mut tx, approved).await?;
         tx.commit().await?;
-
-        Ok(EnrollNodeResponse {
-            node_id: token.target_node_id,
-            display_name,
-            protocol_version: super::model::NODE_PROTOCOL_VERSION,
-        })
+        Ok(())
     }
 
     pub(crate) async fn credential(
         &self,
         node_id: Uuid,
-    ) -> Result<NodeCredential, NodeProtocolError> {
-        sqlx::query_as::<_, NodeCredential>(
+    ) -> Result<Option<NodeCredential>, NodeProtocolError> {
+        Ok(sqlx::query_as::<_, NodeCredential>(
             "SELECT public_key, credential_kind FROM dev_nodes WHERE id = $1",
         )
         .bind(node_id)
         .fetch_optional(&self.pool)
-        .await?
-        .ok_or(NodeProtocolError::UnknownNode)
+        .await?)
     }
 
     pub(crate) async fn record_connection(
@@ -283,15 +244,32 @@ impl NodeStore {
     }
 
     pub(crate) async fn list_nodes(&self) -> Result<Vec<NodeView>, NodeProtocolError> {
-        Ok(sqlx::query_as::<_, NodeView>(
+        let rows = sqlx::query_as::<_, NodeRow>(
             "SELECT id, display_name, protocol_version, boot_id, connection_state, \
                     connected_at, last_heartbeat_at, node_disconnected_at, \
-                    $1::BIGINT AS heartbeat_timeout_seconds \
+                    pending_public_key \
                FROM dev_nodes ORDER BY display_name, id",
         )
-        .bind(self.heartbeat_timeout_seconds)
         .fetch_all(&self.pool)
-        .await?)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| NodeView {
+                id: row.id,
+                display_name: row.display_name,
+                protocol_version: row.protocol_version,
+                boot_id: row.boot_id,
+                connection_state: row.connection_state,
+                connected_at: row.connected_at,
+                last_heartbeat_at: row.last_heartbeat_at,
+                node_disconnected_at: row.node_disconnected_at,
+                heartbeat_timeout_seconds: self.heartbeat_timeout_seconds,
+                pending_key_fingerprint: row
+                    .pending_public_key
+                    .as_deref()
+                    .map(public_key_fingerprint),
+            })
+            .collect())
     }
 
     pub(crate) async fn ensure_internal_node(
@@ -327,8 +305,16 @@ pub(crate) struct NodeCredential {
 }
 
 #[derive(Debug, FromRow)]
-struct EnrollmentTokenRow {
-    target_node_id: Uuid,
+struct NodeRow {
+    id: Uuid,
+    display_name: String,
+    protocol_version: Option<i32>,
+    boot_id: Option<Uuid>,
+    connection_state: String,
+    connected_at: Option<DateTime<Utc>>,
+    last_heartbeat_at: Option<DateTime<Utc>>,
+    node_disconnected_at: Option<DateTime<Utc>>,
+    pending_public_key: Option<Vec<u8>>,
 }
 
 #[derive(Debug, FromRow)]
@@ -336,24 +322,6 @@ struct ExpiredConnection {
     id: Uuid,
     boot_id: Uuid,
     connection_id: Uuid,
-}
-
-async fn consume_enrollment_token(
-    tx: &mut Transaction<'_, Postgres>,
-    token: &str,
-) -> Result<EnrollmentTokenRow, NodeProtocolError> {
-    if token.len() < 32 || token.len() > 256 {
-        return Err(NodeProtocolError::InvalidEnrollmentToken);
-    }
-    sqlx::query_as::<_, EnrollmentTokenRow>(
-        "UPDATE dev_node_enrollment_tokens SET used_at = NOW() \
-          WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW() \
-      RETURNING target_node_id",
-    )
-    .bind(token_hash(token))
-    .fetch_optional(&mut **tx)
-    .await?
-    .ok_or(NodeProtocolError::InvalidEnrollmentToken)
 }
 
 async fn mark_sessions_disconnected(
@@ -434,20 +402,10 @@ fn validate_display_name(value: &str) -> Result<String, NodeProtocolError> {
     Ok(value.to_string())
 }
 
-fn decode_public_key(value: &str) -> Result<Vec<u8>, NodeProtocolError> {
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(value)
-        .map_err(|_| NodeProtocolError::InvalidRequest("invalid public key encoding".into()))?;
-    if decoded.len() != 32 {
-        return Err(NodeProtocolError::InvalidRequest(
-            "Ed25519 public key must be 32 bytes".into(),
-        ));
-    }
-    Ok(decoded)
-}
-
-fn token_hash(token: &str) -> Vec<u8> {
-    digest::digest(&digest::SHA256, token.as_bytes())
-        .as_ref()
-        .to_vec()
+fn public_key_fingerprint(public_key: &[u8]) -> String {
+    format!(
+        "SHA256:{}",
+        base64::engine::general_purpose::STANDARD_NO_PAD
+            .encode(digest::digest(&digest::SHA256, public_key))
+    )
 }

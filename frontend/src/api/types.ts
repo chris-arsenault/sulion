@@ -170,6 +170,7 @@ export interface RepoView {
 }
 
 export type NodeConnectionState =
+  | "pending"
   | "enrolled"
   | "connected"
   | "disconnected";
@@ -184,6 +185,7 @@ export interface NodeView {
   last_heartbeat_at: string | null;
   node_disconnected_at: string | null;
   heartbeat_timeout_seconds: number;
+  pending_key_fingerprint: string | null;
 }
 
 export interface AppStateResponse {

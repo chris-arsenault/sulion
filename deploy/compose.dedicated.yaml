@@ -21,7 +21,7 @@ services:
       SULION_CODE_INTEL_URL: http://127.0.0.1:8084
     volumes: !override
       - ${SULION_HOME_HOST_PATH:-/home/sulion}:/home/sulion
-      - ${SULION_NODE_STATE_HOST_PATH:-/var/lib/sulion/node}:/var/lib/sulion-node:ro
+      - ${SULION_NODE_STATE_HOST_PATH:-/var/lib/sulion/node}:/var/lib/sulion-node
       - type: bind
         source: /var/run/docker.sock
         target: /var/run/docker.sock

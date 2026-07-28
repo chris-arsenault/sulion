@@ -106,9 +106,6 @@ pkgs.testers.runNixOSTest {
     machine.succeed("getfattr -n user.DOSATTRIB /home/sulion/repos/from-smb/hostname.txt")
 
     machine.succeed("systemctl cat sulion-stack.service | grep -F /var/run/docker.sock")
-    machine.succeed(
-      "systemctl cat sulion-stack.service | grep -F /var/lib/sulion/node/private-key.pk8"
-    )
     machine.succeed("systemctl cat sulion-stack.service | grep -F compose.dedicated.yaml")
     machine.succeed(
       "systemctl cat sulion-stack.service | grep -F 'Sulion dedicated development-node application'"

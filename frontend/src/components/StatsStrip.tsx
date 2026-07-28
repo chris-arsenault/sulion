@@ -6,25 +6,57 @@
 // pressure. No history, no alerting; this exists to answer "is this
 // deploy sized correctly?" at a glance (ticket #27).
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type MouseEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 
+import { approveNodePairing } from "../api/client";
 import { Icon } from "../icons";
 import { useSessions } from "../state/SessionStore";
 import { Tooltip } from "./ui";
 import "./StatsStrip.css";
 
 export function StatsStrip() {
-  const { nodes, stats, lastError } = useSessions(
+  const { nodes, stats, lastError, refresh } = useSessions(
     useShallow((store) => ({
       nodes: store.nodes,
       stats: store.stats,
       lastError: store.lastError,
+      refresh: store.refresh,
     })),
   );
   const [expanded, setExpanded] = useState(false);
+  const [approvingNodeId, setApprovingNodeId] = useState<string | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   const toggleExpanded = useCallback(() => setExpanded((v) => !v), []);
+  const approvePairing = useCallback(
+    async (nodeId: string) => {
+      setApprovingNodeId(nodeId);
+      setApprovalError(null);
+      try {
+        await approveNodePairing(nodeId);
+        await refresh();
+      } catch (error) {
+        setApprovalError(
+          error instanceof Error ? error.message : "Node approval failed",
+        );
+      } finally {
+        setApprovingNodeId(null);
+      }
+    },
+    [refresh],
+  );
+  const approvePendingNode = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      void approvePairing(event.currentTarget.value);
+    },
+    [approvePairing],
+  );
+  const primaryNode =
+    nodes.find((node) => node.connection_state === "connected") ??
+    nodes.find((node) => node.pending_key_fingerprint != null) ??
+    nodes[0] ??
+    null;
 
   if (!stats) {
     return (
@@ -45,11 +77,6 @@ export function StatsStrip() {
   const memPct = memLimitMb ? Math.min(100, (memUsedMb / memLimitMb) * 100) : null;
   const cpuDisplay = `${s.process.cpu_percent.toFixed(0)}%`;
   const dbSizeDisplay = formatBytes(s.db.database_size_bytes);
-  const primaryNode =
-    nodes.find((node) => node.connection_state === "connected") ??
-    nodes[0] ??
-    null;
-
   return (
     <div className="stats-strip" data-testid="stats-strip">
       <button
@@ -96,7 +123,7 @@ export function StatsStrip() {
           label={
             primaryNode
               ? `${primaryNode.display_name}: ${nodeStatusLabel(primaryNode.connection_state)}`
-              : "No development node enrolled"
+              : "No development node paired"
           }
         >
           <span
@@ -172,30 +199,56 @@ export function StatsStrip() {
           <section className="stats-strip__section" aria-label="Development nodes">
             <h3 className="stats-strip__section-title">Development node</h3>
             {primaryNode ? (
-              <dl className="stats-strip__details">
-                <div>
-                  <dt>name</dt>
-                  <dd>{primaryNode.display_name}</dd>
-                </div>
-                <div>
-                  <dt>connection</dt>
-                  <dd>{nodeStatusLabel(primaryNode.connection_state)}</dd>
-                </div>
-                <div>
-                  <dt>protocol</dt>
-                  <dd>
-                    {primaryNode.protocol_version == null
-                      ? "unknown"
-                      : `v${primaryNode.protocol_version}`}
-                  </dd>
-                </div>
-                <div>
-                  <dt>last heartbeat</dt>
-                  <dd>{formatTimestamp(primaryNode.last_heartbeat_at)}</dd>
-                </div>
-              </dl>
+              <>
+                <dl className="stats-strip__details">
+                  <div>
+                    <dt>name</dt>
+                    <dd>{primaryNode.display_name}</dd>
+                  </div>
+                  <div>
+                    <dt>connection</dt>
+                    <dd>{nodeStatusLabel(primaryNode.connection_state)}</dd>
+                  </div>
+                  <div>
+                    <dt>protocol</dt>
+                    <dd>
+                      {primaryNode.protocol_version == null
+                        ? "unknown"
+                        : `v${primaryNode.protocol_version}`}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>last heartbeat</dt>
+                    <dd>{formatTimestamp(primaryNode.last_heartbeat_at)}</dd>
+                  </div>
+                  {primaryNode.pending_key_fingerprint && (
+                    <div>
+                      <dt>identity</dt>
+                      <dd>{primaryNode.pending_key_fingerprint}</dd>
+                    </div>
+                  )}
+                </dl>
+                {primaryNode.pending_key_fingerprint && (
+                  <button
+                    type="button"
+                    className="stats-strip__approve"
+                    disabled={approvingNodeId === primaryNode.id}
+                    onClick={approvePendingNode}
+                    value={primaryNode.id}
+                  >
+                    {approvingNodeId === primaryNode.id
+                      ? "Approving…"
+                      : "Approve node"}
+                  </button>
+                )}
+                {approvalError && (
+                  <span className="stats-strip__approval-error" role="alert">
+                    {approvalError}
+                  </span>
+                )}
+              </>
             ) : (
-              <span className="stats-strip__empty">No node enrolled</span>
+              <span className="stats-strip__empty">No node paired</span>
             )}
           </section>
         </div>

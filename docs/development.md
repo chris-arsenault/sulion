@@ -38,7 +38,9 @@ The portable Compose bundle and role overlays are documented in
 [`deploy/README.md`](../deploy/README.md). `compose.yaml` is the production
 TrueNAS control-plane selection. Add `deploy/compose.standalone.yaml` for a
 combined generic-Linux runtime, or `deploy/compose.dedicated.yaml` for the
-node-only NixOS runtime.
+node-only NixOS runtime. `deploy/compose.truenas-standalone.yaml` is the
+single-file Komodo entry point for combined TrueNAS host operation; selecting
+it requires changing only `truenas_compose_path` in `platform.yml`.
 
 ## PTY Postgres
 
@@ -62,7 +64,7 @@ Postgres-backed tests live in `backend/tests/*_integration.rs`, gated with `#![c
 - The harness enables the `integration-tests` Cargo feature, runs each integration target one at a time with `--test-threads=1`, and auto-starts an ephemeral `docker.io/library/postgres:16` container via Docker when `SULION_TEST_DB` is unset.
 - In Sulion PTYs, the runner automatically attaches that container to the `sulion` Docker network, and tests connect to the container name on port `5432`; no Docker socket or host port discovery is required in the PTY.
 - Do not mark backend integration tests `#[ignore]`. When adding a new target, register it in the script so the harness stays the single supported path.
-- `node_protocol_integration` exercises real WebSocket enrollment/authentication,
+- `node_protocol_integration` exercises real WebSocket pairing/authentication,
   reconnect and boot reconciliation, direct loopback requests, control
   replacement with a live PTY, and filesystem escape rejection. Do not replace
   those behaviors with serialized-message or source-text assertions.

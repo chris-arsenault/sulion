@@ -29,6 +29,7 @@ function nodeView(overrides: Partial<NodeView> = {}): NodeView {
     last_heartbeat_at: "2026-07-27T12:00:03Z",
     node_disconnected_at: null,
     heartbeat_timeout_seconds: 20,
+    pending_key_fingerprint: null,
     ...overrides,
   };
 }
@@ -98,6 +99,40 @@ describe("StatsStrip", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await user.click(screen.getByLabelText(/toggle stats details/i));
     expect(screen.getByText("never")).toBeDefined();
+  });
+
+  it("approves a pending node from the control-plane UI", async () => {
+    const pending = nodeView({
+      connection_state: "pending",
+      protocol_version: null,
+      boot_id: null,
+      connected_at: null,
+      last_heartbeat_at: null,
+      pending_key_fingerprint: "SHA256:pending-node-key",
+    });
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        return new Response(null, { status: 204 });
+      }
+      return jsonResponse(appStatePayload({ stats: statsPayload(), nodes: [pending] }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<StatsStrip />);
+    await waitFor(() => {
+      expect(screen.getByText("pending")).toBeDefined();
+    });
+
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByLabelText(/toggle stats details/i));
+    expect(screen.getByText("SHA256:pending-node-key")).toBeDefined();
+    await user.click(screen.getByRole("button", { name: "Approve node" }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) =>
+        String(url).endsWith(`/api/nodes/${pending.id}/approve`) &&
+        init?.method === "POST",
+      )).toBe(true);
+    });
   });
 
   it("shows 'stats unavailable' when the endpoint fails on first load", async () => {

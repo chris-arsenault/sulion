@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{post, Router};
@@ -11,8 +11,8 @@ use futures::StreamExt;
 use uuid::Uuid;
 
 use super::model::{
-    ControlWireMessage, CreateEnrollmentTokenRequest, EnrollNodeRequest, FragmentAssembler,
-    NodeWireMessage, WireEnvelope, MAX_NODE_FRAME_BYTES, NODE_PROTOCOL_VERSION,
+    ControlWireMessage, FragmentAssembler, NodeWireMessage, WireEnvelope, MAX_NODE_FRAME_BYTES,
+    NODE_PROTOCOL_VERSION,
 };
 use super::NodeProtocolError;
 use crate::AppState;
@@ -20,39 +20,19 @@ use crate::AppState;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn public_router() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/api/nodes/enroll", post(enroll))
-        .route("/ws/nodes", axum::routing::get(connect))
+    Router::new().route("/ws/nodes", axum::routing::get(connect))
 }
 
 pub fn admin_router() -> Router<Arc<AppState>> {
-    Router::new().route(
-        "/api/nodes/enrollment-tokens",
-        post(create_enrollment_token),
-    )
+    Router::new().route("/api/nodes/:id/approve", post(approve_pairing))
 }
 
-async fn create_enrollment_token(
+async fn approve_pairing(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<CreateEnrollmentTokenRequest>,
+    Path(node_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, NodeApiError> {
-    let token = state
-        .node_control
-        .create_enrollment_token(
-            &request.display_name,
-            request.target_node_id,
-            request.ttl_seconds,
-        )
-        .await?;
-    Ok((StatusCode::CREATED, Json(token)))
-}
-
-async fn enroll(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<EnrollNodeRequest>,
-) -> Result<impl IntoResponse, NodeApiError> {
-    let enrolled = state.node_control.enroll(request).await?;
-    Ok((StatusCode::CREATED, Json(enrolled)))
+    state.node_control.approve_pairing(node_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn connect(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -88,12 +68,18 @@ async fn node_socket(state: Arc<AppState>, mut socket: WebSocket) {
             return;
         }
     };
+    let node_id = hello.node_id;
     let connection = match state
         .node_control
         .authenticate_and_register(hello, &challenge)
         .await
     {
         Ok(registration) => registration,
+        Err(NodeProtocolError::PairingRequired) => {
+            tracing::info!(%node_id, "development node is awaiting approval");
+            close_with_reason(&mut socket, 1008, "node approval required").await;
+            return;
+        }
         Err(err) => {
             tracing::warn!(%err, "development node authentication rejected");
             close_with_reason(&mut socket, 1008, "node authentication failed").await;
@@ -289,9 +275,7 @@ impl IntoResponse for NodeApiError {
             NodeProtocolError::NotFound | NodeProtocolError::UnknownNode => {
                 (StatusCode::NOT_FOUND, "node_not_found")
             }
-            NodeProtocolError::InvalidEnrollmentToken => {
-                (StatusCode::UNAUTHORIZED, "invalid_enrollment_token")
-            }
+            NodeProtocolError::PairingRequired => (StatusCode::CONFLICT, "node_pairing_required"),
             NodeProtocolError::AuthenticationFailed => {
                 (StatusCode::UNAUTHORIZED, "node_authentication_failed")
             }

@@ -9,9 +9,17 @@ overlays:
   Linux host;
 - `compose.truenas.yaml` adds the TrueNAS brokered-Docker policy when used
   together with the standalone overlay for rollback; and
+- `compose.truenas-standalone.yaml` merges those files into the single Compose
+  entry point required by Komodo; and
 - `compose.dedicated.yaml` runs only the development node, ingester, and code
   intelligence on the dedicated host. Only the node receives the development
   home and direct access to the dedicated host's Docker daemon.
+
+`platform.yml` is the TrueNAS topology selector. Keep
+`truenas_compose_path: compose.yaml` for the split control plane. To restore
+combined TrueNAS host operation, change only that value to
+`deploy/compose.truenas-standalone.yaml` and push the commit to `main`. Both
+paths are rendered by CI on every change.
 
 The backend image is deliberately a shared release artifact in this phase: it
 contains the `sulion`, `sulion-node`, and `sulion-ingester` binaries plus the

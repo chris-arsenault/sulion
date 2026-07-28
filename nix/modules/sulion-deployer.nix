@@ -90,10 +90,7 @@ in
         "docker.service"
         "network-online.target"
       ];
-      unitConfig.ConditionPathExists = [
-        cfg.envFile
-        "/var/lib/sulion/node/private-key.pk8"
-      ];
+      unitConfig.ConditionPathExists = [ cfg.envFile ];
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
@@ -101,7 +98,6 @@ in
         EnvironmentFile = cfg.envFile;
         ExecStartPre = [
           "${pkgs.coreutils}/bin/test -S /var/run/docker.sock"
-          "${pkgs.coreutils}/bin/test -f /var/lib/sulion/node/private-key.pk8"
         ];
         ExecStart = "${compose} ${composeArgs} up -d --remove-orphans";
         ExecReload = "${compose} ${composeArgs} up -d --remove-orphans";
@@ -121,10 +117,7 @@ in
         "docker.service"
         "network-online.target"
       ];
-      unitConfig.ConditionPathExists = [
-        cfg.envFile
-        "/var/lib/sulion/node/private-key.pk8"
-      ];
+      unitConfig.ConditionPathExists = [ cfg.envFile ];
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${nodeUpdate}/bin/sulion-node-update";

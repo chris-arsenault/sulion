@@ -1,14 +1,5 @@
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args = std::env::args().collect::<Vec<_>>();
-    if let Some(command) = args.get(1).map(String::as_str) {
-        match command {
-            "keygen" => return keygen(&args[2..]),
-            "enroll" => return enroll(&args[2..]).await,
-            _ => {}
-        }
-    }
-
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(
@@ -19,6 +10,13 @@ async fn main() -> anyhow::Result<()> {
 
     let client_config = sulion::node_protocol::client::NodeClientConfig::from_env()?;
     let config = sulion::config::Config::from_env()?;
+    if !client_config.private_key_path.try_exists()? {
+        sulion::node_protocol::client::generate_private_key(&client_config.private_key_path)?;
+        tracing::info!(
+            path = %client_config.private_key_path.display(),
+            "generated development node identity key"
+        );
+    }
     let pool = sulion::db::connect_and_wait_for_migrations(&config.db_url, "node").await?;
     let private_key = std::sync::Arc::new(sulion::node_protocol::client::load_private_key(
         &client_config.private_key_path,
@@ -101,35 +99,4 @@ fn add_supplementary_group(gid: libc::gid_t) -> anyhow::Result<()> {
         }
     }
     Ok(())
-}
-
-fn keygen(args: &[String]) -> anyhow::Result<()> {
-    let output = option(args, "--output")
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| anyhow::anyhow!("usage: sulion-node keygen --output <private-key-path>"))?;
-    let public_key = sulion::node_protocol::client::generate_private_key(&output)?;
-    println!("{public_key}");
-    Ok(())
-}
-
-async fn enroll(args: &[String]) -> anyhow::Result<()> {
-    let control_url = option(args, "--control-url").ok_or_else(|| {
-        anyhow::anyhow!(
-            "usage: sulion-node enroll --control-url <https-url> --token <token> --key <path>"
-        )
-    })?;
-    let token = option(args, "--token")
-        .ok_or_else(|| anyhow::anyhow!("sulion-node enroll requires --token"))?;
-    let key = option(args, "--key")
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| anyhow::anyhow!("sulion-node enroll requires --key"))?;
-    let enrolled = sulion::node_protocol::client::enroll(&control_url, &token, &key).await?;
-    println!("{}", serde_json::to_string_pretty(&enrolled)?);
-    Ok(())
-}
-
-fn option(args: &[String], name: &str) -> Option<String> {
-    args.windows(2)
-        .find(|pair| pair[0] == name)
-        .map(|pair| pair[1].clone())
 }

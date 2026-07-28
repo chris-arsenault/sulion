@@ -17,11 +17,10 @@ use tokio::sync::{mpsc, oneshot, watch, RwLock};
 use uuid::Uuid;
 
 pub use model::{
-    CreateEnrollmentTokenRequest, EnrollNodeRequest, EnrollNodeResponse, EnrollmentToken,
     NodeHello, NodeRequestKind, NodeView, RequestResultPayload, RequestResultStatus,
     TerminalBytesPayload, TerminalDeadPayload, TerminalResizePayload, WireEnvelope,
-    DEFAULT_HEARTBEAT_INTERVAL_SECS, DEFAULT_HEARTBEAT_TIMEOUT_SECS, MAX_NODE_FRAME_BYTES,
-    NODE_PROTOCOL_VERSION,
+    DEDICATED_NODE_ID, DEFAULT_HEARTBEAT_INTERVAL_SECS, DEFAULT_HEARTBEAT_TIMEOUT_SECS,
+    MAX_NODE_FRAME_BYTES, NODE_PROTOCOL_VERSION,
 };
 pub use transport::{admin_router, public_router};
 
@@ -34,8 +33,8 @@ pub enum NodeProtocolError {
     NotFound,
     #[error("unknown node")]
     UnknownNode,
-    #[error("invalid or expired enrollment token")]
-    InvalidEnrollmentToken,
+    #[error("node is awaiting operator approval")]
+    PairingRequired,
     #[error("invalid request: {0}")]
     InvalidRequest(String),
     #[error("node authentication failed")]
@@ -171,24 +170,10 @@ impl NodeControl {
         })
     }
 
-    pub async fn create_enrollment_token(
-        &self,
-        display_name: &str,
-        target_node_id: Uuid,
-        ttl_seconds: Option<u64>,
-    ) -> Result<EnrollmentToken, NodeProtocolError> {
-        self.store
-            .create_enrollment_token(display_name, target_node_id, ttl_seconds)
-            .await
-    }
-
-    pub async fn enroll(
-        &self,
-        request: EnrollNodeRequest,
-    ) -> Result<EnrollNodeResponse, NodeProtocolError> {
-        let response = self.store.enroll(request).await?;
-        self.cancel_active(response.node_id).await;
-        Ok(response)
+    pub async fn approve_pairing(&self, node_id: Uuid) -> Result<(), NodeProtocolError> {
+        self.store.approve_pairing(node_id).await?;
+        self.cancel_active(node_id).await;
+        Ok(())
     }
 
     pub async fn list_nodes(&self) -> Result<Vec<NodeView>, NodeProtocolError> {
@@ -350,13 +335,25 @@ impl NodeControl {
     ) -> Result<RegisteredConnection, NodeProtocolError> {
         validate_hello(&hello)?;
         let credential = self.store.credential(hello.node_id).await?;
-        if credential.credential_kind != "ed25519"
+        if credential
+            .as_ref()
+            .is_some_and(|credential| credential.credential_kind != "ed25519")
             || hello.protocol_version != challenge.protocol_version
         {
             return Err(NodeProtocolError::AuthenticationFailed);
         }
-        let public_key = credential
+        let offered_public_key = hello
             .public_key
+            .as_deref()
+            .map(decode_node_public_key)
+            .transpose()?;
+        let public_key = offered_public_key
+            .as_deref()
+            .or_else(|| {
+                credential
+                    .as_ref()
+                    .and_then(|credential| credential.public_key.as_deref())
+            })
             .ok_or(NodeProtocolError::AuthenticationFailed)?;
         let signature = hello.decode_signature().map_err(|err| {
             tracing::debug!(%err, node_id = %hello.node_id, "invalid node signature encoding");
@@ -365,6 +362,18 @@ impl NodeControl {
         signature::UnparsedPublicKey::new(&signature::ED25519, public_key)
             .verify(&hello.signing_payload(challenge), &signature)
             .map_err(|_| NodeProtocolError::AuthenticationFailed)?;
+
+        if let Some(offered_public_key) = offered_public_key {
+            let approved = credential
+                .as_ref()
+                .and_then(|credential| credential.public_key.as_deref());
+            if approved != Some(offered_public_key.as_slice()) {
+                self.store
+                    .request_pairing(hello.node_id, &offered_public_key)
+                    .await?;
+                return Err(NodeProtocolError::PairingRequired);
+            }
+        }
         self.register(hello).await
     }
 
@@ -593,6 +602,16 @@ fn validate_hello(hello: &NodeHello) -> Result<(), NodeProtocolError> {
         return Err(NodeProtocolError::AuthenticationFailed);
     }
     Ok(())
+}
+
+fn decode_node_public_key(value: &str) -> Result<Vec<u8>, NodeProtocolError> {
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| NodeProtocolError::AuthenticationFailed)?;
+    if decoded.len() != 32 {
+        return Err(NodeProtocolError::AuthenticationFailed);
+    }
+    Ok(decoded)
 }
 
 pub(crate) fn random_url_token(bytes: usize) -> Result<String, NodeProtocolError> {

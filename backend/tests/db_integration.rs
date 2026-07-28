@@ -53,7 +53,6 @@ async fn migrations_apply_on_empty_db() {
         "code_references",
         "code_roots",
         "code_symbols",
-        "dev_node_enrollment_tokens",
         "dev_nodes",
         "events",
         "event_blocks",
@@ -74,6 +73,12 @@ async fn migrations_apply_on_empty_db() {
             "table {expected} missing; got {names:?}"
         );
     }
+    assert!(
+        !names
+            .iter()
+            .any(|name| name == "dev_node_enrollment_tokens"),
+        "legacy node enrollment token table still exists"
+    );
 }
 
 #[tokio::test]

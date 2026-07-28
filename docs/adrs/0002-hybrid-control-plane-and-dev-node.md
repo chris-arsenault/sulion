@@ -76,7 +76,7 @@ dev-node application artifacts used on conventional Linux.
 The control-to-node surface is a small typed protocol rather than a general
 remote-command channel. It covers:
 
-- node enrollment, authentication, heartbeat, and boot identity;
+- node pairing approval, authentication, heartbeat, and boot identity;
 - direct session and workspace lifecycle requests;
 - terminal snapshot, output, input, resize, and reconnect streams;
 - repository, file, Git, upload, and worktree operations;

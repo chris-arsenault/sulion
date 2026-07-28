@@ -63,6 +63,10 @@
   color: var(--crit-fg);
 }
 
+.stats-strip__node[data-state="pending"] {
+  color: var(--warn-fg);
+}
+
 .stats-strip__empty {
   color: var(--text-lo);
   font-style: italic;
@@ -128,4 +132,24 @@
   margin: 0;
   font-family: var(--font-mono);
   text-align: right;
+}
+
+.stats-strip__approve {
+  align-self: flex-end;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.stats-strip__approve:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.stats-strip__approval-error {
+  color: var(--crit-fg);
 }

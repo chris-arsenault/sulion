@@ -19,14 +19,14 @@ not implement a multi-node scheduler, capability negotiation, rolling protocol
 ranges, release reconciliation, durable remote-operation ledger, replay cache,
 credential history, drain controller, or remote shell.
 
-There is one protocol version and three persisted connection states:
-`enrolled`, `connected`, and `disconnected`. A mismatched or unauthenticated
-peer is rejected; it is not retained as another lifecycle state. Upgrades that
-change the protocol must update control and node together.
+There is one protocol version and four persisted connection states: `pending`,
+`enrolled`, `connected`, and `disconnected`. Only the fixed node ID can enter
+the pending state; other unknown or unauthenticated peers are rejected.
+Upgrades that change the protocol must update control and node together.
 
 This leaves four mechanisms:
 
-1. one-time enrollment and an Ed25519 node identity;
+1. one-click pairing approval and an Ed25519 node identity;
 2. an outbound authenticated WebSocket;
 3. direct typed request/response messages and terminal streams; and
 4. a heartbeat containing boot identity and live PTY inventory.
@@ -62,26 +62,20 @@ Control owns:
 
 ## Enrollment and connection
 
-The checked-in host configuration fixes the node ID. An authenticated operator
-creates a short-lived token for that ID:
+The checked-in host configuration fixes one dedicated node ID. On first start,
+the node creates its Ed25519 key locally and includes the public key in its
+signed handshake. Control verifies proof of possession and exposes the
+fingerprint as pending in the authenticated UI. The operator approves it with:
 
 ```text
-POST /api/nodes/enrollment-tokens
-{ display_name, target_node_id, ttl_seconds? }
+POST /api/nodes/{id}/approve
 ```
 
-The node consumes it once:
-
-```text
-POST /api/nodes/enroll
-{ token, public_key }
-```
-
-Only the token hash and the current public key are stored. Re-enrollment for
-the same configured ID replaces that key and closes its active connection.
-There is no credential-generation or revocation-history subsystem. Removing a
-compromised node is an operator action: stop it, replace the key through a new
-targeted enrollment token, and restart it.
+Approval stores the submitted public key. The node's existing outbound retry
+loop then reconnects without a copied token or a node-side command. A different
+key for the same fixed ID becomes a new pending approval and does not replace
+the accepted key until approved. There is no credential history, tenant model,
+or separate enrollment service.
 
 The long-lived endpoint is `GET /ws/nodes`. Control sends a random challenge.
 The node signs the challenge, stable node ID, fresh boot ID, and exact protocol
@@ -160,7 +154,7 @@ without duplicating node behavior or depending on NixOS.
 The focused node tests cover:
 
 - control readiness and mutation refusal while the node is absent;
-- targeted enrollment and authenticated connection;
+- pending-key approval and authenticated connection;
 - same-boot reconnect versus new-boot session termination;
 - the shared direct request path in loopback mode;
 - PTY survival across control replacement; and
