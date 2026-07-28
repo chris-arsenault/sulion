@@ -179,7 +179,6 @@ fn signed_hello_with_nonce(
         node_id,
         boot_id,
         node_nonce: node_nonce.to_string(),
-        tunnel_public_key: None,
         protocol_version: NODE_PROTOCOL_VERSION,
         public_key: Some(
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(keypair.public_key().as_ref()),
@@ -815,25 +814,19 @@ async fn a_node_paired_to_one_control_plane_refuses_another() {
 }
 
 #[tokio::test]
-async fn credentials_are_withheld_from_the_cleartext_enrollment_hop() {
-    // The tunnel cannot exist before the keys are exchanged, so enrollment has
-    // to happen in the clear. That hop is allowed to carry public keys and the
-    // peering, and nothing else.
-    std::env::set_var("SULION_TUNNEL_ENDPOINT", "192.168.66.3:51820");
-    std::env::set_var("SULION_TUNNEL_SUBNET", "10.88.0.0/24");
-    let pool = fresh_pool().await;
-    sqlx::query("INSERT INTO control_tunnel (id, private_key, public_key) VALUES (1, $1, $2)")
-        .bind(vec![7_u8; 32])
-        .bind(vec![9_u8; 32])
-        .execute(&pool)
-        .await
-        .expect("seed control tunnel key");
+async fn the_node_channel_runs_over_tls_bound_to_the_control_identity() {
+    // Sessions carry credentials, so the node channel must be encrypted and
+    // the encryption must be attributable: the certificate a node sees is
+    // signed into the handshake proof by the identity an operator approved.
+    use sulion::node_protocol::tls;
 
-    let tunnel = sulion::node_protocol::TunnelPolicy::load(&pool)
-        .await
-        .expect("load tunnel")
-        .expect("tunnel configured");
+    let pool = fresh_pool().await;
     let identity = control_identity();
+    let expected_key = identity.public_key().to_string();
+    let (cert_pem, key_pem) = tls::test_certificate();
+    let control_tls = tls::ControlTls::from_pem(&cert_pem, &key_pem).expect("parse tls");
+    let expected_digest = control_tls.digest.clone();
+
     let state = AppState::new_with_auth_and_node_mode(
         pool,
         "/tmp".into(),
@@ -846,100 +839,78 @@ async fn credentials_are_withheld_from_the_cleartext_enrollment_hop() {
     state
         .node_control
         .apply_policy(
-            Some(delivered_config(&[("DB_PASSWORD", "delivered-secret")])),
+            None,
             NodeSourcePolicy::new(
                 NodeLanGuard::parse("127.0.0.0/8").expect("lan"),
                 NodeLanGuard::parse("").expect("proxies"),
             ),
             Some(identity),
-            Some(tunnel),
+            Some(expected_digest.clone()),
         )
         .expect("apply policy");
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    let router = app(state.clone());
+
+    let router = axum::Router::new()
+        .merge(sulion::node_protocol::public_router())
+        .with_state(state.clone());
+    let rustls_config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(
+        control_tls.server_config().expect("server config"),
+    ));
+    let handle = axum_server::Handle::new();
+    let serve_handle = handle.clone();
     tokio::spawn(async move {
-        let _ = axum::serve(
-            listener,
-            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .await;
-    });
-    let base = format!("http://{addr}");
-    let keypair = generate_keypair();
-    pair_and_approve(&base, &state.node_control, &keypair).await;
-
-    let mut socket = connect_node(&base, &keypair, DEDICATED_NODE_ID, Uuid::new_v4()).await;
-    // Loopback is not a tunnel address, so this connection gets the peering it
-    // needs to build the tunnel and no credentials.
-    let payload = receive_node_config(&mut socket).await;
-    assert_eq!(
-        payload["values"],
-        json!({}),
-        "credentials must not cross the cleartext enrollment hop"
-    );
-
-    std::env::remove_var("SULION_TUNNEL_ENDPOINT");
-    std::env::remove_var("SULION_TUNNEL_SUBNET");
-}
-
-#[tokio::test]
-async fn a_node_from_the_previous_release_still_authenticates() {
-    // Deploys are control-plane first: CI only advances node-release after the
-    // control deploy succeeds, so a still-running node from the previous
-    // release has to keep connecting to the new control plane. If it could
-    // not, the enclave would drop on every release until its poller caught up.
-    let pool = fresh_pool().await;
-    let (base, state) = start_server_with_identity(
-        pool,
-        None,
-        NodeSourcePolicy::new(
-            NodeLanGuard::parse("127.0.0.0/8").expect("lan"),
-            NodeLanGuard::parse("").expect("proxies"),
-        ),
-        Some(control_identity()),
-    )
-    .await;
-    let keypair = generate_keypair();
-
-    // A hello exactly as the previous release built it: no nonce, no tunnel
-    // key, and a signature over only the fields that release covered.
-    let legacy_hello = |challenge: &ControlChallenge, boot_id: Uuid| {
-        let mut hello = NodeHello {
-            node_id: DEDICATED_NODE_ID,
-            boot_id,
-            protocol_version: NODE_PROTOCOL_VERSION,
-            public_key: Some(
-                base64::engine::general_purpose::URL_SAFE_NO_PAD
-                    .encode(keypair.public_key().as_ref()),
-            ),
-            node_nonce: String::new(),
-            tunnel_public_key: None,
-            signature: String::new(),
-        };
-        hello.signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(keypair.sign(&hello.signing_payload(challenge)).as_ref());
-        hello
-    };
-
-    let send_legacy = |base: String, boot_id: Uuid| async move {
-        let mut socket = open_socket(&base).await;
-        let challenge = receive_challenge(&mut socket).await;
-        let hello = legacy_hello(&challenge, boot_id);
-        let envelope =
-            sulion::node_protocol::WireEnvelope::new(DEDICATED_NODE_ID, boot_id, "node.hello");
-        socket
-            .send(Message::Text(
-                serde_json::to_string(&NodeWireMessage::Hello { envelope, hello })
-                    .expect("hello json"),
-            ))
+        axum_server::bind_rustls("127.0.0.1:0".parse().unwrap(), rustls_config)
+            .handle(serve_handle)
+            .serve(router.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .await
-            .expect("send legacy hello");
-        socket
+            .expect("serve tls");
+    });
+    let addr = handle.listening().await.expect("listening");
+    let url = format!("wss://127.0.0.1:{}/ws/nodes", addr.port());
+
+    let keypair = generate_keypair();
+
+    // First contact: no pin yet, so the verifier records what it saw and the
+    // signed proof is what judges it.
+    let connect = |pinned: Option<rustls::pki_types::CertificateDer<'static>>| {
+        let url = url.clone();
+        async move {
+            let (verifier, seen) = tls::PinnedServerVerifier::new(pinned);
+            let connector = tokio_tungstenite::Connector::Rustls(Arc::new(
+                tls::client_config(verifier).expect("client config"),
+            ));
+            let result = tokio_tungstenite::connect_async_tls_with_config(
+                &url,
+                None,
+                false,
+                Some(connector),
+            )
+            .await;
+            (result, seen)
+        }
     };
 
-    // Pairing, then a real connection, both with the old signature shape.
-    let mut socket = send_legacy(base.clone(), Uuid::new_v4()).await;
+    let (result, seen) = connect(None).await;
+    let mut socket = result.expect("tls connect").0;
+    let seen_der = seen.lock().unwrap().clone().expect("certificate seen");
+    assert_eq!(tls::cert_digest(&seen_der), expected_digest);
+
+    // Enrollment over the encrypted channel, then the proof must bind the
+    // exact certificate the TLS layer presented.
+    let boot_id = Uuid::new_v4();
+    let challenge = receive_challenge(&mut socket).await;
+    let hello = signed_hello(&keypair, &challenge, DEDICATED_NODE_ID, boot_id);
+    let envelope =
+        sulion::node_protocol::WireEnvelope::new(DEDICATED_NODE_ID, boot_id, "node.hello");
+    socket
+        .send(Message::Text(
+            serde_json::to_string(&NodeWireMessage::Hello {
+                envelope,
+                hello: hello.clone(),
+            })
+            .expect("hello json"),
+        ))
+        .await
+        .expect("send hello");
     let response = socket.next().await.expect("frame").expect("read");
     let Message::Close(Some(frame)) = response else {
         panic!("expected pairing-required close, got {response:?}");
@@ -951,7 +922,40 @@ async fn a_node_from_the_previous_release_still_authenticates() {
         .await
         .expect("approve");
 
-    let mut socket = send_legacy(base, Uuid::new_v4()).await;
+    let (result, seen) = connect(Some(seen_der.clone().into())).await;
+    let mut socket = result.expect("pinned tls connect").0;
+    let challenge = receive_challenge(&mut socket).await;
+    let hello = signed_hello(&keypair, &challenge, DEDICATED_NODE_ID, Uuid::new_v4());
+    let envelope =
+        sulion::node_protocol::WireEnvelope::new(DEDICATED_NODE_ID, hello.boot_id, "node.hello");
+    socket
+        .send(Message::Text(
+            serde_json::to_string(&NodeWireMessage::Hello {
+                envelope,
+                hello: hello.clone(),
+            })
+            .expect("hello json"),
+        ))
+        .await
+        .expect("send hello");
     let ack = receive_ack(&mut socket).await;
-    assert_eq!(ack.protocol_version, NODE_PROTOCOL_VERSION);
+    let proof = ack.control_proof.expect("proof");
+    assert_eq!(proof.public_key, expected_key);
+    assert_eq!(
+        proof.tls_cert_digest.as_deref(),
+        Some(expected_digest.as_str()),
+        "the signed proof must bind the TLS certificate",
+    );
+    let seen_again = seen.lock().unwrap().clone().expect("certificate seen");
+    assert_eq!(tls::cert_digest(&seen_again), expected_digest);
+
+    // A node pinned to a different certificate must fail at the TLS layer,
+    // before any protocol bytes flow.
+    let (other_pem, other_key) = tls::test_certificate();
+    let other = tls::ControlTls::from_pem(&other_pem, &other_key).expect("other tls");
+    let (result, _) = connect(Some(other.cert_der().clone())).await;
+    assert!(
+        result.is_err(),
+        "a mismatched certificate pin must refuse the connection"
+    );
 }

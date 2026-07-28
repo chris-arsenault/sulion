@@ -4,16 +4,13 @@ services:
     container_name: sulion-backend
     restart: unless-stopped
     ports:
-      # Development-node enrollment, bound to the LAN address only. A node
-      # cannot reach the tunnel before it has been peered, so this cleartext
-      # hop exists to exchange public keys and nothing else; credentials are
-      # withheld until a connection arrives over wg0. No upstream registration
-      # points at either port, so node pairing is not reachable from the public
-      # reverse proxy.
-      - "${SULION_NODE_BIND_ADDRESS:-192.168.66.3}:${SULION_NODE_PORT:-30081}:8080"
-      # WireGuard endpoint. Declared here rather than on node-tunnel because
-      # that container shares this network namespace.
-      - "${SULION_NODE_BIND_ADDRESS:-192.168.66.3}:${SULION_TUNNEL_PORT:-51820}:51820/udp"
+      # Development-node control channel, bound to the LAN address only and
+      # published to a listener that serves nothing but /ws/nodes — the rest of
+      # the API stays behind the frontend proxy on an unpublished port. Direct
+      # rather than proxied so the LAN source check sees each node's real
+      # address. No upstream registration points at this port, so node pairing
+      # is not reachable from the public reverse proxy.
+      - "${SULION_NODE_BIND_ADDRESS:-192.168.66.3}:${SULION_NODE_PORT:-30081}:8085"
     environment:
       # DB connects to the shared TrueNAS Postgres (192.168.66.3:5432).
       # DB + role + SSM creds are auto-provisioned by the
@@ -31,11 +28,12 @@ services:
       # peer. SULION_NODE_TRUSTED_PROXY_CIDR is deliberately unset here, which
       # means a forwarded client address is never believed.
       SULION_NODE_LAN_CIDR: "${SULION_NODE_LAN_CIDR:-192.168.66.0/24}"
-      # Where nodes dial the tunnel, and the address space it hands out. Setting
-      # the endpoint is what turns the tunnel on: unset, credentials are
-      # delivered over the LAN hop as before.
-      SULION_TUNNEL_ENDPOINT: "${SULION_TUNNEL_ENDPOINT:-192.168.66.3:51820}"
-      SULION_TUNNEL_SUBNET: "${SULION_TUNNEL_SUBNET:-10.88.0.0/24}"
+      # Second listener carrying only the node router and the broker/retrieval
+      # gateway; the published node port above targets this, never the full
+      # API on 8080. Serves TLS with a self-generated certificate whose SANs
+      # cover the LAN address nodes dial.
+      SULION_NODE_LISTEN: "0.0.0.0:8085"
+      SULION_NODE_TLS_SAN: "${SULION_NODE_TLS_SAN:-192.168.66.3}"
       # Forwarded verbatim to a node once an operator approves its identity
       # key. This is the whole reason a dedicated node needs no secrets of its
       # own. Already present in SULION_DB_URL above; named individually here so
@@ -97,11 +95,6 @@ services:
       # required to match on every connection after, so a machine that later
       # answers on the same address cannot take the node over.
       SULION_NODE_CONTROL_PIN_PATH: "/var/lib/sulion-node/control-key.pub"
-      # This node's WireGuard key, and the config it renders from the peering
-      # it is granted. Both root-owned; the host applies the config, because
-      # the node does not own the host network namespace.
-      SULION_NODE_TUNNEL_KEY_PATH: "/var/lib/sulion-node/tunnel-private.key"
-      SULION_NODE_TUNNEL_CONF_PATH: "/var/lib/sulion-node/wg0.conf"
       SULION_NODE_RUN_USER: "dev"
       SULION_NODE_RUN_UID: "7321"
       SULION_NODE_RUN_GID: "7321"
@@ -121,29 +114,6 @@ services:
       HOME: "/home/dev"
     networks:
       - sulion
-
-  node-tunnel:
-    image: ${SULION_IMAGE_REGISTRY:-ghcr.io/chris-arsenault/sulion}/backend:${IMAGE_TAG:-latest}
-    container_name: sulion-node-tunnel
-    restart: unless-stopped
-    # Shares the backend's network namespace, so wg0 is an interface the
-    # backend binds directly: no forwarding, no address translation, and the
-    # node's real tunnel address is what the source check sees. NET_ADMIN lives
-    # here rather than on the control process.
-    network_mode: "service:backend"
-    cap_add:
-      - NET_ADMIN
-    entrypoint:
-      - /usr/bin/dumb-init
-      - --
-      - /usr/local/bin/sulion-node-tunnel
-    environment:
-      SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@${SULION_POSTGRES_HOST:-192.168.66.3}:${SULION_POSTGRES_PORT:-5432}/${SULION_DB_NAME:-sulion}"
-      SULION_TUNNEL_SUBNET: "${SULION_TUNNEL_SUBNET:-10.88.0.0/24}"
-      SULION_TUNNEL_PORT: "${SULION_TUNNEL_PORT:-51820}"
-      HOME: "/home/dev"
-    depends_on:
-      - backend
 
   ingester:
     image: ${SULION_IMAGE_REGISTRY:-ghcr.io/chris-arsenault/sulion}/backend:${IMAGE_TAG:-latest}

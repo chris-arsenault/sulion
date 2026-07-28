@@ -135,7 +135,8 @@ fn broker_registration_client() -> Option<BrokerRegistrationClient> {
     Some(BrokerRegistrationClient {
         broker_url,
         registration_token,
-        http: reqwest::Client::new(),
+        // Trusts the pinned control certificate in addition to public roots.
+        http: crate::node_protocol::tls::control_http_client(),
     })
 }
 

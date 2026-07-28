@@ -36,10 +36,6 @@ pub struct NodeHello {
     /// one connection cannot be replayed into another.
     #[serde(default)]
     pub node_nonce: String,
-    /// WireGuard public key offered for peering. Present from the first
-    /// cleartext enrollment; control returns the peering once approved.
-    #[serde(default)]
-    pub tunnel_public_key: Option<String>,
     pub signature: String,
 }
 
@@ -58,12 +54,10 @@ impl NodeHello {
             fields.push(public_key.clone());
         }
         // Appended rather than inserted so an older node's signature, which
-        // covers neither field, still verifies against the same construction.
+        // does not cover the nonce, still verifies against the same
+        // construction.
         if !self.node_nonce.is_empty() {
             fields.push(self.node_nonce.clone());
-        }
-        if let Some(tunnel_public_key) = &self.tunnel_public_key {
-            fields.push(tunnel_public_key.clone());
         }
         fields.join("\n").into_bytes()
     }
@@ -85,32 +79,38 @@ pub struct HelloAck {
     /// so this cannot be stripped to force a downgrade.
     #[serde(default)]
     pub control_proof: Option<ControlHelloProof>,
-    /// WireGuard peering granted to this node, present once it is approved.
-    #[serde(default)]
-    pub tunnel: Option<TunnelPeering>,
 }
 
 /// Control's signature over the handshake, carrying the key that made it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ControlHelloProof {
     pub public_key: String,
+    /// Digest of the TLS certificate this control plane serves. Signed, so the
+    /// certificate a node sees in the handshake is bound to the identity an
+    /// operator approved: a substituted certificate cannot carry this proof.
+    #[serde(default)]
+    pub tls_cert_digest: Option<String>,
     pub signature: String,
 }
 
 impl ControlHelloProof {
     pub fn signing_payload(&self, challenge: &ControlChallenge, hello: &NodeHello) -> Vec<u8> {
-        [
-            "sulion-control-handshake-v1",
-            &challenge.challenge_id.to_string(),
-            &challenge.nonce,
-            &hello.node_nonce,
-            &hello.node_id.to_string(),
-            &hello.boot_id.to_string(),
-            &hello.protocol_version.to_string(),
-            &self.public_key,
-        ]
-        .join("\n")
-        .into_bytes()
+        let mut fields = vec![
+            "sulion-control-handshake-v1".to_string(),
+            challenge.challenge_id.to_string(),
+            challenge.nonce.clone(),
+            hello.node_nonce.clone(),
+            hello.node_id.to_string(),
+            hello.boot_id.to_string(),
+            hello.protocol_version.to_string(),
+            self.public_key.clone(),
+        ];
+        // Appended so a proof without it verifies against the same
+        // construction during a version skew.
+        if let Some(tls_cert_digest) = &self.tls_cert_digest {
+            fields.push(tls_cert_digest.clone());
+        }
+        fields.join("\n").into_bytes()
     }
 
     pub fn decode_signature(&self) -> anyhow::Result<Vec<u8>> {
@@ -118,22 +118,6 @@ impl ControlHelloProof {
             .decode(&self.signature)
             .map_err(|err| anyhow::anyhow!("invalid control proof encoding: {err}"))
     }
-}
-
-/// The WireGuard peering control grants an approved node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TunnelPeering {
-    /// Control's WireGuard public key.
-    pub control_public_key: String,
-    /// Address this node takes on the tunnel, in CIDR form.
-    pub node_address: String,
-    /// Control's address on the tunnel; the node's only allowed destination.
-    pub control_address: String,
-    /// `host:port` the node dials to establish the tunnel.
-    pub endpoint: String,
-    /// Control URL reachable once the tunnel is up. The node moves to this for
-    /// everything past enrollment, so session traffic never crosses cleartext.
-    pub control_url: String,
 }
 
 /// Signing payload binding a configuration digest to the node it is sent to.
@@ -521,7 +505,6 @@ mod tests {
             boot_id: Uuid::nil(),
             protocol_version: 1,
             node_nonce: "node-nonce".into(),
-            tunnel_public_key: None,
             public_key: Some("public-key".into()),
             signature: String::new(),
         }

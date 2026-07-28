@@ -47,22 +47,6 @@ let
       exec ${pkgs.bash}/bin/bash ${../scripts/sulion-node-bootstrap.sh}
     '';
   };
-  nodeTunnel = pkgs.writeShellApplication {
-    name = "sulion-node-tunnel";
-    runtimeInputs = with pkgs; [
-      coreutils
-      diffutils
-      gnugrep
-      iproute2
-      util-linux
-      wireguard-tools
-    ];
-    text = ''
-      export SULION_TUNNEL_CONF_SOURCE=${lib.escapeShellArg cfg.tunnelConfigFile}
-      export SULION_TUNNEL_INTERFACE=${lib.escapeShellArg cfg.tunnelInterface}
-      exec ${pkgs.bash}/bin/bash ${../scripts/sulion-node-tunnel.sh}
-    '';
-  };
   nodeActivate = pkgs.writeShellApplication {
     name = "sulion-node-activate";
     runtimeInputs = with pkgs; [
@@ -145,21 +129,6 @@ in
       '';
     };
 
-    tunnelConfigFile = lib.mkOption {
-      type = lib.types.str;
-      default = "/var/lib/sulion/node/wg0.conf";
-      description = ''
-        WireGuard configuration `sulion-node` renders from the peering the
-        control plane granted it. Written root-only; a path unit applies it.
-      '';
-    };
-
-    tunnelInterface = lib.mkOption {
-      type = lib.types.str;
-      default = "wg0";
-      description = "Interface name for the control-plane tunnel.";
-    };
-
     nodeStateDirectory = lib.mkOption {
       type = lib.types.str;
       default = "/var/lib/sulion/node";
@@ -174,38 +143,38 @@ in
 
     controlUrl = lib.mkOption {
       type = lib.types.str;
-      default = "ws://192.168.66.3:30081/ws/nodes";
+      default = "wss://192.168.66.3:30081/ws/nodes";
       description = ''
-        Node control channel. Points at the control plane's LAN-bound node port
-        rather than its public hostname, so node traffic never leaves the LAN
-        and never traverses the public reverse proxy.
+        Node control channel: the control plane's encrypted LAN node port,
+        never its public hostname. TLS terminates in the control process and
+        the node pins the certificate on first pairing.
       '';
     };
 
     allowInsecureControlUrl = lib.mkOption {
       type = lib.types.bool;
-      default = true;
+      default = false;
       description = ''
-        Permit a `ws://` control URL. The default control URL is a LAN address
-        on the same segment the node already reaches Postgres over, so it
-        carries the same exposure rather than a new one.
+        Permit a `ws://` control URL. Sessions carry credentials, so cleartext
+        is never acceptable in deployment; this exists for local development
+        stacks only.
       '';
     };
 
     secretBrokerUrl = lib.mkOption {
       type = lib.types.str;
-      default = "http://10.88.0.1:8081";
+      default = "https://192.168.66.3:30081/broker";
       description = ''
-        Secret broker, reached over the tunnel rather than the public
-        hostname. Every destination a node talks to is on the tunnel, so no
-        node traffic leaves the LAN.
+        Secret broker, on the same encrypted node port as the control channel:
+        one endpoint, one certificate, one pin. No node traffic leaves the
+        network or crosses the LAN in the clear.
       '';
     };
 
     retrievalUrl = lib.mkOption {
       type = lib.types.str;
-      default = "http://10.88.0.1:8083";
-      description = "Retrieval service, reached over the tunnel.";
+      default = "https://192.168.66.3:30081/retrieval";
+      description = "Retrieval, on the encrypted node port.";
     };
 
     codeIntelUrl = lib.mkOption {
@@ -255,9 +224,7 @@ in
       nodeActivate
       nodeBootstrap
       nodeDeploy
-      nodeTunnel
       nodeUpdate
-      pkgs.wireguard-tools
     ];
 
     # Generates the host half of the runtime environment. Without this the node
@@ -325,29 +292,6 @@ in
       serviceConfig = {
         Type = "oneshot";
         ExecStart = "${nodeActivate}/bin/sulion-node-activate";
-      };
-    };
-
-    # The node writes its peering after it is approved; this is what turns that
-    # write into a live interface without anyone logging in. Credentials are
-    # withheld by the control plane until they can cross it.
-    systemd.paths.sulion-node-tunnel = {
-      description = "Watch for tunnel peering delivered to the Sulion node";
-      wantedBy = [ "paths.target" ];
-      pathConfig = {
-        PathChanged = cfg.tunnelConfigFile;
-        Unit = "sulion-node-tunnel.service";
-      };
-    };
-
-    systemd.services.sulion-node-tunnel = {
-      description = "Apply tunnel peering delivered to the Sulion node";
-      wants = [ "network-online.target" ];
-      after = [ "network-online.target" ];
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-        ExecStart = "${nodeTunnel}/bin/sulion-node-tunnel";
       };
     };
 

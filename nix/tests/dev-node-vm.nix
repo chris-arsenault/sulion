@@ -118,7 +118,12 @@ pkgs.testers.runNixOSTest {
     machine.succeed("test $(stat -c %a /var/lib/sulion/config/bootstrap.env) = 600")
     bootstrap = machine.succeed("cat /var/lib/sulion/config/bootstrap.env")
     assert "SULION_NODE_ID=019d4f28-88ac-7a80-932c-b0f53a0708f4" in bootstrap
-    assert "SULION_NODE_CONTROL_URL=ws://192.168.66.3:30081/ws/nodes" in bootstrap
+    assert "SULION_NODE_CONTROL_URL=wss://192.168.66.3:30081/ws/nodes" in bootstrap
+    # Every destination the node talks to is on the LAN; nothing points at the
+    # public hostname.
+    assert "SULION_SECRET_BROKER_URL=https://192.168.66.3:30081/broker" in bootstrap
+    assert "SULION_RETRIEVAL_URL=https://192.168.66.3:30081/retrieval" in bootstrap
+    assert "ahara.io" not in bootstrap
     assert "SULION_REPOS_HOST_PATH=/home/sulion/repos" in bootstrap
     assert "SULION_DEV_PORT_RANGE=26000-26010" in bootstrap
     # Shared credentials are delivered, never generated here.
@@ -152,44 +157,10 @@ pkgs.testers.runNixOSTest {
     # An incomplete delivery must not trigger a deployment.
     machine.succeed("sulion-node-activate | grep -F 'nothing to activate'")
 
-    # The tunnel is what makes the node channel confidential, and the node end
-    # is a host interface rather than a container, so activation has to be able
-    # to bring it up from what the node writes.
-    machine.succeed("test $(stat -c %U:%G /var/lib/sulion/node/wg0.conf) = root:root")
-    machine.succeed("test $(stat -c %a /var/lib/sulion/node/wg0.conf) = 600")
-    machine.succeed("sudo -u sulion test ! -r /var/lib/sulion/node/wg0.conf")
-    machine.succeed("systemctl is-enabled sulion-node-tunnel.path")
-    machine.succeed(
-      "systemctl cat sulion-node-tunnel.path "
-      "| grep -F 'PathChanged=/var/lib/sulion/node/wg0.conf'"
-    )
-    machine.succeed("command -v sulion-node-tunnel")
-    machine.succeed("command -v wg")
-    machine.succeed("command -v wg-quick")
-    # An empty peering must not try to configure an interface.
-    machine.succeed("sulion-node-tunnel | grep -F 'nothing to bring up'")
-
-    # A real peering brings the interface up and routes only to control.
-    machine.succeed("wg genkey > /tmp/node.key")
-    machine.succeed("wg genkey | wg pubkey > /tmp/control.pub")
-    machine.succeed(
-      "printf '[Interface]\\nPrivateKey = %s\\nAddress = 10.88.0.2/24\\n\\n"
-      "[Peer]\\nPublicKey = %s\\nAllowedIPs = 10.88.0.1/32\\n"
-      "Endpoint = 192.168.66.3:51820\\n' "
-      "\"$(cat /tmp/node.key)\" \"$(cat /tmp/control.pub)\" "
-      "> /var/lib/sulion/node/wg0.conf"
-    )
-    # Let the path unit do it, which is what actually happens in production;
-    # invoking the script here as well would race it.
-    machine.wait_until_succeeds("ip link show wg0", timeout=30)
-    machine.succeed("ip -4 addr show wg0 | grep -F '10.88.0.2/24'")
-    machine.succeed("systemctl is-active sulion-node-tunnel.service")
-    peers = machine.succeed("wg show wg0 allowed-ips")
-    assert "10.88.0.1/32" in peers, peers
-    # Nodes reach control, not each other, so the subnet must not be routed.
-    assert "10.88.0.0/24" not in peers, peers
-    # Re-applying an unchanged peering must not disturb a live interface.
-    machine.succeed("sulion-node-tunnel | grep -F 'already current'")
+    # No tunnel machinery: the node host grants no elevated network privileges
+    # and runs no WireGuard units.
+    machine.fail("systemctl cat sulion-node-tunnel.path")
+    machine.fail("test -e /var/lib/sulion/node/wg0.conf")
 
     machine.succeed("systemctl cat sulion-stack.service | grep -F /var/run/docker.sock")
     machine.succeed("systemctl cat sulion-stack.service | grep -F compose.dedicated.yaml")

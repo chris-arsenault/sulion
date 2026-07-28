@@ -72,14 +72,18 @@ impl ControlIdentity {
     /// Signs the handshake so the node can bind this connection to this key.
     ///
     /// The node's own nonce is covered, so a proof captured from an earlier
-    /// connection cannot be replayed into a later one.
+    /// connection cannot be replayed into a later one. The TLS certificate
+    /// digest is covered so the encrypted transport the node sees is bound to
+    /// this identity.
     pub fn prove_handshake(
         &self,
         challenge: &ControlChallenge,
         hello: &NodeHello,
+        tls_cert_digest: Option<&str>,
     ) -> ControlHelloProof {
         let mut proof = ControlHelloProof {
             public_key: self.public_key.clone(),
+            tls_cert_digest: tls_cert_digest.map(str::to_string),
             signature: String::new(),
         };
         proof.signature = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(

@@ -3,21 +3,19 @@ services:
     profiles:
       - control-plane
 
-  # The tunnel's control end lives with the control plane; the node end is a
-  # NixOS interface on this host, not a container.
-  node-tunnel:
-    profiles:
-      - control-plane
-
   node:
     profiles: !reset []
     network_mode: host
     networks: !reset []
     environment:
-      # The control plane's LAN-bound node port, not its public hostname. Node
-      # traffic never leaves the LAN and never crosses the public proxy.
-      SULION_NODE_CONTROL_URL: ${SULION_NODE_CONTROL_URL:-ws://192.168.66.3:30081/ws/nodes}
-      SULION_NODE_ALLOW_INSECURE_WS: "${SULION_NODE_ALLOW_INSECURE_WS:-1}"
+      # The control plane's encrypted LAN node port, not its public hostname.
+      # TLS terminates in the control process; the node pins the certificate.
+      # Node traffic never leaves the LAN and never crosses the public proxy.
+      SULION_NODE_CONTROL_URL: ${SULION_NODE_CONTROL_URL:-wss://192.168.66.3:30081/ws/nodes}
+      SULION_NODE_ALLOW_INSECURE_WS: "${SULION_NODE_ALLOW_INSECURE_WS:-0}"
+      # World-readable copy of the pinned certificate, trusted as an extra root
+      # by the node process and every PTY tool.
+      SULION_CONTROL_TLS_CA: /run/sulion/control-tls.pem
       SULION_DOCKER_MODE: direct
       SULION_REPOS_ROOT: /home/sulion/repos
       SULION_WORKSPACES_ROOT: /home/sulion/workspaces
@@ -25,10 +23,10 @@ services:
       SULION_CODEX_SESSIONS: /home/sulion/.codex/sessions
       DOCKER_HOST: unix:///var/run/docker.sock
       HOME: /home/sulion
-      # Reached over the tunnel, not the public hostname. No node traffic
-      # leaves the LAN, and none of it crosses the public reverse proxy.
-      SULION_SECRET_BROKER_URL: ${SULION_SECRET_BROKER_URL:-http://10.88.0.1:8081}
-      SULION_RETRIEVAL_URL: ${SULION_RETRIEVAL_URL:-http://10.88.0.1:8083}
+      # Broker and retrieval ride the same encrypted node port: one endpoint,
+      # one certificate, one pin. Secrets never cross the LAN in the clear.
+      SULION_SECRET_BROKER_URL: ${SULION_SECRET_BROKER_URL:-https://192.168.66.3:30081/broker}
+      SULION_RETRIEVAL_URL: ${SULION_RETRIEVAL_URL:-https://192.168.66.3:30081/retrieval}
       SULION_CODE_INTEL_URL: http://127.0.0.1:8084
     volumes: !override
       - ${SULION_HOME_HOST_PATH:-/home/sulion}:/home/sulion

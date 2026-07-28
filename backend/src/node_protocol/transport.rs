@@ -48,27 +48,24 @@ async fn connect(
     let forwarded = headers
         .get("x-real-ip")
         .and_then(|value| value.to_str().ok());
-    let client = match state
+    match state
         .node_control
         .source_policy()
         .admit(peer.map(|ConnectInfo(peer)| peer.ip()), forwarded)
     {
-        Ok(client) => {
-            tracing::debug!(%client, "node socket admitted");
-            client
-        }
+        Ok(client) => tracing::debug!(%client, "node socket admitted"),
         Err(refusal) => {
             tracing::warn!(%refusal, "node socket refused");
             return (StatusCode::FORBIDDEN, "node source address not permitted").into_response();
         }
-    };
+    }
     ws.max_message_size(MAX_NODE_FRAME_BYTES)
         .max_frame_size(MAX_NODE_FRAME_BYTES)
-        .on_upgrade(move |socket| node_socket(state, socket, client))
+        .on_upgrade(move |socket| node_socket(state, socket))
         .into_response()
 }
 
-async fn node_socket(state: Arc<AppState>, mut socket: WebSocket, client: std::net::IpAddr) {
+async fn node_socket(state: Arc<AppState>, mut socket: WebSocket) {
     let challenge = match state.node_control.challenge() {
         Ok(challenge) => challenge,
         Err(err) => {
@@ -113,7 +110,7 @@ async fn node_socket(state: Arc<AppState>, mut socket: WebSocket, client: std::n
             return;
         }
     };
-    run_connection(state, socket, connection, client).await;
+    run_connection(state, socket, connection).await;
 }
 
 async fn receive_hello(socket: &mut WebSocket) -> Result<super::NodeHello, NodeProtocolError> {
@@ -143,7 +140,6 @@ async fn run_connection(
     state: Arc<AppState>,
     mut socket: WebSocket,
     mut connection: super::RegisteredConnection,
-    client: std::net::IpAddr,
 ) {
     let ack = match ack_envelope(
         connection.ack.clone(),
@@ -171,7 +167,7 @@ async fn run_connection(
         return;
     }
 
-    if !deliver_node_config(&state, &connection, client, &mut socket).await {
+    if !deliver_node_config(&state, &connection, &mut socket).await {
         state
             .node_control
             .disconnected(
@@ -243,27 +239,13 @@ async fn run_connection(
 /// need pre-provisioned. Returns whether the connection is still usable.
 ///
 /// Always sends something, with an empty map when there is nothing to deliver,
-/// so a node never waits out a timeout to learn that. Credentials are withheld
-/// entirely from a connection that did not arrive over the tunnel.
+/// so a node never waits out a timeout to learn that.
 async fn deliver_node_config(
     state: &Arc<AppState>,
     connection: &super::RegisteredConnection,
-    client: std::net::IpAddr,
     socket: &mut WebSocket,
 ) -> bool {
-    let may_deliver = state.node_control.may_deliver_credentials(Some(client));
-    if !may_deliver {
-        tracing::info!(
-            node_id = %connection.node_id,
-            %client,
-            "withholding credentials until this node connects over the tunnel",
-        );
-    }
-    let payload = match state
-        .node_control
-        .delivered_config()
-        .filter(|_| may_deliver)
-    {
+    let payload = match state.node_control.delivered_config() {
         Some(config) => {
             tracing::info!(
                 node_id = %connection.node_id,

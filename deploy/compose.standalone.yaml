@@ -27,9 +27,3 @@ services:
 
   runner:
     profiles: !reset []
-
-  # This role hosts the node runtime in-process, so there is no remote node to
-  # build a tunnel to.
-  node-tunnel:
-    profiles:
-      - control-plane

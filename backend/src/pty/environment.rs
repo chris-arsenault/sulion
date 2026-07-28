@@ -87,6 +87,10 @@ pub(super) fn configure_pty_environment(
         "SULION_CODEX_SESSIONS",
         "SULION_SECRET_BROKER_URL",
         "SULION_RETRIEVAL_URL",
+        // Pinned control TLS certificate, so PTY tools reaching the broker and
+        // retrieval verify the control plane's self-signed endpoint. Added as
+        // an extra root; public TLS is unaffected.
+        "SULION_CONTROL_TLS_CA",
         "SULION_RETRIEVAL_TOKEN",
         "SULION_CODE_INTEL_URL",
         "SULION_CODE_INTEL_TOKEN",

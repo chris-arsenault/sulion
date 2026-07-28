@@ -32,7 +32,6 @@ pub(super) async fn start(
         boot_id,
         protocol_version: NODE_PROTOCOL_VERSION,
         node_nonce: String::new(),
-        tunnel_public_key: None,
         public_key: None,
         signature: String::new(),
     };
@@ -55,7 +54,6 @@ pub(super) async fn start_runtime(
         boot_id: runtime.boot_id(),
         protocol_version: NODE_PROTOCOL_VERSION,
         node_nonce: String::new(),
-        tunnel_public_key: None,
         public_key: None,
         signature: String::new(),
     };

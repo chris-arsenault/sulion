@@ -24,14 +24,12 @@ Those break-glass keys live only in the root-owned
 `/var/lib/sulion/config/ssh/authorized_keys`; they are not node credentials,
 broker secrets, or source-controlled host configuration.
 
-The common graph now has nine runtime service roles:
+The common graph now has eight runtime service roles:
 
 - `backend` — main API/control plane; also hosts the loopback runtime only in
   portable standalone mode
 - `node` — dedicated PTY, shadow-emulator, correlation, repo, worktree, file,
   Git, upload, and direct-Docker runtime
-- `node-tunnel` — WireGuard endpoint for the node channel, sharing the control
-  process's network namespace and holding the `NET_ADMIN` it must not
 - `ingester` — sole node-local Claude/Codex JSONL reader
 - `broker` — secret broker, separate container and UID
 - `retrieval` — agent-facing transcript/timeline retrieval API
@@ -61,7 +59,7 @@ Sulion needs three cross-repo infra registrations in `ahara-infra`:
 
 - `infrastructure/terraform/control/project-sulion.tf` grants the deployer role enough IAM to create the Sulion Cognito app client, publish SSM parameters, manage the project-owned ALB listener/certificate/DNS, and deploy the Komodo stack.
 - `infrastructure/terraform/services/db-migrate-truenas.tf` needs a `sulion` entry in `truenas_db_stacks` with `app` and `broker` database registrations so the shared migration Lambda provisions both databases and publishes `/ahara/truenas-db/sulion/app/{username,password}` plus `/ahara/truenas-db/sulion/broker/{username,password}`.
-- `infrastructure/terraform/network/locals.tf` registers `sulion.services.ahara.io` as an `internal` reverse-proxy upstream at `192.168.66.3:30080`, with buffering disabled and WebSocket upgrades enabled. `internal` means Ahara Infra owns nginx and WireGuard ingress while Sulion Terraform owns the public ALB resources. Ports `30081/tcp` and `51820/udp` are deliberately **not** registered: they are the backend's LAN-only development-node enrollment port and WireGuard endpoint, and routing either publicly would undo the node pairing boundary.
+- `infrastructure/terraform/network/locals.tf` registers `sulion.services.ahara.io` as an `internal` reverse-proxy upstream at `192.168.66.3:30080`, with buffering disabled and WebSocket upgrades enabled. `internal` means Ahara Infra owns nginx and WireGuard ingress while Sulion Terraform owns the public ALB resources. Port `30081/tcp` is deliberately **not** registered: it is the backend's encrypted LAN-only node endpoint (control channel plus broker/retrieval gateway), and routing it publicly would undo the node pairing boundary.
 
 Sulion also carries project-local Terraform under [`infrastructure/terraform/`](</home/dev/repos/sulion/infrastructure/terraform>) that creates its `sulion.services.ahara.io` ALB listener rules, ACM certificate, Route53 records, Cognito app client, and publishes:
 
@@ -222,11 +220,11 @@ available, while filesystem and PTY mutations return `503`.
 UI is at `https://sulion.services.ahara.io/`. The frontend blocks on Cognito
 sign-in. Browser REST and broker-management requests carry the Cognito token;
 PTY WebSockets use a short-lived, one-use ticket minted by an authenticated
-request. The node enrolls on `ws://192.168.66.3:30081/ws/nodes` over the LAN and
-then moves everything — control channel, broker, and retrieval — onto the
-tunnel at `10.88.0.1`. No node traffic reaches the public hostname; the
-`node-tunnel` sidecar publishes the broker and retrieval on the tunnel address
-so they do not have to be.
+request. All node traffic — control channel, broker, retrieval — uses the
+single encrypted endpoint at `192.168.66.3:30081` (`wss://…/ws/nodes`,
+`https://…/broker`, `https://…/retrieval`), TLS-terminated in the control
+process with a certificate the node pins. No node traffic reaches the public
+hostname or crosses the LAN in the clear.
 
 ## Networking
 

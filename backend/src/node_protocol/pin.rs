@@ -189,7 +189,6 @@ mod tests {
             protocol_version: 1,
             public_key: None,
             node_nonce: "node-nonce".into(),
-            tunnel_public_key: None,
             signature: String::new(),
         }
     }
@@ -205,7 +204,7 @@ mod tests {
         let control = identity();
         let (challenge, hello) = (challenge(), hello());
 
-        let proof = control.prove_handshake(&challenge, &hello);
+        let proof = control.prove_handshake(&challenge, &hello, None);
         let outcome = pin.verify(Some(&proof), &challenge, &hello).unwrap();
         assert_eq!(
             outcome,
@@ -213,7 +212,7 @@ mod tests {
         );
         pin.record(control.public_key()).unwrap();
 
-        let proof = control.prove_handshake(&challenge, &hello);
+        let proof = control.prove_handshake(&challenge, &hello, None);
         assert_eq!(
             pin.verify(Some(&proof), &challenge, &hello).unwrap(),
             PinOutcome::Matched
@@ -229,7 +228,7 @@ mod tests {
 
         // A well-formed proof from a key this node never paired with.
         let impostor = identity();
-        let proof = impostor.prove_handshake(&challenge, &hello);
+        let proof = impostor.prove_handshake(&challenge, &hello, None);
         let error = pin.verify(Some(&proof), &challenge, &hello).unwrap_err();
         assert!(error.to_string().contains("identity changed"));
     }
@@ -252,7 +251,7 @@ mod tests {
         pin.record(control.public_key()).unwrap();
 
         let first = challenge();
-        let proof = control.prove_handshake(&first, &hello());
+        let proof = control.prove_handshake(&first, &hello(), None);
         // Same key, but a different connection: the nonces no longer match.
         let error = pin
             .verify(Some(&proof), &challenge(), &hello())

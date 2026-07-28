@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
         auth,
         true,
     );
-    apply_node_policy(&state).await?;
+    let node_tls = apply_node_policy(&state).await?;
     if let Some(node) = cfg.standalone_node.as_ref() {
         let runtime = sulion::node_runtime::NodeRuntime::new(
             node.node_id,
@@ -101,6 +101,35 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(sulion::ingest::run_usage_backfill(pool.clone()));
     tokio::spawn(state.node_control.clone().run_heartbeat_monitor());
 
+    // The published LAN port for nodes serves TLS terminated in this process
+    // — no kernel tunnel, no elevated privileges anywhere — and carries only
+    // the node router plus the broker/retrieval gateway, so the rest of the
+    // API is never LAN-exposed. In-process rather than a proxy hop so the LAN
+    // source check sees each node's real address. The certificate is
+    // self-generated, pinned by nodes on first pairing, and its digest is
+    // signed into the handshake proof.
+    if let (Ok(node_listen), Some(tls)) = (std::env::var("SULION_NODE_LISTEN"), node_tls) {
+        let node_listen: std::net::SocketAddr = node_listen
+            .parse()
+            .map_err(|_| anyhow::anyhow!("SULION_NODE_LISTEN must be host:port"))?;
+        let node_app = axum::Router::new()
+            .merge(sulion::node_protocol::public_router())
+            .merge(sulion::node_protocol::gateway::router())
+            .with_state(state.clone());
+        let rustls_config = axum_server::tls_rustls::RustlsConfig::from_config(
+            std::sync::Arc::new(tls.server_config()?),
+        );
+        tracing::info!(listen = %node_listen, "node TLS listener bound");
+        tokio::spawn(async move {
+            if let Err(error) = axum_server::bind_rustls(node_listen, rustls_config)
+                .serve(node_app.into_make_service_with_connect_info::<std::net::SocketAddr>())
+                .await
+            {
+                tracing::error!(%error, "node listener exited");
+            }
+        });
+    }
+
     let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
     tracing::info!(listen = %cfg.listen, "api listener bound");
     // ConnectInfo is what the node LAN guard reads, so the node socket must be
@@ -113,9 +142,12 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Applies the node admission boundary and the runtime configuration this
-/// control plane hands to nodes it has already authenticated.
-async fn apply_node_policy(state: &AppState) -> anyhow::Result<()> {
+/// Applies the node admission boundary, the runtime configuration this control
+/// plane hands to authenticated nodes, and the TLS identity the node port
+/// serves. Returns the TLS material for the listener when one is configured.
+async fn apply_node_policy(
+    state: &AppState,
+) -> anyhow::Result<Option<sulion::node_protocol::tls::ControlTls>> {
     let source_policy = sulion::node_protocol::NodeSourcePolicy::from_env()?;
     if source_policy.is_unrestricted() {
         tracing::warn!("node LAN boundary disabled; SULION_NODE_LAN_CIDR is empty");
@@ -137,18 +169,26 @@ async fn apply_node_policy(state: &AppState) -> anyhow::Result<()> {
     let identity = sulion::node_protocol::ControlIdentity::load_or_create(&state.pool).await?;
     tracing::info!(control_key = %identity.public_key(), "control plane identity ready");
 
-    let tunnel = sulion::node_protocol::TunnelPolicy::load(&state.pool).await?;
-    match tunnel.as_ref() {
-        Some(tunnel) => tracing::info!(
-            control_address = %tunnel.control_address(),
-            "node tunnel peering available",
-        ),
-        None => tracing::warn!("no node tunnel configured; the node channel is not encrypted"),
-    }
+    // TLS for the node port, generated in-process: encryption without any
+    // elevated privilege. The digest rides the signed handshake proof so the
+    // certificate a node pins is bound to the identity above.
+    let node_tls = if std::env::var("SULION_NODE_LISTEN").is_ok() {
+        let sans = std::env::var("SULION_NODE_TLS_SAN").unwrap_or_else(|_| "192.168.66.3".into());
+        let tls =
+            sulion::node_protocol::tls::ControlTls::load_or_create(&state.pool, &sans).await?;
+        tracing::info!(digest = %tls.digest, %sans, "control TLS identity ready");
+        Some(tls)
+    } else {
+        None
+    };
 
-    state
-        .node_control
-        .apply_policy(delivered_config, source_policy, Some(identity), tunnel)
+    state.node_control.apply_policy(
+        delivered_config,
+        source_policy,
+        Some(identity),
+        node_tls.as_ref().map(|tls| tls.digest.clone()),
+    )?;
+    Ok(node_tls)
 }
 
 async fn dispatch_cli(argv: &[std::ffi::OsString]) -> anyhow::Result<Option<i32>> {

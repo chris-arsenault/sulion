@@ -1,13 +1,14 @@
 pub mod client;
 pub mod config;
+pub mod gateway;
 pub mod identity;
 mod lan;
 mod loopback;
 pub mod model;
 pub mod pin;
 mod store;
+pub mod tls;
 mod transport;
-pub mod tunnel;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,13 +28,12 @@ pub use lan::{NodeLanGuard, NodeSourcePolicy, SourceRefusal};
 pub use model::{
     ControlHelloProof, NodeConfigPayload, NodeHello, NodeRequestKind, NodeView,
     RequestResultPayload, RequestResultStatus, TerminalBytesPayload, TerminalDeadPayload,
-    TerminalResizePayload, TunnelPeering, WireEnvelope, DEDICATED_NODE_ID,
-    DEFAULT_HEARTBEAT_INTERVAL_SECS, DEFAULT_HEARTBEAT_TIMEOUT_SECS, DEFAULT_NODE_LAN_CIDR,
-    MAX_NODE_FRAME_BYTES, NODE_PROTOCOL_VERSION,
+    TerminalResizePayload, WireEnvelope, DEDICATED_NODE_ID, DEFAULT_HEARTBEAT_INTERVAL_SECS,
+    DEFAULT_HEARTBEAT_TIMEOUT_SECS, DEFAULT_NODE_LAN_CIDR, MAX_NODE_FRAME_BYTES,
+    NODE_PROTOCOL_VERSION,
 };
 pub use pin::{ControlPin, PinOutcome};
 pub use transport::{admin_router, public_router};
-pub use tunnel::{ApprovedPeer, TunnelPolicy};
 
 use model::HelloAck;
 use store::NodeStore;
@@ -79,8 +79,9 @@ pub struct NodeControl {
     /// Signing identity a node pins on first pairing. Unset on the loopback
     /// and test paths, which have no network peer to impersonate.
     identity: std::sync::OnceLock<ControlIdentity>,
-    /// WireGuard peering offered to approved nodes.
-    tunnel: std::sync::OnceLock<tunnel::TunnelPolicy>,
+    /// Digest of the TLS certificate served on the node port, signed into the
+    /// handshake proof so the transport is bound to the approved identity.
+    tls_cert_digest: std::sync::OnceLock<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,31 +196,12 @@ impl NodeControl {
             delivered_config: std::sync::OnceLock::new(),
             source_policy: std::sync::OnceLock::new(),
             identity: std::sync::OnceLock::new(),
-            tunnel: std::sync::OnceLock::new(),
+            tls_cert_digest: std::sync::OnceLock::new(),
         })
     }
 
-    /// Approves a node's pending identity, and its offered tunnel key with it.
-    ///
-    /// One press accepts both, so an operator never has to reason about them
-    /// separately, and a node cannot rotate its tunnel key unnoticed.
     pub async fn approve_pairing(&self, node_id: Uuid) -> Result<(), NodeProtocolError> {
-        let address = match self.tunnel_policy() {
-            Some(policy) => {
-                let taken = self
-                    .store
-                    .taken_tunnel_addresses()
-                    .await?
-                    .into_iter()
-                    .filter_map(|address| address.parse().ok())
-                    .collect::<Vec<_>>();
-                Some(policy.allocate(&taken)?.to_string())
-            }
-            None => None,
-        };
-        self.store
-            .approve_pairing(node_id, address.as_deref())
-            .await?;
+        self.store.approve_pairing(node_id).await?;
         self.cancel_active(node_id).await;
         Ok(())
     }
@@ -341,23 +323,13 @@ impl NodeControl {
             .verify(&hello.signing_payload(challenge), &signature)
             .map_err(|_| NodeProtocolError::AuthenticationFailed)?;
 
-        let offered_tunnel_key = hello
-            .tunnel_public_key
-            .as_deref()
-            .map(tunnel::decode_tunnel_public_key)
-            .transpose()?;
-
         if let Some(offered_public_key) = offered_public_key {
             let approved = credential
                 .as_ref()
                 .and_then(|credential| credential.public_key.as_deref());
             if approved != Some(offered_public_key.as_slice()) {
                 self.store
-                    .request_pairing(
-                        hello.node_id,
-                        &offered_public_key,
-                        offered_tunnel_key.as_deref(),
-                    )
+                    .request_pairing(hello.node_id, &offered_public_key)
                     .await?;
                 return Err(NodeProtocolError::PairingRequired);
             }
@@ -365,11 +337,14 @@ impl NodeControl {
 
         // Proving control's identity is what lets an already-paired node refuse
         // anything else that answers on this address.
-        let proof = self
-            .identity()
-            .map(|identity| identity.prove_handshake(challenge, &hello));
-        let peering = self.peering_for(hello.node_id).await;
-        self.register(hello, proof, peering).await
+        let proof = self.identity().map(|identity| {
+            identity.prove_handshake(
+                challenge,
+                &hello,
+                self.tls_cert_digest.get().map(String::as_str),
+            )
+        });
+        self.register(hello, proof).await
     }
 
     pub(crate) async fn register_internal(
@@ -377,14 +352,13 @@ impl NodeControl {
         hello: NodeHello,
     ) -> Result<RegisteredConnection, NodeProtocolError> {
         validate_hello(&hello)?;
-        self.register(hello, None, None).await
+        self.register(hello, None).await
     }
 
     async fn register(
         &self,
         hello: NodeHello,
         proof: Option<ControlHelloProof>,
-        tunnel: Option<model::TunnelPeering>,
     ) -> Result<RegisteredConnection, NodeProtocolError> {
         if hello.protocol_version != NODE_PROTOCOL_VERSION {
             return Err(NodeProtocolError::AuthenticationFailed);
@@ -406,7 +380,7 @@ impl NodeControl {
             connection_id,
             node_id: hello.node_id,
             boot_id: hello.boot_id,
-            ack: self.hello_ack(proof, tunnel),
+            ack: self.hello_ack(proof),
             node_nonce: hello.node_nonce.clone(),
             outbound: outbound_rx,
             canceled: cancel_rx,
@@ -415,26 +389,17 @@ impl NodeControl {
     }
 
     /// Builds the acknowledgment, signing it when this control plane has an
-    /// identity and attaching the peering an approved node has been granted.
-    fn hello_ack(
-        &self,
-        proof: Option<ControlHelloProof>,
-        tunnel: Option<model::TunnelPeering>,
-    ) -> HelloAck {
+    /// identity.
+    fn hello_ack(&self, proof: Option<ControlHelloProof>) -> HelloAck {
         HelloAck {
             protocol_version: NODE_PROTOCOL_VERSION,
             heartbeat_interval_secs: self.heartbeat_interval_seconds,
             control_proof: proof,
-            tunnel,
         }
     }
 
     pub(crate) fn identity(&self) -> Option<&ControlIdentity> {
         self.identity.get()
-    }
-
-    pub(crate) fn tunnel_policy(&self) -> Option<&tunnel::TunnelPolicy> {
-        self.tunnel.get()
     }
 
     pub(crate) async fn receive_envelope(
@@ -703,7 +668,7 @@ impl NodeControl {
         delivered_config: Option<NodeRuntimeConfig>,
         source_policy: NodeSourcePolicy,
         identity: Option<ControlIdentity>,
-        tunnel: Option<TunnelPolicy>,
+        tls_cert_digest: Option<String>,
     ) -> anyhow::Result<()> {
         if let Some(delivered_config) = delivered_config {
             self.delivered_config
@@ -715,10 +680,10 @@ impl NodeControl {
                 .set(identity)
                 .map_err(|_| anyhow::anyhow!("control identity is already applied"))?;
         }
-        if let Some(tunnel) = tunnel {
-            self.tunnel
-                .set(tunnel)
-                .map_err(|_| anyhow::anyhow!("tunnel policy is already applied"))?;
+        if let Some(tls_cert_digest) = tls_cert_digest {
+            self.tls_cert_digest
+                .set(tls_cert_digest)
+                .map_err(|_| anyhow::anyhow!("control TLS digest is already applied"))?;
         }
         self.source_policy
             .set(source_policy)
@@ -733,52 +698,6 @@ impl NodeControl {
 
     pub(crate) fn delivered_config(&self) -> Option<&NodeRuntimeConfig> {
         self.delivered_config.get()
-    }
-}
-
-/// Tunnel-facing behaviour, split out to keep the primary implementation
-/// block within the structure limits.
-impl NodeControl {
-    /// Whether credentials may cross this connection.
-    ///
-    /// When a tunnel is configured, they may not leave it. Enrollment happens
-    /// on a cleartext hop by necessity — the tunnel cannot exist before the
-    /// keys are exchanged — so that hop is allowed to carry public keys and
-    /// nothing else. A deployment with no tunnel keeps its previous behaviour.
-    pub(crate) fn may_deliver_credentials(&self, client: Option<std::net::IpAddr>) -> bool {
-        let Some(policy) = self.tunnel_policy() else {
-            return true;
-        };
-        match client {
-            Some(std::net::IpAddr::V4(address)) => policy.contains(address),
-            _ => false,
-        }
-    }
-
-    /// Peers the tunnel sidecar should configure.
-    pub async fn approved_peers(&self) -> Result<Vec<ApprovedPeer>, NodeProtocolError> {
-        Ok(self
-            .store
-            .approved_peers()
-            .await?
-            .into_iter()
-            .filter_map(|(node_id, public_key, address)| {
-                Some(ApprovedPeer {
-                    node_id,
-                    public_key: tunnel::encode_tunnel_key(&public_key),
-                    address: address.parse().ok()?,
-                })
-            })
-            .collect())
-    }
-
-    /// The peering an approved node should use, if the deployment runs a tunnel
-    /// and this node has been granted an address.
-    async fn peering_for(&self, node_id: Uuid) -> Option<model::TunnelPeering> {
-        let policy = self.tunnel_policy()?;
-        let assigned = self.store.tunnel_assignment(node_id).await.ok()??;
-        let address = assigned.parse().ok()?;
-        Some(policy.peering_for(address))
     }
 }
 

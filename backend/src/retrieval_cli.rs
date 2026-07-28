@@ -30,7 +30,8 @@ pub async fn run(args: &[OsString]) -> anyhow::Result<i32> {
         .cloned()
         .collect::<Vec<_>>();
     let env = RetrievalCliEnv::from_env()?;
-    let client = reqwest::Client::new();
+    // Trusts the pinned control certificate in addition to public roots.
+    let client = crate::node_protocol::tls::control_http_client();
     match command {
         "search" => search(&client, &env, &command_args).await,
         "context" => get_json(&client, &env, "/v1/context", &[], wants_json(&command_args)).await,

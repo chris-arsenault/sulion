@@ -81,49 +81,38 @@ The long-lived endpoint is `GET /ws/nodes`. Control sends a random challenge.
 The node signs the challenge, stable node ID, fresh boot ID, and exact protocol
 version. Control verifies the enrolled public key before accepting messages.
 
-Nodes reach `/ws/nodes` on the backend's own LAN-bound port,
-`192.168.66.3:30081`, not through the frontend proxy — which returns 404 for
-that path — and no upstream registration points at it, so a node can never pair
-over the public reverse proxy.
+Nodes reach `wss://192.168.66.3:30081/ws/nodes` — a LAN-bound port published
+to a backend listener that serves only the node router and the
+broker/retrieval gateway. The rest of the API stays behind the frontend proxy
+on an unpublished port; the frontend returns 404 for `/ws/nodes`; no upstream
+registration points at the node port, so a node can never pair over the public
+reverse proxy.
 
-That port is for **enrollment only**. Everything past it runs inside a
-WireGuard tunnel terminated in the control process's own network namespace by
-the `node-tunnel` sidecar, which holds `NET_ADMIN` so the control plane does
-not. Because `wg0` is an interface the control process binds directly, there is
-no forwarding or address translation in the path and a node's real tunnel
-address is what the source check sees.
+**Everything on that port is encrypted, and the encryption terminates in the
+control process** — sessions carry credentials, so nothing crosses the LAN in
+the clear, and the control host grants no elevated network privileges to make
+that true. The certificate is self-generated (stored beside the control
+identity so it survives redeploys), and trust comes from two places:
 
-The tunnel cannot exist before the two ends know each other's keys, so first
-contact is staged:
+- the node pins the certificate at
+  `/var/lib/sulion-node/control-tls.pem` on first pairing and refuses any
+  other certificate afterward, at the TLS layer, before a protocol byte flows;
+- the signed handshake proof carries `tls_cert_digest`, so the certificate a
+  node sees is bound to the Ed25519 identity an operator approved — a
+  substituted certificate cannot carry a valid proof even on first TLS
+  contact.
 
-```text
-1st connect   cleartext, 192.168.66.3:30081   node offers its WireGuard public key
-              → PairingRequired, operator approves in the UI
-2nd connect   cleartext                        control returns the peering; no credentials
-              → node writes wg0.conf, host brings the interface up
-3rd connect   ws://10.88.0.1:8080/ws/nodes     credentials delivered over the tunnel
-thereafter    tunnel only
-```
+The broker and retrieval ride the same port (`https://…:30081/broker` and
+`/retrieval`), proxied to the sibling containers over the internal Docker
+network, which never leaves the host: one endpoint, one certificate, one pin.
+The node process and every PTY tool trust the pinned certificate as an *extra*
+root via `SULION_CONTROL_TLS_CA` (a world-readable copy at
+`/run/sulion/control-tls.pem`), so public TLS is unaffected. **No node traffic
+reaches the public hostname**, and `make validate-deploy` fails if any value
+in the node's environment does.
 
-Credentials are refused on any connection that did not arrive from the tunnel
-subnet, so they never cross the cleartext hop — that hop carries public keys and
-the peering, and nothing else. Approving a node accepts its identity key and its
-tunnel key together and allocates its tunnel address, so one press does all of
-it and a node cannot rotate its tunnel key unnoticed.
-
-Everything a node talks to is on that address. The control API is already there
-because `wg0` lives in the control process's namespace; the broker and
-retrieval are sibling containers, so the sidecar publishes them on the tunnel
-address at `:8081` and `:8083` and proxies each connection by service name.
-**No node traffic reaches the public hostname**, and `make validate-deploy`
-fails if any value in the node's environment does.
-
-`AllowedIPs` on the node side is control's single address, not the subnet: the
-tunnel exists to reach the control plane, and nodes have no business routing to
-each other through it. Publishing the services on that one address is what
-makes that possible without routing a node into the Docker network. The sidecar reconciles the approved-peer set every few
-seconds, so revoking an approval removes the peer rather than leaving a working
-interface until the next restart.
+Recovering from a legitimately reissued certificate is the same deliberate act
+as the identity pin: delete both pin files and approve the node again.
 
 Connecting directly is what makes the boundary checkable: the backend sees each
 node's real address and refuses any source outside `SULION_NODE_LAN_CIDR`

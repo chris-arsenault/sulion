@@ -64,7 +64,8 @@ pub async fn run(args: &[OsString]) -> anyhow::Result<i32> {
         signature,
     };
 
-    let response = reqwest::Client::new()
+    // Trusts the pinned control certificate in addition to public roots.
+    let response = crate::node_protocol::tls::control_http_client()
         .post(format!("{}/v1/use", broker_url.trim_end_matches('/')))
         .json(&request)
         .send()

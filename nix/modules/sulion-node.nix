@@ -159,8 +159,6 @@ in
       # Present from first boot so Compose can always read it as an env file,
       # and so the path unit watching it has something to watch.
       "f /var/lib/sulion/node/delivered.env 0600 root root - -"
-      # Present from first boot so the tunnel path unit has something to watch.
-      "f /var/lib/sulion/node/wg0.conf 0600 root root - -"
     ];
   };
 }

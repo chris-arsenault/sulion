@@ -32,12 +32,10 @@ async fn main() -> anyhow::Result<()> {
     // the control plane is mid-deploy; in every one of those cases it must sit
     // and retry rather than exit and leave the enclave dark. Deploy order is
     // therefore not something anyone has to think about.
-    let mut client_config = client_config;
-    client_config.control_url = retry_forever("node bootstrap", || {
+    retry_forever("node bootstrap", || {
         bootstrap_runtime_config(&client_config, &private_key, boot_id)
     })
     .await;
-    tracing::info!(control_url = %client_config.control_url, "node control channel selected");
 
     let config = sulion::config::Config::from_env()?;
     let pool = retry_forever("database connection", || {
@@ -100,27 +98,10 @@ where
     }
 }
 
-/// Writes the granted peering so the host can bring the tunnel up.
-///
-/// The node cannot configure its own interface — it does not own the host
-/// network namespace — so it renders the configuration into root-owned state
-/// and a host path unit applies it, the same shape as delivered credentials.
-fn apply_tunnel_peering(peering: &sulion::node_protocol::TunnelPeering) -> anyhow::Result<bool> {
-    use sulion::node_protocol::tunnel;
-
-    let keypair = tunnel::TunnelKeypair::load_or_create(&tunnel::node_key_path())?;
-    let path = tunnel::node_config_path();
-    let rendered = tunnel::render_node_config(&keypair, peering);
-    tunnel::write_node_config(&path, &rendered)
-}
-
 /// How long to wait between re-enrollments while the host has not yet activated
 /// delivered configuration. The host rebuilds this container when it does, so
 /// this loop exists only so a failed activation retries instead of wedging.
 const ACTIVATION_POLL: std::time::Duration = std::time::Duration::from_secs(30);
-/// Shorter, because bringing an interface up is fast and the node is otherwise
-/// idle waiting for credentials it can only receive over that interface.
-const TUNNEL_ACTIVATION_POLL: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Fetches runtime configuration over the node channel and writes it to
 /// root-owned host state.
@@ -132,45 +113,19 @@ async fn bootstrap_runtime_config(
     client_config: &sulion::node_protocol::client::NodeClientConfig,
     private_key: &ring::signature::Ed25519KeyPair,
     boot_id: uuid::Uuid,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<()> {
     use sulion::node_protocol::NodeRuntimeConfig;
 
     let path = NodeRuntimeConfig::delivered_path();
-    // Enrollment starts on the cleartext bootstrap address because the tunnel
-    // cannot exist yet, and moves to the tunnel the moment one is granted.
-    // Only public keys ever cross the cleartext hop.
-    let mut url = client_config.control_url.clone();
     loop {
-        let enrollment = sulion::node_protocol::client::await_runtime_config(
+        let Some(delivered) = sulion::node_protocol::client::await_runtime_config(
             client_config,
             private_key,
             boot_id,
-            &url,
         )
-        .await;
-
-        if let Some(peering) = enrollment.peering.as_ref() {
-            if apply_tunnel_peering(peering)? {
-                tracing::info!(
-                    node_address = %peering.node_address,
-                    "tunnel peering written; retrying enrollment over the tunnel",
-                );
-            }
-            url = peering.control_url.clone();
-        }
-
-        let Some(delivered) = enrollment.config else {
-            if enrollment.peering.is_some() {
-                // Credentials are withheld until the connection arrives over
-                // the tunnel. Give the host activation a moment, then retry
-                // against the tunnel address.
-                tokio::time::sleep(TUNNEL_ACTIVATION_POLL).await;
-                continue;
-            }
-            tracing::info!(
-                "control plane delivers no node configuration; using the local environment"
-            );
-            return Ok(url);
+        .await
+        else {
+            return Ok(());
         };
 
         if delivered.write_delivered(&path)? {
@@ -182,7 +137,7 @@ async fn bootstrap_runtime_config(
             );
         }
         if delivered.matches_current_env() {
-            return Ok(url);
+            return Ok(());
         }
         tracing::info!(
             digest = %delivered.digest(),

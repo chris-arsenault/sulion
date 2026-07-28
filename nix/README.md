@@ -31,9 +31,8 @@ agent state, Docker state, and deployment secrets are not shared. SMB, SSH,
 and development ports are accepted only from `192.168.66.0/24`.
 The node initiates its authenticated control connection outbound; this host
 exposes no Sulion API or frontend. All of its outbound Sulion traffic — control
-channel, secret broker, and retrieval — stays on the LAN and, past enrollment,
-inside the WireGuard tunnel. Nothing this host sends reaches the public
-hostname.
+channel, secret broker, and retrieval — stays on the LAN. Nothing this host
+sends reaches the public hostname.
 
 SSH is a LAN-only break-glass administration path for rebuilding NixOS,
 rotating host keys, and recovering when the Sulion control plane is unavailable.
@@ -293,15 +292,14 @@ the machine fills them in itself:
   after, so a machine that later answers on the same address cannot take the
   node over. If the control plane is legitimately replaced, delete this file to
   re-enter first-pairing and approve the node again.
-- `/var/lib/sulion/node/tunnel-private.key`, this host's WireGuard key,
-  generated on first boot. Its public half is offered during pairing and
-  approved along with the identity key.
-- `/var/lib/sulion/node/wg0.conf`, rendered by `sulion-node` from the peering
-  the control plane granted. `sulion-node-tunnel.path` applies it, bringing the
-  interface up with `wg-quick` or reloading it in place with `wg syncconf` so a
-  rotation does not drop live sessions.
+- `/var/lib/sulion/node/control-tls.pem`, the pinned TLS certificate for the
+  encrypted node endpoint, recorded at the same first pairing and bound into
+  the signed handshake. Any other certificate is refused at the TLS layer. A
+  world-readable copy at `/run/sulion/control-tls.pem` lets PTY tools trust it
+  as an extra root. Rotating the control certificate means deleting this pin
+  alongside `control-key.pub`.
 - `/var/lib/sulion/node/delivered.env`, written by `sulion-node` itself after
-  an operator approves it and **only over the tunnel**. This is where the database credentials, retrieval
+  an operator approves it. This is where the database credentials, retrieval
   token, and broker registration token arrive, over the authenticated node
   channel. Mode `0600`, root-only, and unreadable by the `sulion` user.
 - `/var/lib/sulion/config/ssh/authorized_keys`, owned by `root:sulion` with
@@ -340,31 +338,25 @@ There is one step, and it happens in the browser.
 Boot the machine. `sulion-node-bootstrap.service` writes the host environment
 and resolves the current release; `sulion-stack.service` starts the node,
 ingester, and code-intelligence roles. The node creates its root-owned identity
-key and its WireGuard key, connects to the control plane's LAN-bound node port,
-and submits its fingerprint. It has no credentials yet, so it waits.
+key, connects to the control plane's LAN-bound node port, and submits its
+fingerprint. It has no credentials yet, so it waits.
 
 Open the authenticated Sulion UI, expand the stats panel, and find
 `sulion-enclave` under **Development node**. It shows `pending`, the submitted
 fingerprint, and an **Approve node** button. Press it.
 
-Approval accepts both keys and allocates the node a tunnel address. On the next
-reconnect — a few seconds — the control plane returns the peering. The node
-writes `wg0.conf`, `sulion-node-tunnel.path` brings the interface up, and the
-node reconnects over the tunnel. Only then are credentials delivered: they are
-refused on any connection that did not arrive through it. The node writes
+On the next reconnect — a few seconds — the control plane delivers the node's
+runtime configuration over the signed channel. The node writes
 `delivered.env`, `sulion-node-activate.path` notices, and the stack comes up
 around the new values.
 
-Nothing is copied between machines, no credential is typed on the enclave, and
-nothing but public keys ever crosses the cleartext hop.
+Nothing is copied between machines and no credential is typed on the enclave.
 
 To watch it happen:
 
 ```bash
-journalctl -fu sulion-stack.service -u sulion-node-activate.service \
-  -u sulion-node-tunnel.service
+journalctl -fu sulion-stack.service -u sulion-node-activate.service
 docker logs -f sulion-node
-sudo wg show wg0
 ```
 
 Before approval the node logs `awaiting operator approval` every few seconds.

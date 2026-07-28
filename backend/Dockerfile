@@ -255,7 +255,6 @@ RUN groupadd --gid ${DEV_GID} dev \
 COPY dist/sulion /usr/local/bin/sulion
 COPY dist/sulion-node /usr/local/bin/sulion-node
 COPY dist/sulion-ingester /usr/local/bin/sulion-ingester
-COPY dist/sulion-node-tunnel /usr/local/bin/sulion-node-tunnel
 COPY bin/sulion-agent /opt/sulion/bin/sulion-agent
 COPY bin/cl /opt/sulion/bin/cl
 COPY bin/co /opt/sulion/bin/co
@@ -270,7 +269,7 @@ COPY hooks/session-start.sh /opt/sulion/hooks/session-start.sh
 COPY hooks/activity-hook.sh /opt/sulion/hooks/activity-hook.sh
 COPY entrypoint.sh /opt/sulion/entrypoint.sh
 COPY node-entrypoint.sh /opt/sulion/node-entrypoint.sh
-RUN chmod +x /usr/local/bin/sulion /usr/local/bin/sulion-node /usr/local/bin/sulion-ingester /usr/local/bin/sulion-node-tunnel /opt/sulion/bin/sulion-agent /opt/sulion/bin/cl /opt/sulion/bin/co /opt/sulion/bin/docker /opt/sulion/bin/docker-compose /opt/sulion/bin/aws /opt/sulion/bin/with-cred /opt/sulion/bin/sulion-retrieve /opt/sulion/bin/sulion-code /opt/sulion/hooks/session-start.sh /opt/sulion/hooks/activity-hook.sh /opt/sulion/entrypoint.sh /opt/sulion/node-entrypoint.sh
+RUN chmod +x /usr/local/bin/sulion /usr/local/bin/sulion-node /usr/local/bin/sulion-ingester /opt/sulion/bin/sulion-agent /opt/sulion/bin/cl /opt/sulion/bin/co /opt/sulion/bin/docker /opt/sulion/bin/docker-compose /opt/sulion/bin/aws /opt/sulion/bin/with-cred /opt/sulion/bin/sulion-retrieve /opt/sulion/bin/sulion-code /opt/sulion/hooks/session-start.sh /opt/sulion/hooks/activity-hook.sh /opt/sulion/entrypoint.sh /opt/sulion/node-entrypoint.sh
 USER dev
 WORKDIR /home/dev
 

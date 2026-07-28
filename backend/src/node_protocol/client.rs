@@ -17,7 +17,6 @@ use super::config::NodeRuntimeConfig;
 use super::model::{
     ControlChallenge, ControlWireMessage, FragmentAssembler, HelloAck, NodeConfigPayload,
     NodeWireMessage, RequestResultPayload, TerminalBytesPayload, TerminalResizePayload,
-    TunnelPeering,
 };
 use super::pin::{ControlPin, PinOutcome};
 use super::{
@@ -40,8 +39,6 @@ pub struct NodeClientConfig {
     pub control_url: String,
     pub node_id: Uuid,
     pub private_key_path: PathBuf,
-    /// WireGuard public key offered for peering, once this node has one.
-    pub tunnel_public_key: Option<String>,
 }
 
 impl NodeClientConfig {
@@ -66,16 +63,10 @@ impl NodeClientConfig {
             std::env::var("SULION_NODE_PRIVATE_KEY_PATH")
                 .map_err(|_| anyhow::anyhow!("SULION_NODE_PRIVATE_KEY_PATH must be set"))?,
         );
-        // Generated on first boot and persisted beside the identity key, so
-        // the peering an operator approved keeps matching across restarts.
-        let tunnel_keypair =
-            super::tunnel::TunnelKeypair::load_or_create(&super::tunnel::node_key_path())?;
-        let tunnel_public_key = Some(tunnel_keypair.public_key());
         Ok(Self {
             control_url,
             node_id,
             private_key_path,
-            tunnel_public_key,
         })
     }
 }
@@ -93,25 +84,14 @@ pub async fn run(config: NodeClientConfig, runtime: Arc<NodeRuntime>) -> anyhow:
 
 /// Result of one enrollment handshake.
 enum EnrollOutcome {
-    Delivered(NodeConfigPayload, Option<TunnelPeering>),
-    /// Authenticated, but nothing was delivered — either this deployment
-    /// forwards no configuration, or credentials are being withheld until the
-    /// connection arrives over the tunnel whose peering is carried here.
-    NoConfiguration(Option<TunnelPeering>),
+    Delivered(NodeConfigPayload),
+    /// Authenticated, but this control plane forwards no configuration. The
+    /// node is expected to have been configured out of band.
+    NoConfiguration,
     /// Control closed the handshake, with its stated reason. Normally this is
     /// "node approval required" and the node is waiting on a human; anything
     /// else means the peer would not accept this node at all.
     Rejected(String),
-}
-
-/// What one enrollment established.
-pub struct Enrollment {
-    /// Delivered credentials, withheld until the connection arrives over the
-    /// tunnel.
-    pub config: Option<NodeRuntimeConfig>,
-    /// Peering granted once the node is approved. Present before the config is,
-    /// because the tunnel has to exist before credentials will cross it.
-    pub peering: Option<TunnelPeering>,
 }
 
 /// Obtains runtime configuration over the authenticated channel before the node
@@ -121,38 +101,27 @@ pub struct Enrollment {
 /// an operator approves the fingerprint once in the UI, and the configuration
 /// that would otherwise have been copied onto the machine by hand arrives here.
 /// Blocks until approval, so a freshly installed enclave simply waits.
-///
-/// `url` moves from the cleartext bootstrap address to the tunnel address as
-/// soon as one has been granted, so only public keys ever cross cleartext.
 pub async fn await_runtime_config(
     config: &NodeClientConfig,
     key: &Ed25519KeyPair,
     boot_id: Uuid,
-    url: &str,
-) -> Enrollment {
+) -> Option<NodeRuntimeConfig> {
     let mut announced: Option<String> = None;
     loop {
-        match enroll_once(config, key, boot_id, url).await {
-            Ok(EnrollOutcome::Delivered(payload, peering)) => {
-                match NodeRuntimeConfig::accept(payload) {
-                    Ok(delivered) => {
-                        return Enrollment {
-                            config: Some(delivered),
-                            peering,
-                        }
-                    }
-                    Err(error) => {
-                        // Never write a payload this node did not expect; treat
-                        // it as a hostile or misconfigured peer and retry.
-                        tracing::error!(%error, "rejected delivered node configuration");
-                    }
+        match enroll_once(config, key, boot_id).await {
+            Ok(EnrollOutcome::Delivered(payload)) => match NodeRuntimeConfig::accept(payload) {
+                Ok(delivered) => return Some(delivered),
+                Err(error) => {
+                    // Never write a payload this node did not expect; treat
+                    // it as a hostile or misconfigured peer and retry.
+                    tracing::error!(%error, "rejected delivered node configuration");
                 }
-            }
-            Ok(EnrollOutcome::NoConfiguration(peering)) => {
-                return Enrollment {
-                    config: None,
-                    peering,
-                }
+            },
+            Ok(EnrollOutcome::NoConfiguration) => {
+                tracing::info!(
+                    "control plane delivers no node configuration; using the local environment"
+                );
+                return None;
             }
             Ok(EnrollOutcome::Rejected(reason)) => {
                 // Logged once per distinct reason: this loop runs until a human
@@ -185,27 +154,86 @@ pub async fn await_runtime_config(
     }
 }
 
+/// Connects to control, over pinned TLS for `wss://` URLs. Returns the socket
+/// and, for TLS connections, the DER of the certificate the server presented.
+async fn connect_control(
+    url: &str,
+) -> anyhow::Result<(
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    Option<Vec<u8>>,
+)> {
+    if url.starts_with("wss://") {
+        let pin = super::tls::TlsPin::from_env();
+        let (verifier, seen) = super::tls::PinnedServerVerifier::new(pin.pinned());
+        let connector =
+            tokio_tungstenite::Connector::Rustls(Arc::new(super::tls::client_config(verifier)?));
+        let (socket, _) =
+            tokio_tungstenite::connect_async_tls_with_config(url, None, false, Some(connector))
+                .await?;
+        let seen = seen.lock().expect("seen certificate slot").clone();
+        Ok((socket, seen))
+    } else {
+        let (socket, _) = tokio_tungstenite::connect_async(url).await?;
+        Ok((socket, None))
+    }
+}
+
+/// Confirms the TLS certificate this connection actually used is the one the
+/// control identity signed for, and pins it on first pairing.
+///
+/// This is what makes first TLS contact safe once the Ed25519 identity is
+/// known, and what makes every later contact refuse a substituted certificate
+/// even before the pin file exists.
+fn verify_tls_binding(
+    seen_cert: Option<&[u8]>,
+    proof: Option<&super::model::ControlHelloProof>,
+    can_persist: bool,
+) -> anyhow::Result<()> {
+    let Some(seen) = seen_cert else {
+        // Plain ws://: permitted only where the client already allows an
+        // insecure URL (host-local development and tests).
+        return Ok(());
+    };
+    let seen_digest = super::tls::cert_digest(seen);
+    match proof.and_then(|proof| proof.tls_cert_digest.as_deref()) {
+        Some(signed) if signed == seen_digest => {}
+        Some(_) => anyhow::bail!(
+            "the TLS certificate presented does not match the digest the control \
+             identity signed; refusing to continue"
+        ),
+        None if proof.is_some() => anyhow::bail!(
+            "control proved its identity but did not bind the TLS certificate; \
+             refusing to continue"
+        ),
+        None => tracing::warn!(
+            "TLS connection with no identity proof; certificate is trust-on-first-use only"
+        ),
+    }
+    let pin = super::tls::TlsPin::from_env();
+    if pin.pinned().is_none() && can_persist {
+        pin.record(seen)?;
+        tracing::info!(
+            digest = %seen_digest,
+            path = %pin.path().display(),
+            "pinned the control plane's TLS certificate",
+        );
+    }
+    Ok(())
+}
+
 async fn enroll_once(
     config: &NodeClientConfig,
     key: &Ed25519KeyPair,
     boot_id: Uuid,
-    url: &str,
 ) -> anyhow::Result<EnrollOutcome> {
-    let (socket, _) = tokio_tungstenite::connect_async(url).await?;
+    let (socket, seen_cert) = connect_control(&config.control_url).await?;
     let (mut sink, mut source) = socket.split();
     let challenge = receive_challenge(&mut source).await?;
     if challenge.protocol_version != NODE_PROTOCOL_VERSION {
         anyhow::bail!("control and node protocol versions differ");
     }
     let node_nonce = super::random_url_token(32)?;
-    let hello = signed_hello(
-        config.node_id,
-        boot_id,
-        key,
-        &challenge,
-        node_nonce.clone(),
-        config.tunnel_public_key.clone(),
-    );
+    let hello = signed_hello(config.node_id, boot_id, key, &challenge, node_nonce.clone());
     let mut hello_envelope = WireEnvelope::new(config.node_id, boot_id, "node.hello");
     hello_envelope.protocol_version = hello.protocol_version;
     send_node_message(
@@ -251,13 +279,19 @@ async fn enroll_once(
             tracing::warn!("control plane offered no identity; connection is unauthenticated");
         }
     }
-    let peering = acknowledgment.tunnel.clone();
-
+    // The identity is established; now bind the encrypted transport to it.
+    // Enrollment runs as root, so this is also where the certificate pin and
+    // its runtime copy are written.
+    verify_tls_binding(
+        seen_cert.as_deref(),
+        acknowledgment.control_proof.as_ref(),
+        true,
+    )?;
     let mut fragments = FragmentAssembler::default();
     let deadline = tokio::time::Instant::now() + CONFIG_WAIT;
     loop {
         let frame = match tokio::time::timeout_at(deadline, source.next()).await {
-            Err(_) => return Ok(EnrollOutcome::NoConfiguration(peering)),
+            Err(_) => return Ok(EnrollOutcome::NoConfiguration),
             Ok(None) => return Ok(EnrollOutcome::Rejected("connection closed".into())),
             Ok(Some(frame)) => frame?,
         };
@@ -273,12 +307,12 @@ async fn enroll_once(
         if envelope.message_kind == "control.node_config" {
             let payload: NodeConfigPayload = serde_json::from_value(envelope.payload)?;
             if payload.is_empty() {
-                return Ok(EnrollOutcome::NoConfiguration(peering));
+                return Ok(EnrollOutcome::NoConfiguration);
             }
             // The handshake authenticated the peer; this authenticates the
             // payload itself, which matters while the channel is not encrypted.
             pin.verify_config(&payload.digest, &node_nonce, payload.signature.as_deref())?;
-            return Ok(EnrollOutcome::Delivered(payload, peering));
+            return Ok(EnrollOutcome::Delivered(payload));
         }
     }
 }
@@ -312,7 +346,7 @@ async fn connect_once(
     runtime: Arc<NodeRuntime>,
     key: Arc<Ed25519KeyPair>,
 ) -> anyhow::Result<()> {
-    let (socket, _) = tokio_tungstenite::connect_async(&config.control_url).await?;
+    let (socket, seen_cert) = connect_control(&config.control_url).await?;
     let (mut sink, mut source) = socket.split();
     let challenge = receive_challenge(&mut source).await?;
     if challenge.protocol_version != NODE_PROTOCOL_VERSION {
@@ -325,7 +359,6 @@ async fn connect_once(
         &key,
         &challenge,
         node_nonce.clone(),
-        config.tunnel_public_key.clone(),
     );
     let mut hello_envelope = WireEnvelope::new(runtime.node_id(), runtime.boot_id(), "node.hello");
     hello_envelope.protocol_version = hello.protocol_version;
@@ -333,7 +366,7 @@ async fn connect_once(
         &mut sink,
         NodeWireMessage::Hello {
             envelope: hello_envelope,
-            hello,
+            hello: hello.clone(),
         },
     )
     .await?;
@@ -341,6 +374,15 @@ async fn connect_once(
     if acknowledgment.protocol_version != NODE_PROTOCOL_VERSION {
         anyhow::bail!("control acknowledged an unexpected protocol version");
     }
+    // Same identity and transport checks as enrollment; this process has
+    // dropped privileges, so it verifies but never writes pins.
+    let pin = ControlPin::from_env();
+    pin.verify(acknowledgment.control_proof.as_ref(), &challenge, &hello)?;
+    verify_tls_binding(
+        seen_cert.as_deref(),
+        acknowledgment.control_proof.as_ref(),
+        false,
+    )?;
     tracing::info!(
         node_id = %runtime.node_id(),
         boot_id = %runtime.boot_id(),
@@ -509,13 +551,11 @@ fn signed_hello(
     key: &Ed25519KeyPair,
     challenge: &ControlChallenge,
     node_nonce: String,
-    tunnel_public_key: Option<String>,
 ) -> NodeHello {
     let mut hello = NodeHello {
         node_id,
         boot_id,
         node_nonce,
-        tunnel_public_key,
         protocol_version: NODE_PROTOCOL_VERSION,
         public_key: Some(
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.public_key().as_ref()),

@@ -26,99 +26,37 @@ impl NodeStore {
         &self,
         node_id: Uuid,
         public_key: &[u8],
-        tunnel_public_key: Option<&[u8]>,
     ) -> Result<(), NodeProtocolError> {
         if node_id != DEDICATED_NODE_ID || public_key.len() != 32 {
             return Err(NodeProtocolError::AuthenticationFailed);
         }
-        if tunnel_public_key.is_some_and(|key| key.len() != 32) {
-            return Err(NodeProtocolError::AuthenticationFailed);
-        }
 
-        // The offered tunnel key rides the same pending slot as the identity
-        // key, so one approval accepts both and a node cannot swap its tunnel
-        // key without a fresh approval.
         sqlx::query(
             "INSERT INTO dev_nodes \
                 (id, display_name, credential_kind, pending_public_key, \
-                 pending_tunnel_public_key, connection_state, enrolled_at) \
-             VALUES ($1, 'sulion-enclave', 'ed25519', $2, $3, 'pending', NULL) \
+                 connection_state, enrolled_at) \
+             VALUES ($1, 'sulion-enclave', 'ed25519', $2, 'pending', NULL) \
              ON CONFLICT (id) DO UPDATE SET \
                 pending_public_key = EXCLUDED.pending_public_key, \
-                pending_tunnel_public_key = EXCLUDED.pending_tunnel_public_key, \
                 connection_state = CASE \
                     WHEN dev_nodes.public_key IS NULL THEN 'pending' \
                     ELSE dev_nodes.connection_state \
                 END, \
                 updated_at = NOW() \
              WHERE dev_nodes.credential_kind = 'ed25519' \
-               AND (dev_nodes.pending_public_key \
-                        IS DISTINCT FROM EXCLUDED.pending_public_key \
-                    OR dev_nodes.pending_tunnel_public_key \
-                        IS DISTINCT FROM EXCLUDED.pending_tunnel_public_key)",
+               AND dev_nodes.pending_public_key IS DISTINCT FROM EXCLUDED.pending_public_key",
         )
         .bind(node_id)
         .bind(public_key)
-        .bind(tunnel_public_key)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
-    /// Tunnel addresses already handed out, so allocation can avoid them.
-    pub(crate) async fn taken_tunnel_addresses(&self) -> Result<Vec<String>, NodeProtocolError> {
-        Ok(sqlx::query_scalar::<_, String>(
-            "SELECT tunnel_address FROM dev_nodes WHERE tunnel_address IS NOT NULL",
-        )
-        .fetch_all(&self.pool)
-        .await?)
-    }
-
-    /// The approved peering for a node, if it has one.
-    pub(crate) async fn tunnel_assignment(
-        &self,
-        node_id: Uuid,
-    ) -> Result<Option<String>, NodeProtocolError> {
-        Ok(sqlx::query_scalar::<_, Option<String>>(
-            "SELECT tunnel_address FROM dev_nodes \
-              WHERE id = $1 AND tunnel_public_key IS NOT NULL",
-        )
-        .bind(node_id)
-        .fetch_optional(&self.pool)
-        .await?
-        .flatten())
-    }
-
-    /// Every approved peer, as the tunnel sidecar needs them to configure `wg`.
-    pub(crate) async fn approved_peers(
-        &self,
-    ) -> Result<Vec<(Uuid, Vec<u8>, String)>, NodeProtocolError> {
-        Ok(sqlx::query_as::<_, (Uuid, Vec<u8>, String)>(
-            "SELECT id, tunnel_public_key, tunnel_address FROM dev_nodes \
-              WHERE tunnel_public_key IS NOT NULL AND tunnel_address IS NOT NULL \
-              ORDER BY id",
-        )
-        .fetch_all(&self.pool)
-        .await?)
-    }
-
-    /// Approves the pending identity and, when one was offered, the pending
-    /// tunnel key. `tunnel_address` is retained if the node already had one, so
-    /// re-approving after a key rotation does not renumber a live tunnel.
-    pub(crate) async fn approve_pairing(
-        &self,
-        node_id: Uuid,
-        tunnel_address: Option<&str>,
-    ) -> Result<(), NodeProtocolError> {
+    pub(crate) async fn approve_pairing(&self, node_id: Uuid) -> Result<(), NodeProtocolError> {
         let mut tx = self.pool.begin().await?;
         let approved: Uuid = sqlx::query_scalar(
             "UPDATE dev_nodes SET public_key = pending_public_key, pending_public_key = NULL, \
-                    tunnel_public_key = COALESCE(pending_tunnel_public_key, tunnel_public_key), \
-                    pending_tunnel_public_key = NULL, \
-                    tunnel_address = CASE \
-                        WHEN pending_tunnel_public_key IS NULL THEN tunnel_address \
-                        ELSE COALESCE(tunnel_address, $2) \
-                    END, \
                     connection_id = NULL, connection_state = 'enrolled', \
                     enrolled_at = NOW(), node_disconnected_at = NOW(), updated_at = NOW() \
               WHERE id = $1 AND credential_kind = 'ed25519' \
@@ -126,7 +64,6 @@ impl NodeStore {
           RETURNING id",
         )
         .bind(node_id)
-        .bind(tunnel_address)
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(NodeProtocolError::NotFound)?;
