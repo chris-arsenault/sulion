@@ -25,7 +25,7 @@ impl NodeRuntime {
         kind: NodeRequestKind,
         request: Value,
     ) -> RequestResultPayload {
-        request_result(self.execute_request_inner(kind, request).await)
+        request_result(kind, self.execute_request_inner(kind, request).await)
     }
 
     async fn execute_request_inner(

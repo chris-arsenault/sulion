@@ -147,9 +147,9 @@ them to root-owned host state that the PTY identity cannot read. See
 Only a fixed key list crosses that boundary. The broker master key and Cognito
 credentials are not in it and stay on TrueNAS, so a node — or anything that
 compromises one — never sees them. The node reaches the broker's
-machine-authenticated HTTPS routes through
-`https://sulion.services.ahara.io/broker`; it does not connect to a local
-broker. The token is not forwarded into PTY shells. The control process has no
+machine-authenticated routes over the tunnel at `http://10.88.0.1:8081`, not
+over the public hostname: every destination a node talks to is on the tunnel,
+so no node traffic leaves the LAN. It does not connect to a local broker. The token is not forwarded into PTY shells. The control process has no
 PTY credential file, and neither control nor the development node receives the
 broker master key.
 

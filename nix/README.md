@@ -30,7 +30,10 @@ is created. Samba exports the repository directory as `repos`; workspaces,
 agent state, Docker state, and deployment secrets are not shared. SMB, SSH,
 and development ports are accepted only from `192.168.66.0/24`.
 The node initiates its authenticated control connection outbound; this host
-exposes no Sulion API or frontend.
+exposes no Sulion API or frontend. All of its outbound Sulion traffic — control
+channel, secret broker, and retrieval — stays on the LAN and, past enrollment,
+inside the WireGuard tunnel. Nothing this host sends reaches the public
+hostname.
 
 SSH is a LAN-only break-glass administration path for rebuilding NixOS,
 rotating host keys, and recovering when the Sulion control plane is unavailable.

@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::agent::AgentType;
 use crate::node_protocol::{
-    RequestResultPayload, RequestResultStatus, TerminalBytesPayload, WireEnvelope,
+    NodeRequestKind, RequestResultPayload, RequestResultStatus, TerminalBytesPayload, WireEnvelope,
 };
 use crate::pty::{PtyManager, PtyMetadata, PtyWorkspaceMetadata, SpawnParams};
 use crate::repo_state::RepoStateManager;
@@ -35,8 +35,22 @@ enum RuntimeError {
     BadRequest(String),
     #[error("{0}")]
     NotFound(String),
-    #[error(transparent)]
+    // Not `#[error(transparent)]`: that renders only the outermost context and
+    // drops the chain, so an operator sees the label of a failure rather than
+    // its cause. The whole chain goes to the browser because the alternative
+    // is asking someone to go read a node's logs to learn what broke.
+    #[error("{}", render_chain(.0))]
     Internal(#[from] anyhow::Error),
+}
+
+/// Renders an error and everything beneath it as `outer: inner: root`.
+fn render_chain(error: &anyhow::Error) -> String {
+    let mut rendered = error.to_string();
+    for cause in error.chain().skip(1) {
+        rendered.push_str(": ");
+        rendered.push_str(&cause.to_string());
+    }
+    rendered
 }
 
 impl From<std::io::Error> for RuntimeError {
@@ -369,7 +383,10 @@ impl NodeRuntime {
     }
 }
 
-fn request_result(result: Result<Value, RuntimeError>) -> RequestResultPayload {
+fn request_result(
+    kind: NodeRequestKind,
+    result: Result<Value, RuntimeError>,
+) -> RequestResultPayload {
     match result {
         Ok(result) => RequestResultPayload {
             status: RequestResultStatus::Succeeded,
@@ -377,12 +394,24 @@ fn request_result(result: Result<Value, RuntimeError>) -> RequestResultPayload {
             error_code: None,
             error_message: None,
         },
-        Err(err) => RequestResultPayload {
-            status: RequestResultStatus::Failed,
-            result: None,
-            error_code: Some(err.code().into()),
-            error_message: Some(err.to_string()),
-        },
+        Err(err) => {
+            // The failure is on its way to a browser, but the node is where it
+            // happened and the only place with the surrounding context. Without
+            // this, every node-side failure is invisible in the node's own log
+            // and the only symptom is an error string in the UI.
+            match &err {
+                RuntimeError::Internal(cause) => {
+                    tracing::error!(request = ?kind, error = ?cause, "node request failed")
+                }
+                other => tracing::warn!(request = ?kind, error = %other, "node request rejected"),
+            }
+            RequestResultPayload {
+                status: RequestResultStatus::Failed,
+                result: None,
+                error_code: Some(err.code().into()),
+                error_message: Some(err.to_string()),
+            }
+        }
     }
 }
 

@@ -111,9 +111,17 @@ the peering, and nothing else. Approving a node accepts its identity key and its
 tunnel key together and allocates its tunnel address, so one press does all of
 it and a node cannot rotate its tunnel key unnoticed.
 
+Everything a node talks to is on that address. The control API is already there
+because `wg0` lives in the control process's namespace; the broker and
+retrieval are sibling containers, so the sidecar publishes them on the tunnel
+address at `:8081` and `:8083` and proxies each connection by service name.
+**No node traffic reaches the public hostname**, and `make validate-deploy`
+fails if any value in the node's environment does.
+
 `AllowedIPs` on the node side is control's single address, not the subnet: the
 tunnel exists to reach the control plane, and nodes have no business routing to
-each other through it. The sidecar reconciles the approved-peer set every few
+each other through it. Publishing the services on that one address is what
+makes that possible without routing a node into the Docker network. The sidecar reconciles the approved-peer set every few
 seconds, so revoking an approval removes the peer rather than leaving a working
 interface until the next restart.
 

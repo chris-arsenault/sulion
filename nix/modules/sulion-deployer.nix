@@ -194,14 +194,18 @@ in
 
     secretBrokerUrl = lib.mkOption {
       type = lib.types.str;
-      default = "https://sulion.services.ahara.io/broker";
-      description = "Outbound secret broker endpoint.";
+      default = "http://10.88.0.1:8081";
+      description = ''
+        Secret broker, reached over the tunnel rather than the public
+        hostname. Every destination a node talks to is on the tunnel, so no
+        node traffic leaves the LAN.
+      '';
     };
 
     retrievalUrl = lib.mkOption {
       type = lib.types.str;
-      default = "https://sulion.services.ahara.io/retrieval";
-      description = "Outbound retrieval endpoint.";
+      default = "http://10.88.0.1:8083";
+      description = "Retrieval service, reached over the tunnel.";
     };
 
     codeIntelUrl = lib.mkOption {

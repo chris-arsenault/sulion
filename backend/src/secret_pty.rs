@@ -11,8 +11,21 @@ use crate::secret_protocol::RegisterPtyCredentialRequest;
 
 pub async fn prepare_pty_credential(pty_session_id: Uuid) -> anyhow::Result<Option<PathBuf>> {
     let Some(client) = broker_registration_client() else {
+        tracing::debug!(
+            %pty_session_id,
+            "no secret broker configured; PTY starts without a broker credential"
+        );
         return Ok(None);
     };
+    // Each step here can fail for an unrelated reason and the whole path runs
+    // before a session exists, so a failure surfaces only as a session that
+    // would not start. Traced individually so the failing step is named.
+    tracing::debug!(
+        %pty_session_id,
+        broker_url = %client.broker_url,
+        uid = unsafe { libc::geteuid() },
+        "preparing a PTY secret broker credential",
+    );
     let key_dir = pty_key_dir();
     tokio::fs::create_dir_all(&key_dir)
         .await
@@ -29,12 +42,18 @@ pub async fn prepare_pty_credential(pty_session_id: Uuid) -> anyhow::Result<Opti
         .map_err(|_| anyhow::anyhow!("load generated PTY secret broker key"))?;
     let public_key = BASE64_STANDARD.encode(key_pair.public_key().as_ref());
 
-    client
+    // Reaching the broker and being refused by it are different problems with
+    // different fixes, and the refusal reason is the whole diagnosis. Reported
+    // separately, with the broker's own body, because this surfaces to an
+    // operator as a session that would not start.
+    let endpoint = format!(
+        "{}/v1/pty-credentials",
+        client.broker_url.trim_end_matches('/')
+    );
+    tracing::debug!(%pty_session_id, %endpoint, "registering the PTY credential with the broker");
+    let response = client
         .http
-        .post(format!(
-            "{}/v1/pty-credentials",
-            client.broker_url.trim_end_matches('/')
-        ))
+        .post(&endpoint)
         .bearer_auth(&client.registration_token)
         .json(&RegisterPtyCredentialRequest {
             pty_session_id,
@@ -42,9 +61,29 @@ pub async fn prepare_pty_credential(pty_session_id: Uuid) -> anyhow::Result<Opti
         })
         .send()
         .await
-        .context("register PTY secret broker credential")?
-        .error_for_status()
-        .context("register PTY secret broker credential")?;
+        .inspect_err(|error| {
+            // The transport error names what actually went wrong — DNS, TLS,
+            // connection refused — and it is otherwise flattened away by the
+            // time this reaches a browser.
+            tracing::error!(%pty_session_id, %endpoint, ?error, "secret broker is unreachable");
+        })
+        .with_context(|| format!("reach the secret broker at {endpoint}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|error| format!("<unreadable body: {error}>"));
+        let body = body.chars().take(300).collect::<String>();
+        tracing::error!(
+            %pty_session_id,
+            %endpoint,
+            %status,
+            %body,
+            "secret broker refused a PTY credential",
+        );
+        anyhow::bail!("secret broker refused a PTY credential: {status} from {endpoint}: {body}");
+    }
 
     tokio::fs::write(&key_path, pkcs8.as_ref())
         .await
@@ -52,6 +91,7 @@ pub async fn prepare_pty_credential(pty_session_id: Uuid) -> anyhow::Result<Opti
     tokio::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
         .await
         .with_context(|| format!("chmod {}", key_path.display()))?;
+    tracing::debug!(%pty_session_id, path = %key_path.display(), "PTY broker credential ready");
     Ok(Some(key_path))
 }
 

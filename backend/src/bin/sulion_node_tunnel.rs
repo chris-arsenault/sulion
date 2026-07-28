@@ -22,6 +22,15 @@ use sulion::node_protocol::{ApprovedPeer, NodeControl};
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(5);
 const INTERFACE: &str = "wg0";
 
+/// Control-plane services a node needs, published on the tunnel address.
+///
+/// Resolved by name per connection so a redeployed sibling container keeps
+/// working without restarting this one.
+const SERVICE_FORWARDS: &[(u16, &str)] = &[
+    (8081, "sulion-broker:8081"),
+    (8083, "sulion-retrieval:8083"),
+];
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -46,6 +55,21 @@ async fn main() -> anyhow::Result<()> {
     let address = control_address(&subnet)?;
 
     bring_up(&keypair, address, prefix_of(&subnet)?, port).await?;
+
+    // Everything a node talks to is reachable on the tunnel address, so no
+    // node traffic leaves the LAN. The control API is already here — wg0 lives
+    // in the control process's own namespace — but the broker and retrieval
+    // are sibling containers, so they are forwarded onto the same address
+    // rather than being reached over the public hostname.
+    for (listen_port, target) in SERVICE_FORWARDS {
+        let listen = std::net::SocketAddr::from((address, *listen_port));
+        let target = (*target).to_string();
+        tokio::spawn(async move {
+            if let Err(error) = forward_service(listen, target.clone()).await {
+                tracing::error!(%listen, %target, %error, "tunnel service forward exited");
+            }
+        });
+    }
 
     // NodeControl is used only for its approved-peer view here; this process
     // never serves node connections itself.
@@ -154,6 +178,32 @@ async fn reconcile(
 
     *applied = desired;
     Ok(())
+}
+
+/// Proxies one control-plane service onto the tunnel address.
+///
+/// A node's `AllowedIPs` is control's single address, so publishing the
+/// services there — rather than routing a node into the Docker network — keeps
+/// the tunnel to exactly the destinations a node is meant to reach.
+async fn forward_service(listen: std::net::SocketAddr, target: String) -> anyhow::Result<()> {
+    let listener = tokio::net::TcpListener::bind(listen).await?;
+    tracing::info!(%listen, %target, "forwarding a control-plane service onto the tunnel");
+    loop {
+        let (mut inbound, peer) = listener.accept().await?;
+        let target = target.clone();
+        tokio::spawn(async move {
+            let mut outbound = match tokio::net::TcpStream::connect(&target).await {
+                Ok(stream) => stream,
+                Err(error) => {
+                    tracing::warn!(%peer, %target, %error, "tunnel forward could not reach service");
+                    return;
+                }
+            };
+            if let Err(error) = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await {
+                tracing::debug!(%peer, %target, %error, "tunnel forward closed");
+            }
+        });
+    }
 }
 
 async fn run(program: &str, args: &[&str]) -> anyhow::Result<()> {

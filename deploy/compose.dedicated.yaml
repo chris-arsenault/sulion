@@ -25,8 +25,10 @@ services:
       SULION_CODEX_SESSIONS: /home/sulion/.codex/sessions
       DOCKER_HOST: unix:///var/run/docker.sock
       HOME: /home/sulion
-      SULION_SECRET_BROKER_URL: ${SULION_SECRET_BROKER_URL:-https://sulion.services.ahara.io/broker}
-      SULION_RETRIEVAL_URL: ${SULION_RETRIEVAL_URL:-https://sulion.services.ahara.io/retrieval}
+      # Reached over the tunnel, not the public hostname. No node traffic
+      # leaves the LAN, and none of it crosses the public reverse proxy.
+      SULION_SECRET_BROKER_URL: ${SULION_SECRET_BROKER_URL:-http://10.88.0.1:8081}
+      SULION_RETRIEVAL_URL: ${SULION_RETRIEVAL_URL:-http://10.88.0.1:8083}
       SULION_CODE_INTEL_URL: http://127.0.0.1:8084
     volumes: !override
       - ${SULION_HOME_HOST_PATH:-/home/sulion}:/home/sulion

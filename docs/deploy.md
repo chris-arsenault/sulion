@@ -222,9 +222,11 @@ available, while filesystem and PTY mutations return `503`.
 UI is at `https://sulion.services.ahara.io/`. The frontend blocks on Cognito
 sign-in. Browser REST and broker-management requests carry the Cognito token;
 PTY WebSockets use a short-lived, one-use ticket minted by an authenticated
-request. The node establishes `ws://192.168.66.3:30081/ws/nodes` outbound on
-the LAN and uses service-authenticated `/broker` and `/retrieval` routes over
-the public hostname.
+request. The node enrolls on `ws://192.168.66.3:30081/ws/nodes` over the LAN and
+then moves everything — control channel, broker, and retrieval — onto the
+tunnel at `10.88.0.1`. No node traffic reaches the public hostname; the
+`node-tunnel` sidecar publishes the broker and retrieval on the tunnel address
+so they do not have to be.
 
 ## Networking
 
