@@ -362,6 +362,22 @@ pub async fn apply(pool: &Pool, msg: &CorrelateMsg) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // An agent session lives in exactly one PTY. Resuming it in a new PTY
+    // moves it there, so first release it from whichever PTY held it —
+    // otherwise the old (usually dead) PTY keeps listing the same
+    // conversation and the sidebar shows it twice.
+    sqlx::query(
+        "UPDATE pty_sessions \
+         SET current_session_uuid = NULL, \
+             current_session_agent = NULL, \
+             current_claude_session_uuid = NULL \
+         WHERE current_session_uuid = $2 AND id <> $1",
+    )
+    .bind(msg.pty_id)
+    .bind(msg.session_uuid)
+    .execute(pool)
+    .await?;
+
     // Point the PTY row at this now-current agent session. Keep the
     // legacy Claude-specific pointer populated only for Claude rows.
     sqlx::query(

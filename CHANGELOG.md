@@ -4,6 +4,13 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Resuming a session moves it, never copies it
+
+- Resuming an agent session in a new PTY now releases it from the PTY that
+  previously held it, so the sidebar lists the conversation once instead of
+  showing the dead shell and the live one side by side. A data migration
+  releases bindings duplicated before the fix.
+
 ### One identity: sulion
 
 - Retired the image's portable `dev` account and every `/home/dev` path. UID

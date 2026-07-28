@@ -191,6 +191,79 @@ async fn second_claude_session_in_same_pty_updates_pointer() {
 }
 
 #[tokio::test]
+async fn resuming_a_session_in_a_new_pty_releases_the_old_pty() {
+    let pool = fresh_pool().await;
+    let mgr = PtyManager::new(pool.clone());
+    let old_pty = mgr
+        .spawn(SpawnParams {
+            repo: "r".into(),
+            working_dir: PathBuf::from("/tmp"),
+            shell: PathBuf::from("/bin/sleep"),
+            args: vec!["60".into()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let new_pty = mgr
+        .spawn(SpawnParams {
+            repo: "r".into(),
+            working_dir: PathBuf::from("/tmp"),
+            shell: PathBuf::from("/bin/sleep"),
+            args: vec!["60".into()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let session = Uuid::new_v4();
+    correlate::apply(
+        &pool,
+        &CorrelateMsg {
+            pty_id: old_pty.id,
+            session_uuid: session,
+            agent: "claude-code".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    correlate::apply(
+        &pool,
+        &CorrelateMsg {
+            pty_id: new_pty.id,
+            session_uuid: session,
+            agent: "claude-code".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // The session moved: exactly one PTY row may claim it, and it is the new one.
+    let rows: Vec<(Uuid, Option<Uuid>, Option<String>, Option<Uuid>)> = sqlx::query_as(
+        "SELECT id, current_session_uuid, current_session_agent, current_claude_session_uuid \
+         FROM pty_sessions WHERE id IN ($1, $2)",
+    )
+    .bind(old_pty.id)
+    .bind(new_pty.id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    for (id, current, agent, legacy) in rows {
+        if id == new_pty.id {
+            assert_eq!(current, Some(session));
+            assert_eq!(agent.as_deref(), Some("claude-code"));
+            assert_eq!(legacy, Some(session));
+        } else {
+            assert_eq!(current, None, "old PTY must release the resumed session");
+            assert_eq!(agent, None);
+            assert_eq!(legacy, None);
+        }
+    }
+
+    mgr.delete(old_pty.id).await.ok();
+    mgr.delete(new_pty.id).await.ok();
+}
+
+#[tokio::test]
 async fn socket_listener_accepts_json_line_and_updates_db() {
     let pool = fresh_pool().await;
     let mgr = PtyManager::new(pool.clone());
