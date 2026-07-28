@@ -20,6 +20,14 @@ module "edge" {
         "/api/devices/pair/token",
         "/api/repos/*/ingest",
         "/api/repos/*/raw",
+      ]
+      authenticated = false
+    },
+    # Nodes and PTY wrappers authenticate these routes with their own signed
+    # credentials or bearer token rather than a browser Cognito JWT.
+    {
+      priority = 174
+      paths = [
         "/broker/v1/use",
         "/broker/v1/pty-credentials",
         "/broker/v1/pty-credentials/*",
@@ -30,25 +38,25 @@ module "edge" {
     # Browsers cannot attach Authorization headers to a WebSocket handshake.
     # Sulion authenticates this route with a short-lived, one-use ticket.
     {
-      priority      = 174
+      priority      = 175
       paths         = ["/ws/*"]
       authenticated = false
     },
     {
-      priority      = 175
+      priority      = 176
       paths         = ["/health"]
       authenticated = false
     },
     # Defense in depth: the ALB validates Cognito JWTs before Sulion validates
     # issuer, client, and claims again at the application boundary.
     {
-      priority      = 176
+      priority      = 177
       paths         = ["/api/*", "/broker/*"]
       authenticated = true
     },
     # Static assets and the login/pairing shell must load before authentication.
     {
-      priority      = 177
+      priority      = 178
       paths         = ["/*"]
       authenticated = false
     },
