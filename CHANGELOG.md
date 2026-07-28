@@ -9,7 +9,9 @@ All notable user-visible changes to Sulion are recorded here.
 - Resuming an agent session in a new PTY now releases it from the PTY that
   previously held it, so the sidebar lists the conversation once instead of
   showing the dead shell and the live one side by side. A data migration
-  releases bindings duplicated before the fix.
+  releases bindings duplicated before the fix, including ingester-discovered
+  sessions that never had an authoritative PTY link: every session keeps only
+  its most recent claimant.
 
 ### One identity: sulion
 
