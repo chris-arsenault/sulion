@@ -959,3 +959,54 @@ async fn the_node_channel_runs_over_tls_bound_to_the_control_identity() {
         "a mismatched certificate pin must refuse the connection"
     );
 }
+
+#[tokio::test]
+async fn http_clients_pin_the_control_certificate_including_the_deployed_ca_flagged_one() {
+    // The broker/retrieval path failed in production with CaUsedAsEndEntity:
+    // webpki refuses the first certificate generation, which carries CA:TRUE.
+    // The HTTP clients therefore pin byte-exactly, like the control channel,
+    // and this proves it against a server presenting that exact certificate.
+    use sulion::node_protocol::tls;
+
+    let (cert_pem, key_pem) = tls::test_certificate_with_ca_flag();
+    let served = tls::ControlTls::from_pem(&cert_pem, &key_pem).expect("parse tls");
+    let router =
+        axum::Router::new().route("/broker/v1/health", axum::routing::get(|| async { "ok" }));
+    let rustls_config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(
+        served.server_config().expect("server config"),
+    ));
+    let handle = axum_server::Handle::new();
+    let serve_handle = handle.clone();
+    tokio::spawn(async move {
+        axum_server::bind_rustls("127.0.0.1:0".parse().unwrap(), rustls_config)
+            .handle(serve_handle)
+            .serve(router.into_make_service())
+            .await
+            .expect("serve tls");
+    });
+    let addr = handle.listening().await.expect("listening");
+    let url = format!("https://127.0.0.1:{}/broker/v1/health", addr.port());
+
+    // Default webpki verification refuses this certificate even as a root —
+    // the exact production failure.
+    let default_client = reqwest::Client::new();
+    assert!(
+        default_client.get(&url).send().await.is_err(),
+        "webpki must refuse the CA-flagged certificate; if this starts \
+         passing, the pinned client is no longer load-bearing"
+    );
+
+    // The pinned client accepts exactly this certificate...
+    let pinned = tls::pinned_http_client(served.cert_der().clone()).expect("pinned client");
+    let response = pinned.get(&url).send().await.expect("pinned request");
+    assert_eq!(response.status(), 200);
+
+    // ...and only this certificate.
+    let (other_pem, other_key) = tls::test_certificate();
+    let other = tls::ControlTls::from_pem(&other_pem, &other_key).expect("other tls");
+    let wrong_pin = tls::pinned_http_client(other.cert_der().clone()).expect("client");
+    assert!(
+        wrong_pin.get(&url).send().await.is_err(),
+        "a mismatched pin must refuse the connection"
+    );
+}

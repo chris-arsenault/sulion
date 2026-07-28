@@ -134,16 +134,32 @@ pub fn test_certificate() -> (String, String) {
     generate("127.0.0.1").expect("mint test certificate")
 }
 
-/// Mints the self-signed certificate. CA:TRUE so the same certificate serves
-/// as its own trust anchor for ordinary clients adding it as a root.
+/// The first deployed generation of certificates carried CA:TRUE; kept
+/// mintable so tests keep proving the pinned clients accept them.
+pub fn test_certificate_with_ca_flag() -> (String, String) {
+    generate_with_ca("127.0.0.1", true).expect("mint test certificate")
+}
+
+/// Mints the self-signed certificate as a plain end-entity certificate.
+///
+/// Verification is byte-exact pinning on every client, so no CA flag is
+/// needed — and webpki rejects a certificate carrying CA:TRUE when a server
+/// presents it as its own (`CaUsedAsEndEntity`), so setting it would break any
+/// standard verifier that ever sees this certificate.
 fn generate(sans: &str) -> Result<(String, String), NodeProtocolError> {
+    generate_with_ca(sans, false)
+}
+
+fn generate_with_ca(sans: &str, ca: bool) -> Result<(String, String), NodeProtocolError> {
     let failed = |error: String| NodeProtocolError::Cryptography(error);
     let mut params =
         rcgen::CertificateParams::new(Vec::new()).map_err(|error| failed(error.to_string()))?;
     params
         .distinguished_name
         .push(rcgen::DnType::CommonName, "sulion-control");
-    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    if ca {
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    }
     for san in sans.split(',').map(str::trim).filter(|san| !san.is_empty()) {
         let san = match san.parse::<std::net::IpAddr>() {
             Ok(address) => rcgen::SanType::IpAddress(address),
@@ -336,24 +352,52 @@ pub fn client_config(
         .with_no_client_auth())
 }
 
-/// HTTP client trusting the pinned control certificate in addition to the
-/// public roots. Used by the node process and every PTY tool that talks to the
-/// broker or retrieval, so their TLS to control verifies while public TLS is
-/// unaffected.
+/// HTTP client for the control plane's node endpoint (broker and retrieval).
+///
+/// When the pinned certificate is present, TLS uses the same byte-exact pin
+/// as the control channel rather than webpki verification — the endpoint is a
+/// single known certificate, exact match is stronger than any root store, and
+/// webpki rejects the first deployed certificate generation outright
+/// (`CaUsedAsEndEntity`, its CA:TRUE flag). These clients speak only to
+/// control, never to public hosts, so replacing the root store loses nothing.
 pub fn control_http_client() -> reqwest::Client {
-    let mut builder = reqwest::Client::builder();
-    if let Ok(path) = std::env::var(CONTROL_CA_ENV) {
-        match std::fs::read(&path) {
-            Ok(pem) => match reqwest::Certificate::from_pem(&pem) {
-                Ok(cert) => builder = builder.add_root_certificate(cert),
-                Err(error) => {
-                    tracing::warn!(%path, %error, "control TLS certificate is unreadable")
-                }
-            },
-            Err(error) => tracing::debug!(%path, %error, "no control TLS certificate to trust"),
+    let Some(pinned) = pinned_from_env() else {
+        return reqwest::Client::new();
+    };
+    pinned_http_client(pinned).unwrap_or_else(|error| {
+        tracing::warn!(%error, "pinned TLS client unavailable; using default verification");
+        reqwest::Client::new()
+    })
+}
+
+/// Reqwest client that accepts exactly one server certificate.
+pub fn pinned_http_client(
+    pinned: CertificateDer<'static>,
+) -> Result<reqwest::Client, NodeProtocolError> {
+    let (verifier, _seen) = PinnedServerVerifier::new(Some(pinned));
+    reqwest::Client::builder()
+        .use_preconfigured_tls(client_config(verifier)?)
+        .build()
+        .map_err(|error| NodeProtocolError::Cryptography(error.to_string()))
+}
+
+fn pinned_from_env() -> Option<CertificateDer<'static>> {
+    let path = std::env::var(CONTROL_CA_ENV).ok()?;
+    let pem = match std::fs::read(&path) {
+        Ok(pem) => pem,
+        Err(error) => {
+            tracing::debug!(%path, %error, "no control TLS certificate to trust");
+            return None;
+        }
+    };
+    let cert = rustls_pemfile::certs(&mut pem.as_slice()).next();
+    match cert {
+        Some(Ok(cert)) => Some(cert),
+        _ => {
+            tracing::warn!(%path, "control TLS certificate is unreadable");
+            None
         }
     }
-    builder.build().unwrap_or_else(|_| reqwest::Client::new())
 }
 
 #[cfg(test)]
