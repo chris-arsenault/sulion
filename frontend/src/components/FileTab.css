@@ -364,9 +364,4 @@
   image-rendering: auto;
 }
 
-.ft__svg {
-  display: flex;
-  justify-content: center;
-}
-
 .ft--err .ft__body { color: var(--crit-fg); }

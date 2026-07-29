@@ -67,15 +67,16 @@ export function StatsStrip() {
   }
 
   const s = stats;
-  const memUsedMb = s.process.memory_rss_bytes / (1024 * 1024);
-  const memLimitMb = s.process.memory_limit_bytes
-    ? s.process.memory_limit_bytes / (1024 * 1024)
+  // Memory and CPU describe the development node's machine, not this
+  // process. Without a node there is nothing to describe, and a dash beats a
+  // number that quietly measures the wrong host.
+  const memDisplay = s.node
+    ? `${formatBytes(s.node.memory_used_bytes)} / ${formatBytes(s.node.memory_total_bytes)}`
+    : "—";
+  const memPct = s.node
+    ? Math.min(100, (s.node.memory_used_bytes / s.node.memory_total_bytes) * 100)
     : null;
-  const memDisplay = memLimitMb
-    ? `${memUsedMb.toFixed(0)} / ${memLimitMb.toFixed(0)} MB`
-    : `${memUsedMb.toFixed(0)} MB`;
-  const memPct = memLimitMb ? Math.min(100, (memUsedMb / memLimitMb) * 100) : null;
-  const cpuDisplay = `${s.process.cpu_percent.toFixed(0)}%`;
+  const cpuDisplay = s.node ? `${s.node.cpu_percent.toFixed(0)}%` : "—";
   const dbSizeDisplay = formatBytes(s.db.database_size_bytes);
   return (
     <div className="stats-strip" data-testid="stats-strip">
@@ -95,13 +96,13 @@ export function StatsStrip() {
         >
           <Icon name="chevron-right" size={12} />
         </span>
-        <Tooltip label="Backend memory (RSS / cgroup limit)">
+        <Tooltip label="Development node memory (used / total)">
           <span className="stats-strip__pill tabular">
             <Icon name="cpu" size={12} />
             {memDisplay}
           </span>
         </Tooltip>
-        <Tooltip label="Backend process CPU percent">
+        <Tooltip label="Development node CPU percent across all cores">
           <span className="stats-strip__pill tabular">
             <Icon name="activity" size={12} />
             {cpuDisplay}
@@ -146,11 +147,11 @@ export function StatsStrip() {
                 <dd>{formatUptime(s.uptime_seconds)}</dd>
               </div>
               <div>
-                <dt>backend mem</dt>
+                <dt>node mem</dt>
                 <dd>{memDisplay}</dd>
               </div>
               <div>
-                <dt>backend cpu</dt>
+                <dt>node cpu</dt>
                 <dd>{cpuDisplay}</dd>
               </div>
               <div>
@@ -274,7 +275,7 @@ function MemBar({ pct }: { pct: number }) {
   return (
     <div
       className="stats-strip__mem-bar"
-      aria-label="Memory usage vs. container limit"
+      aria-label="Development node memory usage vs. total"
     >
       <div
         className="stats-strip__mem-fill"

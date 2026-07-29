@@ -26,7 +26,7 @@ pub use config::NodeRuntimeConfig;
 pub use identity::ControlIdentity;
 pub use lan::{NodeLanGuard, NodeSourcePolicy, SourceRefusal};
 pub use model::{
-    ControlHelloProof, NodeConfigPayload, NodeHello, NodeRequestKind, NodeView,
+    ControlHelloProof, NodeConfigPayload, NodeHello, NodeHostStats, NodeRequestKind, NodeView,
     RequestResultPayload, RequestResultStatus, TerminalBytesPayload, TerminalDeadPayload,
     TerminalResizePayload, WireEnvelope, DEDICATED_NODE_ID, DEFAULT_HEARTBEAT_INTERVAL_SECS,
     DEFAULT_HEARTBEAT_TIMEOUT_SECS, DEFAULT_NODE_LAN_CIDR, MAX_NODE_FRAME_BYTES,
@@ -67,6 +67,10 @@ pub struct NodeControl {
     active: Arc<RwLock<HashMap<Uuid, ActiveConnection>>>,
     request_waiters: Arc<RwLock<HashMap<Uuid, oneshot::Sender<RequestResultPayload>>>>,
     terminal_streams: Arc<RwLock<HashMap<Uuid, mpsc::Sender<TerminalEvent>>>>,
+    /// Latest whole-machine sample from each connected node. Current pressure
+    /// only: it is dropped on disconnect rather than aged, because a stale
+    /// figure from a node that is gone is worse than no figure.
+    host_stats: Arc<RwLock<HashMap<Uuid, NodeHostStats>>>,
     heartbeat_interval_seconds: u64,
     heartbeat_timeout_seconds: u64,
     /// Runtime configuration handed to a node once it authenticates. Unset
@@ -170,6 +174,8 @@ struct HeartbeatPayload {
     live_session_ids: Vec<Uuid>,
     #[serde(default)]
     inventory_complete: bool,
+    #[serde(default)]
+    host: Option<NodeHostStats>,
 }
 
 impl NodeControl {
@@ -191,6 +197,7 @@ impl NodeControl {
             active: Arc::new(RwLock::new(HashMap::new())),
             request_waiters: Arc::new(RwLock::new(HashMap::new())),
             terminal_streams: Arc::new(RwLock::new(HashMap::new())),
+            host_stats: Arc::new(RwLock::new(HashMap::new())),
             heartbeat_interval_seconds,
             heartbeat_timeout_seconds,
             delivered_config: std::sync::OnceLock::new(),
@@ -428,6 +435,9 @@ impl NodeControl {
                 if !current {
                     return Err(NodeProtocolError::Unavailable);
                 }
+                if let Some(host) = payload.host {
+                    self.host_stats.write().await.insert(envelope.node_id, host);
+                }
             }
             "request.result" => {
                 let request_id = envelope.request_id.ok_or_else(|| {
@@ -477,6 +487,7 @@ impl NodeControl {
             .is_some_and(|connection| connection.connection_id == connection_id)
         {
             active.remove(&node_id);
+            self.host_stats.write().await.remove(&node_id);
         }
         drop(active);
         let streams = self
@@ -498,8 +509,20 @@ impl NodeControl {
 
     async fn cancel_active(&self, node_id: Uuid) {
         if let Some(connection) = self.active.write().await.remove(&node_id) {
+            self.host_stats.write().await.remove(&node_id);
             let _ = connection.cancel.send(true);
         }
+    }
+
+    /// Latest machine sample from the connected node, or None while no node
+    /// has reported one. The deployment supports one node, so the first
+    /// active connection carrying a sample is the answer.
+    pub async fn host_stats(&self) -> Option<NodeHostStats> {
+        let active = self.active.read().await;
+        let stats = self.host_stats.read().await;
+        active
+            .keys()
+            .find_map(|node_id| stats.get(node_id).copied())
     }
 
     async fn active_boot(&self, node_id: Uuid) -> Result<Uuid, NodeProtocolError> {
@@ -735,18 +758,20 @@ pub fn heartbeat_envelope(
     boot_id: Uuid,
     live_session_ids: Vec<Uuid>,
     inventory_complete: bool,
+    host: Option<NodeHostStats>,
 ) -> WireEnvelope {
     let mut envelope = WireEnvelope::new(node_id, boot_id, "node.heartbeat");
     envelope.payload = json!({
         "live_session_ids": live_session_ids,
         "inventory_complete": inventory_complete,
+        "host": host,
     });
     envelope
 }
 
 #[cfg(test)]
 mod tests {
-    use super::random_url_token;
+    use super::{random_url_token, HeartbeatPayload};
 
     #[test]
     fn random_tokens_are_nonempty_and_distinct() {
@@ -754,5 +779,28 @@ mod tests {
         let second = random_url_token(32).unwrap();
         assert!(!first.is_empty());
         assert_ne!(first, second);
+    }
+
+    /// Control and node deploy on their own schedules, so a payload must
+    /// survive a peer that predates a field and a peer that adds one. This is
+    /// what makes deployment order irrelevant, and it is why adding a field
+    /// never justifies a protocol version bump.
+    #[test]
+    fn a_heartbeat_survives_a_peer_from_another_release() {
+        let older: HeartbeatPayload = serde_json::from_value(serde_json::json!({
+            "live_session_ids": [],
+            "inventory_complete": true,
+        }))
+        .expect("a heartbeat without the newer field still parses");
+        assert!(older.host.is_none());
+
+        let newer: HeartbeatPayload = serde_json::from_value(serde_json::json!({
+            "live_session_ids": [],
+            "inventory_complete": true,
+            "host": {"memory_used_bytes": 1, "memory_total_bytes": 2, "cpu_percent": 3.0},
+            "something_this_build_has_never_heard_of": 1,
+        }))
+        .expect("a heartbeat with unknown fields still parses");
+        assert_eq!(newer.host.map(|host| host.memory_total_bytes), Some(2));
     }
 }

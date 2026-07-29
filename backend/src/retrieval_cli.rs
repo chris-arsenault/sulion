@@ -128,7 +128,8 @@ impl RetrievalCliEnv {
     }
 
     fn url(&self, path: &str, pairs: &[(&str, String)]) -> anyhow::Result<Url> {
-        let mut url = Url::parse(self.base_url.trim_end_matches('/'))
+        let base_url = format!("{}/", self.base_url.trim_end_matches('/'));
+        let mut url = Url::parse(&base_url)
             .context("invalid SULION_RETRIEVAL_URL")?
             .join(path.trim_start_matches('/'))?;
         {
@@ -649,6 +650,35 @@ mod tests {
         assert_eq!(
             infer_repo("/home/sulion/workspaces/sulion/abc"),
             Some("sulion".to_string())
+        );
+    }
+
+    #[test]
+    fn appends_request_path_below_configured_base_path() {
+        let env = RetrievalCliEnv {
+            base_url: "https://192.168.66.3:30081/retrieval".to_string(),
+            token: "token".to_string(),
+            repo: None,
+            cwd: None,
+            pty_id: None,
+            workspace_id: None,
+            agent_session_id: None,
+        };
+        let url = env
+            .url("/v1/search", &[("q", "node migration".to_string())])
+            .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://192.168.66.3:30081/retrieval/v1/search?q=node+migration"
+        );
+
+        let direct = RetrievalCliEnv {
+            base_url: "http://sulion-retrieval:8083".to_string(),
+            ..env
+        };
+        assert_eq!(
+            direct.url("/v1/index/status", &[]).unwrap().path(),
+            "/v1/index/status"
         );
     }
 }

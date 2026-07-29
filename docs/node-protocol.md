@@ -22,14 +22,28 @@ credential history, drain controller, or remote shell.
 There is one protocol version and four persisted connection states: `pending`,
 `enrolled`, `connected`, and `disconnected`. Only the fixed node ID can enter
 the pending state; other unknown or unauthenticated peers are rejected.
-Upgrades that change the protocol must update control and node together.
+
+Control and node are released separately and in no fixed order, so protocol
+changes are additive: new payload fields are optional, and a reader treats an
+absent field as "not reported" rather than an error. Messages carry no
+`deny_unknown_fields`, so a peer from either release parses the other's
+payloads. That is what keeps deployment order out of the contract — a node and
+a control plane from different releases interoperate, with the newer side's
+optional data simply missing until both have shipped.
+
+Adding a field is therefore never a reason to change
+`NODE_PROTOCOL_VERSION`. Bumping it severs every peer that has not been
+upgraded until both sides restart, so it is reserved for a message that
+genuinely cannot be served by both builds — and that change has to carry a
+compatibility plan of its own.
 
 This leaves four mechanisms:
 
 1. one-click pairing approval and an Ed25519 node identity;
 2. an outbound authenticated WebSocket;
 3. direct typed request/response messages and terminal streams; and
-4. a heartbeat containing boot identity and live PTY inventory.
+4. a heartbeat containing boot identity, live PTY inventory, and a
+   whole-machine resource sample.
 
 ## Ownership
 
@@ -221,9 +235,14 @@ stall the PTY reader or shadow emulator.
 
 ## Heartbeat and reboot behavior
 
-The heartbeat reports the node's current boot ID and complete live PTY ID
-inventory.
+The heartbeat reports the node's current boot ID, complete live PTY ID
+inventory, and a whole-machine memory and CPU sample.
 
+- The machine sample is the only source of the memory and CPU figures the
+  browser shows. Control keeps the latest one per connected node and drops it
+  on disconnect; there is no series and no persistence. It is whole-machine
+  rather than per-process because builds, language servers, and development
+  containers are what consume a node.
 - A control restart does not mark node-owned sessions dead. The node reconnects
   with the same boot ID and reports the surviving PTYs.
 - A socket loss marks the node disconnected and records disconnect timestamps

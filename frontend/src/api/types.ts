@@ -676,11 +676,13 @@ export interface FileTraceResponse {
 
 export interface StatsResponse {
   uptime_seconds: number;
-  process: {
-    memory_rss_bytes: number;
+  /** Whole-machine pressure on the development node, from its latest
+   * heartbeat. Null until a node reports one, and again once it disconnects. */
+  node: {
+    memory_used_bytes: number;
+    memory_total_bytes: number;
     cpu_percent: number;
-    memory_limit_bytes: number | null;
-  };
+  } | null;
   pty: {
     live_sessions: number;
     live_agent_sessions: number;

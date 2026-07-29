@@ -78,17 +78,12 @@ chown 7322:7322 /mnt/apps/apps/sulion-broker
 ```
 
 `apps/apps/sulion-broker` belongs only to the broker container. It holds the
-broker master key and is never mounted into control or a node. Existing
-`apps/apps/sulion`, `repos`, and `workspaces` datasets remain unchanged through
-the migration so the standalone rollback role can mount them. They are not in
-the production control-plane I/O path.
+broker master key and is never mounted into control or a node. The split
+control plane mounts no development home, repository, or workspace datasets.
 
 UID/GID **7321** is deliberately off the 1000-series consumer range. Pinned in `backend/Dockerfile` via the `DEV_UID` / `DEV_GID` build args; change both together or not at all.
 
 The broker runs as **7322:7322**, configured in [`broker/Dockerfile`](</home/sulion/repos/sulion/broker/Dockerfile>).
-
-The standalone overlay bind-mounts each legacy dataset explicitly because a
-plain Docker bind does not follow nested ZFS datasets under its parent.
 
 ## Broker key
 
@@ -129,16 +124,17 @@ truenas_compose_path: deploy/compose.truenas-standalone.yaml
 
 Changing that one value and pushing `main` is sufficient to switch the Komodo
 stack between the two supported TrueNAS roles. CI renders both paths on every
-change. Postgres and the preserved TrueNAS home, repo, and workspace datasets
-are shared by both roles; the role switch does not restore or transform them.
+change. The combined role expects its development home at
+`/mnt/apps/apps/sulion`, with `repos` and `workspaces` mounted explicitly
+because a parent bind does not cross nested ZFS dataset mount points.
 
 Deploy `ahara-infra` before the first Sulion edge deployment so the internal
 nginx upstream, WireGuard ingress, and Sulion deployer permissions already
 exist. The production TrueNAS deploy replaces only control-plane services: a
 backend replacement drops browser attachments, while node-owned PTYs continue
-and reconnect. Applying the combined rollback role still terminates any PTYs
-owned by that combined backend. Replacing `sulion-node` is an explicit
-session-affecting operation.
+and reconnect. Switching to the combined role terminates PTYs owned by its
+combined backend. Replacing `sulion-node` is an explicit session-affecting
+operation.
 
 The backend/control container owns the main `sulion` database migrations and
 Postgres-only startup repair. Node, ingester, retrieval, and code intelligence
@@ -190,11 +186,10 @@ The PTY helper is `sulion-code`; the full command contract is in
 [`docs/code-intel.md`](code-intel.md), and the durable design decision is in
 [`docs/adrs/0001-code-intelligence-agent-tool.md`](adrs/0001-code-intelligence-agent-tool.md).
 
-## Drop in credentials
+## Standalone TrueNAS credentials
 
-The following paths apply only when restoring the standalone TrueNAS rollback
-role. SSH into TrueNAS; the legacy dataset root is the container's
-`/home/sulion/`:
+The following paths apply only to the combined TrueNAS role. Its dataset root
+is the container's `/home/sulion/`:
 
 - SSH keys: `/mnt/apps/apps/sulion/.ssh/` (private keys chmod 0600)
 - Git identity: `/mnt/apps/apps/sulion/.gitconfig`

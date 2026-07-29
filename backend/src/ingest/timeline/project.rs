@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::ingest::canonical::{BlockKind, OperationCategory};
 
-use super::render::{format_turn_markdown, pair_operation_type, subagent_title};
+use super::render::{format_turn_markdown, pair_operation_type, subagent_title, truncate};
 use super::{
     ProjectionFilters, SpeakerFacet, StoredEvent, TimelineAssistantItem, TimelineChunk,
     TimelineGenericDetails, TimelineResponse, TimelineSubagent, TimelineToolPair,
@@ -607,14 +607,14 @@ fn first_paragraph(text: &str, max: usize) -> String {
         .iter()
         .skip(1)
         .any(|part| !part.trim().is_empty());
-    if first.len() <= max {
+    if first.chars().count() <= max {
         if has_more {
             format!("{first} …")
         } else {
             first
         }
     } else {
-        format!("{}…", &first[..max.saturating_sub(1)])
+        truncate(&first, max)
     }
 }
 

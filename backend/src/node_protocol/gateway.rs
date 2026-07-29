@@ -45,8 +45,7 @@ fn client() -> &'static reqwest::Client {
 
 /// Forwards one request to an internal upstream and streams the response back.
 ///
-/// Only the headers the upstream contracts actually use cross the boundary,
-/// so a client cannot smuggle hop-by-hop or spoofed-identity headers through.
+/// Only the headers the upstream contracts actually use cross the boundary.
 async fn forward(upstream_env: &str, prefix: &str, request: Request) -> Response {
     let Some(base) = std::env::var(upstream_env)
         .ok()
@@ -68,8 +67,17 @@ async fn forward(upstream_env: &str, prefix: &str, request: Request) -> Response
 
     let method = request.method().clone();
     let mut forwarded = client().request(method, &url);
-    for name in [header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT] {
-        if let Some(value) = request.headers().get(&name) {
+    for name in [
+        "authorization",
+        "content-type",
+        "accept",
+        "x-sulion-repo",
+        "x-sulion-cwd",
+        "x-sulion-pty-id",
+        "x-sulion-workspace-id",
+        "x-sulion-agent-session-id",
+    ] {
+        if let Some(value) = request.headers().get(name) {
             forwarded = forwarded.header(name, value);
         }
     }

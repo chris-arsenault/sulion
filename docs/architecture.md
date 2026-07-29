@@ -254,11 +254,10 @@ contract. The production Compose selections divide the graph by ownership:
 
 Code intelligence mounts local repos/workspaces on the node host. Broker and
 retrieval remain durable services backed by TrueNAS Postgres. The standalone
-overlay plus the TrueNAS host-policy overlay restores the previous combined,
-brokered runtime for rollback. Full setup is in
-[`deploy.md`](deploy.md); the decision and remaining sequence are in
-[`adrs/0002-hybrid-control-plane-and-dev-node.md`](adrs/0002-hybrid-control-plane-and-dev-node.md)
-and [`plans/dedicated-nixos-dev-node.md`](plans/dedicated-nixos-dev-node.md).
+overlay plus the TrueNAS host-policy overlay provides the supported combined,
+brokered runtime. Full setup is in
+[`deploy.md`](deploy.md), and the completed topology decision is in
+[`adrs/0002-hybrid-control-plane-and-dev-node.md`](adrs/0002-hybrid-control-plane-and-dev-node.md).
 
 ## Historical reasoning
 

@@ -243,7 +243,7 @@ in the workspace:
 
 ## Dev Servers
 
-Sulion publishes PTY dev-server ports `26000-26010` on the LAN. Bind dev
+PTY dev-server ports `26000-26010` are reachable from the LAN. Bind dev
 servers to `0.0.0.0` and choose one port from that range.
 
 ```sh
@@ -254,8 +254,20 @@ npm run dev -- --host 0.0.0.0 --port 26000 --strictPort
 HOSTNAME=0.0.0.0 PORT=26001 npm run dev
 ```
 
-Open the app from another LAN machine at `http://192.168.66.3:<port>/`.
-These ports are direct LAN exposure and are not routed through Sulion auth.
+Those ports belong to the machine this PTY runs on, which is the development
+node rather than the control plane. Print its addresses and take the
+`192.168.66.x` one; the `172.x` entries are Docker bridges and are reachable
+only from this host:
+
+```sh
+ip -4 -brief addr show scope global
+```
+
+Open it from another LAN machine at `http://<that address>:<port>/`. Ports
+outside `26000-26010` bind successfully and are reachable from this PTY, but
+the node's firewall drops them at the LAN edge, so a colleague's browser sees
+nothing. These ports are direct LAN exposure and are not routed through Sulion
+auth.
 
 ## Infrastructure
 

@@ -11,12 +11,16 @@ import type {
 export function statsPayload(overrides: Partial<StatsResponse> = {}): StatsResponse {
   return {
     uptime_seconds: 3_700,
-    process: {
-      memory_rss_bytes: 120 * 1024 * 1024,
-      cpu_percent: 4.2,
-      memory_limit_bytes: 500 * 1024 * 1024,
-      ...overrides.process,
-    },
+    // Not spread: `null` is a meaningful override here — it is what the
+    // control plane reports while no node has sent a heartbeat.
+    node:
+      overrides.node === undefined
+        ? {
+            memory_used_bytes: 11 * 1024 * 1024 * 1024,
+            memory_total_bytes: 32 * 1024 * 1024 * 1024,
+            cpu_percent: 4.2,
+          }
+        : overrides.node,
     pty: {
       live_sessions: 3,
       live_agent_sessions: 2,

@@ -165,9 +165,11 @@ sessions show a sigil; coloured rows get a stripe of the chosen tone.
 
 ## Stats strip
 
-The bottom of the sidebar carries a compact stats strip — backend
-memory / CPU, Postgres size, event counts, live PTY and agent session
-counts. Clicking expands it into a detail panel.
+The bottom of the sidebar carries a compact stats strip — the development
+node's memory and CPU, Postgres size, event counts, live PTY and agent
+session counts. Memory and CPU describe the machine your terminals actually
+run on, so they read as dashes while no node is connected. Clicking expands
+it into a detail panel.
 
 ![Stats panel](screenshots/10-stats-strip.png)
 

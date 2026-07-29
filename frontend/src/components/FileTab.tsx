@@ -2,7 +2,9 @@
 //   - markdown  → rendered via the Markdown component
 //   - json      → interactive tree via JsonTree (raw toggle returns <pre>)
 //   - ndjson    → tree per line
-//   - image/svg → inline
+//   - image/svg → <img> via the authenticated blob route, never inline HTML,
+//                 because repo SVG is agent-authored and an inlined <svg> runs
+//                 its own event handlers (onbegin, foreignObject/onerror)
 //   - code      → Shiki syntax highlighting (off-thread worker)
 //   - fallback  → <pre>
 //
@@ -26,6 +28,8 @@ import { useTabs } from "../state/TabStore";
 import { JsonTree } from "./common/JsonTree";
 import { FileTracePanel } from "./FileTracePanel";
 import { Markdown } from "./timeline/Markdown";
+import { canToggleRaw, chooseRenderKind } from "./fileRenderKind";
+import type { RenderKind } from "./fileRenderKind";
 import "./FileTab.css";
 
 export function FileTab({
@@ -163,78 +167,6 @@ export function FileTab({
   );
 }
 
-type RenderKind =
-  | { kind: "truncated" }
-  | { kind: "image-binary" }
-  | { kind: "image-svg"; svg: string }
-  | { kind: "binary" }
-  | { kind: "markdown"; source: string }
-  | { kind: "json"; value: unknown; parseError?: string }
-  | { kind: "ndjson"; entries: Array<{ line: number; value: unknown; parseError?: string }> }
-  | { kind: "code"; lang: string; code: string }
-  | { kind: "raw"; code: string };
-
-function chooseRenderKind(data: FileResponse, raw: boolean): RenderKind {
-  if (data.truncated) return { kind: "truncated" };
-  if (data.binary) {
-    if (data.mime.startsWith("image/")) {
-      return {
-        kind: "image-binary",
-      };
-    }
-    return { kind: "binary" };
-  }
-  // Text. SVG first (text-sniffed).
-  if (data.mime === "image/svg+xml" && data.content) {
-    return { kind: "image-svg", svg: data.content };
-  }
-  if (raw) return { kind: "raw", code: data.content ?? "" };
-
-  const content = data.content ?? "";
-  if (data.mime === "text/markdown" && content) {
-    return { kind: "markdown", source: content };
-  }
-  const ext = extensionOf(data.path);
-  if (ext === "json" || data.mime === "application/json") {
-    try {
-      return { kind: "json", value: JSON.parse(content) };
-    } catch (err) {
-      return {
-        kind: "json",
-        value: content,
-        parseError: err instanceof Error ? err.message : "parse failed",
-      };
-    }
-  }
-  if (ext === "ndjson" || ext === "jsonl") {
-    const entries = content.split("\n").flatMap((line, i) => {
-      const t = line.trim();
-      if (!t) return [];
-      try {
-        return [{ line: i + 1, value: JSON.parse(t) }];
-      } catch (err) {
-        return [
-          {
-            line: i + 1,
-            value: t,
-            parseError: err instanceof Error ? err.message : "parse failed",
-          },
-        ];
-      }
-    });
-    return { kind: "ndjson", entries };
-  }
-  const lang = shikiLangFor(ext);
-  if (lang) return { kind: "code", lang, code: content };
-  return { kind: "raw", code: content };
-}
-
-function canToggleRaw(data: FileResponse): boolean {
-  if (data.truncated) return false;
-  if (data.binary) return false;
-  if (data.mime === "image/svg+xml") return false;
-  return true;
-}
 
 function FileBody({
   data,
@@ -278,9 +210,6 @@ function FileBody({
         <FileDownload repo={repo} workspaceId={workspaceId} path={data.path} />
       </div>
     );
-  }
-  if (kind.kind === "image-svg") {
-    return <SvgBody svg={kind.svg} />;
   }
   if (kind.kind === "markdown") {
     return (
@@ -376,11 +305,6 @@ function HighlightedCode({
     );
   }
   return <HighlightedBody html={html} focusLine={focusLine} focusKey={focusKey} />;
-}
-
-function SvgBody({ svg }: { svg: string }) {
-  const html = useMemo(() => ({ __html: svg }), [svg]);
-  return <div className="ft__svg" dangerouslySetInnerHTML={html} />;
 }
 
 function AuthenticatedImage({
@@ -519,58 +443,3 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
-function extensionOf(path: string): string {
-  const base = path.slice(path.lastIndexOf("/") + 1);
-  const i = base.lastIndexOf(".");
-  return i === -1 ? "" : base.slice(i + 1).toLowerCase();
-}
-
-function shikiLangFor(ext: string): string | null {
-  switch (ext) {
-    case "rs":
-      return "rust";
-    case "ts":
-      return "typescript";
-    case "tsx":
-      return "tsx";
-    case "js":
-      return "javascript";
-    case "jsx":
-      return "jsx";
-    case "py":
-      return "python";
-    case "go":
-      return "go";
-    case "java":
-      return "java";
-    case "c":
-    case "h":
-      return "c";
-    case "cpp":
-    case "hpp":
-    case "cc":
-      return "cpp";
-    case "sh":
-    case "bash":
-      return "bash";
-    case "toml":
-      return "toml";
-    case "yaml":
-    case "yml":
-      return "yaml";
-    case "sql":
-      return "sql";
-    case "css":
-      return "css";
-    case "scss":
-      return "scss";
-    case "html":
-    case "htm":
-      return "html";
-    case "patch":
-    case "diff":
-      return "diff";
-    default:
-      return null;
-  }
-}

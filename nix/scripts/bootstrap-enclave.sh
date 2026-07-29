@@ -155,6 +155,10 @@ nixos-install \
 
 nixos-enter --root /mnt -c 'passwd sulion'
 
+printf '\nSet the Samba password for the sulion account.\n'
+printf 'This may match the console password, but Samba stores it separately.\n'
+nixos-enter --root /mnt -c 'smbpasswd -a sulion'
+
 for service_binary in systemd-oomd systemd-timesyncd; do
   found_service_binary=false
   for service_path in "/mnt/nix/store/"*-systemd-*/lib/systemd/"$service_binary"; do

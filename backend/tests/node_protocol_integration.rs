@@ -10,8 +10,8 @@ use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{json, Value};
 use sulion::node_protocol::model::{ControlChallenge, ControlWireMessage, NodeWireMessage};
 use sulion::node_protocol::{
-    heartbeat_envelope, NodeControl, NodeHello, NodeLanGuard, NodeRequestKind, NodeRuntimeConfig,
-    NodeSourcePolicy, TerminalEvent, DEDICATED_NODE_ID, NODE_PROTOCOL_VERSION,
+    heartbeat_envelope, NodeControl, NodeHello, NodeHostStats, NodeLanGuard, NodeRequestKind,
+    NodeRuntimeConfig, NodeSourcePolicy, TerminalEvent, DEDICATED_NODE_ID, NODE_PROTOCOL_VERSION,
 };
 use sulion::node_runtime::{
     NodeRuntime, RepoCreateRequest, RepoPathRequest, ResourceRequest, SessionCreateRequest,
@@ -256,7 +256,17 @@ async fn send_heartbeat(
     boot_id: Uuid,
     live_session_ids: Vec<Uuid>,
 ) {
-    let envelope = heartbeat_envelope(node_id, boot_id, live_session_ids, true);
+    send_heartbeat_with_host(socket, node_id, boot_id, live_session_ids, None).await;
+}
+
+async fn send_heartbeat_with_host(
+    socket: &mut ClientSocket,
+    node_id: Uuid,
+    boot_id: Uuid,
+    live_session_ids: Vec<Uuid>,
+    host: Option<NodeHostStats>,
+) {
+    let envelope = heartbeat_envelope(node_id, boot_id, live_session_ids, true, host);
     socket
         .send(Message::Text(
             serde_json::to_string(&NodeWireMessage::Envelope { envelope }).expect("heartbeat json"),
@@ -318,6 +328,80 @@ async fn fixed_node_pairing_is_approved_in_the_control_plane() {
     assert_eq!(node.id, DEDICATED_NODE_ID);
     assert_eq!(node.connection_state, "connected");
     assert_eq!(node.pending_key_fingerprint, None);
+}
+
+/// The strip's memory/CPU must describe the machine that runs PTYs and
+/// builds. Control samples nothing of its own, so a deployment with no node
+/// reports no machine rather than quietly measuring the control plane.
+#[tokio::test]
+async fn app_state_reports_the_nodes_machine_and_forgets_it_on_disconnect() {
+    let pool = fresh_pool().await;
+    let (base, state) = start_server(pool, true).await;
+    let keypair = generate_keypair();
+    let node_id = DEDICATED_NODE_ID;
+    pair_and_approve(&base, &state.node_control, &keypair).await;
+    let client = reqwest::Client::new();
+
+    // app-state serves the cached sample; the background sampler owns the
+    // cadence in production, so the test drives it explicitly.
+    sulion::api::sample_stats_once(&state)
+        .await
+        .expect("sample before node");
+    let before: Value = client
+        .get(format!("{base}/api/app-state"))
+        .send()
+        .await
+        .expect("app-state before node")
+        .json()
+        .await
+        .expect("app-state json");
+    assert_eq!(before["stats"]["node"], Value::Null);
+
+    let boot_id = Uuid::new_v4();
+    let mut socket = connect_node(&base, &keypair, node_id, boot_id).await;
+    send_heartbeat_with_host(
+        &mut socket,
+        node_id,
+        boot_id,
+        Vec::new(),
+        Some(NodeHostStats {
+            memory_used_bytes: 11 * 1024 * 1024 * 1024,
+            memory_total_bytes: 32 * 1024 * 1024 * 1024,
+            cpu_percent: 47.5,
+        }),
+    )
+    .await;
+
+    sulion::api::sample_stats_once(&state)
+        .await
+        .expect("sample with node");
+    let connected: Value = client
+        .get(format!("{base}/api/app-state"))
+        .send()
+        .await
+        .expect("app-state with node")
+        .json()
+        .await
+        .expect("app-state json");
+    let reported = &connected["stats"]["node"];
+    assert_eq!(reported["memory_used_bytes"], 11 * 1024 * 1024 * 1024_u64);
+    assert_eq!(reported["memory_total_bytes"], 32 * 1024 * 1024 * 1024_u64);
+    assert_eq!(reported["cpu_percent"], 47.5);
+
+    socket.close(None).await.expect("close node connection");
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    sulion::api::sample_stats_once(&state)
+        .await
+        .expect("sample after disconnect");
+    let after: Value = client
+        .get(format!("{base}/api/app-state"))
+        .send()
+        .await
+        .expect("app-state after disconnect")
+        .json()
+        .await
+        .expect("app-state json");
+    assert_eq!(after["stats"]["node"], Value::Null);
 }
 
 #[tokio::test]

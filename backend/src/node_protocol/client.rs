@@ -403,6 +403,7 @@ async fn connect_once(
                     runtime.boot_id(),
                     runtime.live_session_ids().await,
                     true,
+                    Some(runtime.host_stats().await),
                 );
                 send_node_envelope(&mut sink, heartbeat).await?;
             }

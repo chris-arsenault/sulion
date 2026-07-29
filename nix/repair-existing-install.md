@@ -42,7 +42,7 @@ At the `sulion-enclave` console, connect wired Ethernet and run:
 
 ```bash
 sudo git -C /etc/sulion pull --ff-only \
-  origin feat/dedicated-nixos-dev-node
+  origin main
 
 sudo nix run /etc/sulion#install-admin-key -- \
   add /home/sulion/repos/sulion-enclave.pub
@@ -91,11 +91,10 @@ Test and activate the repository flake directly:
 
 ```bash
 sudo nixos-rebuild test \
-  --flake github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#sulion-enclave
+  --flake github:chris-arsenault/sulion/main#sulion-enclave
 sudo nixos-rebuild switch \
-  --flake github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#sulion-enclave
+  --flake github:chris-arsenault/sulion/main#sulion-enclave
 ```
 
-Replace the branch ref with `main` after the work is merged. `test` activates
-the candidate only until reboot; run `switch` only after the SSH and host checks
-pass.
+`test` activates the candidate only until reboot; run `switch` only after the
+SSH and host checks pass.

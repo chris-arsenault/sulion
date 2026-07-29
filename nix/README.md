@@ -148,7 +148,7 @@ configuration but makes no disk changes:
 
 ```bash
 nix --extra-experimental-features 'nix-command flakes' run \
-  github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#bootstrap-enclave \
+  github:chris-arsenault/sulion/main#bootstrap-enclave \
   -- \
   --disk "$INSTALL_DISK" \
   --key-file /tmp/sulion-enclave.pub \
@@ -161,7 +161,7 @@ installation:
 
 ```bash
 nix --extra-experimental-features 'nix-command flakes' run \
-  github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#bootstrap-enclave \
+  github:chris-arsenault/sulion/main#bootstrap-enclave \
   -- \
   --disk "$INSTALL_DISK" \
   --key-file /tmp/sulion-enclave.pub
@@ -174,9 +174,14 @@ GPT/ESP/ext4 layout with Disko, mounts it at `/mnt`, and populates it through
 the standard `nixos-install` path. It installs the exact resolved flake source,
 places the public key in root-owned machine-local state, and uses the standard
 NixOS password prompts for the root recovery and `sulion` console/sudo
-passwords. It verifies the installed systemd OOM and time-synchronization
-executables before unmounting the target. Cleartext password material is not
-passed to Nix or written into the repository.
+passwords. It then prompts for the `sulion` Samba password and writes that
+credential directly into the installed system's Samba database before
+unmounting the target. The Unix and Samba accounts represent the same single
+user and may use the same human-entered password, but Samba stores its own
+credential verifier. Cleartext password material is not passed to Nix, stored
+in shell arguments, or written into the repository. The installer also verifies
+the installed systemd OOM and time-synchronization executables before
+unmounting the target.
 
 When it reports completion:
 
@@ -184,16 +189,8 @@ When it reports completion:
 reboot
 ```
 
-After removing the installer USB, log in as `sulion` on the local console and add
-the Samba password:
-
-```bash
-sudo smbpasswd -a sulion
-```
-
-The Unix and Samba accounts represent the same single user. They may use the
-same human-entered password, but Samba stores its own credential verifier. Do
-not configure `force user` or create separate per-client identities.
+After removing the installer USB, the `sulion` Unix and Samba accounts are both
+ready. Do not configure `force user` or create separate per-client identities.
 
 ### Optional Wi-Fi
 
@@ -256,7 +253,7 @@ Test the repository flake before making it the boot default:
 
 ```bash
 sudo nixos-rebuild test \
-  --flake github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#sulion-enclave
+  --flake github:chris-arsenault/sulion/main#sulion-enclave
 ```
 
 Verify SSH, Docker, and Samba from another LAN machine while the test
@@ -264,11 +261,10 @@ configuration is active. Then persist it:
 
 ```bash
 sudo nixos-rebuild switch \
-  --flake github:chris-arsenault/sulion/feat/dedicated-nixos-dev-node#sulion-enclave
+  --flake github:chris-arsenault/sulion/main#sulion-enclave
 ```
 
-Replace the branch ref with `main` after merge. Application images update
-independently through the node release poller below.
+Application images update independently through the node release poller below.
 
 ## Runtime files
 
@@ -407,9 +403,6 @@ are running, and then records the selected SHA in `bootstrap.env`. A failed
 activation leaves the previous SHA recorded so the poller retries. NixOS host
 changes remain a separate
 `nixos-rebuild switch --flake ...#sulion-enclave` operation.
-
-The one-time repository copy and authority switch are documented in
-[`repository-cutover.md`](repository-cutover.md).
 
 ## Host checks
 

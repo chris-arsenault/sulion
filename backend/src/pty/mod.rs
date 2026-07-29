@@ -171,6 +171,26 @@ pub struct PtyManager {
     sessions: RwLock<HashMap<Uuid, Arc<PtySession>>>,
 }
 
+/// Terminal dimension bounds. `vt100` materialises the normal and alternate
+/// grids eagerly, so an unbounded size is an allocation the process cannot
+/// refuse: `handle_alloc_error` aborts rather than unwinds, which would take
+/// every live PTY on the node with it. Applied at the two points every size
+/// passes through — `PtyManager::spawn` and the resize task — so no caller can
+/// route around them.
+const MIN_COLS: u16 = 20;
+const MAX_COLS: u16 = 500;
+const MIN_ROWS: u16 = 5;
+const MAX_ROWS: u16 = 300;
+
+fn clamp_pty_size(size: PtySize) -> PtySize {
+    PtySize {
+        cols: size.cols.clamp(MIN_COLS, MAX_COLS),
+        rows: size.rows.clamp(MIN_ROWS, MAX_ROWS),
+        pixel_width: 0,
+        pixel_height: 0,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpawnParams {
     pub id: Option<Uuid>,
@@ -242,14 +262,15 @@ impl PtyManager {
             anyhow::bail!("PTY session {id} is already live");
         }
         let secret_broker_key_path = crate::secret_pty::prepare_pty_credential(id).await?;
+        let size = clamp_pty_size(PtySize {
+            rows: params.rows,
+            cols: params.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
         let pty_system = portable_pty::native_pty_system();
         let pair = pty_system
-            .openpty(PtySize {
-                rows: params.rows,
-                cols: params.cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
+            .openpty(size)
             .map_err(|e| anyhow::anyhow!("openpty failed: {e}"))?;
 
         let cmd = shell_command(id, &params, secret_broker_key_path.as_ref());
@@ -266,7 +287,7 @@ impl PtyManager {
         let (out_tx, _) = broadcast::channel::<Vec<u8>>(BROADCAST_CAPACITY);
         let (in_tx, in_rx) = mpsc::channel::<Vec<u8>>(64);
         let (resize_tx, resize_rx) = mpsc::channel::<PtySize>(16);
-        let emulator = ShadowEmulator::new(params.rows, params.cols);
+        let emulator = ShadowEmulator::new(size.rows, size.cols);
 
         let reader = pair
             .master
@@ -760,6 +781,7 @@ fn spawn_resize_task(
 ) {
     tokio::spawn(async move {
         while let Some(size) = rx.recv().await {
+            let size = clamp_pty_size(size);
             {
                 let m = master.lock().await;
                 if let Err(err) = m.resize(size) {
@@ -835,5 +857,42 @@ pub fn default_shell() -> PathBuf {
         PathBuf::from("/bin/bash")
     } else {
         PathBuf::from("/bin/sh")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn size(cols: u16, rows: u16) -> PtySize {
+        PtySize {
+            cols,
+            rows,
+            pixel_width: 0,
+            pixel_height: 0,
+        }
+    }
+
+    #[test]
+    fn clamps_hostile_dimensions() {
+        // A client can send this on an open terminal socket. Unclamped it is
+        // ~275 GB of eager vt100 grid allocation, which aborts the process.
+        let clamped = clamp_pty_size(size(u16::MAX, u16::MAX));
+        assert_eq!(clamped.cols, MAX_COLS);
+        assert_eq!(clamped.rows, MAX_ROWS);
+    }
+
+    #[test]
+    fn clamps_degenerate_dimensions() {
+        let clamped = clamp_pty_size(size(0, 0));
+        assert_eq!(clamped.cols, MIN_COLS);
+        assert_eq!(clamped.rows, MIN_ROWS);
+    }
+
+    #[test]
+    fn leaves_ordinary_dimensions_alone() {
+        let clamped = clamp_pty_size(size(120, 30));
+        assert_eq!(clamped.cols, 120);
+        assert_eq!(clamped.rows, 30);
     }
 }

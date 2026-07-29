@@ -167,3 +167,45 @@ fn task_pairs_capture_subagent_turns() {
     assert_eq!(subagent.turns.len(), 1);
     assert_eq!(subagent.turns[0].preview, "sub prompt");
 }
+
+/// The preview truncates at a character count, not a byte index. Slicing bytes
+/// panicked on any prompt whose cut landed inside a multi-byte character, which
+/// killed the projection for that session and restarted the ingester on every
+/// subsequent line.
+#[test]
+fn previews_truncate_multibyte_prompts_without_panicking() {
+    fn preview_of(prompt: &str) -> String {
+        let events = vec![
+            event(1, "user", vec![text(0, prompt)]),
+            event(2, "assistant", vec![text(0, "ok")]),
+        ];
+        let projected =
+            project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
+        projected.turns[0].preview.clone()
+    }
+
+    // The original panic: 200 Cyrillic characters is 400 bytes, so a byte-index
+    // cut at 279 landed inside 'я'. It is under the 280-character limit, so the
+    // correct result is the prompt returned whole.
+    let under_limit = "я".repeat(200);
+    assert_eq!(preview_of(&under_limit), under_limit);
+
+    // Over the limit it truncates on a character boundary.
+    let over_limit = "я".repeat(400);
+    let preview = preview_of(&over_limit);
+    assert!(preview.ends_with('…'), "expected ellipsis, got {preview:?}");
+    assert_eq!(preview.chars().count(), 280);
+
+    // Emoji are 4 bytes, so they straddle a different set of boundaries.
+    let emoji = preview_of(&"🙂".repeat(400));
+    assert!(emoji.ends_with('…'));
+    assert_eq!(emoji.chars().count(), 280);
+
+    // The assistant fallback preview uses a different limit (260) and the same
+    // truncation path.
+    let events = vec![event(1, "assistant", vec![text(0, &"я".repeat(400))])];
+    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
+    let preview = &projected.turns[0].preview;
+    assert!(preview.starts_with("(assistant) "));
+    assert!(preview.ends_with('…'));
+}

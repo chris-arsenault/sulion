@@ -5,6 +5,11 @@ use serde_json::Value;
 use std::collections::HashMap;
 use uuid::Uuid;
 
+/// Bumping this severs every peer that has not been upgraded, so it is
+/// reserved for a message that genuinely cannot be served by both builds.
+/// Ordinary additions do not qualify: new payload fields are optional and
+/// absent-tolerant, which leaves a node and a control plane from different
+/// releases interoperating with no coordination and no version change.
 pub const NODE_PROTOCOL_VERSION: u32 = 1;
 /// LAN the dedicated node must connect from. Node sockets arriving from any
 /// other source are refused before a challenge is issued.
@@ -464,6 +469,22 @@ pub struct TerminalResizePayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TerminalDeadPayload {
     pub exit_code: Option<i32>,
+}
+
+/// Machine pressure on the host that actually runs PTYs, builds, language
+/// servers, and development containers. It rides the heartbeat because that
+/// is already the node's periodic liveness message; the control plane keeps
+/// only the latest sample and never persists a series.
+///
+/// Whole-machine, not per-process: the interesting number on a development
+/// node is what the box has left, and almost none of that is spent inside the
+/// node process itself.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct NodeHostStats {
+    pub memory_used_bytes: u64,
+    pub memory_total_bytes: u64,
+    /// Whole-machine CPU across every core, 0-100 regardless of core count.
+    pub cpu_percent: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

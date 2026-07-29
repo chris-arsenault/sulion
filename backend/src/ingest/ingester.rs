@@ -40,6 +40,13 @@ use canonical_backfill::{detect_compaction_parent, set_parent_session};
 /// Heartbeat interval for the "I'm alive, here's what I've done" log.
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(60);
 
+/// Ceiling on how much of a file's delta is buffered in one tick, and with it
+/// the longest line the ingester will accept. Transcripts are written by
+/// agents, so neither the delta nor a single line is trustworthy input: an
+/// unterminated line is never committed and would otherwise be re-read in full
+/// on every tick, growing without bound until the ingester OOMs and restarts.
+const MAX_READ_BYTES: usize = 8 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 pub struct IngesterConfig {
     pub claude_projects_dir: PathBuf,
@@ -336,8 +343,13 @@ async fn process_file(
 
     let mut transcript = std::fs::File::open(&file.path)?;
     transcript.seek(SeekFrom::Start(file.committed_offset as u64))?;
-    let mut buf = Vec::with_capacity((file.file_len - file.committed_offset) as usize);
-    transcript.read_to_end(&mut buf)?;
+    let pending = (file.file_len - file.committed_offset) as usize;
+    let read_cap = pending.min(MAX_READ_BYTES);
+    let mut buf = Vec::with_capacity(read_cap);
+    transcript
+        .by_ref()
+        .take(read_cap as u64)
+        .read_to_end(&mut buf)?;
 
     // Walk the buffer. For each newline-terminated line, insert an event
     // and advance `next_committed` past the newline.
@@ -384,6 +396,38 @@ async fn process_file(
 
     // Any tail after the last newline is a partial line. Left in the
     // file; will be re-read on the next tick once it's newline-terminated.
+    //
+    // Unless it is longer than a whole tick's read: then it is not a partial
+    // line we can wait out, because waiting re-reads the cap every tick
+    // forever. Skip past it to the next newline and resynchronise on a line
+    // boundary. Nothing is committed for the skipped bytes, so the malformed
+    // region is dropped rather than half-parsed.
+    if next_committed == file.committed_offset && buf.len() >= MAX_READ_BYTES {
+        let scanned_to = file.committed_offset + buf.len() as i64;
+        match next_line_boundary(&file.path, scanned_to)? {
+            Some(resume) => {
+                tracing::warn!(
+                    path = %file.path.display(),
+                    from = file.committed_offset,
+                    resume,
+                    "oversized transcript line; skipping to the next line boundary",
+                );
+                result.parse_errors += 1;
+                set_offset(pool, file.session_uuid, &file.path, resume).await?;
+                result.committed_offset = resume;
+            }
+            None => {
+                // Still being written. The read is capped, so this costs a
+                // bounded read per tick rather than unbounded growth.
+                tracing::warn!(
+                    path = %file.path.display(),
+                    from = file.committed_offset,
+                    "transcript line exceeds the read cap and is not yet terminated",
+                );
+            }
+        }
+        return Ok(result);
+    }
 
     if next_committed != file.committed_offset {
         set_offset(pool, file.session_uuid, &file.path, next_committed).await?;
@@ -394,6 +438,27 @@ async fn process_file(
             .await;
     }
     Ok(result)
+}
+
+/// Offset just past the next newline at or after `from`, or `None` if the file
+/// ends first. Scans in fixed-size chunks so skipping an arbitrarily long line
+/// costs bounded memory.
+fn next_line_boundary(path: &Path, from: i64) -> std::io::Result<Option<i64>> {
+    const CHUNK: usize = 64 * 1024;
+    let mut file = std::fs::File::open(path)?;
+    file.seek(SeekFrom::Start(from as u64))?;
+    let mut chunk = vec![0u8; CHUNK];
+    let mut position = from;
+    loop {
+        let read = file.read(&mut chunk)?;
+        if read == 0 {
+            return Ok(None);
+        }
+        if let Some(index) = chunk[..read].iter().position(|&b| b == b'\n') {
+            return Ok(Some(position + index as i64 + 1));
+        }
+        position += read as i64;
+    }
 }
 
 async fn rebuild_projections_after_insert(
@@ -1072,6 +1137,37 @@ fn hash_text(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn next_line_boundary_finds_the_offset_past_the_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        std::fs::write(&path, b"abc\ndef\n").unwrap();
+
+        assert_eq!(next_line_boundary(&path, 0).unwrap(), Some(4));
+        assert_eq!(next_line_boundary(&path, 4).unwrap(), Some(8));
+    }
+
+    #[test]
+    fn next_line_boundary_spans_chunks_and_reports_unterminated_tails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+
+        // Longer than the 64 KiB scan chunk, so the newline is only found on a
+        // later iteration — this is the case that skips an oversized line.
+        let mut body = vec![b'x'; 200 * 1024];
+        body.push(b'\n');
+        body.extend_from_slice(b"next\n");
+        std::fs::write(&path, &body).unwrap();
+        assert_eq!(
+            next_line_boundary(&path, 0).unwrap(),
+            Some(200 * 1024 + 1)
+        );
+
+        // A tail still being written has no boundary to resume from yet.
+        std::fs::write(&path, vec![b'x'; 100 * 1024]).unwrap();
+        assert_eq!(next_line_boundary(&path, 0).unwrap(), None);
+    }
 
     #[test]
     fn parse_session_uuid_from_filename() {

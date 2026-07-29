@@ -5,10 +5,10 @@ and the production TrueNAS control-plane selection. Host adapters are small
 overlays:
 
 - no overlay runs frontend, control API, broker, and retrieval on TrueNAS;
-- `compose.standalone.yaml` restores the combined application on a generic
+- `compose.standalone.yaml` runs the combined application on a generic
   Linux host;
 - `compose.truenas.yaml` adds the TrueNAS brokered-Docker policy when used
-  together with the standalone overlay for rollback; and
+  together with the standalone overlay; and
 - `compose.truenas-standalone.yaml` merges those files into the single Compose
   entry point required by Komodo; and
 - `compose.dedicated.yaml` runs only the development node, ingester, and code
@@ -16,7 +16,7 @@ overlays:
   home and direct access to the dedicated host's Docker daemon.
 
 `platform.yml` is the TrueNAS topology selector. Keep
-`truenas_compose_path: compose.yaml` for the split control plane. To restore
+`truenas_compose_path: compose.yaml` for the split control plane. To select
 combined TrueNAS host operation, change only that value to
 `deploy/compose.truenas-standalone.yaml` and push the commit to `main`. Both
 paths are rendered by CI on every change.

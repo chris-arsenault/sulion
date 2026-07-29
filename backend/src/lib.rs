@@ -75,8 +75,6 @@ pub struct AppState {
     pub ingester: Arc<ingest::Ingester>,
     /// Timestamp the app was constructed. Surfaced as `uptime_seconds`.
     pub start_time: Instant,
-    /// sysinfo probe; holds its own `System` so CPU% diffs work across calls.
-    pub stats_probe: Arc<api::StatsProbe>,
     pub stats_cache: Arc<api::StatsCache>,
     /// E2E-only hook that can ask active websocket attachers to close.
     pub ws_test_hooks: Arc<WsTestHooks>,
@@ -157,7 +155,6 @@ impl AppState {
             workspace_state,
             ingester,
             start_time: Instant::now(),
-            stats_probe: Arc::new(api::StatsProbe::new()),
             stats_cache: Arc::new(api::StatsCache::new()),
             ws_test_hooks: Arc::new(WsTestHooks::default()),
             ws_tickets: Arc::new(api::WsTicketStore::default()),

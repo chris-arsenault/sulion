@@ -30,7 +30,7 @@ mod workspace_routes;
 mod ws;
 
 pub use routes::ApiError;
-pub use stats::{run_stats_sampler, sample_stats_once, StatsCache, StatsProbe};
+pub use stats::{run_stats_sampler, sample_stats_once, StatsCache};
 pub use ws::WsTicketStore;
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {

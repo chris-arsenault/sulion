@@ -8,7 +8,7 @@ use super::model::{
     NodeHello, NodeRequestKind, RequestResultPayload, RequestResultStatus, TerminalBytesPayload,
     TerminalResizePayload, WireEnvelope, NODE_PROTOCOL_VERSION,
 };
-use super::{heartbeat_envelope, NodeControl, NodeProtocolError};
+use super::{heartbeat_envelope, NodeControl, NodeHostStats, NodeProtocolError};
 use crate::node_runtime::{NodeRuntime, SessionInputRequest, SessionResizeRequest};
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +73,7 @@ async fn run(
         connection.boot_id,
         live_sessions(&runtime).await,
         true,
+        host_stats(&runtime).await,
     );
     if control
         .receive_envelope(connection.connection_id, initial)
@@ -107,6 +108,7 @@ async fn run(
                     connection.boot_id,
                     live_sessions(&runtime).await,
                     true,
+                    host_stats(&runtime).await,
                 );
                 if control.receive_envelope(connection.connection_id, envelope).await.is_err() {
                     break;
@@ -251,6 +253,16 @@ async fn live_sessions(runtime: &Option<Arc<NodeRuntime>>) -> Vec<Uuid> {
     match runtime {
         Some(runtime) => runtime.live_session_ids().await,
         None => Vec::new(),
+    }
+}
+
+/// Standalone runs the node in this process, so its machine is the node's
+/// machine and the same sample is the right one to report. A loopback
+/// connection with no runtime owns nothing and reports nothing.
+async fn host_stats(runtime: &Option<Arc<NodeRuntime>>) -> Option<NodeHostStats> {
+    match runtime {
+        Some(runtime) => Some(runtime.host_stats().await),
+        None => None,
     }
 }
 

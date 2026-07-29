@@ -24,9 +24,11 @@ use crate::worktree::{WorkspaceManager, WorkspaceRecord};
 
 const TERMINAL_ATTACH_BUFFER: usize = 256;
 
+mod host;
 mod messages;
 mod requests;
 
+pub use host::HostProbe;
 pub use messages::*;
 
 #[derive(Debug, thiserror::Error)]
@@ -84,6 +86,7 @@ pub struct NodeRuntime {
     repo_state: Arc<RepoStateManager>,
     workspace_state: Arc<WorkspaceManager>,
     attachments: Mutex<HashMap<Uuid, watch::Sender<bool>>>,
+    host: HostProbe,
 }
 
 impl NodeRuntime {
@@ -107,6 +110,7 @@ impl NodeRuntime {
             pool,
             repos_root,
             attachments: Mutex::new(HashMap::new()),
+            host: HostProbe::new(),
         })
     }
 
@@ -132,6 +136,10 @@ impl NodeRuntime {
 
     pub async fn live_session_ids(&self) -> Vec<Uuid> {
         self.pty.live_session_ids().await
+    }
+
+    pub async fn host_stats(&self) -> crate::node_protocol::NodeHostStats {
+        self.host.sample().await
     }
 
     pub async fn open_terminal(
@@ -336,8 +344,8 @@ impl NodeRuntime {
                 workspace: Some(pty_workspace_metadata(&workspace)),
                 shell,
                 args,
-                cols: request.cols.clamp(20, 500),
-                rows: request.rows.clamp(5, 300),
+                cols: request.cols,
+                rows: request.rows,
                 initial_agent_runtime_agent: initial_agent,
             })
             .await?;

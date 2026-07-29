@@ -84,9 +84,10 @@ remote-command channel. It covers:
 
 The deployment supports one configured node. Durable resource rows still carry
 `node_id` so ownership remains explicit. Control and node accept one exact
-protocol version and are upgraded together. The protocol does not add
-capability negotiation, release reconciliation, a durable remote-operation
-ledger, or automated drain orchestration.
+protocol version, and protocol changes stay additive and absent-tolerant so
+that version does not move and deployment order stays out of the contract. The
+protocol does not add capability negotiation, release reconciliation, a durable
+remote-operation ledger, or automated drain orchestration.
 
 ## Storage and Docker boundary
 
@@ -141,7 +142,8 @@ Costs:
 - filesystem-backed API routes need typed node equivalents;
 - session state must distinguish node disconnect, node reboot, process exit,
   and deletion;
-- control and node protocol changes must deploy together; and
+- protocol changes must stay additive, since either side may run a release
+  ahead of the other; and
 - repository migration and Samba identity/ACL preservation need a deliberate
   cutover.
 
@@ -178,8 +180,6 @@ single browser origin and lets the node remain outbound-only.
 
 ## References
 
-- Implementation plan:
-  [`../plans/dedicated-nixos-dev-node.md`](../plans/dedicated-nixos-dev-node.md)
 - Node ownership and protocol contract:
   [`../node-protocol.md`](../node-protocol.md)
 - Current shipped architecture: [`../architecture.md`](../architecture.md)

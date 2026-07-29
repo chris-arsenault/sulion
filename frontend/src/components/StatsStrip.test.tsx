@@ -49,18 +49,27 @@ describe("StatsStrip", () => {
     installStatsFetch(statsPayload());
     render(<StatsStrip />);
     await waitFor(() => {
-      expect(screen.getByText(/120 \/ 500 MB/i)).toBeDefined();
+      expect(screen.getByText(/11.00 GB \/ 32.00 GB/i)).toBeDefined();
       expect(screen.getByText(/4%/)).toBeDefined();
       expect(screen.getByText(/50.0 MB/)).toBeDefined();
       expect(screen.getByText(/^3$/)).toBeDefined();
     });
   });
 
+  it("shows no machine reading while no node has reported one", async () => {
+    installStatsFetch(statsPayload({ node: null }));
+    render(<StatsStrip />);
+    await waitFor(() => {
+      expect(screen.getAllByText("—")).toHaveLength(2);
+    });
+    expect(screen.queryByLabelText(/node memory usage/i)).toBeNull();
+  });
+
   it("expands to separate current load from inventory", async () => {
     installStatsFetch(statsPayload());
     render(<StatsStrip />);
     await waitFor(() => {
-      expect(screen.getByText(/120 \/ 500 MB/i)).toBeDefined();
+      expect(screen.getAllByText(/11.00 GB \/ 32.00 GB/i).length).toBeGreaterThan(0);
     });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await user.click(screen.getByLabelText(/toggle stats details/i));
