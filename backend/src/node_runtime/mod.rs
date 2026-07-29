@@ -296,7 +296,7 @@ impl NodeRuntime {
                         )
                         .await?
                 }
-                "isolated" | "worktree" => {
+                "isolated" => {
                     self.workspace_state
                         .create_worktree_workspace_owned(
                             &request.repo,

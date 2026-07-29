@@ -79,9 +79,8 @@ impl RetrievalConfig {
             .unwrap_or_else(|_| "0.0.0.0:8083".to_string())
             .parse()
             .context("invalid SULION_RETRIEVAL_LISTEN")?;
-        let db_url = std::env::var("SULION_DB_URL")
-            .or_else(|_| std::env::var("DATABASE_URL"))
-            .map_err(|_| anyhow!("SULION_DB_URL or DATABASE_URL must be set"))?;
+        let db_url =
+            std::env::var("SULION_DB_URL").map_err(|_| anyhow!("SULION_DB_URL must be set"))?;
         let token = env_required("SULION_RETRIEVAL_TOKEN")?;
         let embedding_service_url = env_optional("SULION_RETRIEVAL_EMBEDDING_URL")
             .unwrap_or_else(|| DEFAULT_EMBEDDING_SERVICE_URL.to_string());

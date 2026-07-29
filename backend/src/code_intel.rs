@@ -38,9 +38,8 @@ impl CodeIntelConfig {
             .unwrap_or_else(|_| "0.0.0.0:8084".to_string())
             .parse()
             .context("invalid SULION_CODE_INTEL_LISTEN")?;
-        let db_url = std::env::var("SULION_DB_URL")
-            .or_else(|_| std::env::var("DATABASE_URL"))
-            .map_err(|_| anyhow!("SULION_DB_URL or DATABASE_URL must be set"))?;
+        let db_url =
+            std::env::var("SULION_DB_URL").map_err(|_| anyhow!("SULION_DB_URL must be set"))?;
         let token = env_required("SULION_CODE_INTEL_TOKEN")?;
         let allowed_roots = parse_allowed_roots(
             env_optional("SULION_CODE_INTEL_ALLOWED_ROOTS")

@@ -21,8 +21,7 @@ impl Config {
             .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
             .parse()?;
         let db_url = std::env::var("SULION_DB_URL")
-            .or_else(|_| std::env::var("DATABASE_URL"))
-            .map_err(|_| anyhow::anyhow!("SULION_DB_URL or DATABASE_URL must be set"))?;
+            .map_err(|_| anyhow::anyhow!("SULION_DB_URL must be set"))?;
         let repos_root = PathBuf::from(
             std::env::var("SULION_REPOS_ROOT")
                 .unwrap_or_else(|_| dirs_home().join("repos").to_string_lossy().into_owned()),

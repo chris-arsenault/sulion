@@ -275,7 +275,31 @@ Verification: `cargo clippy --all-targets` clean, 216 backend unit tests pass
 
 ---
 
-## Chunk 5 — Single-component legacy cruft (safe deletes, no cross-component contract)
+## Chunk 5 — Single-component legacy cruft (done)
+
+Items 25 and 26 applied. Item 27 was **not** done here: it says to fold into
+item 31, and Chunk 7 restructures the same health-check block, so fixing it
+separately would only create a conflict.
+
+- Item 25: the three `SULION_DB_URL.or_else(DATABASE_URL)` fallbacks are gone
+  and the error text now names only `SULION_DB_URL`. Checked first that no
+  `sqlx::query!`-style macro exists, since those read `DATABASE_URL` at compile
+  time — all queries here are runtime string queries, so nothing needs it for a
+  build. `container_runner/postgres.rs` still injects `DATABASE_URL` and
+  `TEST_DATABASE_URL` into user dev containers, which is the documented feature
+  (`docs/development.md:54`), untouched.
+- Item 26: the `"worktree"` workspace-*mode* alias is gone from all five sites.
+  Workspace *kind* `"worktree"` is a distinct persisted value — used across
+  `worktree.rs`, the sidebar, and `workspace_integration` — and is untouched.
+
+Verification: `cargo clippy --all-targets` clean, 216 unit tests pass, and the
+full integration suite passes (11 targets, 110 tests), including
+`workspace_integration` and `rest_integration`, which exercise both workspace
+modes end to end.
+
+---
+
+## Chunk 5 — original items
 
 25. **`DATABASE_URL` fallback** — `backend/src/config.rs:23-25`,
     `code_intel.rs:41-43`, `retrieval.rs:83-84` all do

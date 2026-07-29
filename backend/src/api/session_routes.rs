@@ -199,7 +199,7 @@ pub(super) async fn create_session(
     let workspace_root = workspace_record.path.clone();
     let working_dir = match (&req.working_dir, workspace_mode) {
         (Some(p), "main") => PathBuf::from(p),
-        (Some(_), "isolated") | (Some(_), "worktree") => {
+        (Some(_), "isolated") => {
             return Err(ApiError::BadRequest(
                 "working_dir is only supported with workspace_mode=main".into(),
             ));

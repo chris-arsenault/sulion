@@ -252,7 +252,7 @@ pub(super) async fn resolve_session_workspace(
                 .await
                 .map_err(ApiError::Internal)
         }
-        "isolated" | "worktree" => state
+        "isolated" => state
             .workspace_state
             .create_worktree_workspace(&req.repo)
             .await
@@ -277,13 +277,13 @@ pub(super) fn validate_workspace_request(
             "workspace_id cannot be combined with working_dir".into(),
         ));
     }
-    if req.working_dir.is_some() && matches!(workspace_mode, "isolated" | "worktree") {
+    if req.working_dir.is_some() && workspace_mode == "isolated" {
         return Err(ApiError::BadRequest(
             "working_dir is only supported with workspace_mode=main".into(),
         ));
     }
     match workspace_mode {
-        "main" | "isolated" | "worktree" => Ok(()),
+        "main" | "isolated" => Ok(()),
         _ => Err(ApiError::BadRequest(
             "workspace_mode must be one of: main, isolated".into(),
         )),
