@@ -97,7 +97,6 @@ async fn main() -> anyhow::Result<()> {
         ));
     }
     tokio::spawn(sulion::api::run_stats_sampler(state.clone()));
-    tokio::spawn(sulion::ingest::run_usage_backfill(pool.clone()));
     tokio::spawn(state.node_control.clone().run_heartbeat_monitor());
 
     // The published LAN port for nodes serves TLS terminated in this process

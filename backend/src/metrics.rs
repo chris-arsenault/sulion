@@ -333,8 +333,6 @@ async fn git_activity(pool: &Pool) -> anyhow::Result<Vec<RepoGitActivity>> {
             return Ok(cached.data.clone());
         }
     }
-    // repo_runtime_state is the live registry (the 0001 `repos` table is
-    // legacy and stale in deployed databases).
     let repos: Vec<(String, String)> = sqlx::query_as(
         "SELECT repo_name, path FROM repo_runtime_state \
           WHERE \"exists\" ORDER BY repo_name",

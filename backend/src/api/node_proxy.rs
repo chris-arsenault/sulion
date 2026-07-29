@@ -24,13 +24,21 @@ pub async fn session_node(state: &AppState, session_id: Uuid) -> ApiResult<Uuid>
         .ok_or_else(|| ApiError::Unavailable("session is owned by the legacy local runtime".into()))
 }
 
-pub async fn repo_node(state: &AppState, repo: &str) -> ApiResult<Uuid> {
-    let node_id: Option<Uuid> = sqlx::query_scalar("SELECT node_id FROM repos WHERE name = $1")
-        .bind(repo)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-    node_id.ok_or_else(|| ApiError::Unavailable("repo has no development-node owner".into()))
+/// The node that owns a repo's checkout.
+///
+/// This used to read `repos.node_id`, a second registry maintained alongside
+/// `repo_runtime_state` purely to answer this one question. It could only be
+/// wrong: a repo discovered after the node started had no row and every route
+/// for it answered 503, and renaming a repo without one wrote a row owned by
+/// nobody. Meanwhile the column carried no information — only the fixed
+/// dedicated node may pair, and a deployment is either control-plane or
+/// standalone-loopback, never both, so one node exists and every repo named it.
+///
+/// Existence is not pre-checked here either. The node owns the repos directory
+/// and checks `is_dir()` on every repo request, returning not-found, so a
+/// lookup here could only disagree with the authority.
+pub async fn repo_node(state: &AppState, _repo: &str) -> ApiResult<Uuid> {
+    default_node(state).await
 }
 
 pub async fn workspace_node(state: &AppState, workspace_id: Uuid) -> ApiResult<Uuid> {

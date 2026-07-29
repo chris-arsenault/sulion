@@ -118,24 +118,6 @@ pub async fn shutdown_node_sessions(state: &Arc<AppState>) {
     }
 }
 
-/// Registers a repo that a test created directly on disk with the in-process
-/// node, mirroring the `claim_discovered_resources` step a node runs when it
-/// starts. Repo routes resolve the owning node from the `repos` row, so a
-/// directory on its own is not reachable — a real node only picks such a repo
-/// up at its next start.
-pub async fn register_repo(pool: &db::Pool, name: &str, path: &Path) {
-    sqlx::query(
-        "INSERT INTO repos (name, path, node_id) VALUES ($1, $2, $3) \
-         ON CONFLICT (name) DO UPDATE SET path = EXCLUDED.path, node_id = EXCLUDED.node_id",
-    )
-    .bind(name)
-    .bind(path.to_string_lossy().as_ref())
-    .bind(TEST_NODE_ID)
-    .execute(pool)
-    .await
-    .expect("register repo with the test node");
-}
-
 /// Attaches an in-process node to an existing state and hands back the runtime.
 ///
 /// Suites that need to place a PTY the websocket layer can attach to must spawn

@@ -687,7 +687,48 @@ not installed in this environment to parse it.
 
 ---
 
-## Chunk 10 — Decisions needed (not code changes yet)
+## Chunk 10 — Done (neither item needed a decision)
+
+Both were filed as "decisions needed". Neither was: one had a gate that could be
+checked, and the other was answered by the goals this plan already states —
+architectural cleanliness and removing legacy/migration cruft.
+
+**Item 43.** The gate was "confirm the marker exists in production". It does:
+`usage_backfills` holds exactly `claude-usage-dedup-v1`, completed
+2026-07-25 04:19:25Z, read via `psql` inside `sulion-node` so no credentials
+were printed. The 249-line module and its unconditional spawn are gone. The
+marker table stays — dropping it would let a future `-v2` re-run this one.
+
+**Item 42.** `repos` is removed from the code. It failed every goal:
+
+- Legacy: added by migration 0001, superseded by `repo_runtime_state`, and
+  `metrics.rs` already called it "legacy and stale".
+- Carried no information: production had 44 repos, **one** distinct `node_id`,
+  and one row in `dev_nodes`. It could not carry more — only the fixed dedicated
+  node may pair (`store.rs:30`), and control-plane and standalone-loopback never
+  coexist, so exactly one node exists per deployment.
+- Caused bugs: one reader, four writers, and the writers disagreed. Rename's
+  fallback inserted a row with no `node_id`, and a repo discovered after node
+  start got no row at all. Both produced 503 "repo has no development-node
+  owner".
+- Redundant: the node owns the repos directory and checks `is_dir()` on every
+  repo request, returning not-found. A control-plane pre-check could only
+  disagree with the authority.
+
+`repo_node` resolves the node directly now; the four writers are gone;
+`claim_discovered_resources` claims only workspaces. `common::register_repo`,
+written in Chunk 7 to work around this, went with it.
+
+**Phase B, a later release:** a migration dropping the `repos` table. An older
+backend against the same database still writes those rows, and its writes stay
+harmless while the table exists — the same two-phase rule as Chunk 6.
+
+If multi-node ownership is ever wanted, it belongs on `repo_runtime_state`,
+where the rest of repo state already lives.
+
+---
+
+## Chunk 10 — original items
 
 42. **`repos` vs `repo_runtime_state` split-brain.** `metrics.rs:336-337` asserts
     "repo_runtime_state is the live registry (the 0001 `repos` table is legacy and

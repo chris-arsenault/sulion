@@ -384,16 +384,6 @@ impl NodeRuntime {
         self.repo_state
             .upsert_repo(&request.name, &destination)
             .await?;
-        sqlx::query(
-            "INSERT INTO repos (name, path, node_id) VALUES ($1, $2, $3) \
-             ON CONFLICT (name) DO UPDATE SET path = EXCLUDED.path, node_id = EXCLUDED.node_id",
-        )
-        .bind(&request.name)
-        .bind(destination.to_string_lossy().as_ref())
-        .bind(self.node_id)
-        .execute(&self.pool)
-        .await
-        .map_err(anyhow::Error::from)?;
         Ok(json!({"name": request.name, "path": destination}))
     }
 }

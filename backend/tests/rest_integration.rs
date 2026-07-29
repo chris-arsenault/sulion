@@ -1116,7 +1116,6 @@ async fn file_trace_returns_related_turns() {
     // upsert_repo only records runtime state; the route resolves the owning
     // node from the `repos` row, which a node writes when it claims what it
     // discovered.
-    common::register_repo(&h.state.pool, "r", &h.repos_root().join("r")).await;
 
     let response = h
         .client
@@ -1144,7 +1143,6 @@ async fn repo_file_preview_defers_binary_media_and_raw_route_streams_bytes() {
     std::fs::write(h.repos_root().join("r/readme.md"), "# hi\n").unwrap();
     let png: [u8; 12] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 1, 2, 3];
     std::fs::write(h.repos_root().join("r/assets/logo.png"), png).unwrap();
-    common::register_repo(&h.state.pool, "r", &h.repos_root().join("r")).await;
 
     // Text preview inlines content with its real MIME.
     let md: serde_json::Value = h
@@ -1291,7 +1289,6 @@ async fn rename_repo_moves_checkout_and_updates_session_records() {
         .upsert_repo("oldrepo", &old_path)
         .await
         .unwrap();
-    common::register_repo(&h.state.pool, "oldrepo", &old_path).await;
     let pty_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO pty_sessions (id, repo, working_dir, state, created_at) \

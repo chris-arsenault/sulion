@@ -267,15 +267,13 @@ impl NodeRuntime {
         tokio::spawn(self.workspace_state.clone().run());
     }
 
+    /// Claims workspaces this node is responsible for.
+    ///
+    /// Repos are no longer claimed: ownership lived in `repos.node_id`, which
+    /// only this node could ever be, and claiming at startup was what made a
+    /// repo discovered later unreachable. `repo_runtime_state` is the registry;
+    /// the node answers "does this repo exist" from disk on each request.
     async fn claim_discovered_resources(&self) -> anyhow::Result<()> {
-        sqlx::query(
-            "INSERT INTO repos (name, path, node_id) \
-             SELECT repo_name, path, $1 FROM repo_runtime_state WHERE exists = TRUE \
-             ON CONFLICT (name) DO UPDATE SET path = EXCLUDED.path, node_id = EXCLUDED.node_id",
-        )
-        .bind(self.node_id)
-        .execute(&self.pool)
-        .await?;
         sqlx::query(
             "UPDATE workspaces SET node_id = $1, updated_at = NOW() \
              WHERE state <> 'deleted' AND (node_id IS NULL OR node_id = $1)",

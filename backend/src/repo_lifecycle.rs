@@ -242,23 +242,6 @@ async fn rename_repo_runtime_records(
         .await?;
     }
 
-    sqlx::query("DELETE FROM repos WHERE name = $1")
-        .bind(new_name)
-        .execute(&mut **tx)
-        .await?;
-    let updated = sqlx::query("UPDATE repos SET name = $2, path = $3 WHERE name = $1")
-        .bind(old_name)
-        .bind(new_name)
-        .bind(new_path)
-        .execute(&mut **tx)
-        .await?;
-    if updated.rows_affected() == 0 {
-        sqlx::query("INSERT INTO repos (name, path) VALUES ($1, $2)")
-            .bind(new_name)
-            .bind(new_path)
-            .execute(&mut **tx)
-            .await?;
-    }
     Ok(())
 }
 
@@ -408,10 +391,6 @@ async fn mark_repo_deleted_records(
     .bind(&path)
     .execute(&mut *tx)
     .await?;
-    sqlx::query("DELETE FROM repos WHERE name = $1")
-        .bind(name)
-        .execute(&mut *tx)
-        .await?;
     sqlx::query(
         "UPDATE workspaces \
             SET state = 'deleted', updated_at = NOW() \
