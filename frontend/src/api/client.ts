@@ -40,7 +40,6 @@ import type {
   UpdatePlanPhaseInput,
   AgentLaunchType,
   WorkspaceDirtyPathsResponse,
-  WorkspaceView,
 } from "./types";
 
 export class ApiError extends Error {
@@ -549,14 +548,6 @@ export function getRepoDirtyPaths(name: string): Promise<RepoDirtyPathsResponse>
   );
 }
 
-export function listWorkspaces(): Promise<WorkspaceView[]> {
-  return request<WorkspaceView[]>("/api/workspaces");
-}
-
-export function getWorkspace(id: string): Promise<WorkspaceView> {
-  return request<WorkspaceView>(`/api/workspaces/${encodeURIComponent(id)}`);
-}
-
 export function deleteWorkspace(
   id: string,
   opts: { force?: boolean; deleteBranch?: boolean } = {},
@@ -582,20 +573,6 @@ export function refreshWorkspaceState(id: string): Promise<void> {
   return request<void>(`/api/workspaces/${encodeURIComponent(id)}/refresh`, {
     method: "POST",
   });
-}
-
-export function getWorkspaceFiles(
-  id: string,
-  path = "",
-  all = false,
-): Promise<DirListing> {
-  const qs = new URLSearchParams();
-  if (path) qs.set("path", path);
-  if (all) qs.set("all", "true");
-  const suffix = qs.toString() ? `?${qs}` : "";
-  return request<DirListing>(
-    `/api/workspaces/${encodeURIComponent(id)}/files${suffix}`,
-  );
 }
 
 export function getWorkspaceFile(

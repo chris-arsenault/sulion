@@ -22,8 +22,6 @@ use crate::pty::{PtyManager, PtyMetadata, PtyWorkspaceMetadata, SpawnParams};
 use crate::repo_state::RepoStateManager;
 use crate::worktree::{WorkspaceManager, WorkspaceRecord};
 
-const TERMINAL_ATTACH_BUFFER: usize = 256;
-
 mod host;
 mod messages;
 mod requests;
@@ -561,8 +559,4 @@ impl TerminalStream {
             .await
             .map_err(|_| anyhow::anyhow!("node connection closed"))
     }
-}
-
-pub fn terminal_attach_channel() -> (mpsc::Sender<WireEnvelope>, mpsc::Receiver<WireEnvelope>) {
-    mpsc::channel(TERMINAL_ATTACH_BUFFER)
 }

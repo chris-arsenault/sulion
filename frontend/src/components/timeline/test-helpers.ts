@@ -57,10 +57,6 @@ export function textBlock(ord: number, text: string): TimelineBlock {
   return { ord, kind: "text", text };
 }
 
-export function thinkingBlock(ord: number, text: string): TimelineBlock {
-  return { ord, kind: "thinking", text };
-}
-
 export function toolUseBlock(
   ord: number,
   id: string,

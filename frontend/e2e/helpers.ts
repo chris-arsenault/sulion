@@ -182,14 +182,6 @@ export async function expectTerminalToContain(page: Page, text: string) {
     .toContain(text);
 }
 
-export async function expectTerminalNotToContain(page: Page, text: string) {
-  await expect
-    .poll(async () => terminalText(page), {
-      message: `expected terminal not to contain ${text}`,
-    })
-    .not.toContain(text);
-}
-
 export async function restoreSeededSessionMetadata(request: APIRequestContext) {
   const sessions = await listAppStateSessions(request);
   for (const session of sessions) {

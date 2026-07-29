@@ -484,15 +484,6 @@ pub async fn apply_runtime(pool: &Pool, msg: &RuntimeMsg) -> anyhow::Result<()> 
     Ok(())
 }
 
-/// Helper used by the hook script on platforms where it's more ergonomic
-/// to spawn a small correlator binary than a shell script. Not used by the
-/// default hook but useful for diagnostics. Writes one JSON line to the
-/// given socket and reads the ACK.
-#[allow(dead_code)]
-pub fn send_blocking(sock: &Path, pty_id: Uuid, session_uuid: Uuid) -> std::io::Result<()> {
-    send_blocking_for_agent(sock, pty_id, session_uuid, "claude-code")
-}
-
 pub async fn send_for_agent(
     sock: &Path,
     pty_id: Uuid,

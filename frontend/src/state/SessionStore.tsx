@@ -24,7 +24,6 @@ import type {
   WorkspaceView,
 } from "../api/types";
 import {
-  clearLastViewedStorage,
   isSessionUnread,
   loadLastViewedMap,
   markLastViewed,
@@ -364,11 +363,6 @@ export function resetSessionStore() {
   useSessionStore.setState(initialState());
 }
 
-export function resetSessionStoreStorage() {
-  clearLastViewedStorage();
-  clearRepoExpansionStorage();
-}
-
 function readSessionIdFromUrl(): string | null {
   if (typeof window === "undefined") return null;
   return new URLSearchParams(window.location.search).get("session");
@@ -436,11 +430,3 @@ function replacePathPrefix(value: string, fromPrefix: string, toPrefix: string):
   return value;
 }
 
-function clearRepoExpansionStorage() {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.removeItem(REPO_EXPANSION_STORAGE_KEY);
-  } catch {
-    /* ignore */
-  }
-}

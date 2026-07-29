@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use ignore::WalkBuilder;
 use tree_sitter::{Language as TsLanguage, Parser, Point, Tree};
 
@@ -191,16 +191,6 @@ pub struct ParsedSource {
     pub tree: Tree,
 }
 
-impl ParsedSource {
-    pub fn root_range(&self) -> SourceRange {
-        let root = self.tree.root_node();
-        SourceRange {
-            start: LineIndex::point_to_position(root.start_position()),
-            end: LineIndex::point_to_position(root.end_position()),
-        }
-    }
-}
-
 #[derive(Default)]
 pub struct SourceParser {
     parser: Parser,
@@ -359,11 +349,6 @@ fn count_error_nodes(tree: &Tree) -> usize {
         }
     }
     count
-}
-
-pub fn language_required(path: &Path) -> anyhow::Result<SourceLanguage> {
-    SourceLanguage::from_path(path)
-        .ok_or_else(|| anyhow!("unsupported source language for {}", path.display()))
 }
 
 #[cfg(test)]

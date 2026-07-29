@@ -114,10 +114,6 @@ struct EmbeddingRequest<'a> {
 #[derive(Deserialize)]
 struct EmbeddingResponse {
     data: Vec<EmbeddingItem>,
-    #[allow(dead_code)]
-    model: Option<String>,
-    #[allow(dead_code)]
-    usage: Option<Value>,
 }
 
 #[derive(Deserialize)]

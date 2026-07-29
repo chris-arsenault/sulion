@@ -136,7 +136,30 @@ the part with no automated coverage here.
 
 ---
 
-## Chunk 3 — Dead code (zero risk, mechanical)
+## Chunk 3 — Dead code (done)
+
+All twelve applied; 846 lines removed. Notes worth keeping:
+
+- Item 14 (`terminal_attach_channel`) was flagged "confirm first" because
+  `node_runtime/mod.rs` was mid-edit. With host stats committed it is confirmed
+  unreferenced — a leftover, not scaffolding.
+- Items 15 (`send_blocking`) and 16 (the two `EmbeddingResponse` fields) were
+  marked "your call" and optional. Both were removed. `send_blocking` carried a
+  comment claiming diagnostic value but had no caller anywhere, including the
+  hook script it named.
+- Deleting the exports surfaced four more dead symbols the review had not
+  found, because they were only reachable from the code being removed:
+  `clearRepoExpansionStorage` and a `clearLastViewedStorage` import in
+  `SessionStore.tsx`, a `WorkspaceView` import in `api/client.ts`, and the
+  `anyhow!` macro import in both `code_intel/indexer.rs` and `parser.rs`.
+- The frontend uses **pnpm**, not npm. `pnpm install --lockfile-only` updates
+  `pnpm-lock.yaml`; `npm install` crashes on the pnpm-shaped `node_modules`.
+
+Verification: `cargo clippy --all-targets` clean, 211 backend unit tests pass;
+`tsc --noEmit` and `eslint .` clean, 253 frontend tests pass (down from 259 —
+the 6 removed belonged to the dead `timeline/types.ts`).
+
+
 
 ### Backend (~105-115 lines)
 

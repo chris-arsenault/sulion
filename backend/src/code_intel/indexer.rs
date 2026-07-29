@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use chrono::{DateTime, Utc};
 use ring::digest;
 use sqlx::Row;
@@ -530,61 +530,6 @@ pub fn discover_allowed_root_specs(allowed_roots: &[PathBuf]) -> anyhow::Result<
     Ok(roots)
 }
 
-pub fn resolve_current_root(allowed_roots: &[PathBuf]) -> anyhow::Result<CodeRootSpec> {
-    let cwd = std::env::current_dir().context("read current directory")?;
-    if let Some(workspace_path) = env_path("SULION_WORKSPACE_PATH") {
-        if cwd.starts_with(&workspace_path) {
-            return Ok(CodeRootSpec {
-                kind: CodeRootKind::Workspace,
-                name: env_optional("SULION_REPO_NAME").unwrap_or_else(|| basename(&workspace_path)),
-                path: workspace_path,
-                repo_name: env_optional("SULION_REPO_NAME"),
-                workspace_id: env_optional("SULION_WORKSPACE_ID")
-                    .and_then(|value| value.parse::<Uuid>().ok()),
-                git_head: env_optional("SULION_BASE_SHA"),
-            });
-        }
-    }
-    if let Some(repo_path) = env_path("SULION_CANONICAL_REPO") {
-        if cwd.starts_with(&repo_path) {
-            return Ok(CodeRootSpec {
-                kind: CodeRootKind::Repo,
-                name: env_optional("SULION_REPO_NAME").unwrap_or_else(|| basename(&repo_path)),
-                path: repo_path,
-                repo_name: env_optional("SULION_REPO_NAME"),
-                workspace_id: None,
-                git_head: None,
-            });
-        }
-    }
-    for allowed_root in allowed_roots {
-        if let Ok(rest) = cwd.strip_prefix(allowed_root) {
-            let Some(first) = rest.components().next() else {
-                continue;
-            };
-            let root_path = allowed_root.join(first.as_os_str());
-            let name = basename(&root_path);
-            let kind = if allowed_root.file_name().and_then(|name| name.to_str()) == Some("repos") {
-                CodeRootKind::Repo
-            } else {
-                CodeRootKind::Workspace
-            };
-            return Ok(CodeRootSpec {
-                kind,
-                name: name.clone(),
-                path: root_path,
-                repo_name: Some(name),
-                workspace_id: None,
-                git_head: None,
-            });
-        }
-    }
-    Err(anyhow!(
-        "current directory {} is outside allowed code-intel roots",
-        cwd.display()
-    ))
-}
-
 fn is_generated_dir(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
@@ -604,24 +549,6 @@ fn hash_bytes(bytes: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
-}
-
-fn basename(path: &Path) -> String {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("root")
-        .to_string()
-}
-
-fn env_path(key: &str) -> Option<PathBuf> {
-    env_optional(key).map(PathBuf::from)
-}
-
-fn env_optional(key: &str) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }
 
 impl std::ops::AddAssign for IndexStats {

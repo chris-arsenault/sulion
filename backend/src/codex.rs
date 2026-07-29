@@ -10,7 +10,6 @@ use uuid::Uuid;
 
 const FD_SCAN_INTERVAL: Duration = Duration::from_millis(100);
 const DESCENDANT_FD_SCAN_GRACE: Duration = Duration::from_millis(500);
-const DEFAULT_WRAPPER_PATH: &str = "/opt/sulion/bin/codex";
 const LAUNCH_ID_ENV: &str = "SULION_CODEX_LAUNCH_ID";
 
 #[derive(Debug, Clone)]
@@ -20,15 +19,6 @@ pub struct LauncherConfig {
     pub sessions_dir: PathBuf,
     pub correlate_sock: PathBuf,
     pub args: Vec<OsString>,
-}
-
-pub fn wrapper_path() -> PathBuf {
-    let preferred = PathBuf::from(DEFAULT_WRAPPER_PATH);
-    if preferred.exists() {
-        preferred
-    } else {
-        PathBuf::from("codex")
-    }
 }
 
 pub fn parse_launcher_args(args: &[OsString]) -> anyhow::Result<LauncherConfig> {
