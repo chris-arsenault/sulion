@@ -231,6 +231,25 @@ shell. `cargo xwin` is installed for Windows MSVC cross-builds, with
 If another named local toolchain is broken, prefer the stable toolchain above
 instead of debugging unrelated rustup state.
 
+## Nix
+
+`nix` is installed single-user, with the store owned by `sulion` and flakes
+enabled. It is here so the flake and NixOS modules under `nix/` can be checked
+while editing them:
+
+```sh
+nix-instantiate --parse nix/modules/sulion-deployer.nix   # syntax, instant
+nix flake check --no-build                                # full evaluation
+```
+
+`make validate-nix` remains the gate — it runs `flake check` inside
+`nix/Dockerfile.check` on a pinned image, so it is reproducible in a way a
+PTY's local install is not. Use the local `nix` for the fast loop and the make
+target before you rely on the result.
+
+There is no daemon (no systemd in these containers) and no channels
+configured, so anything needing nixpkgs should go through the flake.
+
 ## .NET
 
 `dotnet` is installed globally with SDKs for both repo families currently used

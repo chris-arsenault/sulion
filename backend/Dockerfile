@@ -254,6 +254,38 @@ RUN groupadd --gid ${DEV_GID} sulion \
   && chmod 0440 /etc/sudoers.d/sulion \
   && chown -R sulion:sulion /home/sulion /run/sulion
 
+# Nix, so the flake and NixOS modules under nix/ can be checked from a PTY
+# directly. `make validate-nix` already covers them, but it does so by building
+# nix/Dockerfile.check, which pulls a nixos/nix image and re-copies the tree on
+# every run — too slow to reach for while editing. A local `nix-instantiate
+# --parse` answers in milliseconds, so the fast check exists alongside the
+# thorough one rather than replacing it: validate-nix still runs `flake check`
+# and stays the gate.
+#
+# Single-user install: the daemon needs systemd, which these containers do not
+# run. `build-users-group` must be emptied in /etc/nix/nix.conf *before* the
+# installer runs, or it fails looking for the `nixbld` group it did not create.
+#
+# The store is chowned to `sulion` rather than made world-writable like
+# /usr/local/cargo, because nix chmods /nix/var/nix/profiles/per-user on every
+# invocation and chmod requires ownership — a+rwX is not enough and the command
+# fails for a non-root user. That is also why this block sits after the account
+# exists. Root still reaches the store by being root.
+#
+# Symlinked into /usr/local/bin for the same reason cargo is: login shells
+# source /etc/profile, which resets PATH and would drop the profile's bin. Each
+# name is linked separately because the nix binary dispatches on argv[0].
+RUN mkdir -m 0755 /nix \
+  && mkdir -p /etc/nix \
+  && printf 'experimental-features = nix-command flakes\nbuild-users-group =\n' \
+       > /etc/nix/nix.conf \
+  && curl --proto '=https' --tlsv1.2 -sSf -L https://nixos.org/nix/install \
+       | sh -s -- --no-daemon --no-channel-add \
+  && for b in /root/.nix-profile/bin/*; do \
+       ln -sf "$(readlink -f "$b")" "/usr/local/bin/$(basename "$b")"; \
+     done \
+  && chown -R sulion:sulion /nix
+
 COPY dist/sulion /usr/local/bin/sulion
 COPY dist/sulion-node /usr/local/bin/sulion-node
 COPY dist/sulion-ingester /usr/local/bin/sulion-ingester
