@@ -24,3 +24,14 @@ pub use projection::{
 };
 pub use reset::{rebuild_ingest_derivatives, ReindexStats};
 pub use usage_backfill::run_usage_backfill;
+
+/// What the read paths need, without reaching into the parse and projection
+/// internals behind them. `canonical` is the ingester's JSONL representation
+/// and `timeline` is its projection module; consumers want the block type and
+/// the session-lookup entry point, not the modules those live in.
+pub use canonical::{Block as CanonicalBlock, OperationCategory};
+pub use timeline::{
+    load_session_events, resolve_session_target, ProjectionFilters, SessionEventFilter,
+    SessionLookup, SpeakerFacet, TimelineSummaryResponse, TimelineTurn,
+    TimelineTurnDetailResponse,
+};

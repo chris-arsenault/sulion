@@ -348,7 +348,7 @@ describe("api client", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("posts legacy-compatible grant unlock requests to the broker", async () => {
+  it("posts one grant unlock request per secret", async () => {
     const bodies: unknown[] = [];
     stubFetch(async (url, init) => {
       expect(url).toBe("/broker/v1/grants");
@@ -369,18 +369,11 @@ describe("api client", () => {
         pty_session_id: TEST_PTY_ID,
         secret_id: TEST_SECRET_ID,
         ttl_seconds: 600,
-        tool: "with-cred",
-      },
-      {
-        pty_session_id: TEST_PTY_ID,
-        secret_id: TEST_SECRET_ID,
-        ttl_seconds: 600,
-        tool: "aws",
       },
     ]);
   });
 
-  it("posts legacy-compatible grant revoke requests to the broker", async () => {
+  it("posts one grant revoke request per secret", async () => {
     const bodies: unknown[] = [];
     stubFetch(async (url, init) => {
       expect(url).toBe("/broker/v1/grants");
@@ -399,12 +392,6 @@ describe("api client", () => {
       {
         pty_session_id: TEST_PTY_ID,
         secret_id: TEST_SECRET_ID,
-        tool: "with-cred",
-      },
-      {
-        pty_session_id: TEST_PTY_ID,
-        secret_id: TEST_SECRET_ID,
-        tool: "aws",
       },
     ]);
   });

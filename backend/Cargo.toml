@@ -39,6 +39,13 @@ path = "src/bin/sulion_node.rs"
 name = "sulion-ingester"
 path = "src/bin/sulion_ingester.rs"
 
+# Declared rather than left to autodiscovery: the e2e stack runs it by name
+# from target/debug and from the image, so it is a shipped artifact like the
+# rest, not an incidental file in src/bin.
+[[bin]]
+name = "e2e_seed"
+path = "src/bin/e2e_seed.rs"
+
 [dependencies]
 axum = { version = "0.7", features = ["ws", "multipart"] }
 tokio = { version = "1", features = ["full"] }

@@ -818,17 +818,11 @@ describe("Sidebar", () => {
     await hoverMenuItem(user, secretId);
     await user.click(await screen.findByRole("menuitem", { name: "10m" }));
 
-    await waitFor(() => expect(state.unlocks).toHaveLength(2));
+    await waitFor(() => expect(state.unlocks).toHaveLength(1));
     expect(state.unlocks).toEqual([{
       pty_session_id: sessionId,
       secret_id: secretId,
       ttl_seconds: 600,
-      tool: "with-cred",
-    }, {
-      pty_session_id: sessionId,
-      secret_id: secretId,
-      ttl_seconds: 600,
-      tool: "aws",
     }]);
 
     await openSessionContextMenu(user, /secret-session/);
@@ -840,15 +834,10 @@ describe("Sidebar", () => {
       }),
     );
 
-    await waitFor(() => expect(state.revokes).toHaveLength(2));
+    await waitFor(() => expect(state.revokes).toHaveLength(1));
     expect(state.revokes).toEqual([{
       pty_session_id: sessionId,
       secret_id: secretId,
-      tool: "with-cred",
-    }, {
-      pty_session_id: sessionId,
-      secret_id: secretId,
-      tool: "aws",
     }]);
   });
 

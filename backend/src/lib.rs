@@ -36,6 +36,7 @@ pub mod repo_state;
 pub mod retrieval;
 pub mod retrieval_cli;
 pub mod secret_broker;
+pub mod service;
 pub mod secret_protocol;
 pub mod secret_pty;
 pub mod workspace;

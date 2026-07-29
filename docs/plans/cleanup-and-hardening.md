@@ -502,7 +502,7 @@ node spawned — and `stdin` is closed so nothing can block on input.
 
 ---
 
-## Chunk 8 — Layering and the data layer (items 32, 33 done)
+## Chunk 8 — Layering and the data layer (done)
 
 **Items 32 and 33.** `node_runtime` no longer imports `crate::api`, and
 `structure_lint` now fails the build if anything outside `api/` does. Two domain
@@ -536,13 +536,35 @@ existed only to permit the inversion are private again and the
   None" and discarding the server's message. That cost three diagnosis rounds
   before `common::create_session` replaced it across both suites.
 
-**Still open in this chunk:** item 34 (broker per-tool grant model — itself a
-two-phase cross-component change), item 35 (ingest facade re-exports), and the
-rest of item 36 (`env_required` duplication, service-binary boilerplate).
+**Item 34 was already done on the broker side.** Migration
+`0003_pty_scoped_grants.sql` dropped the `tool` column, `GrantRequest` has no
+`tool` field so serde discards what the UI sent, and `unlock_grant` already
+revokes-then-inserts per `(pty, secret)` — so the second POST replaced the
+first. There was no prerequisite to build: the UI was doing two round-trips
+where one suffices and the second undid the first.
+`LEGACY_SECRET_GRANT_TOOLS` is gone. `dedupeSecretGrants` stays, now documenting
+its two remaining reasons — rows written before the migration, and a browser tab
+open across the change — per the Chunk 6 two-phase rule.
 
-Verification: clippy clean, 215 unit tests, both structure lints, and the full
-integration suite green on **two consecutive runs** — one green run is what let
-the incomplete race fix through.
+**Item 35 needed a wider facade than listed.** `api` also used `SessionLookup`,
+`ProjectionFilters`, `SpeakerFacet`, `TimelineTurn`, and
+`canonical::OperationCategory`. All of it goes through `ingest::` re-exports
+now; neither route file names `canonical` or `timeline`.
+
+**Item 36, split by what is actually duplicated.** `env_optional` was
+byte-identical in four places and is one function in `config.rs`. The
+`env_required` wrappers stay per-service: they differ in error type and in
+whether they distinguish unset from empty, so merging them would have changed
+error messages. The four service binaries lost their shared tracing setup and
+bind/serve tail to `service.rs` and are ~10 lines each; the two that log
+configuration before serving still do, because a wrong root set is invisible
+from any request. `e2e_seed` has an explicit `[[bin]]` stanza — the e2e stack
+runs it by name from `target/debug` and from the image.
+
+Verification: clippy clean, 215 backend unit tests, both structure lints,
+frontend `tsc`/`eslint` clean with 253 tests, and the full integration suite
+green on **two consecutive runs** — one green run is what let the incomplete
+race fix through.
 
 ---
 

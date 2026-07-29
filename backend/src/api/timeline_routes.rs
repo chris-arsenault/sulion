@@ -9,7 +9,10 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 use super::routes::{repo_path, ApiError, ApiResult};
-use crate::ingest::{self, canonical, timeline};
+use crate::ingest::{
+    self, resolve_session_target, OperationCategory, ProjectionFilters, SessionLookup,
+    SpeakerFacet, TimelineSummaryResponse, TimelineTurn, TimelineTurnDetailResponse,
+};
 use crate::AppState;
 
 #[derive(Deserialize)]
@@ -36,21 +39,21 @@ pub(super) async fn session_timeline(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     Query(q): Query<TimelineQuery>,
-) -> ApiResult<Json<timeline::TimelineSummaryResponse>> {
+) -> ApiResult<Json<TimelineSummaryResponse>> {
     let resolved =
-        timeline::resolve_session_target(&state.pool, id, q.session.or(q.claude_session)).await?;
+        resolve_session_target(&state.pool, id, q.session.or(q.claude_session)).await?;
 
     let resolved = match resolved {
-        timeline::SessionLookup::Resolved(resolved) => resolved,
-        timeline::SessionLookup::NoSession => {
-            return Ok(Json(timeline::TimelineSummaryResponse {
+        SessionLookup::Resolved(resolved) => resolved,
+        SessionLookup::NoSession => {
+            return Ok(Json(TimelineSummaryResponse {
                 session_uuid: None,
                 session_agent: None,
                 total_event_count: 0,
                 turns: Vec::new(),
             }));
         }
-        timeline::SessionLookup::MissingPty => return Err(ApiError::NotFound),
+        SessionLookup::MissingPty => return Err(ApiError::NotFound),
     };
 
     let mut response =
@@ -67,13 +70,13 @@ pub(super) async fn session_timeline_turn(
     State(state): State<Arc<AppState>>,
     Path((id, turn_id)): Path<(Uuid, i64)>,
     Query(q): Query<TimelineQuery>,
-) -> ApiResult<Json<timeline::TimelineTurnDetailResponse>> {
+) -> ApiResult<Json<TimelineTurnDetailResponse>> {
     let resolved =
-        timeline::resolve_session_target(&state.pool, id, q.session.or(q.claude_session)).await?;
+        resolve_session_target(&state.pool, id, q.session.or(q.claude_session)).await?;
 
     let resolved = match resolved {
-        timeline::SessionLookup::Resolved(resolved) => resolved,
-        timeline::SessionLookup::NoSession | timeline::SessionLookup::MissingPty => {
+        SessionLookup::Resolved(resolved) => resolved,
+        SessionLookup::NoSession | SessionLookup::MissingPty => {
             return Err(ApiError::NotFound);
         }
     };
@@ -90,7 +93,7 @@ pub(super) async fn session_timeline_turn(
     };
     let meta = ingest::load_timeline_session_meta(&state.pool, resolved.session_uuid).await?;
     ingest::annotate_timeline_turns(std::slice::from_mut(&mut turn), &meta);
-    Ok(Json(timeline::TimelineTurnDetailResponse {
+    Ok(Json(TimelineTurnDetailResponse {
         session_uuid: resolved.session_uuid,
         session_agent: resolved.session_agent,
         turn,
@@ -101,7 +104,7 @@ pub(super) async fn repo_timeline(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     Query(q): Query<TimelineQuery>,
-) -> ApiResult<Json<timeline::TimelineSummaryResponse>> {
+) -> ApiResult<Json<TimelineSummaryResponse>> {
     let _ = repo_path(&state, &name)?;
     let response =
         ingest::load_repo_timeline_summary_response(&state.pool, &name, &filters_for(q)).await?;
@@ -112,7 +115,7 @@ pub(super) async fn repo_timeline_turn(
     State(state): State<Arc<AppState>>,
     Path((name, session_uuid, turn_id)): Path<(String, Uuid, i64)>,
     Query(q): Query<TimelineQuery>,
-) -> ApiResult<Json<timeline::TimelineTurnDetailResponse>> {
+) -> ApiResult<Json<TimelineTurnDetailResponse>> {
     let _ = repo_path(&state, &name)?;
     ensure_session_belongs_to_repo(&state, session_uuid, &name).await?;
 
@@ -124,7 +127,7 @@ pub(super) async fn repo_timeline_turn(
     };
     let meta = ingest::load_timeline_session_meta(&state.pool, session_uuid).await?;
     ingest::annotate_timeline_turns(std::slice::from_mut(&mut turn), &meta);
-    Ok(Json(timeline::TimelineTurnDetailResponse {
+    Ok(Json(TimelineTurnDetailResponse {
         session_uuid,
         session_agent: meta.session_agent,
         turn,
@@ -164,7 +167,7 @@ pub(super) struct MonitorSessionTurnView {
     current_session_uuid: Option<Uuid>,
     current_session_agent: Option<String>,
     total_event_count: i64,
-    turn: Option<timeline::TimelineTurn>,
+    turn: Option<TimelineTurn>,
 }
 
 #[derive(FromRow)]
@@ -308,8 +311,8 @@ async fn ensure_session_belongs_to_repo(
     }
 }
 
-fn filters_for(query: TimelineQuery) -> timeline::ProjectionFilters {
-    timeline::ProjectionFilters {
+fn filters_for(query: TimelineQuery) -> ProjectionFilters {
+    ProjectionFilters {
         hidden_speakers: parse_hidden_speakers(query.hide_speakers.as_deref()),
         hidden_operation_categories: parse_hidden_categories(query.hide_categories.as_deref()),
         errors_only: query.errors_only.unwrap_or(false),
@@ -319,8 +322,8 @@ fn filters_for(query: TimelineQuery) -> timeline::ProjectionFilters {
     }
 }
 
-fn monitor_filters_for(query: &MonitorTimelineRequest) -> timeline::ProjectionFilters {
-    timeline::ProjectionFilters {
+fn monitor_filters_for(query: &MonitorTimelineRequest) -> ProjectionFilters {
+    ProjectionFilters {
         hidden_speakers: query
             .hidden_speakers
             .iter()
@@ -329,7 +332,7 @@ fn monitor_filters_for(query: &MonitorTimelineRequest) -> timeline::ProjectionFi
         hidden_operation_categories: query
             .hidden_operation_categories
             .iter()
-            .filter_map(|value| canonical::OperationCategory::parse(value))
+            .filter_map(|value| OperationCategory::parse(value))
             .collect(),
         errors_only: query.errors_only,
         show_bookkeeping: query.show_bookkeeping,
@@ -338,7 +341,7 @@ fn monitor_filters_for(query: &MonitorTimelineRequest) -> timeline::ProjectionFi
     }
 }
 
-fn parse_hidden_speakers(raw: Option<&str>) -> HashSet<timeline::SpeakerFacet> {
+fn parse_hidden_speakers(raw: Option<&str>) -> HashSet<SpeakerFacet> {
     let mut out = HashSet::new();
     for value in raw.unwrap_or_default().split(',').map(str::trim) {
         if let Some(facet) = speaker_facet(value) {
@@ -348,19 +351,19 @@ fn parse_hidden_speakers(raw: Option<&str>) -> HashSet<timeline::SpeakerFacet> {
     out
 }
 
-fn speaker_facet(value: &str) -> Option<timeline::SpeakerFacet> {
+fn speaker_facet(value: &str) -> Option<SpeakerFacet> {
     match value {
-        "user" => Some(timeline::SpeakerFacet::User),
-        "assistant" => Some(timeline::SpeakerFacet::Assistant),
-        "tool_result" => Some(timeline::SpeakerFacet::ToolResult),
+        "user" => Some(SpeakerFacet::User),
+        "assistant" => Some(SpeakerFacet::Assistant),
+        "tool_result" => Some(SpeakerFacet::ToolResult),
         _ => None,
     }
 }
 
-fn parse_hidden_categories(raw: Option<&str>) -> HashSet<canonical::OperationCategory> {
+fn parse_hidden_categories(raw: Option<&str>) -> HashSet<OperationCategory> {
     raw.unwrap_or_default()
         .split(',')
         .map(str::trim)
-        .filter_map(canonical::OperationCategory::parse)
+        .filter_map(OperationCategory::parse)
         .collect()
 }

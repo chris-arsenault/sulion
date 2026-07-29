@@ -16,7 +16,9 @@ use super::session_launch::{
     validate_workspace_request,
 };
 use crate::agent::AgentType;
-use crate::ingest::{canonical, timeline};
+use crate::ingest::{
+    load_session_events, resolve_session_target, CanonicalBlock, SessionEventFilter, SessionLookup,
+};
 use crate::node_protocol::NodeRequestKind;
 use crate::node_runtime::{
     AgentRequest, ResourceRequest, SessionCreateRequest, SessionInputRequest,
@@ -450,7 +452,7 @@ pub(super) struct EventView {
     subtype: Option<String>,
     /// Canonical content blocks, agent-agnostic. Empty for unparsable
     /// events or those still waiting on the startup backfill.
-    blocks: Vec<canonical::Block>,
+    blocks: Vec<CanonicalBlock>,
 }
 
 #[derive(Serialize)]
@@ -467,11 +469,11 @@ pub(super) async fn session_history(
     Query(q): Query<HistoryQuery>,
 ) -> ApiResult<Json<HistoryResponse>> {
     let resolved =
-        timeline::resolve_session_target(&state.pool, id, q.session.or(q.claude_session)).await?;
+        resolve_session_target(&state.pool, id, q.session.or(q.claude_session)).await?;
 
     let resolved = match resolved {
-        timeline::SessionLookup::Resolved(resolved) => resolved,
-        timeline::SessionLookup::NoSession => {
+        SessionLookup::Resolved(resolved) => resolved,
+        SessionLookup::NoSession => {
             return Ok(Json(HistoryResponse {
                 session_uuid: None,
                 session_agent: None,
@@ -479,12 +481,12 @@ pub(super) async fn session_history(
                 next_after: None,
             }));
         }
-        timeline::SessionLookup::MissingPty => return Err(ApiError::NotFound),
+        SessionLookup::MissingPty => return Err(ApiError::NotFound),
     };
-    let events = timeline::load_session_events(
+    let events = load_session_events(
         &state.pool,
         resolved.session_uuid,
-        &timeline::SessionEventFilter {
+        &SessionEventFilter {
             after: q.after,
             limit: Some(q.limit.unwrap_or(5000)),
             kind: q.kind.clone(),

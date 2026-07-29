@@ -100,7 +100,6 @@ async function brokerRequest<T>(url: string, init?: RequestInit): Promise<T> {
   return JSON.parse(text) as T;
 }
 
-const LEGACY_SECRET_GRANT_TOOLS = ["with-cred", "aws"] as const;
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const resp = await authFetch(url, init);
@@ -500,26 +499,28 @@ export async function unlockSecretGrant(body: {
   secret_id: string;
   ttl_seconds: number;
 }): Promise<void> {
-  for (const tool of LEGACY_SECRET_GRANT_TOOLS) {
-    await brokerRequest<void>("/broker/v1/grants", {
-      method: "POST",
-      body: JSON.stringify({ ...body, tool }),
-    });
-  }
+  await brokerRequest<void>("/broker/v1/grants", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 export async function revokeSecretGrant(body: {
   pty_session_id: string;
   secret_id: string;
 }): Promise<void> {
-  for (const tool of LEGACY_SECRET_GRANT_TOOLS) {
-    await brokerRequest<void>("/broker/v1/grants", {
-      method: "DELETE",
-      body: JSON.stringify({ ...body, tool }),
-    });
-  }
+  await brokerRequest<void>("/broker/v1/grants", {
+    method: "DELETE",
+    body: JSON.stringify(body),
+  });
 }
 
+/// Collapses grants to one row per secret.
+///
+/// The broker keyed grants by tool until migration 0003 dropped the column, and
+/// the UI posted one grant per tool name to match. Both sides are single-grant
+/// now, but rows written before that remain, and a browser tab open across the
+/// change still double-posts. Retire this once neither is possible.
 function dedupeSecretGrants(grants: SecretGrantMetadata[]): SecretGrantMetadata[] {
   const latestBySecret = new Map<string, SecretGrantMetadata>();
   for (const grant of grants) {

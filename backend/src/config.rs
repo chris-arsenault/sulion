@@ -1,6 +1,19 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+/// An environment variable's value, trimmed, treating unset and blank alike.
+///
+/// Every service had its own copy of this, byte for byte. The `env_required`
+/// wrappers around it stay per-service: they differ in error type and in
+/// whether they distinguish "unset" from "empty", which is a real difference
+/// rather than duplication.
+pub fn env_optional(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub listen: SocketAddr,

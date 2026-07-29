@@ -25,12 +25,7 @@ pub fn env_required(key: &str) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow!("{key} is not set"))
 }
 
-pub fn env_optional(key: &str) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
+pub use crate::config::env_optional;
 
 /// The agent session id under any of the names an agent runtime may export.
 pub fn agent_session_id() -> Option<String> {

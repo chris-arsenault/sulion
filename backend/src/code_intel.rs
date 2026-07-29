@@ -141,12 +141,7 @@ fn env_required(key: &str) -> anyhow::Result<String> {
     Ok(value)
 }
 
-fn env_optional(key: &str) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
+use crate::config::env_optional;
 
 fn parse_allowed_roots(value: &str) -> anyhow::Result<Vec<PathBuf>> {
     let roots = value

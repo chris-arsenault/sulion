@@ -1,26 +1,14 @@
-use std::net::SocketAddr;
-
 use sulion::code_intel::{app, CodeIntelConfig, CodeIntelState};
+use sulion::service;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,sulion=debug".into()),
-        )
-        .init();
-
+    service::init_tracing();
     let config = CodeIntelConfig::from_env()?;
-    let addr: SocketAddr = config.listen;
-    let allowed_roots = config.allowed_roots.clone();
+    let addr = config.listen;
+    // Logged before serving because a wrong root set is the usual reason this
+    // service answers nothing useful, and it is not visible from any request.
+    tracing::info!(allowed_roots = ?config.allowed_roots, "code-intel allowed roots");
     let state = CodeIntelState::from_config(config).await?;
-    tracing::info!(
-        listen = %addr,
-        allowed_roots = ?allowed_roots,
-        "starting sulion code-intel service",
-    );
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app(state)).await?;
-    Ok(())
+    service::serve(addr, app(state), "sulion code-intel service").await
 }
