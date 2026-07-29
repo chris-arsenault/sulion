@@ -9,6 +9,7 @@ pub mod activity;
 pub mod agent;
 pub mod api;
 pub mod auth;
+pub mod cli_http;
 pub mod code_cli;
 pub mod code_intel;
 pub mod codex;

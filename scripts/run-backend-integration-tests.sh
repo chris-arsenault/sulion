@@ -57,11 +57,26 @@ wait_for_postgres() {
   return 1
 }
 
-using_sulion_runner() {
-  [[ "$(command -v docker)" == "/opt/sulion/bin/docker" || -n "${SULION_RUNNER_URL:-}" ]]
+# Retries because this runs right after `docker run -d`: the port forwarder
+# binds a moment after the daemon reports the container started. This only
+# proves the address is routable, not that postgres is accepting queries --
+# wait_for_postgres does that.
+port_is_open() {
+  local host="$1" port="$2" attempt
+  for attempt in $(seq 1 10); do
+    if timeout 2 bash -c "cat < /dev/null > /dev/tcp/${host}/${port}" 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 start_postgres_container() {
+  # Always publish. Whether the mapped port is reachable depends on the caller
+  # sharing a network namespace with the docker daemon, which differs between
+  # a plain host, a managed PTY, and a remote runner -- so the address is
+  # probed below rather than inferred from which docker binary is on PATH.
   local docker_args=(
     run
     --rm
@@ -73,26 +88,33 @@ start_postgres_container() {
     --health-retries 30
     -e POSTGRES_PASSWORD=testpass
     -e POSTGRES_DB=sulion
+    -p "127.0.0.1::${DOCKER_CONTAINER_PORT}"
   )
-
-  if using_sulion_runner; then
-    DOCKER_DB_HOST="${DOCKER_CONTAINER_NAME}"
-    DOCKER_DB_PORT="${DOCKER_CONTAINER_PORT}"
-  else
-    docker_args+=(-p "127.0.0.1::${DOCKER_CONTAINER_PORT}")
-    DOCKER_DB_HOST="127.0.0.1"
-  fi
 
   docker_args+=(docker.io/library/postgres:16)
   docker "${docker_args[@]}" >/dev/null
 
-  if ! using_sulion_runner; then
-    DOCKER_DB_PORT="$(docker port "${DOCKER_CONTAINER_NAME}" "${DOCKER_CONTAINER_PORT}/tcp" | awk -F: 'END { print $NF }')"
-    if [[ -z "${DOCKER_DB_PORT}" ]]; then
-      echo "sulion: failed to discover mapped postgres port" >&2
-      return 1
-    fi
+  local mapped
+  mapped="$(docker port "${DOCKER_CONTAINER_NAME}" "${DOCKER_CONTAINER_PORT}/tcp" 2>/dev/null | awk -F: 'END { print $NF }')"
+
+  if [[ -n "${mapped}" ]] && port_is_open 127.0.0.1 "${mapped}"; then
+    DOCKER_DB_HOST="127.0.0.1"
+    DOCKER_DB_PORT="${mapped}"
+    return 0
   fi
+
+  # No usable published port: the daemon is elsewhere, so reach the container
+  # by name on the shared docker network instead.
+  if port_is_open "${DOCKER_CONTAINER_NAME}" "${DOCKER_CONTAINER_PORT}"; then
+    DOCKER_DB_HOST="${DOCKER_CONTAINER_NAME}"
+    DOCKER_DB_PORT="${DOCKER_CONTAINER_PORT}"
+    return 0
+  fi
+
+  echo "sulion: postgres test container is not reachable at 127.0.0.1:${mapped:-<unmapped>}" >&2
+  echo "sulion: nor by container name ${DOCKER_CONTAINER_NAME}:${DOCKER_CONTAINER_PORT}" >&2
+  echo "sulion: set SULION_TEST_DB to a reachable database to run these tests" >&2
+  return 1
 }
 
 ensure_test_db() {

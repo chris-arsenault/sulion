@@ -7,23 +7,21 @@ use std::time::Duration;
 use base64::Engine;
 use futures::{SinkExt, StreamExt};
 use ring::signature::{Ed25519KeyPair, KeyPair};
-use serde::Deserialize;
-use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
+use super::commands::{handle_command as handle_command_shared, CommandSink};
 use super::config::NodeRuntimeConfig;
 use super::model::{
     ControlChallenge, ControlWireMessage, FragmentAssembler, HelloAck, NodeConfigPayload,
-    NodeWireMessage, RequestResultPayload, TerminalBytesPayload, TerminalResizePayload,
+    NodeWireMessage,
 };
 use super::pin::{ControlPin, PinOutcome};
 use super::{
-    heartbeat_envelope, NodeHello, NodeRequestKind, RequestResultStatus, WireEnvelope,
-    NODE_PROTOCOL_VERSION,
+    heartbeat_envelope, NodeHello, NodeProtocolError, WireEnvelope, NODE_PROTOCOL_VERSION,
 };
-use crate::node_runtime::{NodeRuntime, SessionInputRequest, SessionResizeRequest};
+use crate::node_runtime::NodeRuntime;
 
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
 /// Cadence for re-attempting enrollment. Long enough that an unapproved node
@@ -69,12 +67,6 @@ impl NodeClientConfig {
             private_key_path,
         })
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct EphemeralRequest {
-    kind: String,
-    request: Value,
 }
 
 pub async fn run(config: NodeClientConfig, runtime: Arc<NodeRuntime>) -> anyhow::Result<()> {
@@ -448,101 +440,69 @@ async fn connect_once(
     }
 }
 
+/// Replies are written back to the control websocket, which is also where
+/// terminal byte events go.
+struct SocketSink {
+    node_id: Uuid,
+    boot_id: Uuid,
+    outbound: mpsc::Sender<WireEnvelope>,
+}
+
+impl CommandSink for SocketSink {
+    fn node_id(&self) -> Uuid {
+        self.node_id
+    }
+
+    fn boot_id(&self) -> Uuid {
+        self.boot_id
+    }
+
+    fn terminal_sender(&self) -> mpsc::Sender<WireEnvelope> {
+        self.outbound.clone()
+    }
+
+    async fn send(&self, envelope: WireEnvelope) -> Result<(), NodeProtocolError> {
+        self.outbound
+            .send(envelope)
+            .await
+            .map_err(|_| NodeProtocolError::Unavailable)
+    }
+}
+
 async fn handle_command(
     runtime: Arc<NodeRuntime>,
     outbound: mpsc::Sender<WireEnvelope>,
     command: WireEnvelope,
 ) -> anyhow::Result<()> {
-    match command.message_kind.as_str() {
-        "request" => {
-            let request_id = command
-                .request_id
-                .ok_or_else(|| anyhow::anyhow!("request missing request_id"))?;
-            let request: EphemeralRequest = serde_json::from_value(command.payload)?;
-            let result = match NodeRequestKind::parse(&request.kind) {
-                Some(kind) => runtime.execute_request(kind, request.request).await,
-                None => unsupported_request(),
-            };
-            let mut envelope =
-                WireEnvelope::new(runtime.node_id(), runtime.boot_id(), "request.result");
-            envelope.request_id = Some(request_id);
-            envelope.payload = serde_json::to_value(result)?;
-            outbound.send(envelope).await?;
+    // Config delivery is specific to the socket transport: loopback shares the
+    // process it would be configuring.
+    if command.message_kind == "control.node_config" {
+        // Delivered again on every connection. By this point the process has
+        // dropped to the unprivileged runtime identity and can no longer
+        // write root-owned node state, so a rotation is reported and picked
+        // up by the enrollment stage on the next start.
+        let payload: NodeConfigPayload = serde_json::from_value(command.payload)?;
+        if payload.is_empty() {
+            return Ok(());
         }
-        "terminal.attach" => {
-            runtime
-                .open_terminal(
-                    command
-                        .stream_id
-                        .ok_or_else(|| anyhow::anyhow!("terminal attach missing stream_id"))?,
-                    command
-                        .session_id
-                        .ok_or_else(|| anyhow::anyhow!("terminal attach missing session_id"))?,
-                    outbound,
-                )
-                .await?;
+        let delivered = NodeRuntimeConfig::accept(payload)?;
+        if !delivered.matches_current_env() {
+            tracing::warn!(
+                digest = %delivered.digest(),
+                keys = ?delivered.key_names(),
+                "control plane delivered new node configuration; \
+                 it is applied when sulion-node next starts",
+            );
         }
-        "terminal.detach" => {
-            if let Some(stream_id) = command.stream_id {
-                runtime.close_terminal(stream_id).await;
-            }
-        }
-        "control.node_config" => {
-            // Delivered again on every connection. By this point the process has
-            // dropped to the unprivileged runtime identity and can no longer
-            // write root-owned node state, so a rotation is reported and picked
-            // up by the enrollment stage on the next start.
-            let payload: NodeConfigPayload = serde_json::from_value(command.payload)?;
-            if payload.is_empty() {
-                return Ok(());
-            }
-            let delivered = NodeRuntimeConfig::accept(payload)?;
-            if !delivered.matches_current_env() {
-                tracing::warn!(
-                    digest = %delivered.digest(),
-                    keys = ?delivered.key_names(),
-                    "control plane delivered new node configuration; \
-                     it is applied when sulion-node next starts",
-                );
-            }
-        }
-        "terminal.input" => {
-            let session_id = command
-                .session_id
-                .ok_or_else(|| anyhow::anyhow!("terminal input missing session_id"))?;
-            let bytes =
-                serde_json::from_value::<TerminalBytesPayload>(command.payload)?.into_bytes()?;
-            ensure_request_succeeded(
-                runtime
-                    .execute_request(
-                        NodeRequestKind::SessionInput,
-                        serde_json::to_value(SessionInputRequest::from_bytes(session_id, &bytes))?,
-                    )
-                    .await,
-            )?;
-        }
-        "terminal.resize" => {
-            let session_id = command
-                .session_id
-                .ok_or_else(|| anyhow::anyhow!("terminal resize missing session_id"))?;
-            let resize: TerminalResizePayload = serde_json::from_value(command.payload)?;
-            ensure_request_succeeded(
-                runtime
-                    .execute_request(
-                        NodeRequestKind::SessionResize,
-                        serde_json::to_value(SessionResizeRequest {
-                            session_id,
-                            cols: resize.cols,
-                            rows: resize.rows,
-                        })?,
-                    )
-                    .await,
-            )?;
-        }
-        _ => {
-            tracing::debug!(kind = %command.message_kind, "ignoring unknown control message");
-        }
+        return Ok(());
     }
+
+    let sink = SocketSink {
+        node_id: runtime.node_id(),
+        boot_id: runtime.boot_id(),
+        outbound,
+    };
+    handle_command_shared(&sink, Some(&runtime), command).await?;
     Ok(())
 }
 
@@ -640,28 +600,6 @@ pub fn load_private_key(path: &Path) -> anyhow::Result<Ed25519KeyPair> {
         .map_err(|error| anyhow::anyhow!("read node private key {}: {error}", path.display()))?;
     Ed25519KeyPair::from_pkcs8(&bytes)
         .map_err(|_| anyhow::anyhow!("invalid Ed25519 PKCS#8 key at {}", path.display()))
-}
-
-fn unsupported_request() -> RequestResultPayload {
-    RequestResultPayload {
-        status: RequestResultStatus::Failed,
-        result: None,
-        error_code: Some("unsupported_request".into()),
-        error_message: Some("request is not supported by this node release".into()),
-    }
-}
-
-fn ensure_request_succeeded(result: RequestResultPayload) -> anyhow::Result<()> {
-    match result.status {
-        RequestResultStatus::Succeeded => Ok(()),
-        RequestResultStatus::Failed => anyhow::bail!(
-            "{}: {}",
-            result.error_code.unwrap_or_else(|| "request_failed".into()),
-            result
-                .error_message
-                .unwrap_or_else(|| "node request failed".into())
-        ),
-    }
 }
 
 pub fn generate_private_key(path: &Path) -> anyhow::Result<()> {

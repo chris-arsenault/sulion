@@ -1,11 +1,14 @@
 use std::ffi::OsString;
-use std::path::Path;
 
 use anyhow::{anyhow, Context};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use reqwest::header::HeaderMap;
 use serde_json::{json, Value};
 use url::Url;
 
+use crate::cli_http::{
+    agent_session_id, bearer_headers, build_url, env_optional, env_required, infer_repo,
+    insert_header,
+};
 use crate::code_intel::help::{help_response, HELP_TEXT};
 
 mod output;
@@ -50,7 +53,8 @@ pub async fn run(args: &[OsString]) -> anyhow::Result<i32> {
         }
     };
     let request = invocation.command.request(&env.cwd, &invocation.budget);
-    let client = reqwest::Client::new();
+    // Trusts the pinned control certificate in addition to public roots.
+    let client = crate::node_protocol::tls::control_http_client();
     match request_json(&client, &env, request).await {
         Ok(body) => {
             if invocation.json {
@@ -367,19 +371,12 @@ impl CodeCliEnv {
             pty_id: env_optional("SULION_PTY_ID"),
             workspace_id: env_optional("SULION_WORKSPACE_ID"),
             base_sha: env_optional("SULION_BASE_SHA"),
-            agent_session_id: env_optional("SULION_AGENT_SESSION_ID")
-                .or_else(|| env_optional("SULION_CLAUDE_SESSION_ID"))
-                .or_else(|| env_optional("CODEX_SESSION_ID")),
+            agent_session_id: agent_session_id(),
         })
     }
 
     fn headers(&self) -> anyhow::Result<HeaderMap> {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", self.token))
-                .context("invalid code-intel token header")?,
-        );
+        let mut headers = bearer_headers(&self.token, "invalid code-intel token header")?;
         insert_header(&mut headers, "x-sulion-cwd", Some(&self.cwd))?;
         insert_header(&mut headers, "x-sulion-repo", self.repo.as_deref())?;
         insert_header(&mut headers, "x-sulion-pty-id", self.pty_id.as_deref())?;
@@ -398,18 +395,7 @@ impl CodeCliEnv {
     }
 
     fn url(&self, path: &str, pairs: &[(&str, String)]) -> anyhow::Result<Url> {
-        let mut url = Url::parse(self.base_url.trim_end_matches('/'))
-            .context("invalid SULION_CODE_INTEL_URL")?
-            .join(path.trim_start_matches('/'))?;
-        {
-            let mut query = url.query_pairs_mut();
-            for (key, value) in pairs {
-                if !value.trim().is_empty() {
-                    query.append_pair(key, value);
-                }
-            }
-        }
-        Ok(url)
+        build_url(&self.base_url, path, pairs, "invalid SULION_CODE_INTEL_URL")
     }
 }
 
@@ -493,43 +479,3 @@ fn parse_budget(value: &str) -> Result<String, CliError> {
     }
 }
 
-fn insert_header(
-    headers: &mut HeaderMap,
-    name: &'static str,
-    value: Option<&str>,
-) -> anyhow::Result<()> {
-    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
-        headers.insert(name, HeaderValue::from_str(value)?);
-    }
-    Ok(())
-}
-
-fn env_required(key: &str) -> anyhow::Result<String> {
-    std::env::var(key)
-        .map(|value| value.trim().to_string())
-        .ok()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow!("{key} is not set"))
-}
-
-fn env_optional(key: &str) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn infer_repo(cwd: &str) -> Option<String> {
-    let path = Path::new(cwd);
-    for prefix in ["/home/sulion/repos", "/home/sulion/workspaces"] {
-        if let Ok(rest) = path.strip_prefix(prefix) {
-            if let Some(component) = rest.components().next() {
-                let repo = component.as_os_str().to_string_lossy();
-                if !repo.is_empty() {
-                    return Some(repo.into_owned());
-                }
-            }
-        }
-    }
-    None
-}

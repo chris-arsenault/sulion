@@ -1,21 +1,11 @@
 use std::sync::Arc;
 
-use serde::Deserialize;
-use serde_json::{json, Value};
 use uuid::Uuid;
 
-use super::model::{
-    NodeHello, NodeRequestKind, RequestResultPayload, RequestResultStatus, TerminalBytesPayload,
-    TerminalResizePayload, WireEnvelope, NODE_PROTOCOL_VERSION,
-};
+use super::commands::{handle_command, CommandSink};
+use super::model::{NodeHello, WireEnvelope, NODE_PROTOCOL_VERSION};
 use super::{heartbeat_envelope, NodeControl, NodeHostStats, NodeProtocolError};
-use crate::node_runtime::{NodeRuntime, SessionInputRequest, SessionResizeRequest};
-
-#[derive(Debug, Deserialize)]
-struct EphemeralRequest {
-    kind: String,
-    request: Value,
-}
+use crate::node_runtime::NodeRuntime;
 
 pub(super) async fn start(
     control: Arc<NodeControl>,
@@ -118,13 +108,12 @@ async fn run(
                 let Some(command) = command else {
                     break;
                 };
-                if let Err(err) = handle_command(
-                    &control,
-                    &connection,
-                    runtime.as_ref(),
-                    &runtime_outbound,
-                    command,
-                ).await {
+                let sink = LoopbackSink {
+                    control: &control,
+                    connection: &connection,
+                    terminal_outbound: runtime_outbound.clone(),
+                };
+                if let Err(err) = handle_command(&sink, runtime.as_ref(), command).await {
                     tracing::warn!(%err, node_id = %connection.node_id, "loopback node command failed");
                     break;
                 }
@@ -148,104 +137,32 @@ async fn run(
         .await;
 }
 
-async fn handle_command(
-    control: &NodeControl,
-    connection: &super::RegisteredConnection,
-    runtime: Option<&Arc<NodeRuntime>>,
-    runtime_outbound: &tokio::sync::mpsc::Sender<WireEnvelope>,
-    command: WireEnvelope,
-) -> Result<(), NodeProtocolError> {
-    match command.message_kind.as_str() {
-        "request" => {
-            let request_id = command.request_id.ok_or_else(|| {
-                NodeProtocolError::InvalidRequest("request missing request_id".into())
-            })?;
-            let request: EphemeralRequest = serde_json::from_value(command.payload)?;
-            let result = match (runtime, NodeRequestKind::parse(&request.kind)) {
-                (Some(runtime), Some(kind)) => runtime.execute_request(kind, request.request).await,
-                (None, Some(NodeRequestKind::ProbeEcho)) => RequestResultPayload {
-                    status: RequestResultStatus::Succeeded,
-                    result: Some(json!({ "echo": request.request })),
-                    error_code: None,
-                    error_message: None,
-                },
-                _ => RequestResultPayload {
-                    status: RequestResultStatus::Failed,
-                    result: None,
-                    error_code: Some("unsupported_request".into()),
-                    error_message: Some("request is not supported by this node".into()),
-                },
-            };
-            let mut envelope =
-                WireEnvelope::new(connection.node_id, connection.boot_id, "request.result");
-            envelope.request_id = Some(request_id);
-            envelope.payload = serde_json::to_value(result)?;
-            control
-                .receive_envelope(connection.connection_id, envelope)
-                .await
-        }
-        "terminal.attach" => {
-            let runtime = runtime.ok_or_else(|| {
-                NodeProtocolError::InvalidRequest("terminal runtime is unavailable".into())
-            })?;
-            runtime
-                .open_terminal(
-                    command.stream_id.ok_or_else(|| {
-                        NodeProtocolError::InvalidRequest(
-                            "terminal attach missing stream_id".into(),
-                        )
-                    })?,
-                    command.session_id.ok_or_else(|| {
-                        NodeProtocolError::InvalidRequest(
-                            "terminal attach missing session_id".into(),
-                        )
-                    })?,
-                    runtime_outbound.clone(),
-                )
-                .await
-                .map_err(|err| NodeProtocolError::InvalidRequest(err.to_string()))
-        }
-        "terminal.detach" => {
-            if let (Some(runtime), Some(stream_id)) = (runtime, command.stream_id) {
-                runtime.close_terminal(stream_id).await;
-            }
-            Ok(())
-        }
-        "terminal.input" => {
-            let runtime = runtime.ok_or(NodeProtocolError::Unavailable)?;
-            let session_id = command.session_id.ok_or_else(|| {
-                NodeProtocolError::InvalidRequest("terminal input missing session_id".into())
-            })?;
-            let bytes = serde_json::from_value::<TerminalBytesPayload>(command.payload)?
-                .into_bytes()
-                .map_err(|err| NodeProtocolError::InvalidRequest(err.to_string()))?;
-            let result = runtime
-                .execute_request(
-                    NodeRequestKind::SessionInput,
-                    serde_json::to_value(SessionInputRequest::from_bytes(session_id, &bytes))?,
-                )
-                .await;
-            ensure_request_succeeded(result)
-        }
-        "terminal.resize" => {
-            let runtime = runtime.ok_or(NodeProtocolError::Unavailable)?;
-            let session_id = command.session_id.ok_or_else(|| {
-                NodeProtocolError::InvalidRequest("terminal resize missing session_id".into())
-            })?;
-            let resize: TerminalResizePayload = serde_json::from_value(command.payload)?;
-            let result = runtime
-                .execute_request(
-                    NodeRequestKind::SessionResize,
-                    serde_json::to_value(SessionResizeRequest {
-                        session_id,
-                        cols: resize.cols,
-                        rows: resize.rows,
-                    })?,
-                )
-                .await;
-            ensure_request_succeeded(result)
-        }
-        _ => Ok(()),
+/// Replies are handed straight back to the in-process control plane rather
+/// than written to a socket, and terminal bytes go through the dedicated
+/// channel `run` drains.
+struct LoopbackSink<'a> {
+    control: &'a NodeControl,
+    connection: &'a super::RegisteredConnection,
+    terminal_outbound: tokio::sync::mpsc::Sender<WireEnvelope>,
+}
+
+impl CommandSink for LoopbackSink<'_> {
+    fn node_id(&self) -> Uuid {
+        self.connection.node_id
+    }
+
+    fn boot_id(&self) -> Uuid {
+        self.connection.boot_id
+    }
+
+    fn terminal_sender(&self) -> tokio::sync::mpsc::Sender<WireEnvelope> {
+        self.terminal_outbound.clone()
+    }
+
+    async fn send(&self, envelope: WireEnvelope) -> Result<(), NodeProtocolError> {
+        self.control
+            .receive_envelope(self.connection.connection_id, envelope)
+            .await
     }
 }
 
@@ -263,17 +180,5 @@ async fn host_stats(runtime: &Option<Arc<NodeRuntime>>) -> Option<NodeHostStats>
     match runtime {
         Some(runtime) => Some(runtime.host_stats().await),
         None => None,
-    }
-}
-
-fn ensure_request_succeeded(result: RequestResultPayload) -> Result<(), NodeProtocolError> {
-    match result.status {
-        RequestResultStatus::Succeeded => Ok(()),
-        RequestResultStatus::Failed => Err(NodeProtocolError::Remote {
-            code: result.error_code.unwrap_or_else(|| "request_failed".into()),
-            message: result
-                .error_message
-                .unwrap_or_else(|| "node request failed".into()),
-        }),
     }
 }

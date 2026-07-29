@@ -78,13 +78,12 @@ than the diff:
 
 Verification: backend `cargo check`/`clippy --all-targets` clean and 211 unit
 tests pass (5 new); frontend `tsc --noEmit` and `eslint` clean and 259 tests
-pass (4 new). **The backend integration suite was not run** —
-`scripts/run-backend-integration-tests.sh` points `SULION_TEST_DB` at the test
-container's *name* when `docker` is the brokered runner
-(`using_sulion_runner`), and container names do not resolve from a PTY, so it
-fails at `db::connect` before reaching any code. Run it somewhere that shares a
-network with the container before trusting the ingest change; `process_file` is
-the part with no automated coverage here.
+pass (4 new).
+
+The backend integration suite could not run when this chunk landed, so the
+ingest change (item 8) shipped without coverage of `process_file`. The harness
+has since been fixed (see Chunk 4) and the suite passes, including
+`ingester_integration`, so that gap is closed.
 
 
 
@@ -213,7 +212,41 @@ must drop its per-tool grant model first — see item 34.
 
 ---
 
-## Chunk 4 — Drifting duplication (getting worse with current work)
+## Chunk 4 — Drifting duplication (done)
+
+All three applied, plus a fix to the test harness that was blocking
+verification.
+
+- Item 22 was a real bug, not a style gap: `sulion-code` built request URLs
+  without the trailing-slash base, so a gateway-prefixed
+  `SULION_CODE_INTEL_URL` silently lost its prefix, and it used an unpinned
+  `reqwest::Client`. Both now match `sulion-retrieve`.
+- Item 23 extracted `backend/src/cli_http.rs`. `build_url` is the shared
+  version, so the bug in item 22 cannot recur in one CLI only.
+- Item 24 extracted `backend/src/node_protocol/commands.rs`: one
+  `handle_command` over a `CommandSink` trait, implemented by the websocket
+  client and the loopback. This closes the coverage asymmetry the review
+  flagged — integration tests exercise the loopback, which is now the same code
+  the real node runs. `control.node_config` stays client-only, since loopback
+  shares the process it would configure.
+- The `unsupported_request` message differed between the two copies. Unified as
+  two explicit cases: an unparseable kind reports "not supported by this node
+  release", a runtime-less connection reports "not supported by this node".
+- **Harness fix.** `scripts/run-backend-integration-tests.sh` chose the database
+  address from which `docker` binary was on `PATH`, assuming a brokered runner
+  meant the caller shared a network with the container and could address it by
+  name. In a managed PTY that is false, and the suite died at `db::connect`. It
+  now always publishes the port and *probes* which address works, preferring the
+  published one. The full suite runs here: 11 targets, 110 tests, green.
+
+Verification: `cargo clippy --all-targets` clean, 216 backend unit tests pass
+(5 new in `cli_http`), and the full integration suite passes — notably
+`node_protocol_integration` (16) over the unified dispatch, `ingester_integration`
+(20), and `pty_integration` (6).
+
+---
+
+## Chunk 4 — original items
 
 22. **Port the two missing fixes to `code_cli.rs` now.** The uncommitted
     trailing-slash fix at `retrieval_cli.rs:131-134` (so `Url::join` preserves a
