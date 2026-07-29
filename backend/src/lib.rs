@@ -81,12 +81,10 @@ pub struct AppState {
     pub ws_test_hooks: Arc<WsTestHooks>,
     /// Short-lived, one-use credentials for browser WebSocket handshakes.
     pub ws_tickets: Arc<api::WsTicketStore>,
-    /// Durable development-node registry and authenticated transport.
+    /// Durable development-node registry and authenticated transport. Local
+    /// mutations and terminal attachment always cross it; standalone differs
+    /// only in that its node runs in this process over loopback.
     pub node_control: Arc<node_protocol::NodeControl>,
-    /// When true, local mutations and terminal attachment must cross the node
-    /// protocol. The legacy managers remain present only for focused
-    /// compatibility tests and the rollback path.
-    pub node_protocol_required: bool,
     /// Optional JWT auth validator. Production wiring enables this;
     /// most unit tests keep it unset and exercise handlers directly.
     pub auth: Option<Arc<auth::AuthState>>,
@@ -118,26 +116,6 @@ impl AppState {
         ingester: Arc<ingest::Ingester>,
         auth: Option<Arc<auth::AuthState>>,
     ) -> Arc<Self> {
-        Self::new_with_auth_and_node_mode(
-            pool,
-            repos_root,
-            workspaces_root,
-            library_root,
-            ingester,
-            auth,
-            false,
-        )
-    }
-
-    pub fn new_with_auth_and_node_mode(
-        pool: db::Pool,
-        repos_root: std::path::PathBuf,
-        workspaces_root: std::path::PathBuf,
-        library_root: std::path::PathBuf,
-        ingester: Arc<ingest::Ingester>,
-        auth: Option<Arc<auth::AuthState>>,
-        node_protocol_required: bool,
-    ) -> Arc<Self> {
         let pty = pty::PtyManager::new(pool.clone());
         let repo_state = repo_state::RepoStateManager::new(pool.clone(), repos_root.clone());
         let workspace_state = worktree::WorkspaceManager::new(
@@ -160,7 +138,6 @@ impl AppState {
             ws_test_hooks: Arc::new(WsTestHooks::default()),
             ws_tickets: Arc::new(api::WsTicketStore::default()),
             node_control,
-            node_protocol_required,
             auth,
         })
     }

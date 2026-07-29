@@ -14,18 +14,16 @@ use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use base64::Engine;
 use futures::{sink::SinkExt, stream::StreamExt};
-use portable_pty::PtySize;
 use ring::digest;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast::error::RecvError, mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
 use super::node_proxy;
 use super::routes::{ApiError, ApiResult};
 use crate::auth::AuthenticatedUser;
 use crate::node_protocol::{TerminalAttachment, TerminalEvent};
-use crate::pty::PtySession;
 use crate::AppState;
 
 const WS_PROTOCOL: &str = "sulion.v1";
@@ -103,22 +101,18 @@ pub async fn issue_ticket(
     if metadata.state != crate::pty::PtyState::Live {
         return Err(ApiError::NotFound);
     }
-    if state.node_protocol_required {
-        let node_id = node_proxy::session_node(&state, body.session_id).await?;
-        let connected = state
-            .node_control
-            .list_nodes()
-            .await
-            .map_err(node_proxy::map_error)?
-            .iter()
-            .any(|node| node.id == node_id && node.connection_state == "connected");
-        if !connected {
-            return Err(ApiError::Unavailable(
-                "development node is unavailable".into(),
-            ));
-        }
-    } else if state.pty.get(body.session_id).await.is_none() {
-        return Err(ApiError::NotFound);
+    let node_id = node_proxy::session_node(&state, body.session_id).await?;
+    let connected = state
+        .node_control
+        .list_nodes()
+        .await
+        .map_err(node_proxy::map_error)?
+        .iter()
+        .any(|node| node.id == node_id && node.connection_state == "connected");
+    if !connected {
+        return Err(ApiError::Unavailable(
+            "development node is unavailable".into(),
+        ));
     }
     let ticket = state
         .ws_tickets
@@ -169,26 +163,17 @@ pub async fn attach(
     if !state.ws_tickets.consume(&ticket, id).await {
         return unauthorized();
     }
-    if state.node_protocol_required {
-        let node_id = match node_proxy::session_node(&state, id).await {
-            Ok(node_id) => node_id,
-            Err(error) => return error.into_response(),
-        };
-        let attachment = match state.node_control.open_terminal(node_id, id).await {
-            Ok(attachment) => attachment,
-            Err(error) => return node_proxy::map_error(error).into_response(),
-        };
-        let ws_test_hooks = state.ws_test_hooks.clone();
-        return ws
-            .protocols([WS_PROTOCOL])
-            .on_upgrade(move |socket| handle_node_socket(socket, id, attachment, ws_test_hooks));
-    }
-    let Some(session) = state.pty.get(id).await else {
-        return (axum::http::StatusCode::NOT_FOUND, "no such session").into_response();
+    let node_id = match node_proxy::session_node(&state, id).await {
+        Ok(node_id) => node_id,
+        Err(error) => return error.into_response(),
+    };
+    let attachment = match state.node_control.open_terminal(node_id, id).await {
+        Ok(attachment) => attachment,
+        Err(error) => return node_proxy::map_error(error).into_response(),
     };
     let ws_test_hooks = state.ws_test_hooks.clone();
     ws.protocols([WS_PROTOCOL])
-        .on_upgrade(move |socket| handle_socket(socket, session, ws_test_hooks))
+        .on_upgrade(move |socket| handle_node_socket(socket, id, attachment, ws_test_hooks))
 }
 
 fn ticket_from_protocols(headers: &HeaderMap) -> Option<String> {
@@ -309,125 +294,6 @@ async fn handle_node_socket(
         _ = &mut inbound => outbound.abort(),
     }
     close_sender.close().await;
-}
-
-async fn handle_socket(
-    socket: WebSocket,
-    session: Arc<PtySession>,
-    ws_test_hooks: Arc<crate::WsTestHooks>,
-) {
-    let (mut tx, mut rx) = socket.split();
-
-    // Snapshot first — gives the client the current TUI state.
-    let snapshot = session.emulator.snapshot();
-    if !snapshot.is_empty() && tx.send(Message::Binary(snapshot)).await.is_err() {
-        return;
-    }
-    let _ = tx
-        .send(Message::Text(
-            serde_json::to_string(&ServerMsg::Ready).unwrap(),
-        ))
-        .await;
-
-    let mut out_rx = session.output.subscribe();
-    let input = session.input.clone();
-    let resize = session.resize.clone();
-    let mut drop_ws_rx = ws_test_hooks.subscribe(session.id).await;
-    let (control_tx, mut control_rx) = mpsc::channel::<ServerMsg>(8);
-
-    // Outbound task: broadcast → WS
-    let outbound_session_id = session.id;
-    let outbound = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                msg = out_rx.recv() => {
-                    match msg {
-                        Ok(bytes) => {
-                            if tx.send(Message::Binary(bytes)).await.is_err() {
-                                break;
-                            }
-                        }
-                        Err(RecvError::Lagged(n)) => {
-                            tracing::warn!(session = %outbound_session_id, lagged = n, "broadcast lagged");
-                            continue;
-                        }
-                        Err(RecvError::Closed) => {
-                            // PTY EOF — tell the client and close cleanly.
-                            let _ = tx
-                                .send(Message::Text(
-                                    serde_json::to_string(&ServerMsg::Dead { exit: None }).unwrap(),
-                                ))
-                                .await;
-                            let _ = tx.send(Message::Close(None)).await;
-                            break;
-                        }
-                    }
-                }
-                _ = drop_ws_rx.recv() => {
-                    let _ = tx.send(Message::Close(None)).await;
-                    break;
-                }
-                Some(message) = control_rx.recv() => {
-                    let Ok(message) = serde_json::to_string(&message) else {
-                        continue;
-                    };
-                    if tx.send(Message::Text(message)).await.is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
-    // Inbound task: WS → input/resize
-    let inbound = tokio::spawn(async move {
-        while let Some(msg) = rx.next().await {
-            let Ok(msg) = msg else { break };
-            match msg {
-                Message::Text(text) => match serde_json::from_str::<ClientMsg>(&text) {
-                    Ok(ClientMsg::Input { data }) => {
-                        if input.send(data.into_bytes()).await.is_err() {
-                            break;
-                        }
-                    }
-                    Ok(ClientMsg::Resize { cols, rows }) => {
-                        let _ = resize
-                            .send(PtySize {
-                                cols,
-                                rows,
-                                pixel_width: 0,
-                                pixel_height: 0,
-                            })
-                            .await;
-                    }
-                    Ok(ClientMsg::Ping) => {
-                        if control_tx.send(ServerMsg::Pong).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!(%err, "bad WS text message");
-                    }
-                },
-                Message::Binary(bytes) => {
-                    // Clients MAY send raw bytes as a shortcut for input.
-                    if input.send(bytes).await.is_err() {
-                        break;
-                    }
-                }
-                Message::Close(_) => break,
-                Message::Ping(_) | Message::Pong(_) => {}
-            }
-        }
-    });
-
-    // Await either direction exiting; abort the other so we don't leak tasks.
-    let mut outbound = outbound;
-    let mut inbound = inbound;
-    tokio::select! {
-        _ = &mut outbound => inbound.abort(),
-        _ = &mut inbound => outbound.abort(),
-    }
 }
 
 #[cfg(test)]

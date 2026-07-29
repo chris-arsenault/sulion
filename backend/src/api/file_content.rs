@@ -21,11 +21,6 @@ use crate::workspace;
 /// Largest text file inlined as UTF-8 in a preview. Larger text is reported as
 /// `truncated` so the client fetches raw bytes or opens the file in a terminal.
 pub const TEXT_PREVIEW_CAP: u64 = 1024 * 1024; // 1 MiB
-/// Largest file served over the authenticated raw-byte route. Bounds memory
-/// and keeps a single request from monopolising the proxy; viewing-oriented,
-/// generous enough for screenshots and short clips.
-pub const RAW_MAX_BYTES: u64 = 25 * 1024 * 1024; // 25 MiB
-
 /// Metadata for a file preview. `content` carries inlined UTF-8 text; it is
 /// `None` for binary files, oversized text, and any file whose bytes should be
 /// fetched from the raw-byte route instead.
@@ -152,27 +147,8 @@ pub async fn build_preview(root: PathBuf, rel: &str) -> ApiResult<FileResponse> 
 }
 
 /// Serve a repo-relative file's bytes with the correct content type and
-/// `Range` support. Bounded by `max`; larger files are refused rather than
-/// buffered. Used by both the Cognito browser route and (via a thin wrapper)
-/// callers that pass their own cap.
-pub async fn serve_bytes(
-    root: PathBuf,
-    rel: &str,
-    headers: &HeaderMap,
-    max: u64,
-) -> ApiResult<Response> {
-    let (abs, norm) =
-        workspace::resolve_in_repo(&root, rel).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    let size = stat_file(&abs).await?;
-    if size > max {
-        return Err(ApiError::BadRequest(format!(
-            "file too large to serve ({size} bytes; limit {max})"
-        )));
-    }
-    let bytes = tokio::fs::read(&abs).await?;
-    serve_loaded_bytes(norm, bytes, headers)
-}
-
+/// `Range` support over bytes already loaded — the node reads the file and
+/// sends them, so serving never touches the control plane's filesystem.
 pub fn serve_loaded_bytes(
     norm: String,
     bytes: Vec<u8>,
@@ -340,19 +316,15 @@ mod tests {
         assert_eq!(svg.content.as_deref(), Some("<svg/>"));
     }
 
+    /// The size cap lives on the node now, which reads the file and refuses
+    /// oversized ones before sending; what remains here is turning those bytes
+    /// into a full or partial response.
     #[tokio::test]
-    async fn serve_bytes_full_range_and_limit() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().to_path_buf();
+    async fn serve_loaded_bytes_full_and_range() {
         let payload: Vec<u8> = (0..=9).collect();
-        tokio::fs::write(root.join("pic.png"), &payload)
-            .await
-            .unwrap();
 
         // Full body carries the real content type and length.
-        let full = serve_bytes(root.clone(), "pic.png", &HeaderMap::new(), RAW_MAX_BYTES)
-            .await
-            .unwrap();
+        let full = serve_loaded_bytes("pic.png".into(), payload.clone(), &HeaderMap::new()).unwrap();
         assert_eq!(full.status(), StatusCode::OK);
         assert_eq!(full.headers()[header::CONTENT_TYPE], "image/png");
         assert_eq!(full.headers()[header::ACCEPT_RANGES], "bytes");
@@ -361,17 +333,16 @@ mod tests {
         // A Range request yields 206 with just the slice.
         let mut headers = HeaderMap::new();
         headers.insert(header::RANGE, hv("bytes=2-4"));
-        let partial = serve_bytes(root.clone(), "pic.png", &headers, RAW_MAX_BYTES)
-            .await
-            .unwrap();
+        let partial = serve_loaded_bytes("pic.png".into(), payload.clone(), &headers).unwrap();
         assert_eq!(partial.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(partial.headers()[header::CONTENT_RANGE], "bytes 2-4/10");
         assert_eq!(body_bytes(partial).await, vec![2, 3, 4]);
 
-        // Over the cap is refused rather than buffered.
-        let err = serve_bytes(root, "pic.png", &HeaderMap::new(), 4)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ApiError::BadRequest(_)));
+        // A range past the end is refused rather than clamped or panicking.
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, hv("bytes=20-30"));
+        let unsatisfiable = serve_loaded_bytes("pic.png".into(), payload, &headers).unwrap();
+        assert_eq!(unsatisfiable.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        assert_eq!(unsatisfiable.headers()[header::CONTENT_RANGE], "bytes */10");
     }
 }

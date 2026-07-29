@@ -9,7 +9,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use super::node_proxy;
-use super::routes::{repo_path, repos_root, validate_repo_name, ApiError, ApiResult};
+use super::routes::{validate_repo_name, ApiError, ApiResult};
 use crate::node_protocol::NodeRequestKind;
 use crate::node_runtime::{RepoDeleteRequest, RepoRenameRequest};
 use crate::{git, AppState};
@@ -40,35 +40,18 @@ pub(super) async fn patch_repo(
     let new_name = req.name.trim().to_string();
     validate_repo_name(&new_name)?;
 
-    if state.node_protocol_required {
-        let node_id = node_proxy::repo_node(&state, &old_name).await?;
-        let result = node_proxy::request(
-            &state,
-            node_id,
-            NodeRequestKind::RepoRename,
-            serde_json::to_value(RepoRenameRequest { old_name, new_name })
-                .map_err(anyhow::Error::from)?,
-        )
-        .await?;
-        return Ok(Json(
-            serde_json::from_value(result).map_err(anyhow::Error::from)?,
-        ));
-    }
-    let root = repos_root(&state)?;
-    let old_path = repo_path(&state, &old_name)?;
-    if old_name == new_name {
-        return Ok(Json(RepoView {
-            name: old_name,
-            path: old_path.to_string_lossy().into_owned(),
-        }));
-    }
-
-    let new_path = rename_repo_runtime(&state.pool, &root, &old_name, &new_name).await?;
-
-    Ok(Json(RepoView {
-        name: new_name,
-        path: new_path.to_string_lossy().into_owned(),
-    }))
+    let node_id = node_proxy::repo_node(&state, &old_name).await?;
+    let result = node_proxy::request(
+        &state,
+        node_id,
+        NodeRequestKind::RepoRename,
+        serde_json::to_value(RepoRenameRequest { old_name, new_name })
+            .map_err(anyhow::Error::from)?,
+    )
+    .await?;
+    Ok(Json(
+        serde_json::from_value(result).map_err(anyhow::Error::from)?,
+    ))
 }
 
 pub(super) async fn delete_repo(
@@ -78,29 +61,18 @@ pub(super) async fn delete_repo(
 ) -> ApiResult<StatusCode> {
     validate_repo_name(&name)?;
 
-    if state.node_protocol_required {
-        let node_id = node_proxy::repo_node(&state, &name).await?;
-        node_proxy::request(
-            &state,
-            node_id,
-            NodeRequestKind::RepoDelete,
-            serde_json::to_value(RepoDeleteRequest {
-                name,
-                force: q.force.unwrap_or(false),
-            })
-            .map_err(anyhow::Error::from)?,
-        )
-        .await?;
-        return Ok(StatusCode::NO_CONTENT);
-    }
-    delete_repo_runtime(
-        &state.pool,
-        &state.repos_root,
-        &name,
-        q.force.unwrap_or(false),
+    let node_id = node_proxy::repo_node(&state, &name).await?;
+    node_proxy::request(
+        &state,
+        node_id,
+        NodeRequestKind::RepoDelete,
+        serde_json::to_value(RepoDeleteRequest {
+            name,
+            force: q.force.unwrap_or(false),
+        })
+        .map_err(anyhow::Error::from)?,
     )
     .await?;
-
     Ok(StatusCode::NO_CONTENT)
 }
 

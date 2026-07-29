@@ -16,6 +16,8 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+mod common;
+
 type RetrievalAdminMockSeen = Arc<Mutex<Vec<(Option<String>, serde_json::Value)>>>;
 
 fn test_db_url() -> Option<String> {
@@ -65,13 +67,13 @@ impl Harness {
     async fn new() -> Self {
         let pool = fresh_pool().await;
         let tmp_repos = tempfile::tempdir().unwrap();
-        let state = AppState::new(
+        let (state, _runtime) = common::state_with_loopback_node(
             pool,
-            tmp_repos.path().to_path_buf(),
-            tmp_repos.path().join(".workspaces"),
-            tmp_repos.path().join(".library"),
-            std::sync::Arc::new(sulion::ingest::Ingester::new()),
-        );
+            tmp_repos.path(),
+            &tmp_repos.path().join(".workspaces"),
+            &tmp_repos.path().join(".library"),
+        )
+        .await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let router = app(state.clone());
@@ -91,12 +93,9 @@ impl Harness {
     }
 
     async fn shutdown_sessions(&self) {
-        // Best-effort cleanup so later tests don't trip over live PTYs.
-        if let Ok(list) = self.state.pty.list().await {
-            for meta in list {
-                let _ = self.state.pty.delete(meta.id).await;
-            }
-        }
+        // Through the node, which owns the processes. Deleting through
+        // `state.pty` reaped nothing and left the shells running.
+        common::shutdown_node_sessions(&self.state).await;
     }
 }
 
@@ -423,7 +422,11 @@ async fn metrics_endpoint_rolls_up_usage_and_plan_flow() {
 }
 
 #[tokio::test]
-async fn create_session_with_missing_repo_returns_400() {
+/// The node owns the repos directory and answers a name it cannot find with
+/// not-found. This has been the shipped behaviour all along — standalone has
+/// always routed session creation through its in-process node — the previous
+/// 400 came from the local path no deployment used.
+async fn create_session_with_missing_repo_returns_404() {
     let h = Harness::new().await;
     let resp = h
         .client
@@ -432,7 +435,7 @@ async fn create_session_with_missing_repo_returns_400() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 404);
 }
 
 #[tokio::test]
@@ -526,16 +529,20 @@ async fn history_returns_events_after_ingest_and_correlate() {
 
     // Create PTY via the API so we have a real pty row.
     std::fs::create_dir_all(h.repos_root().join("r")).unwrap();
-    let created: serde_json::Value = h
+    let response = h
         .client
         .post(format!("{}/api/sessions", h.base))
         .json(&json!({ "repo": "r" }))
         .send()
         .await
-        .unwrap()
-        .json()
-        .await
         .unwrap();
+    let status = response.status();
+    let created: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(
+        status,
+        reqwest::StatusCode::CREATED,
+        "create failed: {created}"
+    );
     let pty_id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
 
     // Fake a correlation (like the SessionStart hook would).
@@ -728,16 +735,16 @@ async fn history_returns_events_after_ingest_and_correlate() {
 async fn history_with_no_current_session_returns_empty() {
     let h = Harness::new().await;
     std::fs::create_dir_all(h.repos_root().join("r")).unwrap();
-    let created: serde_json::Value = h
+    let response = h
         .client
         .post(format!("{}/api/sessions", h.base))
         .json(&json!({ "repo": "r" }))
         .send()
         .await
-        .unwrap()
-        .json()
-        .await
         .unwrap();
+    let status = response.status();
+    let created: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(status, reqwest::StatusCode::CREATED, "create failed: {created}");
     let pty_id = created["id"].as_str().unwrap();
 
     let body: serde_json::Value = h
@@ -1132,6 +1139,10 @@ async fn file_trace_returns_related_turns() {
         .upsert_repo("r", &h.repos_root().join("r"))
         .await
         .unwrap();
+    // upsert_repo only records runtime state; the route resolves the owning
+    // node from the `repos` row, which a node writes when it claims what it
+    // discovered.
+    common::register_repo(&h.state.pool, "r", &h.repos_root().join("r")).await;
 
     let response = h
         .client
@@ -1159,6 +1170,7 @@ async fn repo_file_preview_defers_binary_media_and_raw_route_streams_bytes() {
     std::fs::write(h.repos_root().join("r/readme.md"), "# hi\n").unwrap();
     let png: [u8; 12] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 1, 2, 3];
     std::fs::write(h.repos_root().join("r/assets/logo.png"), png).unwrap();
+    common::register_repo(&h.state.pool, "r", &h.repos_root().join("r")).await;
 
     // Text preview inlines content with its real MIME.
     let md: serde_json::Value = h
@@ -1305,6 +1317,7 @@ async fn rename_repo_moves_checkout_and_updates_session_records() {
         .upsert_repo("oldrepo", &old_path)
         .await
         .unwrap();
+    common::register_repo(&h.state.pool, "oldrepo", &old_path).await;
     let pty_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO pty_sessions (id, repo, working_dir, state, created_at) \
@@ -1391,8 +1404,10 @@ async fn health_endpoint_reports_ok_when_db_reachable() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "ok");
     assert_eq!(body["db"], "ok");
-    assert_eq!(body["role"], "standalone");
-    assert_eq!(body["development_node"], "local");
+    assert_eq!(body["role"], "control-plane");
+    // The harness attaches an in-process node over loopback, which is what
+    // standalone does, so the node reads as connected rather than absent.
+    assert_eq!(body["development_node"], "connected");
 }
 
 #[tokio::test]
@@ -1595,14 +1610,13 @@ async fn published_plan_lifecycle_projects_into_app_state() {
 async fn node_mode_delete_removes_husks_without_a_connected_node() {
     let pool = fresh_pool().await;
     let tmp_repos = tempfile::tempdir().unwrap();
-    let state = AppState::new_with_auth_and_node_mode(
+    let state = AppState::new_with_auth(
         pool.clone(),
         tmp_repos.path().to_path_buf(),
         tmp_repos.path().join(".workspaces"),
         tmp_repos.path().join(".library"),
         std::sync::Arc::new(sulion::ingest::Ingester::new()),
         None,
-        true,
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

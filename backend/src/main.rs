@@ -48,14 +48,13 @@ async fn main() -> anyhow::Result<()> {
     let ingester_cfg = IngesterConfig::new(cfg.claude_projects_dir.clone())
         .with_codex_sessions_dir(cfg.codex_sessions_dir.clone());
 
-    let state = AppState::new_with_auth_and_node_mode(
+    let state = AppState::new_with_auth(
         pool.clone(),
         cfg.repos_root.clone(),
         cfg.workspaces_root.clone(),
         cfg.library_root.clone(),
         ingester.clone(),
         auth,
-        true,
     );
     let node_tls = apply_node_policy(&state).await?;
     if let Some(node) = cfg.standalone_node.as_ref() {

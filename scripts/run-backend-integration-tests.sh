@@ -21,6 +21,14 @@ TEST_TARGETS=(
 )
 INTEGRATION_FEATURE="integration-tests"
 
+# Hard ceiling on the cargo invocation. The suite's own work is roughly 100
+# seconds; the rest is the optimised build. A run that passes this is wedged,
+# not slow, and the usual cause is a test leaving a PTY child alive: the child
+# inherits the test binary's stdout, so the pipe never closes and the runner
+# waits on a test that already finished. Kill it and say so rather than let it
+# sit there looking busy.
+SUITE_TIMEOUT_SECONDS="${SULION_TEST_TIMEOUT_SECONDS:-1200}"
+
 DOCKER_CONTAINER_NAME=""
 DOCKER_CONTAINER_PORT="5432"
 DOCKER_DB_HOST="127.0.0.1"
@@ -144,10 +152,24 @@ run_targets() {
   done
 
   echo "==> cargo test --release --features ${INTEGRATION_FEATURE} ${cargo_target_args[*]} -- --test-threads=1"
+  local status=0
+  # `timeout` sends TERM to the whole process group after --kill-after, so a
+  # leaked PTY child cannot keep the run alive past the ceiling. stdin is closed
+  # so nothing can block waiting for input that will never arrive.
   (
     cd "${BACKEND_DIR}"
-    cargo test --release --features "${INTEGRATION_FEATURE}" "${cargo_target_args[@]}" -- --test-threads=1
-  )
+    timeout --signal=TERM --kill-after=30s "${SUITE_TIMEOUT_SECONDS}" \
+      cargo test --release --features "${INTEGRATION_FEATURE}" "${cargo_target_args[@]}" \
+      -- --test-threads=1 < /dev/null
+  ) || status=$?
+
+  if [[ "${status}" -eq 124 || "${status}" -eq 137 ]]; then
+    echo "sulion: integration suite exceeded ${SUITE_TIMEOUT_SECONDS}s and was killed" >&2
+    echo "sulion: the suite runs in ~100s; a timeout means a test is wedged, most" >&2
+    echo "sulion: often a leaked PTY child holding the test binary's stdout open." >&2
+    echo "sulion: raise the ceiling with SULION_TEST_TIMEOUT_SECONDS if that is wrong." >&2
+  fi
+  return "${status}"
 }
 
 ensure_test_db

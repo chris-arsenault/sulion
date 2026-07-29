@@ -6,11 +6,12 @@
 //! principal. Gated on `SULION_TEST_DB`.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use serde_json::json;
-use sulion::{app, db, AppState};
+use sulion::{app, db};
 use tokio::net::TcpListener;
+
+mod common;
 
 fn test_db_url() -> Option<String> {
     std::env::var("SULION_TEST_DB").ok()
@@ -39,13 +40,13 @@ impl Harness {
         let pool = fresh_pool().await;
         let tmp = tempfile::tempdir().unwrap();
         let repos_root = tmp.path().to_path_buf();
-        let state = AppState::new(
+        let (state, _runtime) = common::state_with_loopback_node(
             pool,
-            repos_root.clone(),
-            tmp.path().join(".workspaces"),
-            tmp.path().join(".library"),
-            Arc::new(sulion::ingest::Ingester::new()),
-        );
+            &repos_root,
+            &tmp.path().join(".workspaces"),
+            &tmp.path().join(".library"),
+        )
+        .await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let router = app(state);
@@ -65,8 +66,18 @@ impl Harness {
     }
 
     /// Create an (empty) repo directory so `repo_path` resolves.
-    fn make_repo(&self, name: &str) {
-        std::fs::create_dir_all(self.repos_root.join(name)).unwrap();
+    /// Creates the repo the way a client does. A bare `mkdir` is not enough:
+    /// repo routes resolve the owning node from the `repos` row, which only
+    /// exists once the node has created or discovered the repo.
+    async fn make_repo(&self, name: &str) {
+        let response = self
+            .client
+            .post(self.url("/api/repos"))
+            .json(&json!({ "name": name }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::CREATED);
     }
 
     /// Drive pairing all the way to a usable device token.
@@ -110,7 +121,7 @@ impl Harness {
 #[tokio::test]
 async fn pairing_then_ingest_writes_file_to_repo() {
     let h = Harness::new().await;
-    h.make_repo("atlas");
+    h.make_repo("atlas").await;
 
     // Poll before approval → 428 authorization_pending (covers the pending path).
     let start: serde_json::Value = h
@@ -204,7 +215,7 @@ async fn pairing_then_ingest_writes_file_to_repo() {
 #[tokio::test]
 async fn ingest_rejects_missing_and_bad_tokens() {
     let h = Harness::new().await;
-    h.make_repo("atlas");
+    h.make_repo("atlas").await;
 
     // No Authorization header.
     let resp = h

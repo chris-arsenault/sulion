@@ -1,7 +1,6 @@
 //! `/api/sessions*` handlers — spawning, updating, deleting, and history
 //! reads. Ambient session listing is owned by `/api/app-state`.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
@@ -11,10 +10,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::node_proxy;
-use super::routes::{repos_root, ApiError, ApiResult};
+use super::routes::{ApiError, ApiResult};
 use super::session_launch::{
-    protocol_working_dir, pty_workspace_metadata, requested_workspace_mode,
-    resolve_protocol_launch, resolve_session_launch, resolve_session_workspace,
+    protocol_working_dir, requested_workspace_mode, resolve_protocol_launch,
     validate_workspace_request,
 };
 use crate::agent::AgentType;
@@ -23,7 +21,7 @@ use crate::node_protocol::NodeRequestKind;
 use crate::node_runtime::{
     AgentRequest, ResourceRequest, SessionCreateRequest, SessionInputRequest,
 };
-use crate::pty::{self, AgentRuntimeMetadata, PtyMetadata, SpawnParams};
+use crate::pty::{self, AgentRuntimeMetadata, PtyMetadata};
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -184,56 +182,7 @@ pub(super) async fn create_session(
     if req.repo.is_empty() {
         return Err(ApiError::BadRequest("repo must not be empty".into()));
     }
-    if state.node_protocol_required {
-        return create_session_on_node(&state, req).await;
-    }
-
-    // Resolve the repo root for fixture lookup. Workspace creation is
-    // intentionally deferred until after all launch/resume validation
-    // succeeds so bad requests don't leave stray worktrees behind.
-    let repos_root = repos_root(&state)?;
-    let workspace_mode = requested_workspace_mode(&req);
-    let launch = resolve_session_launch(&req, &repos_root)?;
-
-    let workspace_record = resolve_session_workspace(&state, &req, workspace_mode).await?;
-    let workspace_root = workspace_record.path.clone();
-    let working_dir = match (&req.working_dir, workspace_mode) {
-        (Some(p), "main") => PathBuf::from(p),
-        (Some(_), "isolated") => {
-            return Err(ApiError::BadRequest(
-                "working_dir is only supported with workspace_mode=main".into(),
-            ));
-        }
-        (Some(_), _) => unreachable!("workspace mode validated in resolve_session_workspace"),
-        (None, _) => workspace_root,
-    };
-    if !working_dir.exists() {
-        return Err(ApiError::BadRequest(format!(
-            "working dir does not exist: {}",
-            working_dir.display()
-        )));
-    }
-
-    let params = SpawnParams {
-        id: None,
-        node_id: None,
-        node_boot_id: None,
-        repo: req.repo.clone(),
-        working_dir,
-        workspace: Some(pty_workspace_metadata(&workspace_record)),
-        shell: launch.shell,
-        args: launch.args,
-        cols: req.cols.unwrap_or(120),
-        rows: req.rows.unwrap_or(32),
-        initial_agent_runtime_agent: launch.initial_agent_runtime_agent,
-    };
-    let meta = state.pty.spawn(params).await?;
-    state
-        .workspace_state
-        .bind_created_session(workspace_record.id, meta.id)
-        .await
-        .map_err(ApiError::Internal)?;
-    Ok((StatusCode::CREATED, Json(SessionView::from(meta))))
+    create_session_on_node(&state, req).await
 }
 
 async fn create_session_on_node(
@@ -246,7 +195,7 @@ async fn create_session_on_node(
     let working_dir = req
         .working_dir
         .as_deref()
-        .map(|path| protocol_working_dir(&req.repo, path))
+        .map(|path| protocol_working_dir(&state.repos_root, &req.repo, path))
         .transpose()?;
     let node_id = node_proxy::default_node(state).await?;
     let session_id = Uuid::new_v4();
@@ -297,24 +246,18 @@ pub(super) async fn start_session_agent(
         )));
     }
 
-    if state.node_protocol_required {
-        let node_id = node_proxy::session_node(&state, id).await?;
-        node_proxy::request(
-            &state,
-            node_id,
-            NodeRequestKind::SessionAgentStart,
-            serde_json::to_value(AgentRequest {
-                session_id: id,
-                agent: agent.as_str().into(),
-            })
-            .map_err(anyhow::Error::from)?,
-        )
-        .await?;
-        return Ok(StatusCode::ACCEPTED);
-    }
-    state.pty.mark_agent_starting(id, agent.as_str()).await?;
-    let command = format!("{}\r", default_agent_launch_command(agent, false));
-    state.pty.send_input(id, command.into_bytes()).await?;
+    let node_id = node_proxy::session_node(&state, id).await?;
+    node_proxy::request(
+        &state,
+        node_id,
+        NodeRequestKind::SessionAgentStart,
+        serde_json::to_value(AgentRequest {
+            session_id: id,
+            agent: agent.as_str().into(),
+        })
+        .map_err(anyhow::Error::from)?,
+    )
+    .await?;
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -331,18 +274,14 @@ pub(super) async fn interrupt_session_agent(
     if !matches!(meta.agent_runtime.state.as_str(), "starting" | "running") {
         return Err(ApiError::BadRequest("agent is not running".into()));
     }
-    if state.node_protocol_required {
-        let node_id = node_proxy::session_node(&state, id).await?;
-        node_proxy::request(
-            &state,
-            node_id,
-            NodeRequestKind::SessionAgentInterrupt,
-            serde_json::to_value(ResourceRequest { id }).map_err(anyhow::Error::from)?,
-        )
-        .await?;
-        return Ok(StatusCode::ACCEPTED);
-    }
-    state.pty.send_input(id, agent_interrupt_input()).await?;
+    let node_id = node_proxy::session_node(&state, id).await?;
+    node_proxy::request(
+        &state,
+        node_id,
+        NodeRequestKind::SessionAgentInterrupt,
+        serde_json::to_value(ResourceRequest { id }).map_err(anyhow::Error::from)?,
+    )
+    .await?;
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -368,11 +307,7 @@ pub(super) async fn send_session_prompt(
     if meta.agent_runtime.state != "running" {
         return Err(ApiError::BadRequest("agent is not running".into()));
     }
-    let node_id = if state.node_protocol_required {
-        Some(node_proxy::session_node(&state, id).await?)
-    } else {
-        None
-    };
+    let node_id = node_proxy::session_node(&state, id).await?;
     for (index, chunk) in prompt_input_chunks(&req.text).into_iter().enumerate() {
         if index > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(
@@ -380,18 +315,14 @@ pub(super) async fn send_session_prompt(
             ))
             .await;
         }
-        if let Some(node_id) = node_id {
-            node_proxy::request(
-                &state,
-                node_id,
-                NodeRequestKind::SessionInput,
-                serde_json::to_value(SessionInputRequest::from_bytes(id, &chunk))
-                    .map_err(anyhow::Error::from)?,
-            )
-            .await?;
-        } else {
-            state.pty.send_input(id, chunk).await?;
-        }
+        node_proxy::request(
+            &state,
+            node_id,
+            NodeRequestKind::SessionInput,
+            serde_json::to_value(SessionInputRequest::from_bytes(id, &chunk))
+                .map_err(anyhow::Error::from)?,
+        )
+        .await?;
     }
     crate::activity::set(
         &state.pool,
@@ -411,37 +342,35 @@ pub(super) async fn delete_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    if state.node_protocol_required {
-        let (node_id, session_state): (Option<Uuid>, String) =
-            sqlx::query_as("SELECT node_id, state FROM pty_sessions WHERE id = $1")
-                .bind(id)
-                .fetch_optional(&state.pool)
-                .await?
-                .ok_or(ApiError::NotFound)?;
-        // Forward only when the owning node is connected and can reap the
-        // process. Husks — orphaned or ended sessions, including rows from
-        // the legacy local runtime or a node identity that no longer exists
-        // — have no process anywhere, and refusing to delete them strands
-        // them in the sidebar forever (the resume flow deletes the husk it
-        // replaces).
-        match node_id {
-            Some(node_id) if state.node_control.is_connected(node_id).await => {
-                node_proxy::request(
-                    &state,
-                    node_id,
-                    NodeRequestKind::SessionDelete,
-                    serde_json::to_value(ResourceRequest { id }).map_err(anyhow::Error::from)?,
-                )
-                .await?;
-                return Ok(StatusCode::NO_CONTENT);
-            }
-            _ if session_state == "live" => {
-                return Err(ApiError::Unavailable(
-                    "session's development node is not connected".into(),
-                ));
-            }
-            _ => {}
+    let (node_id, session_state): (Option<Uuid>, String) =
+        sqlx::query_as("SELECT node_id, state FROM pty_sessions WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(ApiError::NotFound)?;
+    // Forward only when the owning node is connected and can reap the
+    // process. Husks — orphaned or ended sessions, including rows from
+    // the legacy local runtime or a node identity that no longer exists
+    // — have no process anywhere, and refusing to delete them strands
+    // them in the sidebar forever (the resume flow deletes the husk it
+    // replaces).
+    match node_id {
+        Some(node_id) if state.node_control.is_connected(node_id).await => {
+            node_proxy::request(
+                &state,
+                node_id,
+                NodeRequestKind::SessionDelete,
+                serde_json::to_value(ResourceRequest { id }).map_err(anyhow::Error::from)?,
+            )
+            .await?;
+            return Ok(StatusCode::NO_CONTENT);
         }
+        _ if session_state == "live" => {
+            return Err(ApiError::Unavailable(
+                "session's development node is not connected".into(),
+            ));
+        }
+        _ => {}
     }
     state.pty.delete(id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -602,52 +531,9 @@ pub(super) async fn drop_session_ws(
     }
 }
 
-pub(super) fn shell_quote(path: &std::path::Path) -> String {
-    shell_quote_str(&path.to_string_lossy())
-}
-
-pub(super) fn shell_quote_str(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
 pub(super) fn parse_launch_agent(raw: &str) -> ApiResult<AgentType> {
     AgentType::parse(raw.trim())
         .map_err(|_| ApiError::BadRequest("agent must be one of: claude, codex".to_string()))
-}
-
-pub(super) fn default_agent_launch_command(agent: AgentType, append_exec_bash: bool) -> String {
-    match agent {
-        AgentType::Claude => agent_launch_shell_command(
-            agent,
-            &["--dangerously-skip-permissions".to_string()],
-            append_exec_bash,
-        ),
-        AgentType::Codex => {
-            agent_launch_shell_command(agent, &["--yolo".to_string()], append_exec_bash)
-        }
-    }
-}
-
-pub(super) fn agent_launch_shell_command(
-    agent: AgentType,
-    agent_args: &[String],
-    append_exec_bash: bool,
-) -> String {
-    let mut parts = vec![
-        shell_quote(&crate::agent::binary_path()),
-        "agent-launcher".to_string(),
-        "--type".to_string(),
-        agent.as_str().to_string(),
-        "--mode".to_string(),
-        "real".to_string(),
-        "--".to_string(),
-    ];
-    parts.extend(agent_args.iter().map(|arg| shell_quote_str(arg)));
-    let mut command = parts.join(" ");
-    if append_exec_bash {
-        command.push_str(" ; exec bash");
-    }
-    command
 }
 
 const AGENT_PROMPT_SUBMIT_DELAY_MS: u64 = 50;
@@ -665,10 +551,6 @@ fn prompt_input_chunks(text: &str) -> Vec<Vec<u8>> {
 
 fn agent_submit_input() -> Vec<u8> {
     b"\r".to_vec()
-}
-
-fn agent_interrupt_input() -> Vec<u8> {
-    b"\x1b".to_vec()
 }
 
 #[cfg(test)]
@@ -703,8 +585,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn agent_interrupt_sends_escape() {
-        assert_eq!(agent_interrupt_input(), b"\x1b");
-    }
 }

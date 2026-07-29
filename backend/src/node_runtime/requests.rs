@@ -192,7 +192,11 @@ impl NodeRuntime {
                 let root = self.repo_root(&request.repo)?;
                 let path = request.upload.path.clone();
                 let bytes = request.upload.into_bytes()?;
-                let written = crate::workspace::write_file(root, path, bytes.clone()).await?;
+                // Rejected paths (traversal, symlink escape) are the client's
+                // fault, so they must not surface as a node malfunction.
+                let written = crate::workspace::write_file(root, path, bytes.clone())
+                    .await
+                    .map_err(|err| RuntimeError::BadRequest(err.to_string()))?;
                 self.repo_state.request_refresh(&request.repo).await?;
                 Ok(json!({"path": written, "size": bytes.len()}))
             }
@@ -256,9 +260,14 @@ impl NodeRuntime {
         match kind {
             NodeRequestKind::WorkspaceDelete => {
                 let request: (ResourceRequest, DeleteWorkspaceOptions) = decode(request)?;
+                // Refusals here are things the caller can act on -- live
+                // sessions, uncommitted work, unmerged commits -- so they are
+                // bad requests, not node failures. The generic conversion would
+                // report them as "development node unavailable".
                 self.workspace_state
                     .delete_workspace(request.0.id, request.1)
-                    .await?;
+                    .await
+                    .map_err(|err| RuntimeError::BadRequest(err.to_string()))?;
                 Ok(Value::Null)
             }
             NodeRequestKind::WorkspaceRefresh => {
@@ -287,8 +296,9 @@ impl NodeRuntime {
                 let workspace = self.load_workspace(request.workspace_id).await?;
                 let path = request.upload.path.clone();
                 let bytes = request.upload.into_bytes()?;
-                let written =
-                    crate::workspace::write_file(workspace.path, path, bytes.clone()).await?;
+                let written = crate::workspace::write_file(workspace.path, path, bytes.clone())
+                    .await
+                    .map_err(|err| RuntimeError::BadRequest(err.to_string()))?;
                 self.workspace_state
                     .request_refresh(request.workspace_id)
                     .await?;
@@ -414,7 +424,17 @@ impl NodeRuntime {
     }
 
     async fn raw_file(&self, root: PathBuf, path: String) -> Result<Value, RuntimeError> {
-        let (_, bytes) = crate::workspace::read_file(root, path.clone()).await?;
+        // Three outcomes the caller must be able to tell apart. A rejected
+        // path is the client's fault (400), an absent file is a miss (404),
+        // and only a genuine read failure is the node's problem. Collapsing
+        // any of them into the generic error reports it as "development node
+        // unavailable" -- a 503 blaming the node for an ordinary request.
+        let (absolute, _) = crate::workspace::resolve_in_repo(&root, &path)
+            .map_err(|err| RuntimeError::BadRequest(err.to_string()))?;
+        if !absolute.is_file() {
+            return Err(RuntimeError::NotFound(format!("no such file: {path}")));
+        }
+        let bytes = tokio::fs::read(&absolute).await?;
         if bytes.len() > RAW_FILE_MAX_BYTES {
             return Err(RuntimeError::BadRequest(format!(
                 "file exceeds {RAW_FILE_MAX_BYTES} bytes"

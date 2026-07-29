@@ -49,7 +49,14 @@ pub fn resolve_in_repo(repo_root: &Path, rel: &str) -> anyhow::Result<(PathBuf, 
             }
         }
     }
-    let target = repo_root.join(rel);
+    // `join("")` appends a separator, so the repo root itself would come back
+    // as `/repo/` and compare unequal to every other spelling of the same
+    // directory. An empty or `.` relative path means the root.
+    let target = if rel.is_empty() || rel == "." {
+        repo_root.to_path_buf()
+    } else {
+        repo_root.join(rel)
+    };
     // If the path exists, canonicalize both sides and verify containment.
     if target.exists() {
         let root_real = repo_root.canonicalize()?;
@@ -225,16 +232,6 @@ async fn list_visible_paths(
             .collect::<std::collections::HashSet<_>>())
     })
     .await?
-}
-
-/// Read a file's bytes. Caller applies size caps + binary detection.
-pub async fn read_file(repo_root: PathBuf, rel: String) -> anyhow::Result<(PathBuf, Vec<u8>)> {
-    let (abs, _) = resolve_in_repo(&repo_root, &rel)?;
-    if !abs.is_file() {
-        anyhow::bail!("not a file: {}", abs.display());
-    }
-    let bytes = tokio::fs::read(&abs).await?;
-    Ok((abs, bytes))
 }
 
 /// Write bytes to a repo-relative path. Rejects symlink targets to

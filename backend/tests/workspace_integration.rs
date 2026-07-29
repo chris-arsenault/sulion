@@ -8,6 +8,8 @@ use sulion::{app, db, AppState};
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
+mod common;
+
 fn test_db_url() -> Option<String> {
     std::env::var("SULION_TEST_DB").ok()
 }
@@ -44,13 +46,13 @@ impl Harness {
         let workspaces_root = tmp.path().join("workspaces");
         std::fs::create_dir_all(&repos_root).unwrap();
         std::fs::create_dir_all(&workspaces_root).unwrap();
-        let state = AppState::new(
+        let (state, _runtime) = common::state_with_loopback_node(
             pool,
-            repos_root,
-            workspaces_root,
-            tmp.path().join("library"),
-            Arc::new(sulion::ingest::Ingester::new()),
-        );
+            &repos_root,
+            &workspaces_root,
+            &tmp.path().join("library"),
+        )
+        .await;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let router = app(state.clone());
@@ -66,11 +68,7 @@ impl Harness {
     }
 
     async fn shutdown_sessions(&self) {
-        if let Ok(list) = self.state.pty.list().await {
-            for meta in list {
-                let _ = self.state.pty.delete(meta.id).await;
-            }
-        }
+        common::shutdown_node_sessions(&self.state).await;
     }
 }
 
@@ -126,7 +124,7 @@ async fn isolated_session_creates_git_worktree_workspace() {
     assert_eq!(dirty["workspace_id"], workspace_id.to_string());
     assert_eq!(dirty["dirty_by_path"]["agent.txt"], "??");
 
-    h.state.pty.delete(session_id).await.unwrap();
+    common::delete_node_session(&h.state, session_id).await;
 }
 
 #[tokio::test]
@@ -152,7 +150,7 @@ async fn delete_workspace_removes_worktree_branch_and_row() {
     let workspace_path = PathBuf::from(workspace["path"].as_str().unwrap());
     let branch_name = workspace["branch_name"].as_str().unwrap().to_string();
 
-    h.state.pty.delete(session_id).await.unwrap();
+    common::delete_node_session(&h.state, session_id).await;
     let resp = h
         .client
         .delete(format!("{}/api/workspaces/{workspace_id}", h.base))
@@ -199,7 +197,7 @@ async fn delete_workspace_rejects_unmerged_branch_commits_without_force() {
     run(&workspace_path, &["add", "agent.txt"]);
     run(&workspace_path, &["commit", "-m", "agent work"]);
 
-    h.state.pty.delete(session_id).await.unwrap();
+    common::delete_node_session(&h.state, session_id).await;
     let resp = h
         .client
         .delete(format!("{}/api/workspaces/{workspace_id}", h.base))
@@ -251,7 +249,7 @@ async fn delete_workspace_allows_branch_commits_merged_into_target() {
     run(&workspace_path, &["commit", "-m", "agent work"]);
     run(&repo_path, &["merge", &branch_name]);
 
-    h.state.pty.delete(session_id).await.unwrap();
+    common::delete_node_session(&h.state, session_id).await;
     let resp = h
         .client
         .delete(format!("{}/api/workspaces/{workspace_id}", h.base))
@@ -298,7 +296,7 @@ async fn delete_workspace_rejects_live_sessions_and_dirty_worktrees() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(body["error"].as_str().unwrap().contains("live or orphaned"));
 
-    h.state.pty.delete(session_id).await.unwrap();
+    common::delete_node_session(&h.state, session_id).await;
     std::fs::write(workspace_path.join("agent.txt"), "changed\n").unwrap();
 
     let resp = h
@@ -347,7 +345,7 @@ async fn delete_workspace_removes_missing_worktree_registration() {
     let workspace_path = PathBuf::from(workspace["path"].as_str().unwrap());
     let branch_name = workspace["branch_name"].as_str().unwrap().to_string();
 
-    h.state.pty.delete(session_id).await.unwrap();
+    common::delete_node_session(&h.state, session_id).await;
     std::fs::remove_dir_all(&workspace_path).unwrap();
 
     let resp = h

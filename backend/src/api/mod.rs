@@ -81,14 +81,11 @@ struct Health {
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Health>) {
-    let role = if state.node_protocol_required {
-        "control-plane"
-    } else {
-        "standalone"
-    };
-    let development_node = if !state.node_protocol_required {
-        "local"
-    } else if state.node_control.active_connection_count().await > 0 {
+    // Every deployment is a control plane; standalone differs only in running
+    // its node in-process, which shows up as a connected development node
+    // rather than a different role.
+    let role = "control-plane";
+    let development_node = if state.node_control.active_connection_count().await > 0 {
         "connected"
     } else {
         "unavailable"

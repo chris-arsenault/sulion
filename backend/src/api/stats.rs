@@ -95,11 +95,7 @@ pub async fn collect_stats(state: &AppState) -> anyhow::Result<StatsResponse> {
     let node = state.node_control.host_stats().await;
     let snapshot = stats_snapshot(&state.pool).await?;
     let pty = PtyStats {
-        live_sessions: if state.node_protocol_required {
-            snapshot.live_pty_sessions.max(0) as usize
-        } else {
-            state.pty.live_count().await
-        },
+        live_sessions: snapshot.live_pty_sessions.max(0) as usize,
         live_agent_sessions: snapshot.live_agent_sessions,
     };
     let db = DbStats {

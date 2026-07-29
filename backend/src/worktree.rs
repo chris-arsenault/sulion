@@ -160,11 +160,27 @@ impl WorkspaceManager {
             }
             None => {
                 let id = requested_id.unwrap_or_else(Uuid::new_v4);
-                sqlx::query(
+                // A node's periodic workspace sync ensures the same main
+                // workspace this call does, so the two race whenever a repo is
+                // first used. `path` is unique, so the loser of that race would
+                // otherwise fail the whole session launch on a constraint
+                // violation. Converge on whichever row landed first instead.
+                let landed: Uuid = sqlx::query_scalar(
                     "INSERT INTO workspaces \
                         (id, repo_name, kind, path, branch_name, base_ref, base_sha, merge_target, \
                          state, next_status_at, created_at, updated_at, node_id) \
-                     VALUES ($1, $2, 'main', $3, $4, $4, $5, $4, 'active', NOW(), NOW(), NOW(), $6)",
+                     VALUES ($1, $2, 'main', $3, $4, $4, $5, $4, 'active', NOW(), NOW(), NOW(), $6) \
+                     ON CONFLICT (path) DO UPDATE SET \
+                        repo_name = EXCLUDED.repo_name, \
+                        branch_name = EXCLUDED.branch_name, \
+                        base_ref = EXCLUDED.base_ref, \
+                        base_sha = EXCLUDED.base_sha, \
+                        merge_target = EXCLUDED.merge_target, \
+                        state = 'active', \
+                        next_status_at = NOW(), \
+                        node_id = COALESCE(workspaces.node_id, EXCLUDED.node_id), \
+                        updated_at = NOW() \
+                     RETURNING id",
                 )
                 .bind(id)
                 .bind(repo_name)
@@ -172,10 +188,10 @@ impl WorkspaceManager {
                 .bind(branch.as_deref())
                 .bind(head.as_deref())
                 .bind(node_id)
-                .execute(&self.pool)
+                .fetch_one(&self.pool)
                 .await
                 .with_context(|| format!("insert main workspace for {repo_name}"))?;
-                self.load_workspace(id).await
+                self.load_workspace(landed).await
             }
         }
     }

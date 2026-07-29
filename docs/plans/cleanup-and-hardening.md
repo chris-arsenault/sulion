@@ -367,7 +367,90 @@ What each needs is release sequencing, not version negotiation.
 
 ---
 
-## Chunk 7 — Remove the dual-runtime flag (large, self-contained)
+## Chunk 7 — Remove the dual-runtime flag (done)
+
+Item 31 applied and item 27 folded in. ~810 net lines removed. Full suite green:
+11 targets, 110 tests, plus clippy clean and 215 unit tests.
+
+**What the flag actually was.** `main.rs` already passed `true` for every role
+including standalone, so the `false` branch was unreachable by configuration —
+only by editing source and rebuilding. Single-machine deployment does not
+depend on it and is unaffected: `SULION_DEPLOYMENT_ROLE=standalone` selects
+loopback transport, and `main.rs` still builds a `NodeRuntime` and connects it
+in-process. `make validate-deploy` passes for all four compose variants.
+
+**What removing it exposed.** The whole local implementation was dead once the
+branch went: `resolve_session_launch`, `resume_agent_launch`,
+`default_agent_launch`, `resolve_session_workspace`, `repo_path_for_session`,
+`pty_workspace_metadata`, `SessionLaunch`, the local websocket handler
+`handle_socket`, the shell-command builders in `session_routes`,
+`file_content::serve_bytes` with `RAW_MAX_BYTES`, and `workspace::read_file`.
+The last one was invisible to the dead-code lint because it is `pub` in a
+library crate — `pub` items need a manual reference check, which is the same
+blind spot that hid Chunk 3's findings.
+
+**Seven real bugs on the shipping path**, all previously masked because the
+tests exercised the legacy path and the node path had no coverage:
+
+- A missing file returned 503, not 404: `raw_file` let the not-found error fall
+  into `RuntimeError::Internal`, which the proxy reports as "development node
+  unavailable".
+- A rejected path on upload returned 503, not 400, from the same generic
+  conversion in `RepoUpload` / `WorkspaceUpload`.
+- A rejected path on read returned 404, not 400 — **self-inflicted**: the first
+  fix above mapped every `read_file` failure to `NotFound`, collapsing
+  path-safety rejections into ordinary misses. `raw_file` now separates all
+  three outcomes explicitly.
+- Workspace deletion refusals returned 503, not 400. Live sessions, uncommitted
+  work, and unmerged commits are all things the caller can act on.
+- **A session launch could fail outright the first time a repo was used.** A
+  node's periodic workspace sync and `ensure_main_workspace_owned` both
+  select-then-insert the main workspace, and `workspaces.path` is unique, so the
+  loser of that race failed its insert and took the launch down with it. The
+  insert now converges with `ON CONFLICT (path) DO UPDATE ... RETURNING id`.
+  This one affects standalone in production; it stayed hidden because a
+  legacy-mode `AppState` never started the sync loops.
+- `protocol_working_dir` hardcoded `/home/sulion/repos`, so the control plane
+  asserted one node's disk layout from a string literal and rejected any other
+  root. It now uses the configured `repos_root` — identical in production.
+- `resolve_in_repo` returned the repo root itself with a trailing separator,
+  because `Path::join("")` appends one, so a `working_dir` equal to the repo
+  root compared unequal to every other spelling of the same directory.
+
+**Test migration was not a constructor swap.** `rest_integration`,
+`ws_integration`, `workspace_integration`, and `device_integration` now build
+an `AppState` with a loopback `NodeRuntime` via `tests/common/mod.rs`, so what
+they exercise is what ships. Two fixtures had to change because they relied on
+local-path behaviour: a repo created with a bare `mkdir` has no `repos` row, and
+repo routes resolve the owning node from that row. `device_integration` now
+creates repos through the API; `common::register_repo` covers tests that
+genuinely need an on-disk repo, mirroring the node's
+`claim_discovered_resources` step.
+
+**Harness guardrails.** The suite runs in ~110s; the rest of the wall clock is
+the optimised build. A run that exceeds `SULION_TEST_TIMEOUT_SECONDS` (default
+1200) is now killed by `timeout` against the whole process group and says why,
+because the failure mode is silent: a test that leaves a PTY alive has that
+child inherit the test binary's stdout, so the pipe never closes and the runner
+waits on a test that already finished. That is what made runs look like they
+took 18 minutes. Cleanup now goes through the node — `state.pty` owns nothing a
+node spawned — and `stdin` is closed so nothing can block on input.
+
+**Known rough edges.**
+
+- A node claims repos it discovers only at startup, so a repo added to
+  `~/repos` by hand is not routable until the next restart. Pre-existing and not
+  a regression: standalone already ran with the protocol required. Candidate for
+  Chunk 10.
+- `history_returns_events_after_ingest_and_correlate` failed once in a full
+  suite run and passed standalone and on re-run. Suspect the 2-second background
+  workspace sync racing session creation. Its blind `unwrap` on the response has
+  been replaced with a status assertion, so a recurrence will name the cause
+  instead of reporting "unwrap on None".
+
+---
+
+## Chunk 7 — original item
 
 31. **Delete `node_protocol_required = false`.** `lib.rs:85-88` calls the legacy
     managers a compatibility/rollback path, but `main.rs:51-59` hardcodes `true`

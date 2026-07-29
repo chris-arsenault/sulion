@@ -40,15 +40,14 @@ async fn fresh_pool() -> db::Pool {
     pool
 }
 
-async fn start_server(pool: db::Pool, node_required: bool) -> (String, Arc<AppState>) {
-    let state = AppState::new_with_auth_and_node_mode(
+async fn start_server(pool: db::Pool) -> (String, Arc<AppState>) {
+    let state = AppState::new_with_auth(
         pool,
         "/tmp".into(),
         "/tmp/sulion-workspaces-test".into(),
         "/tmp/sulion-library-test".into(),
         Arc::new(sulion::ingest::Ingester::new()),
         None,
-        node_required,
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("listener address");
@@ -76,14 +75,13 @@ async fn start_server_with_identity(
     source_policy: NodeSourcePolicy,
     control_identity: Option<sulion::node_protocol::ControlIdentity>,
 ) -> (String, Arc<AppState>) {
-    let state = AppState::new_with_auth_and_node_mode(
+    let state = AppState::new_with_auth(
         pool,
         "/tmp".into(),
         "/tmp/sulion-workspaces-test".into(),
         "/tmp/sulion-library-test".into(),
         Arc::new(sulion::ingest::Ingester::new()),
         None,
-        true,
     );
     state
         .node_control
@@ -279,7 +277,7 @@ async fn send_heartbeat_with_host(
 #[tokio::test]
 async fn control_stays_ready_and_refuses_local_mutations_without_the_node() {
     let pool = fresh_pool().await;
-    let (base, _state) = start_server(pool, true).await;
+    let (base, _state) = start_server(pool).await;
     let client = reqwest::Client::new();
 
     let health: Value = client
@@ -304,7 +302,7 @@ async fn control_stays_ready_and_refuses_local_mutations_without_the_node() {
 #[tokio::test]
 async fn fixed_node_pairing_is_approved_in_the_control_plane() {
     let pool = fresh_pool().await;
-    let (base, state) = start_server(pool, false).await;
+    let (base, state) = start_server(pool).await;
     let keypair = generate_keypair();
     request_pairing(&base, &keypair, DEDICATED_NODE_ID).await;
     let pending = state.node_control.list_nodes().await.unwrap().remove(0);
@@ -336,7 +334,7 @@ async fn fixed_node_pairing_is_approved_in_the_control_plane() {
 #[tokio::test]
 async fn app_state_reports_the_nodes_machine_and_forgets_it_on_disconnect() {
     let pool = fresh_pool().await;
-    let (base, state) = start_server(pool, true).await;
+    let (base, state) = start_server(pool).await;
     let keypair = generate_keypair();
     let node_id = DEDICATED_NODE_ID;
     pair_and_approve(&base, &state.node_control, &keypair).await;
@@ -407,7 +405,7 @@ async fn app_state_reports_the_nodes_machine_and_forgets_it_on_disconnect() {
 #[tokio::test]
 async fn same_boot_reconnect_preserves_sessions_and_new_boot_ends_them() {
     let pool = fresh_pool().await;
-    let (base, state) = start_server(pool.clone(), false).await;
+    let (base, state) = start_server(pool.clone()).await;
     let keypair = generate_keypair();
     let node_id = DEDICATED_NODE_ID;
     pair_and_approve(&base, &state.node_control, &keypair).await;
@@ -911,14 +909,13 @@ async fn the_node_channel_runs_over_tls_bound_to_the_control_identity() {
     let control_tls = tls::ControlTls::from_pem(&cert_pem, &key_pem).expect("parse tls");
     let expected_digest = control_tls.digest.clone();
 
-    let state = AppState::new_with_auth_and_node_mode(
+    let state = AppState::new_with_auth(
         pool,
         "/tmp".into(),
         "/tmp/sulion-workspaces-test".into(),
         "/tmp/sulion-library-test".into(),
         Arc::new(sulion::ingest::Ingester::new()),
         None,
-        true,
     );
     state
         .node_control

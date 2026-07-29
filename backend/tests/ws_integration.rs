@@ -16,6 +16,8 @@ use tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
 use tokio_tungstenite::tungstenite::http::Request;
 use tokio_tungstenite::tungstenite::Message;
 
+mod common;
+
 fn test_db_url() -> Option<String> {
     std::env::var("SULION_TEST_DB").ok()
 }
@@ -36,21 +38,30 @@ async fn fresh_pool() -> db::Pool {
     pool
 }
 
-async fn start_server(pool: db::Pool) -> (String, std::sync::Arc<AppState>) {
-    let state = AppState::new(
+/// Returns the node runtime alongside the state: terminal attach is served by
+/// the node that owns the PTY, so these tests must place their sessions on the
+/// node's manager rather than the control plane's.
+async fn start_server(
+    pool: db::Pool,
+) -> (
+    String,
+    std::sync::Arc<AppState>,
+    std::sync::Arc<sulion::node_runtime::NodeRuntime>,
+) {
+    let (state, runtime) = common::state_with_loopback_node(
         pool,
-        std::path::PathBuf::from("/tmp"),
-        std::path::PathBuf::from("/tmp/sulion-workspaces-test"),
-        std::path::PathBuf::from("/tmp/sulion-library-test"),
-        std::sync::Arc::new(sulion::ingest::Ingester::new()),
-    );
+        std::path::Path::new("/tmp"),
+        std::path::Path::new("/tmp/sulion-workspaces-test"),
+        std::path::Path::new("/tmp/sulion-library-test"),
+    )
+    .await;
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().unwrap();
     let router = app(state.clone());
     tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
     });
-    (format!("ws://{addr}"), state)
+    (format!("ws://{addr}"), state, runtime)
 }
 
 async fn ticketed_request(base: &str, session_id: uuid::Uuid) -> Request<()> {
@@ -104,10 +115,12 @@ async fn collect_for(
 #[tokio::test]
 async fn connect_receives_snapshot_then_ready_then_live_bytes() {
     let pool = fresh_pool().await;
-    let (base, state) = start_server(pool.clone()).await;
+    let (base, _state, runtime) = start_server(pool.clone()).await;
 
     // Spawn a PTY that prints a sentinel and stays alive.
-    let mgr: &std::sync::Arc<PtyManager> = &state.pty;
+    // The node's manager, not the control plane's: whoever spawns the process
+    // is who the websocket layer asks to attach to it.
+    let mgr: std::sync::Arc<PtyManager> = runtime.pty();
     let meta = mgr
         .spawn(SpawnParams {
             repo: "r".into(),
@@ -118,6 +131,11 @@ async fn connect_receives_snapshot_then_ready_then_live_bytes() {
                 // Print sentinel, then loop sleeping so the PTY stays live.
                 "printf 'SNAPSHOT_SENTINEL\\n'; while :; do sleep 1; done".into(),
             ],
+            // Stamp the node identity the way the node's own create_session
+            // does. Without it the row has no owner and the ticket route
+            // cannot resolve which node to attach through.
+            node_id: Some(runtime.node_id()),
+            node_boot_id: Some(runtime.boot_id()),
             ..Default::default()
         })
         .await
@@ -165,15 +183,22 @@ async fn connect_receives_snapshot_then_ready_then_live_bytes() {
 #[tokio::test]
 async fn resize_message_is_accepted() {
     let pool = fresh_pool().await;
-    let (base, state) = start_server(pool.clone()).await;
+    let (base, _state, runtime) = start_server(pool.clone()).await;
 
-    let mgr: &std::sync::Arc<PtyManager> = &state.pty;
+    // The node's manager, not the control plane's: whoever spawns the process
+    // is who the websocket layer asks to attach to it.
+    let mgr: std::sync::Arc<PtyManager> = runtime.pty();
     let meta = mgr
         .spawn(SpawnParams {
             repo: "r".into(),
             working_dir: PathBuf::from("/tmp"),
             shell: PathBuf::from("/bin/sh"),
             args: vec!["-c".into(), "while :; do sleep 1; done".into()],
+            // Stamp the node identity the way the node's own create_session
+            // does. Without it the row has no owner and the ticket route
+            // cannot resolve which node to attach through.
+            node_id: Some(runtime.node_id()),
+            node_boot_id: Some(runtime.boot_id()),
             ..Default::default()
         })
         .await
@@ -231,15 +256,22 @@ async fn resize_message_is_accepted() {
 #[tokio::test]
 async fn input_sent_to_shell_appears_in_output() {
     let pool = fresh_pool().await;
-    let (base, state) = start_server(pool.clone()).await;
+    let (base, _state, runtime) = start_server(pool.clone()).await;
 
-    let mgr: &std::sync::Arc<PtyManager> = &state.pty;
+    // The node's manager, not the control plane's: whoever spawns the process
+    // is who the websocket layer asks to attach to it.
+    let mgr: std::sync::Arc<PtyManager> = runtime.pty();
     // cat(1) echoes its stdin back verbatim.
     let meta = mgr
         .spawn(SpawnParams {
             repo: "r".into(),
             working_dir: PathBuf::from("/tmp"),
             shell: PathBuf::from("/bin/cat"),
+            // Stamp the node identity the way the node's own create_session
+            // does. Without it the row has no owner and the ticket route
+            // cannot resolve which node to attach through.
+            node_id: Some(runtime.node_id()),
+            node_boot_id: Some(runtime.boot_id()),
             ..Default::default()
         })
         .await
@@ -280,7 +312,7 @@ async fn input_sent_to_shell_appears_in_output() {
 #[tokio::test]
 async fn websocket_requires_a_ticket() {
     let pool = fresh_pool().await;
-    let (base, _state) = start_server(pool.clone()).await;
+    let (base, _state, _runtime) = start_server(pool.clone()).await;
     let bogus = uuid::Uuid::new_v4();
     let url = format!("{base}/ws/sessions/{bogus}");
     // tokio-tungstenite returns Err on non-101 responses.
@@ -291,14 +323,19 @@ async fn websocket_requires_a_ticket() {
 #[tokio::test]
 async fn ticket_is_single_use() {
     let pool = fresh_pool().await;
-    let (base, state) = start_server(pool.clone()).await;
-    let meta = state
-        .pty
+    let (base, _state, runtime) = start_server(pool.clone()).await;
+    let mgr = runtime.pty();
+    let meta = mgr
         .spawn(SpawnParams {
             repo: "r".into(),
             working_dir: PathBuf::from("/tmp"),
             shell: PathBuf::from("/bin/sh"),
             args: vec!["-c".into(), "while :; do sleep 1; done".into()],
+            // Stamp the node identity the way the node's own create_session
+            // does. Without it the row has no owner and the ticket route
+            // cannot resolve which node to attach through.
+            node_id: Some(runtime.node_id()),
+            node_boot_id: Some(runtime.boot_id()),
             ..Default::default()
         })
         .await
@@ -321,5 +358,5 @@ async fn ticket_is_single_use() {
 
     let second = tokio_tungstenite::connect_async(replay).await;
     assert!(second.is_err(), "reusing a websocket ticket must fail");
-    state.pty.delete(meta.id).await.expect("delete");
+    mgr.delete(meta.id).await.expect("delete");
 }
