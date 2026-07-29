@@ -92,6 +92,28 @@ impl Harness {
         self.state.repos_root.clone()
     }
 
+    /// Creates a session and fails with the server's message if it did not.
+    ///
+    /// Unwrapping `body["id"]` directly reports "unwrap on None" and discards
+    /// the error that explains why, which has cost several debugging rounds.
+    async fn create_session(&self, body: serde_json::Value) -> serde_json::Value {
+        let response = self
+            .client
+            .post(format!("{}/api/sessions", self.base))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let created: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(
+            status,
+            reqwest::StatusCode::CREATED,
+            "create session {body} failed: {created}"
+        );
+        created
+    }
+
     async fn shutdown_sessions(&self) {
         // Through the node, which owns the processes. Deleting through
         // `state.pty` reaped nothing and left the shells running.
@@ -126,15 +148,7 @@ async fn sessions_crud_roundtrip() {
     std::fs::create_dir_all(h.repos_root().join(repo_name)).unwrap();
 
     // POST /api/sessions
-    let resp = h
-        .client
-        .post(format!("{}/api/sessions", h.base))
-        .json(&json!({ "repo": repo_name }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 201);
-    let created: serde_json::Value = resp.json().await.unwrap();
+    let created = h.create_session(json!({ "repo": repo_name })).await;
     let id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
     assert_eq!(created["state"], "live");
     assert_eq!(created["repo"], repo_name);
@@ -529,20 +543,7 @@ async fn history_returns_events_after_ingest_and_correlate() {
 
     // Create PTY via the API so we have a real pty row.
     std::fs::create_dir_all(h.repos_root().join("r")).unwrap();
-    let response = h
-        .client
-        .post(format!("{}/api/sessions", h.base))
-        .json(&json!({ "repo": "r" }))
-        .send()
-        .await
-        .unwrap();
-    let status = response.status();
-    let created: serde_json::Value = response.json().await.unwrap();
-    assert_eq!(
-        status,
-        reqwest::StatusCode::CREATED,
-        "create failed: {created}"
-    );
+    let created = h.create_session(json!({ "repo": "r" })).await;
     let pty_id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
 
     // Fake a correlation (like the SessionStart hook would).
@@ -735,16 +736,7 @@ async fn history_returns_events_after_ingest_and_correlate() {
 async fn history_with_no_current_session_returns_empty() {
     let h = Harness::new().await;
     std::fs::create_dir_all(h.repos_root().join("r")).unwrap();
-    let response = h
-        .client
-        .post(format!("{}/api/sessions", h.base))
-        .json(&json!({ "repo": "r" }))
-        .send()
-        .await
-        .unwrap();
-    let status = response.status();
-    let created: serde_json::Value = response.json().await.unwrap();
-    assert_eq!(status, reqwest::StatusCode::CREATED, "create failed: {created}");
+    let created = h.create_session(json!({ "repo": "r" })).await;
     let pty_id = created["id"].as_str().unwrap();
 
     let body: serde_json::Value = h
@@ -946,32 +938,14 @@ async fn repo_timeline_returns_merged_turns_across_sessions() {
 
     std::fs::create_dir_all(h.repos_root().join("r")).unwrap();
 
-    let first_created: serde_json::Value = h
-        .client
-        .post(format!("{}/api/sessions", h.base))
-        .json(&json!({ "repo": "r" }))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let first_created = h.create_session(json!({ "repo": "r" })).await;
     let first_pty_id = first_created["id"]
         .as_str()
         .unwrap()
         .parse::<Uuid>()
         .unwrap();
 
-    let second_created: serde_json::Value = h
-        .client
-        .post(format!("{}/api/sessions", h.base))
-        .json(&json!({ "repo": "r" }))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let second_created = h.create_session(json!({ "repo": "r" })).await;
     let second_pty_id = second_created["id"]
         .as_str()
         .unwrap()

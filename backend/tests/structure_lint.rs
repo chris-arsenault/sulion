@@ -60,6 +60,50 @@ fn rust_source_stays_within_structural_limits() {
     );
 }
 
+/// `api` is the HTTP layer: it may depend on the domain, never the reverse.
+///
+/// The node runtime used to call into `api::repo_lifecycle_routes` and
+/// `api::file_content`, which meant the process that owns the repos directory
+/// depended on the process that serves requests about it, and two modules were
+/// made `pub(crate)` purely to allow it. Domain logic that both need lives in
+/// its own module now; this keeps it there.
+#[test]
+fn only_the_api_layer_depends_on_the_api_layer() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let src_dir = manifest_dir.join("src");
+    let mut failures = Vec::new();
+
+    for entry in WalkDir::new(&src_dir).into_iter().filter_map(Result::ok) {
+        let path = entry.path();
+        if !entry.file_type().is_file()
+            || path.extension().and_then(|ext| ext.to_str()) != Some("rs")
+        {
+            continue;
+        }
+        let rel = path
+            .strip_prefix(&manifest_dir)
+            .expect("source file lives under manifest dir");
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        // `api` itself, and the code-intel service's own unrelated `api` module.
+        if rel_str.starts_with("src/api/") || rel_str.starts_with("src/code_intel/") {
+            continue;
+        }
+        let source = fs::read_to_string(path).expect("read source file");
+        for (index, line) in source.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("");
+            if code.contains("crate::api::") || code.contains("crate::api;") {
+                failures.push(format!("{}:{}: {}", rel.display(), index + 1, line.trim()));
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "the api layer must not be a dependency of the domain:\n{}",
+        failures.join("\n")
+    );
+}
+
 fn file_limit_for(path: &Path) -> usize {
     let path = path.to_string_lossy();
     FILE_LIMIT_OVERRIDES

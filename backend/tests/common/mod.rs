@@ -38,6 +38,32 @@ pub async fn state_with_loopback_node(
     (state, runtime)
 }
 
+/// Creates a session and fails with the server's message if it did not.
+///
+/// Unwrapping a field of the response directly reports "unwrap on None" and
+/// discards the error that explains why. That has cost several rounds of
+/// re-running a suite by hand to find out what a 503 actually said.
+pub async fn create_session(
+    client: &reqwest::Client,
+    base: &str,
+    body: serde_json::Value,
+) -> serde_json::Value {
+    let response = client
+        .post(format!("{base}/api/sessions"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let created: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(
+        status,
+        reqwest::StatusCode::CREATED,
+        "create session {body} failed: {created}"
+    );
+    created
+}
+
 /// Kills one PTY through the node that owns it.
 ///
 /// `state.pty.delete` does not: the control plane's manager has no handle on a

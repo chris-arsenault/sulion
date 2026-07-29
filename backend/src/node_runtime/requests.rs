@@ -149,14 +149,13 @@ impl NodeRuntime {
             }
             NodeRequestKind::RepoRename => {
                 let request: RepoRenameRequest = decode(request)?;
-                crate::api::repo_lifecycle_routes::rename_repo_runtime(
+                crate::repo_lifecycle::rename_repo_runtime(
                     &self.pool,
                     &self.repos_root,
                     &request.old_name,
                     &request.new_name,
                 )
-                .await
-                .map_err(runtime_api_error)?;
+                .await?;
                 Ok(json!({
                     "name": request.new_name,
                     "path": self.repos_root.join(&request.new_name),
@@ -164,14 +163,13 @@ impl NodeRuntime {
             }
             NodeRequestKind::RepoDelete => {
                 let request: RepoDeleteRequest = decode(request)?;
-                crate::api::repo_lifecycle_routes::delete_repo_runtime(
+                crate::repo_lifecycle::delete_repo_runtime(
                     &self.pool,
                     &self.repos_root,
                     &request.name,
                     request.force,
                 )
-                .await
-                .map_err(runtime_api_error)?;
+                .await?;
                 Ok(Value::Null)
             }
             NodeRequestKind::RepoRefresh => {
@@ -221,9 +219,8 @@ impl NodeRuntime {
                 let request: RepoPathRequest = decode(request)?;
                 let path = required_path(request.path)?;
                 value(
-                    crate::api::file_content::build_preview(self.repo_root(&request.repo)?, &path)
-                        .await
-                        .map_err(|err| RuntimeError::BadRequest(err.to_string()))?,
+                    crate::file_preview::build_preview(self.repo_root(&request.repo)?, &path)
+                        .await?,
                 )
             }
             NodeRequestKind::RepoFileRaw => {
@@ -326,11 +323,7 @@ impl NodeRuntime {
                 let request: WorkspacePathRequest = decode(request)?;
                 let workspace = self.load_workspace(request.workspace_id).await?;
                 let path = required_path(request.path)?;
-                value(
-                    crate::api::file_content::build_preview(workspace.path, &path)
-                        .await
-                        .map_err(|err| RuntimeError::BadRequest(err.to_string()))?,
-                )
+                value(crate::file_preview::build_preview(workspace.path, &path).await?)
             }
             NodeRequestKind::WorkspaceFileRaw => {
                 let request: WorkspacePathRequest = decode(request)?;

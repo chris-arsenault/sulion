@@ -275,7 +275,7 @@ pub(super) fn repo_path(state: &AppState, name: &str) -> ApiResult<PathBuf> {
 }
 
 pub(super) fn validate_repo_name(name: &str) -> ApiResult<()> {
-    if name.is_empty() || name.contains('/') || name.starts_with('.') {
+    if !crate::workspace::is_valid_repo_name(name) {
         return Err(ApiError::BadRequest("invalid repo name".into()));
     }
     Ok(())

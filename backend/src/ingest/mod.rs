@@ -6,6 +6,7 @@ mod maintenance;
 mod metadata;
 mod projection;
 mod reset;
+mod tail;
 pub mod timeline;
 mod usage;
 mod usage_backfill;

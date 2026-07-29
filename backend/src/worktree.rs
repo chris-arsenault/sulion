@@ -160,27 +160,11 @@ impl WorkspaceManager {
             }
             None => {
                 let id = requested_id.unwrap_or_else(Uuid::new_v4);
-                // A node's periodic workspace sync ensures the same main
-                // workspace this call does, so the two race whenever a repo is
-                // first used. `path` is unique, so the loser of that race would
-                // otherwise fail the whole session launch on a constraint
-                // violation. Converge on whichever row landed first instead.
-                let landed: Uuid = sqlx::query_scalar(
+                let inserted = sqlx::query(
                     "INSERT INTO workspaces \
                         (id, repo_name, kind, path, branch_name, base_ref, base_sha, merge_target, \
                          state, next_status_at, created_at, updated_at, node_id) \
-                     VALUES ($1, $2, 'main', $3, $4, $4, $5, $4, 'active', NOW(), NOW(), NOW(), $6) \
-                     ON CONFLICT (path) DO UPDATE SET \
-                        repo_name = EXCLUDED.repo_name, \
-                        branch_name = EXCLUDED.branch_name, \
-                        base_ref = EXCLUDED.base_ref, \
-                        base_sha = EXCLUDED.base_sha, \
-                        merge_target = EXCLUDED.merge_target, \
-                        state = 'active', \
-                        next_status_at = NOW(), \
-                        node_id = COALESCE(workspaces.node_id, EXCLUDED.node_id), \
-                        updated_at = NOW() \
-                     RETURNING id",
+                     VALUES ($1, $2, 'main', $3, $4, $4, $5, $4, 'active', NOW(), NOW(), NOW(), $6)",
                 )
                 .bind(id)
                 .bind(repo_name)
@@ -188,10 +172,37 @@ impl WorkspaceManager {
                 .bind(branch.as_deref())
                 .bind(head.as_deref())
                 .bind(node_id)
-                .fetch_one(&self.pool)
-                .await
-                .with_context(|| format!("insert main workspace for {repo_name}"))?;
-                self.load_workspace(landed).await
+                .execute(&self.pool)
+                .await;
+
+                match inserted {
+                    Ok(_) => self.load_workspace(id).await,
+                    // A node's periodic workspace sync ensures the same main
+                    // workspace this call does, so the two race the first time a
+                    // repo is used, and the loser would otherwise fail the whole
+                    // session launch. Two constraints guard the invariant — the
+                    // unique `path` and the partial one-main-per-repo index — so
+                    // there is no single `ON CONFLICT` target that covers it.
+                    // Whichever fired, the other writer won: adopt its row.
+                    Err(err) if is_unique_violation(&err) => {
+                        let existing: Option<(Uuid,)> = sqlx::query_as(
+                            "SELECT id FROM workspaces \
+                              WHERE repo_name = $1 AND kind = 'main' AND state <> 'deleted'",
+                        )
+                        .bind(repo_name)
+                        .fetch_optional(&self.pool)
+                        .await
+                        .with_context(|| format!("load raced main workspace for {repo_name}"))?;
+                        match existing {
+                            Some((id,)) => self.load_workspace(id).await,
+                            None => Err(anyhow::anyhow!(
+                                "main workspace for {repo_name} conflicted but is not present"
+                            )),
+                        }
+                    }
+                    Err(err) => Err(err)
+                        .with_context(|| format!("insert main workspace for {repo_name}")),
+                }
             }
         }
     }
@@ -859,8 +870,17 @@ async fn discover_repo_dirs(root: &Path) -> anyhow::Result<Vec<(String, PathBuf)
     Ok(out)
 }
 
+/// Postgres reports every uniqueness failure as SQLSTATE 23505, whichever
+/// index caught it.
+fn is_unique_violation(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .and_then(|db| db.code())
+        .is_some_and(|code| code == "23505")
+}
+
 fn validate_repo_name(name: &str) -> anyhow::Result<()> {
-    if name.is_empty() || name.contains('/') || name.starts_with('.') {
+    if !crate::workspace::is_valid_repo_name(name) {
         anyhow::bail!("invalid repo name");
     }
     Ok(())

@@ -502,7 +502,51 @@ node spawned — and `stdin` is closed so nothing can block on input.
 
 ---
 
-## Chunk 8 — Layering and the data layer
+## Chunk 8 — Layering and the data layer (items 32, 33 done)
+
+**Items 32 and 33.** `node_runtime` no longer imports `crate::api`, and
+`structure_lint` now fails the build if anything outside `api/` does. Two domain
+modules came out: `file_preview.rs` (MIME, inlining, truncation cap) and
+`repo_lifecycle.rs` (refusal checks, directory move, record updates). Each owns
+its error type, so `api` maps to `ApiError` and the node maps to `RuntimeError`
+without either depending on the other's. The two `pub(crate)` widenings that
+existed only to permit the inversion are private again and the
+`runtime_api_error` bridge is gone.
+
+**Found on the way:**
+
+- `validate_repo_name` existed three times and the copies *disagreed*: the node
+  rejected `\` and `..`, the API and worktree layers did not, so a name's
+  validity depended on which layer saw it first. One strict predicate now lives
+  in `workspace.rs`.
+- Both node preview call sites flattened every failure to `BadRequest`, so a
+  missing file previewed as 400. `PreviewError` distinguishes them now — the
+  eighth instance of this error-flattening pattern in the cleanup.
+- **The main-workspace race was only half fixed in Chunk 7.** Two constraints
+  guard one-main-per-repo — the unique `path` and the partial
+  `workspaces_main_repo_idx` — and a single INSERT can name only one
+  `ON CONFLICT` target, so whichever index Postgres checked first decided
+  whether the launch survived. That is why it looked intermittent and moved
+  between tests. `ensure_main_workspace_owned` now catches any 23505 and adopts
+  the row the other writer created.
+- `structure_lint` is in `make ci` but not the integration target list, so
+  `ingest/ingester.rs` had been over its size limit since Chunk 2 without
+  anything I ran noticing. The bounded-read logic moved to `ingest/tail.rs`.
+- Test session creation unwrapped response fields blindly, reporting "unwrap on
+  None" and discarding the server's message. That cost three diagnosis rounds
+  before `common::create_session` replaced it across both suites.
+
+**Still open in this chunk:** item 34 (broker per-tool grant model — itself a
+two-phase cross-component change), item 35 (ingest facade re-exports), and the
+rest of item 36 (`env_required` duplication, service-binary boilerplate).
+
+Verification: clippy clean, 215 unit tests, both structure lints, and the full
+integration suite green on **two consecutive runs** — one green run is what let
+the incomplete race fix through.
+
+---
+
+## Chunk 8 — original items
 
 32. **Extract a data layer for repo lifecycle.** `db.rs` is connection plumbing
     only; raw SQL lives in 47 files. Worst is `api/repo_lifecycle_routes.rs` with

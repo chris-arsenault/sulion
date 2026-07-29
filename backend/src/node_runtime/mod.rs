@@ -65,6 +65,30 @@ impl From<sqlx::Error> for RuntimeError {
     }
 }
 
+impl From<crate::repo_lifecycle::RepoLifecycleError> for RuntimeError {
+    fn from(value: crate::repo_lifecycle::RepoLifecycleError) -> Self {
+        use crate::repo_lifecycle::RepoLifecycleError as Error;
+        match value {
+            Error::NotFound => Self::NotFound("repo not found".into()),
+            Error::BadRequest(message) => Self::BadRequest(message),
+            Error::Internal(err) => Self::Internal(err),
+            Error::Db(err) => Self::Internal(err.into()),
+            Error::Io(err) => Self::Internal(err.into()),
+        }
+    }
+}
+
+impl From<crate::file_preview::PreviewError> for RuntimeError {
+    fn from(value: crate::file_preview::PreviewError) -> Self {
+        use crate::file_preview::PreviewError;
+        match value {
+            PreviewError::NotFound => Self::NotFound("no such file".into()),
+            PreviewError::BadPath(message) => Self::BadRequest(message),
+            PreviewError::Io(err) => Self::Internal(err.into()),
+        }
+    }
+}
+
 impl RuntimeError {
     fn code(&self) -> &'static str {
         match self {
@@ -437,21 +461,8 @@ fn required_path(path: Option<String>) -> Result<String, RuntimeError> {
         .ok_or_else(|| RuntimeError::BadRequest("path is required".into()))
 }
 
-fn runtime_api_error(error: crate::api::ApiError) -> RuntimeError {
-    match error {
-        crate::api::ApiError::NotFound => RuntimeError::NotFound("not found".into()),
-        crate::api::ApiError::BadRequest(message) => RuntimeError::BadRequest(message),
-        other => RuntimeError::Internal(anyhow::anyhow!(other)),
-    }
-}
-
 fn validate_repo_name(name: &str) -> Result<(), RuntimeError> {
-    if name.is_empty()
-        || name.starts_with('.')
-        || name.contains('/')
-        || name.contains('\\')
-        || name.contains("..")
-    {
+    if !crate::workspace::is_valid_repo_name(name) {
         return Err(RuntimeError::BadRequest("invalid repo name".into()));
     }
     Ok(())

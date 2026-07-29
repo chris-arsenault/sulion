@@ -258,6 +258,20 @@ pub async fn write_file(
     Ok(abs)
 }
 
+/// Whether a repo name is safe to use as a single path component.
+///
+/// One rule, because there were three and they disagreed: the node rejected
+/// `\` and `..` while the API and worktree layers accepted them, so whether a
+/// name was valid depended on which layer looked at it first. This is the
+/// strictest of the three.
+pub fn is_valid_repo_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('.')
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains("..")
+}
+
 pub fn looks_binary(bytes: &[u8]) -> bool {
     // Classic heuristic: NUL byte in the first 8KB = binary.
     bytes.iter().take(8192).any(|&b| b == 0)

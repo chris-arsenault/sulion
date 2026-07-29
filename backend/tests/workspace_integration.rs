@@ -78,16 +78,12 @@ async fn isolated_session_creates_git_worktree_workspace() {
     let repo_path = h.state.repos_root.join("app");
     init_git_repo(&repo_path);
 
-    let created: serde_json::Value = h
-        .client
-        .post(format!("{}/api/sessions", h.base))
-        .json(&json!({ "repo": "app", "workspace_mode": "isolated" }))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let created = common::create_session(
+        &h.client,
+        &h.base,
+        json!({ "repo": "app", "workspace_mode": "isolated" }),
+    )
+    .await;
 
     let session_id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
     let workspace = created["workspace"].as_object().unwrap();
@@ -133,16 +129,12 @@ async fn delete_workspace_removes_worktree_branch_and_row() {
     let repo_path = h.state.repos_root.join("app");
     init_git_repo(&repo_path);
 
-    let created: serde_json::Value = h
-        .client
-        .post(format!("{}/api/sessions", h.base))
-        .json(&json!({ "repo": "app", "workspace_mode": "isolated" }))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let created = common::create_session(
+        &h.client,
+        &h.base,
+        json!({ "repo": "app", "workspace_mode": "isolated" }),
+    )
+    .await;
 
     let session_id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
     let workspace = created["workspace"].as_object().unwrap();
@@ -177,16 +169,12 @@ async fn delete_workspace_rejects_unmerged_branch_commits_without_force() {
     let repo_path = h.state.repos_root.join("app");
     init_git_repo(&repo_path);
 
-    let created: serde_json::Value = h
-        .client
-        .post(format!("{}/api/sessions", h.base))
-        .json(&json!({ "repo": "app", "workspace_mode": "isolated" }))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let created = common::create_session(
+        &h.client,
+        &h.base,
+        json!({ "repo": "app", "workspace_mode": "isolated" }),
+    )
+    .await;
 
     let session_id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
     let workspace = created["workspace"].as_object().unwrap();
@@ -227,16 +215,12 @@ async fn delete_workspace_allows_branch_commits_merged_into_target() {
     let repo_path = h.state.repos_root.join("app");
     init_git_repo(&repo_path);
 
-    let created: serde_json::Value = h
-        .client
-        .post(format!("{}/api/sessions", h.base))
-        .json(&json!({ "repo": "app", "workspace_mode": "isolated" }))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let created = common::create_session(
+        &h.client,
+        &h.base,
+        json!({ "repo": "app", "workspace_mode": "isolated" }),
+    )
+    .await;
 
     let session_id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
     let workspace = created["workspace"].as_object().unwrap();
@@ -270,16 +254,12 @@ async fn delete_workspace_rejects_live_sessions_and_dirty_worktrees() {
     let repo_path = h.state.repos_root.join("app");
     init_git_repo(&repo_path);
 
-    let created: serde_json::Value = h
-        .client
-        .post(format!("{}/api/sessions", h.base))
-        .json(&json!({ "repo": "app", "workspace_mode": "isolated" }))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let created = common::create_session(
+        &h.client,
+        &h.base,
+        json!({ "repo": "app", "workspace_mode": "isolated" }),
+    )
+    .await;
 
     let session_id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
     let workspace = created["workspace"].as_object().unwrap();
@@ -328,16 +308,12 @@ async fn delete_workspace_removes_missing_worktree_registration() {
     let repo_path = h.state.repos_root.join("app");
     init_git_repo(&repo_path);
 
-    let created: serde_json::Value = h
-        .client
-        .post(format!("{}/api/sessions", h.base))
-        .json(&json!({ "repo": "app", "workspace_mode": "isolated" }))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let created = common::create_session(
+        &h.client,
+        &h.base,
+        json!({ "repo": "app", "workspace_mode": "isolated" }),
+    )
+    .await;
 
     let session_id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
     let workspace = created["workspace"].as_object().unwrap();
@@ -371,16 +347,12 @@ async fn main_session_binds_canonical_repo_workspace() {
     let repo_path = h.state.repos_root.join("app");
     init_git_repo(&repo_path);
 
-    let created: serde_json::Value = h
-        .client
-        .post(format!("{}/api/sessions", h.base))
-        .json(&json!({ "repo": "app", "workspace_mode": "main" }))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let created = common::create_session(
+        &h.client,
+        &h.base,
+        json!({ "repo": "app", "workspace_mode": "main" }),
+    )
+    .await;
 
     let workspace = created["workspace"].as_object().unwrap();
     assert_eq!(workspace["kind"], "main");
