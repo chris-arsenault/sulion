@@ -20,6 +20,16 @@ let
   # Only resources that belong to a stale Sulion project are touched, and the
   # stack recreates everything it removes, so this is a migration, not a
   # teardown of foreign state.
+  #
+  # It runs as ExecStartPre on every stack start and will keep doing so, even
+  # though the condition it repairs — a host whose containers still carry a
+  # derivation-derived project name from before `--project-name sulion` was
+  # pinned above — can only be met once per host. Delete it when no machine can
+  # still be in that state: every host has started the stack at least once since
+  # the project name was pinned, which for a single dedicated node means after
+  # its next rebuild. The check costs three `docker inspect` calls, so leaving
+  # it is cheap; the reason to remove it is that it reads as ongoing policy
+  # rather than the one-time repair it is.
   stackAdopt = pkgs.writeShellApplication {
     name = "sulion-stack-adopt";
     runtimeInputs = [ pkgs.docker ];

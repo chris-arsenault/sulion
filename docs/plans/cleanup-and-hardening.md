@@ -605,7 +605,46 @@ race fix through.
 
 ---
 
-## Chunk 9 — Docs and nix janitorial (cheap)
+## Chunk 9 — Docs and nix janitorial (done, with one deferral)
+
+- **Item 37 done.** `docs/code-intel-findings.md` deleted after confirming both
+  of its open items shipped: `parser.rs:8` caps files at 2 MB and
+  `code_intel/lsp.rs` runs persistent servers with idle eviction, documented at
+  `docs/deploy.md:174-183`. Nothing referenced it and nothing in it was live, so
+  nothing moved to `backlog.md`.
+- **Item 38 done.** Future prompts and device pairing are in
+  `docs/architecture.md` under the backend surface. Device pairing gets the
+  fuller treatment because it is an auth surface: the three-step device
+  authorization flow, that approval requires an authenticated browser session,
+  that only hashes are stored, and that device tokens reach exactly two routes —
+  verified against `api/mod.rs`, not asserted.
+- **Item 39 deferred, deliberately.** `nix/repair-existing-install.md` is the
+  recovery path for a host still on the retired `/etc/sulion` layout, and
+  whether the dedicated node is past that is an operational fact this
+  environment cannot see — the absence of `/etc/sulion` in a PTY container
+  proves nothing about the node. Deleting it on an assumption would remove the
+  only recovery path if the assumption is wrong. The retirement condition is now
+  stated at the top of the doc; deletion needs a human confirming the machine.
+- **Item 40 done.** `sulion-stack-adopt` keeps running but now records what has
+  to be true before it can go, and that it is a one-time repair rather than
+  ongoing policy.
+- **Item 41 done.** `compose.truenas.yaml` explains why it repeats role and
+  transport (rollback readability) and which line is its own policy. The
+  `node-tunnel` assertions are documented as an invariant to enforce, not a
+  stale guard — a reintroduced tunnel service should fail the build. The VM test
+  already said this, so only the Makefile needed it.
+- **Item 44 done.** The gateway forwarding comment is back and states the part
+  that matters: the safety is a property of the *upstreams* reading these
+  headers as query-parameter fallbacks, so if either ever authorises on
+  `x-sulion-pty-id`, forwarding must stop.
+
+Verification: clippy clean, 215 unit tests, `make validate-deploy` passes. The
+nix edit is comment-only (verified: zero non-comment added lines) because nix is
+not installed in this environment to parse it.
+
+---
+
+## Chunk 9 — original items
 
 37. **Delete `docs/code-intel-findings.md`.** A spent June incident artifact that
     now contradicts current docs: it calls the parser-hang fix "Not yet

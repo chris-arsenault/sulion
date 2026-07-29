@@ -1,5 +1,12 @@
 # Apply this host-policy overlay together with compose.standalone.yaml to
 # restore the combined TrueNAS runtime during rollback.
+#
+# The role and transport are repeated from compose.standalone.yaml, which this
+# is always applied with, and are identical there. They stay because the pair
+# is a rollback path: a reader reaching for it should see the runtime shape it
+# selects without having to hold both files at once. `SULION_DOCKER_MODE` is
+# the only line that is this file's own policy — TrueNAS has no Docker socket
+# to hand a container, so the runner is brokered.
 services:
   backend:
     environment:

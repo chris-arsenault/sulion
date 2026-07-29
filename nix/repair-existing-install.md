@@ -1,5 +1,13 @@
 # Repair an existing Sulion NixOS installation
 
+> **Retire this document once no machine needs it.** It is a one-shot
+> transition for hosts still running from the retired root-owned `/etc/sulion`
+> checkout — the same era as the deleted `repository-cutover.md`. When the
+> dedicated node is confirmed on the fresh-install/flake path, delete this file
+> and its link in [`README.md`](README.md). Keeping it costs nothing; deleting
+> it while a host still needs it removes the only recovery path, so confirm
+> before removing rather than assuming.
+
 This document is only for preserving and transitioning a machine that already
 runs an earlier `sulion-enclave` generation from the root-owned
 `/etc/sulion` checkout.

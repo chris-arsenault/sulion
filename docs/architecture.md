@@ -170,6 +170,42 @@ The node launches PTYs with Sulion-managed wrapper tools on `PATH`:
 
 `with-cred` and `aws` are the only supported secret-consumption paths. Credential grants are scoped to a PTY and secret, not to a specific wrapper. The backend does not own the broker master key and does not expose any alternate secret-injection mechanism.
 
+### Future prompts
+
+Deferred follow-ups written against the agent session a PTY is currently
+correlated to. They are stored as files at
+`<future_prompts_root>/<session_uuid>/<id>.md` and carry a `pending` or `sent`
+state, so a queued prompt survives a control restart and is visible to anything
+that can read the directory.
+
+They are deliberately not the prompt library: the library is reusable text
+addressed by slug, while these are one-off and bound to a single transcript
+session, and they disappear from the UI when that session is no longer current.
+Routes are `GET`/`PUT` on `/api/sessions/:id/future-prompts` and
+`DELETE`/`PATCH` on an individual entry. See `backend/src/future_prompts.rs`.
+
+### Device pairing
+
+An auth surface, distinct from the Cognito login the browser uses. It exists so
+an external tool — the first is the Ableton "Send to Sulion" extension — can
+obtain a long-lived token without ever holding the user's credentials.
+
+The shape is OAuth device authorization:
+
+1. `POST /api/devices/pair` (public) returns a secret `device_code` and a short
+   `user_code` for the human to read out.
+2. `POST /api/devices/pair/approve` (Cognito-authenticated) binds the pairing to
+   the signed-in identity. Approval always happens inside an authenticated
+   browser session, so pairing cannot be completed by the device alone.
+3. `POST /api/devices/pair/token` (public, polled by the device) mints the token
+   once approved.
+
+Only base64 SHA-256 hashes of the `device_code` and the minted token are stored;
+plaintext exists in transit only. Device tokens authenticate a narrow surface —
+repo file ingest and raw read — rather than the whole API. See
+`backend/src/api/device_routes.rs` and the browser approval page
+`frontend/src/components/PairPage.tsx`.
+
 ## Broker surface
 
 The broker is a separate Rust service and container. It stores encrypted secret payloads, tracks active grants, validates direct browser requests for secrets/grants management, and redeems active grants for wrapper use.

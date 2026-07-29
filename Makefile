@@ -13,6 +13,11 @@ validate-deploy:
 	  grep -q "^COPY dist/$$bin " $$dockerfile \
 	    || { echo "$$dockerfile never copies $$bin, which platform.yml builds for it"; exit 1; }; \
 	done
+#   Each overlay below asserts `.services["node-tunnel"] == null`. The service
+#   is long gone; the assertion stays because its absence is the invariant, not
+#   an accident — node traffic is LAN-confined and TLS-terminated in-process,
+#   with no kernel tunnel and no elevated privileges anywhere. A reintroduced
+#   tunnel service should fail the build rather than quietly work.
 	docker compose --env-file deploy/compose.validate.env -f compose.yaml config --quiet
 	docker compose --env-file deploy/compose.validate.env -f deploy/compose.truenas-standalone.yaml config --quiet
 	docker compose --env-file deploy/compose.validate.env -f compose.yaml -f deploy/compose.standalone.yaml config --quiet

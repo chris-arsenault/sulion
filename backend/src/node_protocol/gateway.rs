@@ -67,6 +67,19 @@ async fn forward(upstream_env: &str, prefix: &str, request: Request) -> Response
 
     let method = request.method().clone();
     let mut forwarded = client().request(method, &url);
+    // An allowlist, so a caller cannot smuggle hop-by-hop headers through.
+    //
+    // The `x-sulion-*` entries look like identity but are not treated as it.
+    // Both upstreams read them as fallbacks for query parameters — see
+    // `retrieval::context` and `code_intel::api::root`, which do
+    // `query.field.or_else(|| header(..))` — so anything reachable by spoofing
+    // a header is already reachable by setting the equivalent query parameter,
+    // and forwarding them grants nothing extra.
+    //
+    // That is what makes this safe, and it is a property of the upstreams, not
+    // of this list. If either ever authorises on `x-sulion-pty-id` — scoping a
+    // secret grant to it, say — this becomes a spoof from anything on the node
+    // LAN, and the header must stop being forwarded.
     for name in [
         "authorization",
         "content-type",
