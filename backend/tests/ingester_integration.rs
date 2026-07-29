@@ -901,8 +901,8 @@ async fn ingest_restores_current_pty_link_when_session_row_was_lost() {
     let pty_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO pty_sessions \
-         (id, repo, working_dir, state, current_claude_session_uuid, current_session_uuid, current_session_agent) \
-         VALUES ($1, 'repo-a', '/tmp/repo-a', 'live', $2, $2, 'claude-code')",
+         (id, repo, working_dir, state, current_session_uuid, current_session_agent) \
+         VALUES ($1, 'repo-a', '/tmp/repo-a', 'live', $2, 'claude-code')",
     )
     .bind(pty_id)
     .bind(fx.session_uuid)

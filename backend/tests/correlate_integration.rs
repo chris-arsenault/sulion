@@ -238,8 +238,8 @@ async fn resuming_a_session_in_a_new_pty_releases_the_old_pty() {
     .unwrap();
 
     // The session moved: exactly one PTY row may claim it, and it is the new one.
-    let rows: Vec<(Uuid, Option<Uuid>, Option<String>, Option<Uuid>)> = sqlx::query_as(
-        "SELECT id, current_session_uuid, current_session_agent, current_claude_session_uuid \
+    let rows: Vec<(Uuid, Option<Uuid>, Option<String>)> = sqlx::query_as(
+        "SELECT id, current_session_uuid, current_session_agent \
          FROM pty_sessions WHERE id IN ($1, $2)",
     )
     .bind(old_pty.id)
@@ -247,15 +247,13 @@ async fn resuming_a_session_in_a_new_pty_releases_the_old_pty() {
     .fetch_all(&pool)
     .await
     .unwrap();
-    for (id, current, agent, legacy) in rows {
+    for (id, current, agent) in rows {
         if id == new_pty.id {
             assert_eq!(current, Some(session));
             assert_eq!(agent.as_deref(), Some("claude-code"));
-            assert_eq!(legacy, Some(session));
         } else {
             assert_eq!(current, None, "old PTY must release the resumed session");
             assert_eq!(agent, None);
-            assert_eq!(legacy, None);
         }
     }
 

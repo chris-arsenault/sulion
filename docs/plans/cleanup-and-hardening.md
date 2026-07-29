@@ -322,7 +322,38 @@ modes end to end.
 
 ---
 
-## Chunk 6 — Cross-component legacy cruft (two-phase; no dependencies)
+## Chunk 6 — Cross-component legacy cruft (phase A done)
+
+Phase A of all three: the old forms are no longer *written*. The readers stay,
+because each peer here can lag arbitrarily — a node on its own release timer, a
+browser tab holding stale JS, an older backend against the same database.
+
+- **Item 28.** `hooks/session-start.sh` now sends
+  `{"pty_id","session_uuid","agent":"claude-code"}`. The alias and the agent
+  default stay; the module comment says what has to be true before they go.
+- **Item 29 needed no change.** Nothing in `frontend/src` sends
+  `claude_resume_uuid` — the plan's note that `useResumeSession.ts` "already
+  sends both" was stale. The removal condition is now documented on the field.
+- **Item 30.** The metrics `p_reverse` join reads `current_session_uuid`, and
+  `correlate.rs` no longer writes `current_claude_session_uuid` in either the
+  release or the claim UPDATE. Two tests that asserted on the legacy column were
+  updated.
+
+The canonical payload had no test — only the alias did — so the shape production
+actually emits was unverified. There are now two unit tests, one per shape, the
+older one named for what it is.
+
+**Phase B, for a later release once no peer can emit the old form:** drop the
+`claude_session_uuid` alias and `default_agent`; drop `claude_resume_uuid` and
+the agent inference in `resolve_protocol_launch` that exists only for it; add a
+migration dropping `pty_sessions.current_claude_session_uuid`.
+
+Verification: clippy clean, 216 unit tests, full integration suite green
+(11 targets, 110 tests).
+
+---
+
+## Chunk 6 — original items
 
 Each of these is a contract between independently-released components. None can
 be a single-release delete. The pattern for all of them: **stop writing the old

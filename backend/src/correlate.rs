@@ -10,8 +10,11 @@
 //! {"pty_id": "<uuid>", "session_uuid": "<uuid>", "agent": "claude-code"}
 //! ```
 //!
-//! Older Claude hooks still send `claude_session_uuid`; we accept that as
-//! an alias and default the agent to `claude-code`.
+//! The hook ships in the image but runs on the node, which releases on its own
+//! timer, so a control plane can outlive the hook that talks to it. The
+//! `claude_session_uuid` alias and the agent default exist only for a hook from
+//! before that field was renamed; the shipped hook sends the shape above. They
+//! come out once no node can still be running the older one.
 //!
 //! The backend upserts the session row, sets its `pty_session_id`
 //! to the PTY, and updates `pty_sessions.current_session_uuid` /
@@ -369,8 +372,7 @@ pub async fn apply(pool: &Pool, msg: &CorrelateMsg) -> anyhow::Result<()> {
     sqlx::query(
         "UPDATE pty_sessions \
          SET current_session_uuid = NULL, \
-             current_session_agent = NULL, \
-             current_claude_session_uuid = NULL \
+             current_session_agent = NULL \
          WHERE current_session_uuid = $2 AND id <> $1",
     )
     .bind(msg.pty_id)
@@ -378,16 +380,17 @@ pub async fn apply(pool: &Pool, msg: &CorrelateMsg) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
-    // Point the PTY row at this now-current agent session. Keep the
-    // legacy Claude-specific pointer populated only for Claude rows.
+    // Point the PTY row at this now-current agent session.
+    //
+    // `current_claude_session_uuid` is deliberately no longer written. It held
+    // the same value as `current_session_uuid` for Claude rows and NULL for
+    // everything else, and nothing reads it any more. The column stays until a
+    // later release drops it, so that this backend and an older one writing the
+    // old shape can run against the same database.
     sqlx::query(
         "UPDATE pty_sessions \
          SET current_session_uuid = $2, \
-             current_session_agent = $3, \
-             current_claude_session_uuid = CASE \
-                 WHEN $3 = 'claude-code' THEN $2 \
-                 ELSE NULL \
-             END \
+             current_session_agent = $3 \
          WHERE id = $1",
     )
     .bind(msg.pty_id)
@@ -627,7 +630,23 @@ mod tests {
     use super::*;
 
     #[test]
+    /// The shape `hooks/session-start.sh` sends.
     fn parse_correlate_msg() {
+        let pty = Uuid::new_v4();
+        let session = Uuid::new_v4();
+        let json = format!(
+            r#"{{"pty_id":"{pty}","session_uuid":"{session}","agent":"claude-code"}}"#
+        );
+        let parsed: CorrelateMsg = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.pty_id, pty);
+        assert_eq!(parsed.session_uuid, session);
+        assert_eq!(parsed.agent, "claude-code");
+    }
+
+    #[test]
+    /// The shape a hook from before the rename sends. A node releases on its own
+    /// timer, so this has to keep parsing until no old hook can still be running.
+    fn parse_correlate_msg_from_a_pre_rename_hook() {
         let pty = Uuid::new_v4();
         let session = Uuid::new_v4();
         let json = format!(r#"{{"pty_id":"{pty}","claude_session_uuid":"{session}"}}"#);

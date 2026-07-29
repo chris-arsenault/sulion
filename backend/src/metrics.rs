@@ -224,7 +224,7 @@ async fn usage_metrics(pool: &Pool) -> anyhow::Result<UsageMetrics> {
             LEFT JOIN pty_sessions p_direct ON p_direct.id = lp.pty_session_id \
             LEFT JOIN LATERAL ( \
                 SELECT pr.repo FROM pty_sessions pr \
-                 WHERE pr.current_claude_session_uuid = u.session_uuid \
+                 WHERE pr.current_session_uuid = u.session_uuid \
                  LIMIT 1) p_reverse ON TRUE \
             LEFT JOIN LATERAL ( \
                 SELECT r.repo_name FROM repo_runtime_state r \

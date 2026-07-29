@@ -39,7 +39,7 @@ fi
 # Deliver with a short connect timeout so a dead socket doesn't hang
 # Claude. `socat` is the reliable tool for Unix-socket write-from-bash,
 # but fall back to python if it's not installed.
-PAYLOAD="{\"pty_id\":\"${PTY_ID}\",\"claude_session_uuid\":\"${CLAUDE_SESSION_UUID}\"}"
+PAYLOAD="{\"pty_id\":\"${PTY_ID}\",\"session_uuid\":\"${CLAUDE_SESSION_UUID}\",\"agent\":\"claude-code\"}"
 
 if command -v socat >/dev/null 2>&1; then
   printf '%s\n' "$PAYLOAD" | timeout 2s socat - "UNIX-CONNECT:${SOCK}" >/dev/null 2>&1 || true

@@ -163,7 +163,11 @@ pub(super) struct CreateSessionReq {
     pub(super) resume_session_uuid: Option<Uuid>,
     #[serde(default)]
     pub(super) resume_agent: Option<String>,
-    /// Backward-compatible alias for older frontend builds.
+    /// Alias for `resume_session_uuid`. No shipped frontend sends it — the
+    /// resume hook sends the pair above — but a browser tab left open holds its
+    /// JS indefinitely, so the reader stays until stale tabs are no longer a
+    /// concern. Removing it also drops the agent inference in
+    /// `resolve_protocol_launch` that exists only for callers of this field.
     #[serde(default)]
     pub(super) claude_resume_uuid: Option<Uuid>,
     /// Optional first-class agent to launch immediately in the new PTY.
