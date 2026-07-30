@@ -87,11 +87,24 @@ pub(super) fn protocol_working_dir(
     if let Ok(relative) = path.strip_prefix(&repo_root) {
         return Ok(relative.to_string_lossy().into_owned());
     }
-    let mut components = path.components();
-    for component in components.by_ref() {
-        if component.as_os_str() == repo {
-            return Ok(components.as_path().to_string_lossy().into_owned());
+    // Split at the repo-name component, preferring the one that follows a
+    // `repos` component: a repo named after the node's user collides with
+    // /home/<user> otherwise, and a subdirectory named after the repo
+    // collides from the other side. Last occurrence is the fallback for
+    // layouts whose checkout parent is not named `repos`.
+    let components: Vec<&std::ffi::OsStr> = path.components().map(|c| c.as_os_str()).collect();
+    let mut split_index = None;
+    for (index, component) in components.iter().enumerate() {
+        if *component == repo {
+            split_index = Some(index);
+            if index > 0 && components[index - 1] == "repos" {
+                break;
+            }
         }
+    }
+    if let Some(index) = split_index {
+        let tail: std::path::PathBuf = components[index + 1..].iter().collect();
+        return Ok(tail.to_string_lossy().into_owned());
     }
     Err(ApiError::BadRequest(format!(
         "absolute working_dir must be inside a {repo} checkout"
@@ -182,6 +195,44 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, "crates/core");
+    }
+
+    #[test]
+    fn a_repo_named_after_the_node_user_splits_at_the_checkout() {
+        // /home/sulion/repos/sulion: the home directory component must not
+        // win over the checkout component.
+        let out = protocol_working_dir(
+            Path::new("/var/empty/sulion/repos"),
+            "sulion",
+            "/home/sulion/repos/sulion",
+        )
+        .unwrap();
+        assert_eq!(out, "");
+        let out = protocol_working_dir(
+            Path::new("/var/empty/sulion/repos"),
+            "sulion",
+            "/home/sulion/repos/sulion/backend/src",
+        )
+        .unwrap();
+        assert_eq!(out, "backend/src");
+    }
+
+    #[test]
+    fn a_subdirectory_named_after_the_repo_keeps_its_tail() {
+        let out = protocol_working_dir(
+            Path::new("/var/empty/sulion/repos"),
+            "app",
+            "/home/sulion/repos/app/vendor/app",
+        )
+        .unwrap();
+        assert_eq!(out, "vendor/app");
+    }
+
+    #[test]
+    fn a_layout_without_a_repos_component_splits_at_the_last_occurrence() {
+        let out =
+            protocol_working_dir(Path::new("/var/empty"), "app", "/srv/checkouts/app/sub").unwrap();
+        assert_eq!(out, "sub");
     }
 
     #[test]
