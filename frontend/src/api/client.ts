@@ -137,6 +137,11 @@ export function deleteSession(id: string): Promise<void> {
   return request<void>(`/api/sessions/${id}`, { method: "DELETE" });
 }
 
+/** Restarts the session's shell on the current toolset, in place. */
+export function upgradeSession(id: string): Promise<void> {
+  return request<void>(`/api/sessions/${id}/upgrade`, { method: "POST" });
+}
+
 export function startSessionAgent(
   id: string,
   agent: AgentLaunchType,

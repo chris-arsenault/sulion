@@ -31,6 +31,10 @@ pub fn router() -> Router<Arc<AppState>> {
             delete(session_routes::delete_session).patch(session_routes::patch_session),
         )
         .route(
+            "/api/sessions/:id/upgrade",
+            post(session_routes::upgrade_session),
+        )
+        .route(
             "/api/sessions/:id/agent",
             post(session_routes::start_session_agent),
         )

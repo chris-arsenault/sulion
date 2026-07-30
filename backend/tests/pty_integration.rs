@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use sulion::db;
-use sulion::pty::{default_shell, read_meta, reconcile_orphans_on_startup, PtyState, SpawnParams};
+use sulion::pty::{default_shell, read_meta, PtyState, SpawnParams};
 
 mod common;
 
@@ -174,31 +174,78 @@ async fn list_returns_live_and_dead_but_not_deleted() {
 }
 
 #[tokio::test]
-async fn startup_reconciliation_transitions_live_rows_to_orphaned() {
+async fn upgrade_moves_one_session_and_leaves_neighbours_alone() {
     let pool = fresh_pool().await;
-    // Insert a fake 'live' row simulating a PTY from the prior backend.
-    let id = uuid::Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO pty_sessions (id, repo, working_dir, state, created_at) \
-         VALUES ($1, $2, $3, 'live', NOW() - INTERVAL '1 hour')",
-    )
-    .bind(id)
-    .bind("prior")
-    .bind("/tmp")
-    .execute(&pool)
-    .await
-    .unwrap();
+    let (link, events) = sulion::devenv::link::DevenvLink::new();
+    let old_server = std::sync::Arc::new(sulion::devenv::server::DevenvServer::with_ident(Some(
+        "old-toolset".into(),
+    )));
+    let new_server = std::sync::Arc::new(sulion::devenv::server::DevenvServer::with_ident(Some(
+        "new-toolset".into(),
+    )));
+    for server in [old_server.clone(), new_server.clone()] {
+        let (node_side, devenv_side) = tokio::io::duplex(1024 * 1024);
+        tokio::spawn(server.serve(devenv_side));
+        tokio::spawn(link.clone().handle_connection(node_side));
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while link.connected_idents().await.len() < 2 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "both devenvs must connect"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 
-    let reconciled = reconcile_orphans_on_startup(&pool).await.unwrap();
-    assert_eq!(reconciled, 1);
+    link.set_current_ident(Some("old-toolset".into())).await;
+    let mgr = sulion::pty::PtyManager::with_devenv(pool.clone(), link.clone(), events);
+    let spawn = |repo: &str| SpawnParams {
+        repo: repo.into(),
+        working_dir: PathBuf::from("/tmp"),
+        shell: PathBuf::from("/bin/sleep"),
+        args: vec!["60".into()],
+        ..Default::default()
+    };
+    let a = mgr.spawn(spawn("upgrade-a")).await.expect("spawn a");
+    let b = mgr.spawn(spawn("upgrade-b")).await.expect("spawn b");
 
-    let meta = read_meta(&pool, id).await.unwrap().unwrap();
-    assert_eq!(meta.state, PtyState::Orphaned);
-    assert!(meta.ended_at.is_some());
+    // The toolset rolls; only the explicitly upgraded session moves.
+    link.set_current_ident(Some("new-toolset".into())).await;
+    let upgraded = mgr.upgrade(a.id, None, None).await.expect("upgrade a");
+    assert_eq!(upgraded.id, a.id);
 
-    // Running it again with no live rows is a no-op.
-    let reconciled = reconcile_orphans_on_startup(&pool).await.unwrap();
-    assert_eq!(reconciled, 0);
+    let ident_of = |id: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, Option<String>)>(
+                "SELECT state, devenv_ident FROM pty_sessions WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("read session row")
+        }
+    };
+    let (a_state, a_ident) = ident_of(a.id).await;
+    assert_eq!(a_state, "live");
+    assert_eq!(a_ident.as_deref(), Some("new-toolset"));
+    let (b_state, b_ident) = ident_of(b.id).await;
+    assert_eq!(b_state, "live", "the neighbour must be untouched");
+    assert_eq!(b_ident.as_deref(), Some("old-toolset"));
+
+    assert!(new_server.live_session_ids().await.contains(&a.id));
+    assert!(!old_server.live_session_ids().await.contains(&a.id));
+    assert!(old_server.live_session_ids().await.contains(&b.id));
+
+    // A second upgrade has nothing to do.
+    let err = mgr
+        .upgrade(a.id, None, None)
+        .await
+        .expect_err("already current");
+    assert!(err.to_string().contains("already on the current toolset"));
+
+    mgr.delete(a.id).await.expect("delete a");
+    mgr.delete(b.id).await.expect("delete b");
 }
 
 #[tokio::test]

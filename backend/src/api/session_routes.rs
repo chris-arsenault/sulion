@@ -382,6 +382,44 @@ pub(super) async fn delete_session(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Moves a session's shell onto the current toolset. Forward-only: unlike
+/// delete there is no husk fallback, because an upgrade without a live
+/// process is meaningless.
+pub(super) async fn upgrade_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let (node_id, session_state): (Option<Uuid>, String) =
+        sqlx::query_as("SELECT node_id, state FROM pty_sessions WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(ApiError::NotFound)?;
+    if session_state != "live" {
+        return Err(ApiError::BadRequest(
+            "only live sessions can be upgraded".into(),
+        ));
+    }
+    let Some(node_id) = node_id else {
+        return Err(ApiError::Unavailable(
+            "session has no development node".into(),
+        ));
+    };
+    if !state.node_control.is_connected(node_id).await {
+        return Err(ApiError::Unavailable(
+            "session's development node is not connected".into(),
+        ));
+    }
+    node_proxy::request(
+        &state,
+        node_id,
+        NodeRequestKind::SessionUpgrade,
+        serde_json::to_value(ResourceRequest { id }).map_err(anyhow::Error::from)?,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(Deserialize)]
 pub(super) struct PatchSessionReq {
     /// Set the label. Empty string clears. Null/absent = no change.

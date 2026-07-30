@@ -38,6 +38,7 @@ impl NodeRuntime {
             | NodeRequestKind::SessionAgentStart
             | NodeRequestKind::SessionCreate
             | NodeRequestKind::SessionDelete
+            | NodeRequestKind::SessionUpgrade
             | NodeRequestKind::SessionInput
             | NodeRequestKind::SessionResize => self.execute_session_request(kind, request).await,
             NodeRequestKind::RepoCreate
@@ -80,6 +81,17 @@ impl NodeRuntime {
                 let request: ResourceRequest = decode(request)?;
                 self.pty.delete(request.id).await?;
                 Ok(Value::Null)
+            }
+            NodeRequestKind::SessionUpgrade => {
+                let request: ResourceRequest = decode(request)?;
+                // Refusals ("already on the current toolset", "not live")
+                // are caller-actionable, not node malfunctions.
+                value(
+                    self.pty
+                        .upgrade(request.id, Some(self.node_id), Some(self.boot_id))
+                        .await
+                        .map_err(|err| RuntimeError::BadRequest(err.to_string()))?,
+                )
             }
             NodeRequestKind::SessionAgentStart => {
                 let request: AgentRequest = decode(request)?;

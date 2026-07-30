@@ -11,6 +11,7 @@ import {
   getAppState,
   renameRepo as apiRenameRepo,
   updateSession as apiUpdateSession,
+  upgradeSession as apiUpgradeSession,
 } from "../api/client";
 import type {
   CreateRepoRequest,
@@ -56,6 +57,7 @@ export interface SessionStore {
     opts?: { force?: boolean; deleteBranch?: boolean },
   ) => Promise<void>;
   updateSession: (id: string, patch: UpdateSessionRequest) => Promise<void>;
+  upgradeSession: (id: string) => Promise<void>;
   createRepo: (req: CreateRepoRequest) => Promise<RepoView>;
   renameRepo: (name: string, nextName: string) => Promise<RepoView>;
   deleteRepo: (name: string, opts?: { force?: boolean }) => Promise<void>;
@@ -208,6 +210,18 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
       set({ sessions: prevSessions });
       throw err;
     }
+  },
+
+  async upgradeSession(id) {
+    try {
+      await apiUpgradeSession(id);
+    } catch (err) {
+      if (err instanceof ApiError) set({ lastError: err.message });
+      throw err;
+    }
+    // The shell was replaced under the same session id; refresh so the
+    // sidebar and any attached panes see the restarted state promptly.
+    await get().refresh();
   },
 
   async createRepo(req) {

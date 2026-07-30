@@ -1802,6 +1802,7 @@ function buildSessionMenuItems({
   onRename,
   secretMenu,
   onUpdate,
+  onUpgrade,
   onDelete,
 }: {
   session: SessionView;
@@ -1813,6 +1814,7 @@ function buildSessionMenuItems({
     pinned?: boolean;
     color?: SessionColor | null;
   }) => void | Promise<void>;
+  onUpgrade: () => void;
   onDelete: () => void;
 }): MenuItem[] {
   return [
@@ -1882,6 +1884,18 @@ function buildSessionMenuItems({
       ],
     },
     { kind: "separator" },
+    ...(session.state === "live"
+      ? [
+          {
+            kind: "item",
+            id: "upgrade",
+            // Restarts the shell in place on the current toolset; the node
+            // refuses with a plain error when there is nothing newer.
+            label: "Upgrade toolset (restarts shell)",
+            onSelect: onUpgrade,
+          } as MenuItem,
+        ]
+      : []),
     {
       kind: "item",
       id: "delete",
@@ -1947,6 +1961,10 @@ function SessionRow({
 
   const selectThis = useCallback(() => onSelect(s.id), [onSelect, s.id]);
   const deleteThis = useCallback(() => onDelete(s.id), [onDelete, s.id]);
+  const upgradeSession = useSessions((store) => store.upgradeSession);
+  const upgradeThis = useCallback(() => {
+    void upgradeSession(s.id).catch(() => undefined);
+  }, [upgradeSession, s.id]);
   const updateThis = useCallback(
     (patch: Parameters<SessionRowProps["onUpdate"]>[1]) => onUpdate(s.id, patch),
     [onUpdate, s.id],
@@ -1993,9 +2011,10 @@ function SessionRow({
         onRename: startRenaming,
         secretMenu,
         onUpdate: updateThis,
+        onUpgrade: upgradeThis,
         onDelete: deleteThis,
       }),
-    [s, openTab, startRenaming, secretMenu, updateThis, deleteThis],
+    [s, openTab, startRenaming, secretMenu, updateThis, upgradeThis, deleteThis],
   );
   const buildMenuItems = useCallback(() => menuItems, [menuItems]);
   const { onContextMenu: onRowContextMenu, onKeyDown: onRowContextMenuKey } =

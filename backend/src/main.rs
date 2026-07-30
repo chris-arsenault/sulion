@@ -36,14 +36,6 @@ async fn main() -> anyhow::Result<()> {
     db::run_migrations(&pool).await?;
     tracing::info!("migrations applied");
 
-    // Legacy in-process live rows died with their backend. Node-owned rows
-    // are deliberately left live until the owning node reports its boot
-    // inventory, so a control-only restart cannot kill durable sessions.
-    let orphaned = sulion::pty::reconcile_orphans_on_startup(&pool).await?;
-    if orphaned > 0 {
-        tracing::info!(count = orphaned, "reconciled orphaned PTY sessions");
-    }
-
     let ingester = std::sync::Arc::new(Ingester::new());
     let ingester_cfg = IngesterConfig::new(cfg.claude_projects_dir.clone())
         .with_codex_sessions_dir(cfg.codex_sessions_dir.clone());

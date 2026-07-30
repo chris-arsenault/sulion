@@ -55,29 +55,6 @@ impl PtyState {
     }
 }
 
-/// On startup, legacy in-process `live` rows correspond to PTYs whose
-/// processes died with the prior backend. Node-owned PTYs outlive the
-/// control process and are reconciled by node boot inventory instead.
-pub async fn reconcile_orphans_on_startup(pool: &Pool) -> anyhow::Result<u64> {
-    let result = sqlx::query(
-        "UPDATE pty_sessions \
-         SET state = 'orphaned', \
-             ended_at = COALESCE(ended_at, NOW()), \
-             agent_runtime_state = CASE \
-                 WHEN agent_runtime_state IN ('starting', 'running') THEN 'exited' \
-                 ELSE agent_runtime_state \
-             END, \
-             agent_runtime_ended_at = CASE \
-                 WHEN agent_runtime_state IN ('starting', 'running') THEN COALESCE(agent_runtime_ended_at, NOW()) \
-                 ELSE agent_runtime_ended_at \
-             END \
-         WHERE state = 'live' AND node_id IS NULL",
-    )
-    .execute(pool)
-    .await?;
-    Ok(result.rows_affected())
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PtyMetadata {
     pub id: Uuid,
@@ -475,6 +452,64 @@ impl PtyManager {
         }
 
         Ok(meta)
+    }
+
+    /// Moves one session's shell to the current devenv: the process ends
+    /// where it is and a fresh default shell starts on the current toolset,
+    /// keeping the session's identity, workspace binding, and working
+    /// directory. Neighbouring sessions are untouched.
+    pub async fn upgrade(
+        self: &Arc<Self>,
+        id: Uuid,
+        node_id: Option<Uuid>,
+        node_boot_id: Option<Uuid>,
+    ) -> anyhow::Result<PtyMetadata> {
+        let session = self
+            .get(id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("no live PTY session {id}"))?;
+        let link = self.link()?.clone();
+        let current = link.current_ident().await;
+        if session.devenv_ident == current {
+            anyhow::bail!("session is already on the current toolset");
+        }
+        let repo = session.repo.clone();
+        let working_dir = session.working_dir.clone();
+        let workspace = session.workspace.clone();
+        drop(session);
+
+        link.kill(id).await?;
+        // The exit event clears the handle and marks the row dead; the
+        // same-id respawn reuses the row (`ON CONFLICT … WHERE state <>
+        // 'live'`) and must not race either.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let handle_gone = !self.sessions.read().await.contains_key(&id);
+            let row_dead = matches!(
+                read_meta(&self.pool, id).await,
+                Ok(Some(meta)) if meta.state != PtyState::Live
+            );
+            if handle_gone && row_dead {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                anyhow::bail!("session {id} did not end in time for its upgrade");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        self.spawn(SpawnParams {
+            id: Some(id),
+            node_id,
+            node_boot_id,
+            repo,
+            working_dir,
+            workspace,
+            shell: default_shell(),
+            args: Vec::new(),
+            ..Default::default()
+        })
+        .await
     }
 
     /// The row was written on the promise of a process; without one it would

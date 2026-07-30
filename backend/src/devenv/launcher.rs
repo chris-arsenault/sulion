@@ -178,8 +178,80 @@ async fn ensure_container_loop(
                 tracing::error!(%error, "devenv container ensure failed; retrying");
             }
         }
+        if let Err(error) = reap_emptied_containers(&link, published_ident.as_deref()).await {
+            tracing::warn!(%error, "devenv reap pass failed");
+        }
         tokio::time::sleep(Duration::from_secs(60)).await;
     }
+}
+
+/// Removes label-owned devenv containers that are not the current toolset
+/// and host nothing. New sessions only land on the current devenv and
+/// upgrades only move sessions to it, so an emptied non-current container
+/// can never become non-empty again — there is nothing a retention window
+/// would preserve. A stopped non-current container's shells are already
+/// gone and goes regardless.
+async fn reap_emptied_containers(
+    link: &Arc<DevenvLink>,
+    current_image_id: Option<&str>,
+) -> anyhow::Result<()> {
+    let output = tokio::process::Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            &format!("label={OWNER_LABEL}"),
+            "--format",
+            "{{.Names}}",
+        ])
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "docker ps failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let names: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(String::from)
+        .collect();
+    for name in names {
+        let Some(state) = inspect_container(&name).await? else {
+            continue;
+        };
+        if !state.owned {
+            continue;
+        }
+        // Phase-1 containers carry no image-id label and host the
+        // default-ident sessions.
+        let ident = state
+            .image_id
+            .as_deref()
+            .unwrap_or(super::link::DEFAULT_IDENT);
+        let is_current =
+            current_image_id.is_some() && state.image_id.as_deref() == current_image_id;
+        let hosted = link.hosted_sessions(ident).await;
+        if should_reap(state.running, is_current, hosted) {
+            tracing::info!(%name, hosted, running = state.running, "reaping emptied devenv container");
+            run_docker(&["rm", "-f", &name]).await?;
+        }
+    }
+    Ok(())
+}
+
+/// The reap decision, kept pure for testing: never the current container,
+/// never one still hosting sessions; stopped non-current containers always.
+fn should_reap(running: bool, is_current: bool, hosted: usize) -> bool {
+    if is_current {
+        return false;
+    }
+    if !running {
+        return true;
+    }
+    hosted == 0
 }
 
 /// Ensures the container for the current image identity and returns that
@@ -337,6 +409,8 @@ fn container_name_for(image_id: &str) -> String {
 struct ContainerState {
     running: bool,
     owned: bool,
+    /// The `sulion.devenv.image-id` label; absent on phase-1 containers.
+    image_id: Option<String>,
 }
 
 async fn inspect_container(name: &str) -> anyhow::Result<Option<ContainerState>> {
@@ -356,7 +430,16 @@ async fn inspect_container(name: &str) -> anyhow::Result<Option<ContainerState>>
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
     let owned = container_labels_owned(entry);
-    Ok(Some(ContainerState { running, owned }))
+    let image_id = entry
+        .pointer("/Config/Labels")
+        .and_then(|labels| labels.get(format!("{OWNER_LABEL}.image-id")))
+        .and_then(|value| value.as_str())
+        .map(String::from);
+    Ok(Some(ContainerState {
+        running,
+        owned,
+        image_id,
+    }))
 }
 
 /// Label validation before adoption, same posture as the dev-postgres
@@ -477,6 +560,18 @@ mod tests {
             delivered_binary_path(std::path::Path::new("/run/sulion"), "0011aabb", "sulion"),
             std::path::PathBuf::from("/run/sulion/devenv-bin/0011aabb/sulion")
         );
+    }
+
+    #[test]
+    fn reaps_only_emptied_non_current_containers() {
+        // The current container is never reaped, whatever its state.
+        assert!(!should_reap(true, true, 0));
+        assert!(!should_reap(false, true, 0));
+        // A running non-current container survives while it hosts sessions.
+        assert!(!should_reap(true, false, 3));
+        assert!(should_reap(true, false, 0));
+        // A stopped non-current container's shells are already gone.
+        assert!(should_reap(false, false, 5));
     }
 
     #[test]

@@ -169,8 +169,8 @@ the standalone role and the e2e stack still pass on the child-process mode.
 | # | Decision |
 | - | -------- |
 | 1 | **Resolved:** the devenv ships as its own toolset-only image, listed in `platform.yml`. A separate image is what stops the toolchain rebuilding on every commit (requirement 5) |
-| 2 | Does "upgrade this session" restart the shell in place, or start a fresh one resuming the agent transcript? |
-| 3 | Reap an emptied container immediately, or after a retention window? |
+| 2 | **Resolved:** restart in place — the session keeps its identity and workspace binding; a fresh default shell starts on the current toolset in the same working directory. No agent-specific logic; resuming an agent is the existing resume flow's job |
+| 3 | **Resolved:** reap immediately — new sessions and upgrades only ever land on the current devenv, so an emptied non-current container can never refill; a retention window would preserve nothing. Stopped non-current containers are reaped regardless |
 | 4 | **Resolved:** the node delivers its per-release devenv server binary via the shared run volume; the container execs the versioned path. A thin per-commit binary layer was rejected because it mints a devenv tag per commit, rolling containers on every release and defeating requirement 5 in spirit |
 | 5 | **Resolved:** the shared workflow now supports opt-in `content_addressed_images` in `platform.yml` (change staged in `~/repos/ahara`, uncommitted). Listed images are tagged with the git tree hash of their component directory (`:t-<tree>`); when that tag already exists in GHCR the build is skipped and `:$SHA`/`:latest` are re-pointed at the existing image. Unchanged toolset ⇒ provably identical image content — not merely cache-probably, which matters because a cache-evicted rebuild is not bit-reproducible and would otherwise mint a spurious new image ID. Phase 2 lists `devenv` there; the node rolls containers only when the pulled `:$SHA` image ID differs from the running container's, which under this scheme happens exactly when the toolset tree changed |
 

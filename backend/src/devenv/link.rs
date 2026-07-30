@@ -248,6 +248,20 @@ impl DevenvLink {
         !self.state.lock().await.connections.is_empty()
     }
 
+    /// Idents of the devenvs currently connected.
+    pub async fn connected_idents(&self) -> Vec<String> {
+        let mut idents: Vec<String> = self
+            .state
+            .lock()
+            .await
+            .connections
+            .keys()
+            .cloned()
+            .collect();
+        idents.sort();
+        idents
+    }
+
     /// Ids of sessions any connected devenv hosts, from this link's view.
     pub async fn live_ids(&self) -> Vec<Uuid> {
         let mut ids: Vec<Uuid> = self.state.lock().await.outputs.keys().copied().collect();
@@ -258,6 +272,20 @@ impl DevenvLink {
     /// The node-side fan-out for a session's output.
     pub async fn output_sender(&self, id: Uuid) -> Option<broadcast::Sender<Vec<u8>>> {
         self.state.lock().await.outputs.get(&id).cloned()
+    }
+
+    /// How many sessions a devenv currently hosts, from this link's view.
+    /// Entries persist across that devenv's disconnects — only an exit or a
+    /// hello that omits the session removes them — so a momentary reconnect
+    /// gap never reads as "empty".
+    pub async fn hosted_sessions(&self, ident: &str) -> usize {
+        self.state
+            .lock()
+            .await
+            .session_host
+            .values()
+            .filter(|host| host.as_str() == ident)
+            .count()
     }
 
     /// Spawns on the current devenv and returns the ident it landed on.
