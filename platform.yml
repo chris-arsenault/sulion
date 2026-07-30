@@ -19,6 +19,13 @@ images:
   - code-intel
   - runner
   - frontend
+  - devenv
+# The devenv image is the PTY toolset with no per-commit binaries: tagged by
+# its directory's git tree hash and skipped entirely when unchanged, so its
+# image ID moves only when toolset content does. The node rolls devenv
+# containers on image-ID change, never on release.
+content_addressed_images:
+  - devenv
 rust_artifacts:
   binaries:
     - { bin: sulion, image: backend }

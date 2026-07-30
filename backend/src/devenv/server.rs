@@ -27,6 +27,9 @@ use super::protocol::{
 const OUTBOUND_CAPACITY: usize = 4096;
 
 pub struct DevenvServer {
+    /// This devenv's identity — the image ID of the container it runs in.
+    /// None for child mode, which has no image.
+    ident: Option<String>,
     sessions: Mutex<HashMap<Uuid, Arc<HostedPty>>>,
 }
 
@@ -38,7 +41,12 @@ impl Default for DevenvServer {
 
 impl DevenvServer {
     pub fn new() -> Self {
+        Self::with_ident(None)
+    }
+
+    pub fn with_ident(ident: Option<String>) -> Self {
         Self {
+            ident,
             sessions: Mutex::new(HashMap::new()),
         }
     }
@@ -81,6 +89,7 @@ impl DevenvServer {
                 &outbound_tx,
                 &DevenvToNode::Hello {
                     pid: std::process::id(),
+                    ident: self.ident.clone(),
                     sessions: inventory,
                 },
             )

@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -lt 2 ]; then
+  echo "usage: with-cred [secret-id] -- <command...>" >&2
+  exit 64
+fi
+
+SECRET_ID=""
+if [ "$1" != "--" ]; then
+  SECRET_ID="$1"
+  shift
+fi
+
+if [ "$1" != "--" ]; then
+  echo "usage: with-cred [secret-id] -- <command...>" >&2
+  exit 64
+fi
+shift
+
+if [ "$#" -eq 0 ]; then
+  echo "with-cred: missing command" >&2
+  exit 64
+fi
+
+if [ -n "${SECRET_ID}" ]; then
+  exec /usr/local/bin/sulion credential-helper \
+    --tool with-cred \
+    --secret "${SECRET_ID}" \
+    -- "$@"
+fi
+
+exec /usr/local/bin/sulion credential-helper \
+  --tool with-cred \
+  -- "$@"

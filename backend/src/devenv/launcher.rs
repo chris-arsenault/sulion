@@ -74,11 +74,14 @@ impl LauncherConfig {
 /// Starts the link's listener and whatever keeps a devenv dialing it.
 pub fn start(link: Arc<DevenvLink>, config: LauncherConfig) {
     let socket_path = config.socket_path.clone();
-    tokio::spawn(async move {
-        if let Err(error) = link.run_listener(socket_path).await {
-            tracing::error!(%error, "devenv listener exited");
-        }
-    });
+    {
+        let link = link.clone();
+        tokio::spawn(async move {
+            if let Err(error) = link.run_listener(socket_path).await {
+                tracing::error!(%error, "devenv listener exited");
+            }
+        });
+    }
     match config.mode {
         LaunchMode::Child => {
             tokio::spawn(supervise_child(config.socket_path));
@@ -89,6 +92,7 @@ pub fn start(link: Arc<DevenvLink>, config: LauncherConfig) {
             run_volume,
         } => {
             tokio::spawn(ensure_container_loop(
+                link,
                 config.socket_path,
                 image,
                 home_host_path,
@@ -132,59 +136,202 @@ fn child_binary_path() -> PathBuf {
     if let Ok(path) = std::env::var("SULION_DEVENV_BIN") {
         return PathBuf::from(path);
     }
+    sibling_binary_path("sulion-devenv")
+}
+
+/// A binary shipped next to this process in the same image, with a PATH
+/// lookup as the fallback for test and development layouts.
+fn sibling_binary_path(name: &str) -> PathBuf {
     if let Ok(current) = std::env::current_exe() {
         if let Some(dir) = current.parent() {
-            let sibling = dir.join("sulion-devenv");
+            let sibling = dir.join(name);
             if sibling.is_file() {
                 return sibling;
             }
         }
     }
-    PathBuf::from("sulion-devenv")
+    PathBuf::from(name)
 }
 
-/// Container mode: make sure the label-owned container exists and runs, then
-/// keep checking cheaply. Docker's restart policy handles crashes; this loop
-/// handles the container being absent or stopped entirely.
+/// Container mode: resolve the current toolset's image identity, publish it
+/// as the target for new sessions, and make sure exactly that container
+/// exists and runs — leaving every other devenv container untouched, because
+/// they are still serving the sessions that started on them. Docker's
+/// restart policy handles crashes; this loop handles absence.
 async fn ensure_container_loop(
+    link: Arc<DevenvLink>,
     socket_path: PathBuf,
     image: String,
     home_host_path: String,
     run_volume: String,
 ) {
+    let mut published_ident: Option<String> = None;
     loop {
-        if let Err(error) =
-            ensure_container(&socket_path, &image, &home_host_path, &run_volume).await
-        {
-            tracing::error!(%error, "devenv container ensure failed; retrying");
+        match ensure_current_container(&socket_path, &image, &home_host_path, &run_volume).await {
+            Ok(image_id) => {
+                if published_ident.as_deref() != Some(image_id.as_str()) {
+                    link.set_current_ident(Some(image_id.clone())).await;
+                    published_ident = Some(image_id);
+                }
+            }
+            Err(error) => {
+                tracing::error!(%error, "devenv container ensure failed; retrying");
+            }
         }
         tokio::time::sleep(Duration::from_secs(60)).await;
     }
 }
 
-async fn ensure_container(
+/// Ensures the container for the current image identity and returns that
+/// identity. Per decision 5 the identity is the image ID: the `:sha` tag
+/// changes every release, while the ID changes exactly when toolset content
+/// does — so a backend-only release resolves to the already-running
+/// container and rolls nothing.
+async fn ensure_current_container(
     socket_path: &std::path::Path,
     image: &str,
     home_host_path: &str,
     run_volume: &str,
-) -> anyhow::Result<()> {
-    if let Some(state) = inspect_container().await? {
+) -> anyhow::Result<String> {
+    let image_id = resolve_image_id(image).await?;
+    let name = container_name_for(&image_id);
+    if let Some(state) = inspect_container(&name).await? {
         if !state.owned {
             anyhow::bail!(
-                "container {CONTAINER_NAME} exists without the {OWNER_LABEL} label; refusing to adopt it"
+                "container {name} exists without the {OWNER_LABEL} label; refusing to adopt it"
             );
         }
         if state.running {
-            return Ok(());
+            return Ok(image_id);
         }
-        tracing::warn!("devenv container exists but is not running; replacing it");
-        run_docker(&["rm", "-f", CONTAINER_NAME]).await?;
+        // A stopped devenv's shells are already gone; replacing it loses
+        // nothing.
+        tracing::warn!(%name, "devenv container exists but is not running; replacing it");
+        run_docker(&["rm", "-f", &name]).await?;
     }
-    let args = container_run_args(socket_path, image, home_host_path, run_volume);
+    // Deliver this node's per-commit binaries through the shared run
+    // volume; the image itself carries only the toolset. The server binary
+    // is exec'd at its versioned path; the CLI additionally gets a stable
+    // symlink because the image's /usr/local/bin/sulion points at it.
+    let exec_path = match deliver_versioned_binary(socket_path, "sulion-devenv").await {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::warn!(%error, "devenv binary delivery failed; using the image's own binary");
+            PathBuf::from("/usr/local/bin/sulion-devenv")
+        }
+    };
+    if let Err(error) = deliver_cli_binary(socket_path).await {
+        tracing::warn!(%error, "sulion CLI delivery failed; PTY wrappers may not resolve");
+    }
+    let args = container_run_args(
+        socket_path,
+        image,
+        home_host_path,
+        run_volume,
+        &image_id,
+        &exec_path,
+    );
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     run_docker(&args).await?;
-    tracing::info!(%image, "devenv container started");
+    tracing::info!(%image, %image_id, "devenv container started");
+    Ok(image_id)
+}
+
+/// The image ID of a reference, pulling it if the daemon does not have it.
+async fn resolve_image_id(image: &str) -> anyhow::Result<String> {
+    if let Some(id) = inspect_image_id(image).await? {
+        return Ok(id);
+    }
+    run_docker(&["pull", image]).await?;
+    inspect_image_id(image)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("image {image} has no ID after pull"))
+}
+
+async fn inspect_image_id(image: &str) -> anyhow::Result<Option<String>> {
+    let output = tokio::process::Command::new("docker")
+        .args(["image", "inspect", "--format", "{{.Id}}", image])
+        .output()
+        .await?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!id.is_empty()).then_some(id))
+}
+
+/// Copies one of this node's binaries onto the run volume at a
+/// content-hashed, write-once path and returns it — the same path inside the
+/// container, which mounts the same volume at the same place.
+async fn deliver_versioned_binary(
+    socket_path: &std::path::Path,
+    name: &str,
+) -> anyhow::Result<PathBuf> {
+    let source = if name == "sulion-devenv" {
+        child_binary_path()
+    } else {
+        sibling_binary_path(name)
+    };
+    let bytes = tokio::fs::read(&source)
+        .await
+        .map_err(|err| anyhow::anyhow!("read {}: {err}", source.display()))?;
+    let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
+    let hash: String = digest.as_ref()[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let run_root = socket_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("devenv socket path has no parent"))?;
+    let target = delivered_binary_path(run_root, &hash, name);
+    if !tokio::fs::try_exists(&target).await.unwrap_or(false) {
+        let dir = target
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("delivered path has no parent"))?;
+        tokio::fs::create_dir_all(dir).await?;
+        // Staging + rename so a concurrent launch never sees a half-written
+        // binary at the versioned path, which is never overwritten in place.
+        let staging = dir.join(format!(".staging-{name}"));
+        tokio::fs::write(&staging, &bytes).await?;
+        let mut perms = tokio::fs::metadata(&staging).await?.permissions();
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o755);
+        tokio::fs::set_permissions(&staging, perms).await?;
+        tokio::fs::rename(&staging, &target).await?;
+    }
+    Ok(target)
+}
+
+/// Delivers the `sulion` CLI and points the stable `<run>/bin/sulion`
+/// symlink at it — the toolset image's /usr/local/bin/sulion resolves
+/// through that link. Swapped atomically; the CLI's node-facing protocols
+/// are additive, so running shells tolerate the version moving forward.
+async fn deliver_cli_binary(socket_path: &std::path::Path) -> anyhow::Result<()> {
+    let target = deliver_versioned_binary(socket_path, "sulion").await?;
+    let run_root = socket_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("devenv socket path has no parent"))?;
+    let bin_dir = run_root.join("bin");
+    tokio::fs::create_dir_all(&bin_dir).await?;
+    let staging = bin_dir.join(".sulion.next");
+    let _ = tokio::fs::remove_file(&staging).await;
+    tokio::fs::symlink(&target, &staging).await?;
+    tokio::fs::rename(&staging, bin_dir.join("sulion")).await?;
     Ok(())
+}
+
+fn delivered_binary_path(run_root: &std::path::Path, hash: &str, name: &str) -> PathBuf {
+    run_root.join("devenv-bin").join(hash).join(name)
+}
+
+/// One container per toolset image identity.
+fn container_name_for(image_id: &str) -> String {
+    let short: String = image_id
+        .trim_start_matches("sha256:")
+        .chars()
+        .take(12)
+        .collect();
+    format!("{CONTAINER_NAME}-{short}")
 }
 
 struct ContainerState {
@@ -192,9 +339,9 @@ struct ContainerState {
     owned: bool,
 }
 
-async fn inspect_container() -> anyhow::Result<Option<ContainerState>> {
+async fn inspect_container(name: &str) -> anyhow::Result<Option<ContainerState>> {
     let output = tokio::process::Command::new("docker")
-        .args(["inspect", CONTAINER_NAME])
+        .args(["inspect", name])
         .output()
         .await?;
     if !output.status.success() {
@@ -227,14 +374,18 @@ fn container_run_args(
     image: &str,
     home_host_path: &str,
     run_volume: &str,
+    image_id: &str,
+    exec_path: &std::path::Path,
 ) -> Vec<String> {
     vec![
         "run".into(),
         "-d".into(),
         "--name".into(),
-        CONTAINER_NAME.into(),
+        container_name_for(image_id),
         "--label".into(),
         format!("{OWNER_LABEL}=1"),
+        "--label".into(),
+        format!("{OWNER_LABEL}.image-id={image_id}"),
         // Restart policy covers daemon restarts and crashes; the node's
         // ensure loop covers absence. Neither ever recreates a healthy
         // running container.
@@ -246,6 +397,8 @@ fn container_run_args(
         "host".into(),
         "-e".into(),
         format!("SULION_DEVENV_SOCK={}", socket_path.display()),
+        "-e".into(),
+        format!("SULION_DEVENV_IDENT={image_id}"),
         "-v".into(),
         format!("{home_host_path}:/home/sulion"),
         "-v".into(),
@@ -255,9 +408,10 @@ fn container_run_args(
         image.into(),
         "--".into(),
         // Through the image entrypoint: it seeds the home-directory config
-        // PTY sessions rely on, then execs its argument.
+        // PTY sessions rely on, then execs its argument — the server binary
+        // this node delivered onto the run volume.
         "/opt/sulion/entrypoint.sh".into(),
-        "/usr/local/bin/sulion-devenv".into(),
+        exec_path.display().to_string(),
     ]
 }
 
@@ -281,23 +435,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn container_args_carry_label_mounts_and_host_network() {
+    fn container_args_carry_identity_label_mounts_and_host_network() {
         let args = container_run_args(
             std::path::Path::new("/run/sulion/devenv.sock"),
-            "ghcr.io/example/backend:abc",
+            "ghcr.io/example/devenv:abc",
             "/home/sulion",
             "sulion_sulion_run",
+            "sha256:0123456789abcdef",
+            std::path::Path::new("/run/sulion/devenv-bin/cafe/sulion-devenv"),
         );
         let joined = args.join(" ");
+        assert!(joined.contains("--name sulion-devenv-0123456789ab"));
         assert!(joined.contains("--label sulion.devenv=1"));
+        assert!(joined.contains("--label sulion.devenv.image-id=sha256:0123456789abcdef"));
         assert!(joined.contains("--network host"));
         assert!(joined.contains("-v /home/sulion:/home/sulion"));
         assert!(joined.contains("-v sulion_sulion_run:/run/sulion"));
         assert!(joined.contains("--restart unless-stopped"));
         assert!(joined.contains("-e SULION_DEVENV_SOCK=/run/sulion/devenv.sock"));
+        assert!(joined.contains("-e SULION_DEVENV_IDENT=sha256:0123456789abcdef"));
         assert!(joined.ends_with(
-            "ghcr.io/example/backend:abc -- /opt/sulion/entrypoint.sh /usr/local/bin/sulion-devenv"
+            "ghcr.io/example/devenv:abc -- /opt/sulion/entrypoint.sh /run/sulion/devenv-bin/cafe/sulion-devenv"
         ));
+    }
+
+    #[test]
+    fn container_names_and_delivery_paths_are_versioned() {
+        assert_eq!(
+            container_name_for("sha256:deadbeefcafe0123"),
+            "sulion-devenv-deadbeefcafe"
+        );
+        assert_eq!(
+            delivered_binary_path(
+                std::path::Path::new("/run/sulion"),
+                "0011aabb",
+                "sulion-devenv"
+            ),
+            std::path::PathBuf::from("/run/sulion/devenv-bin/0011aabb/sulion-devenv")
+        );
+        assert_eq!(
+            delivered_binary_path(std::path::Path::new("/run/sulion"), "0011aabb", "sulion"),
+            std::path::PathBuf::from("/run/sulion/devenv-bin/0011aabb/sulion")
+        );
     }
 
     #[test]

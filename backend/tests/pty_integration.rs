@@ -202,6 +202,34 @@ async fn startup_reconciliation_transitions_live_rows_to_orphaned() {
 }
 
 #[tokio::test]
+async fn spawn_records_the_hosting_devenv_ident() {
+    let pool = fresh_pool().await;
+    let mgr = common::devenv_backed_pty_manager(pool.clone()).await;
+    let meta = mgr
+        .spawn(SpawnParams {
+            repo: "ident".into(),
+            working_dir: PathBuf::from("/tmp"),
+            shell: PathBuf::from("/bin/sleep"),
+            args: vec!["60".into()],
+            ..Default::default()
+        })
+        .await
+        .expect("spawn");
+
+    // The in-process harness devenv announces no identity, so sessions land
+    // on the default host — and the row records which devenv serves them.
+    let ident: Option<String> =
+        sqlx::query_scalar("SELECT devenv_ident FROM pty_sessions WHERE id = $1")
+            .bind(meta.id)
+            .fetch_one(&pool)
+            .await
+            .expect("read devenv_ident");
+    assert_eq!(ident.as_deref(), Some("default"));
+
+    mgr.delete(meta.id).await.expect("delete");
+}
+
+#[tokio::test]
 async fn input_echoes_back_through_the_devenv_link() {
     let pool = fresh_pool().await;
     let mgr = common::devenv_backed_pty_manager(pool.clone()).await;

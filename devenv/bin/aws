@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+exec /usr/local/bin/sulion credential-helper \
+  --tool aws \
+  -- /usr/bin/aws "$@"

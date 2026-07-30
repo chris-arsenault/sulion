@@ -50,6 +50,10 @@ pub enum DevenvToNode {
     Hello {
         #[serde(default)]
         pid: u32,
+        /// Which devenv this is — the image ID of the container it runs in.
+        /// Absent for child-mode devenvs and pre-versioning containers.
+        #[serde(default)]
+        ident: Option<String>,
         #[serde(default)]
         sessions: Vec<InventoryEntry>,
     },
@@ -145,12 +149,34 @@ mod tests {
 
     #[test]
     fn missing_defaulted_fields_decode() {
+        // A phase-1 devenv sends no ident; the hello must still decode.
         let line = r#"{"kind":"hello"}"#;
         let msg: DevenvToNode = decode_line(line).expect("decodes");
         match msg {
-            DevenvToNode::Hello { pid, sessions } => {
+            DevenvToNode::Hello {
+                pid,
+                ident,
+                sessions,
+            } => {
                 assert_eq!(pid, 0);
+                assert_eq!(ident, None);
                 assert!(sessions.is_empty());
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hello_ident_round_trips() {
+        let line = encode_line(&DevenvToNode::Hello {
+            pid: 7,
+            ident: Some("sha256:abc".into()),
+            sessions: Vec::new(),
+        })
+        .expect("encode");
+        match decode_line::<DevenvToNode>(&line).expect("decode") {
+            DevenvToNode::Hello { ident, .. } => {
+                assert_eq!(ident.as_deref(), Some("sha256:abc"));
             }
             other => panic!("wrong variant: {other:?}"),
         }

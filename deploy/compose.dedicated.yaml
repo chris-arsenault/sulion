@@ -20,8 +20,10 @@ services:
       DOCKER_HOST: unix:///var/run/docker.sock
       # The devenv container the node launches for PTY hosting. Deliberately
       # not a compose service: the node deploy's --remove-orphans must never
-      # recreate it — that is what lets shells outlive node releases.
-      SULION_DEVENV_IMAGE: ${SULION_IMAGE_REGISTRY:-ghcr.io/chris-arsenault/sulion}/backend:${IMAGE_TAG:-latest}
+      # recreate it — that is what lets shells outlive node releases. The
+      # :sha tag changes every release, but the node keys containers on the
+      # image ID, which moves only when toolset content does.
+      SULION_DEVENV_IMAGE: ${SULION_IMAGE_REGISTRY:-ghcr.io/chris-arsenault/sulion}/devenv:${IMAGE_TAG:-latest}
       SULION_DEVENV_HOME_HOST_PATH: ${SULION_HOME_HOST_PATH:-/home/sulion}
       # Volume name as the host daemon knows it: <project>_<volume key>,
       # project pinned to "sulion" by the deploy script.

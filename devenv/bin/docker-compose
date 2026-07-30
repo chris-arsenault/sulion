@@ -1,0 +1,13 @@
+#!/bin/sh
+case "${SULION_DOCKER_MODE:-brokered}" in
+  direct)
+    exec /usr/bin/docker compose "$@"
+    ;;
+  brokered)
+    exec /usr/local/bin/sulion runner-client compose "$@"
+    ;;
+  *)
+    echo "unsupported SULION_DOCKER_MODE: ${SULION_DOCKER_MODE}" >&2
+    exit 64
+    ;;
+esac

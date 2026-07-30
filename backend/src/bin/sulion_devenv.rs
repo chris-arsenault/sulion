@@ -25,8 +25,15 @@ async fn main() -> anyhow::Result<()> {
         .map(|value| value == "1")
         .unwrap_or(false);
 
-    let server = Arc::new(sulion::devenv::server::DevenvServer::new());
-    tracing::info!(%socket_path, exit_on_disconnect, "devenv server starting");
+    // The image ID of the container this devenv runs in, injected by the
+    // launcher. Absent in child mode.
+    let ident = std::env::var("SULION_DEVENV_IDENT")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let server = Arc::new(sulion::devenv::server::DevenvServer::with_ident(
+        ident.clone(),
+    ));
+    tracing::info!(%socket_path, exit_on_disconnect, ident = ?ident, "devenv server starting");
 
     let mut backoff = Duration::from_millis(200);
     let mut failing_since: Option<std::time::Instant> = None;

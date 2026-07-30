@@ -147,6 +147,8 @@ pub struct PtySession {
     /// Node-side fan-out of PTY output bytes, fed by the devenv link. Every
     /// subscriber (WS attacher) gets a copy. Closes when the shell exits.
     pub output: broadcast::Sender<Vec<u8>>,
+    /// Which devenv hosts this session's process.
+    pub devenv_ident: String,
     link: Arc<DevenvLink>,
 }
 
@@ -257,26 +259,33 @@ impl PtyManager {
                 LinkEvent::Exited { id, exit_code } => {
                     self.mark_dead(id, exit_code).await;
                 }
-                LinkEvent::Connected { sessions } => {
-                    self.sync_with_inventory(&sessions).await;
+                LinkEvent::Connected { ident, sessions } => {
+                    self.sync_with_inventory(&ident, &sessions).await;
                 }
             }
         }
     }
 
-    /// On devenv (re)connect: adopt hosted sessions this manager has no
-    /// handle for, and declare dead anything it tracked that the devenv no
-    /// longer hosts.
-    async fn sync_with_inventory(self: &Arc<Self>, inventory: &[Uuid]) {
+    /// On a devenv's (re)connect: adopt hosted sessions this manager has no
+    /// handle for, and declare dead anything it tracked *on that devenv*
+    /// that it no longer hosts. Sessions hosted by other devenvs are not
+    /// this hello's to judge.
+    async fn sync_with_inventory(self: &Arc<Self>, ident: &str, inventory: &[Uuid]) {
         let Ok(link) = self.link() else { return };
-        let tracked: Vec<Uuid> = self.sessions.read().await.keys().copied().collect();
-        for id in &tracked {
-            if !inventory.contains(id) {
+        let tracked: Vec<(Uuid, String)> = self
+            .sessions
+            .read()
+            .await
+            .values()
+            .map(|session| (session.id, session.devenv_ident.clone()))
+            .collect();
+        for (id, host) in &tracked {
+            if host == ident && !inventory.contains(id) {
                 self.mark_dead(*id, None).await;
             }
         }
         for id in inventory {
-            if tracked.contains(id) {
+            if tracked.iter().any(|(tracked_id, _)| tracked_id == id) {
                 continue;
             }
             let row = match read_meta(&self.pool, *id).await {
@@ -299,10 +308,19 @@ impl PtyManager {
                 working_dir: row.working_dir.clone(),
                 workspace: row.workspace.clone(),
                 output,
+                devenv_ident: ident.to_string(),
                 link: link.clone(),
             });
             self.sessions.write().await.insert(*id, session);
-            tracing::info!(%id, "adopted devenv-hosted session");
+            if let Err(err) = sqlx::query("UPDATE pty_sessions SET devenv_ident = $2 WHERE id = $1")
+                .bind(id)
+                .bind(ident)
+                .execute(&self.pool)
+                .await
+            {
+                tracing::warn!(%id, %err, "failed to record adopted session's devenv");
+            }
+            tracing::info!(%id, %ident, "adopted devenv-hosted session");
         }
     }
 }
@@ -409,7 +427,7 @@ impl PtyManager {
         .execute(&self.pool)
         .await?;
 
-        if let Err(err) = link
+        let devenv_ident = match link
             .spawn(HostSpawnSpec {
                 id,
                 shell: params.shell.clone(),
@@ -421,20 +439,20 @@ impl PtyManager {
             })
             .await
         {
-            // The row was written on the promise of a process; without one it
-            // would sit in the sidebar as a live husk. Deleted also keeps it
-            // out of every listing.
-            sqlx::query(
-                "UPDATE pty_sessions SET state = 'deleted', ended_at = NOW() \
-                 WHERE id = $1 AND state = 'live'",
-            )
+            Ok(ident) => ident,
+            Err(err) => {
+                self.abandon_unspawned_row(id).await;
+                return Err(err);
+            }
+        };
+        // Recorded after the spawn because the spawn is what decides the
+        // host. An exit event racing this update touches different columns.
+        sqlx::query("UPDATE pty_sessions SET devenv_ident = $2 WHERE id = $1")
             .bind(id)
+            .bind(&devenv_ident)
             .execute(&self.pool)
             .await
             .ok();
-            crate::secret_pty::revoke_pty_credential(id).await;
-            return Err(err);
-        }
 
         match link.output_sender(id).await {
             Some(output) => {
@@ -444,6 +462,7 @@ impl PtyManager {
                     working_dir: meta.working_dir.clone(),
                     workspace: meta.workspace.clone(),
                     output,
+                    devenv_ident,
                     link,
                 });
                 self.sessions.write().await.insert(id, session);
@@ -456,6 +475,21 @@ impl PtyManager {
         }
 
         Ok(meta)
+    }
+
+    /// The row was written on the promise of a process; without one it would
+    /// sit in the sidebar as a live husk. Deleted also keeps it out of every
+    /// listing.
+    async fn abandon_unspawned_row(&self, id: Uuid) {
+        sqlx::query(
+            "UPDATE pty_sessions SET state = 'deleted', ended_at = NOW() \
+             WHERE id = $1 AND state = 'live'",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .ok();
+        crate::secret_pty::revoke_pty_credential(id).await;
     }
 
     pub async fn get(&self, id: Uuid) -> Option<Arc<PtySession>> {
