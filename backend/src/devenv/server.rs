@@ -182,7 +182,12 @@ impl DevenvServer {
             }
         }
 
+        // The pumps hold clones of `outbound_tx`, so the writer's queue never
+        // closes on its own — and an idle devenv (no output frames to fail a
+        // write) would keep serve() from returning, which is what lets the
+        // caller notice the disconnect and redial. Tear the writer down.
         drop(outbound_tx);
+        writer.abort();
         let _ = writer.await;
     }
 
@@ -517,6 +522,49 @@ mod tests {
                 "session not removed after exit"
             );
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn serve_returns_on_disconnect_while_sessions_are_idle() {
+        let server = Arc::new(DevenvServer::new());
+        let (node_side, devenv_side) = tokio::io::duplex(1024 * 1024);
+        let serve_task = tokio::spawn(server.clone().serve(devenv_side));
+        let (read, write) = tokio::io::split(node_side);
+        let mut node = TestNode {
+            lines: BufReader::new(read).lines(),
+            write,
+        };
+        let _hello = node.next().await;
+
+        // A shell that emits nothing: the disconnect must be noticed without
+        // an output frame failing a write first.
+        let spec = HostSpawnSpec {
+            id: Uuid::new_v4(),
+            shell: crate::pty::default_shell(),
+            args: vec!["-c".into(), "sleep 30".into()],
+            working_dir: "/".into(),
+            env: vec![("PATH".into(), "/usr/bin:/bin".into())],
+            cols: 80,
+            rows: 24,
+        };
+        node.send(&NodeToDevenv::Spawn {
+            reply_id: Uuid::new_v4(),
+            spec,
+        })
+        .await;
+        let _spawn_result = node.next().await;
+
+        drop(node);
+        tokio::time::timeout(std::time::Duration::from_secs(10), serve_task)
+            .await
+            .expect("serve must return once the connection drops")
+            .expect("serve task must not panic");
+
+        // Reap the idle shell so its PTY reader does not outlive the test.
+        let ptys: Vec<_> = server.sessions.lock().await.values().cloned().collect();
+        for pty in ptys {
+            pty.kill().await;
         }
     }
 

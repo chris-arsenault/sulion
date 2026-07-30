@@ -266,7 +266,7 @@ async fn send_heartbeat_with_host(
     live_session_ids: Vec<Uuid>,
     host: Option<NodeHostStats>,
 ) {
-    let envelope = heartbeat_envelope(node_id, boot_id, live_session_ids, true, host);
+    let envelope = heartbeat_envelope(node_id, boot_id, live_session_ids, true, host, None);
     socket
         .send(Message::Text(
             serde_json::to_string(&NodeWireMessage::Envelope { envelope }).expect("heartbeat json"),

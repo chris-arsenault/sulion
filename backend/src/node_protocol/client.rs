@@ -396,6 +396,7 @@ async fn connect_once(
                     runtime.live_session_ids().await,
                     true,
                     Some(runtime.host_stats().await),
+                    runtime.devenv_status().await,
                 );
                 send_node_envelope(&mut sink, heartbeat).await?;
             }

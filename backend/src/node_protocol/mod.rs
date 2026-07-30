@@ -27,11 +27,11 @@ pub use config::NodeRuntimeConfig;
 pub use identity::ControlIdentity;
 pub use lan::{NodeLanGuard, NodeSourcePolicy, SourceRefusal};
 pub use model::{
-    ControlHelloProof, NodeConfigPayload, NodeHello, NodeHostStats, NodeRequestKind, NodeView,
-    RequestResultPayload, RequestResultStatus, TerminalBytesPayload, TerminalDeadPayload,
-    TerminalResizePayload, WireEnvelope, DEDICATED_NODE_ID, DEFAULT_HEARTBEAT_INTERVAL_SECS,
-    DEFAULT_HEARTBEAT_TIMEOUT_SECS, DEFAULT_NODE_LAN_CIDR, MAX_NODE_FRAME_BYTES,
-    NODE_PROTOCOL_VERSION,
+    ControlHelloProof, NodeConfigPayload, NodeDevenvStatus, NodeHello, NodeHostStats,
+    NodeRequestKind, NodeView, RequestResultPayload, RequestResultStatus, TerminalBytesPayload,
+    TerminalDeadPayload, TerminalResizePayload, WireEnvelope, DEDICATED_NODE_ID,
+    DEFAULT_HEARTBEAT_INTERVAL_SECS, DEFAULT_HEARTBEAT_TIMEOUT_SECS, DEFAULT_NODE_LAN_CIDR,
+    MAX_NODE_FRAME_BYTES, NODE_PROTOCOL_VERSION,
 };
 pub use pin::{ControlPin, PinOutcome};
 pub use transport::{admin_router, public_router};
@@ -72,6 +72,9 @@ pub struct NodeControl {
     /// only: it is dropped on disconnect rather than aged, because a stale
     /// figure from a node that is gone is worse than no figure.
     host_stats: Arc<RwLock<HashMap<Uuid, NodeHostStats>>>,
+    /// Latest devenv link report from each connected node, same lifecycle as
+    /// `host_stats`: current only, dropped on disconnect.
+    devenv_status: Arc<RwLock<HashMap<Uuid, NodeDevenvStatus>>>,
     heartbeat_interval_seconds: u64,
     heartbeat_timeout_seconds: u64,
     /// Runtime configuration handed to a node once it authenticates. Unset
@@ -177,6 +180,8 @@ struct HeartbeatPayload {
     inventory_complete: bool,
     #[serde(default)]
     host: Option<NodeHostStats>,
+    #[serde(default)]
+    devenv: Option<NodeDevenvStatus>,
 }
 
 impl NodeControl {
@@ -199,6 +204,7 @@ impl NodeControl {
             request_waiters: Arc::new(RwLock::new(HashMap::new())),
             terminal_streams: Arc::new(RwLock::new(HashMap::new())),
             host_stats: Arc::new(RwLock::new(HashMap::new())),
+            devenv_status: Arc::new(RwLock::new(HashMap::new())),
             heartbeat_interval_seconds,
             heartbeat_timeout_seconds,
             delivered_config: std::sync::OnceLock::new(),
@@ -439,6 +445,12 @@ impl NodeControl {
                 if let Some(host) = payload.host {
                     self.host_stats.write().await.insert(envelope.node_id, host);
                 }
+                if let Some(devenv) = payload.devenv {
+                    self.devenv_status
+                        .write()
+                        .await
+                        .insert(envelope.node_id, devenv);
+                }
             }
             "request.result" => {
                 let request_id = envelope.request_id.ok_or_else(|| {
@@ -489,6 +501,7 @@ impl NodeControl {
         {
             active.remove(&node_id);
             self.host_stats.write().await.remove(&node_id);
+            self.devenv_status.write().await.remove(&node_id);
         }
         drop(active);
         let streams = self
@@ -511,6 +524,7 @@ impl NodeControl {
     async fn cancel_active(&self, node_id: Uuid) {
         if let Some(connection) = self.active.write().await.remove(&node_id) {
             self.host_stats.write().await.remove(&node_id);
+            self.devenv_status.write().await.remove(&node_id);
             let _ = connection.cancel.send(true);
         }
     }
@@ -524,6 +538,17 @@ impl NodeControl {
         active
             .keys()
             .find_map(|node_id| stats.get(node_id).copied())
+    }
+
+    /// Latest devenv link report from the connected node, or None while no
+    /// node has reported one (a node from a release without the field never
+    /// will). Same single-node convention as `host_stats`.
+    pub async fn devenv_status(&self) -> Option<NodeDevenvStatus> {
+        let active = self.active.read().await;
+        let status = self.devenv_status.read().await;
+        active
+            .keys()
+            .find_map(|node_id| status.get(node_id).cloned())
     }
 
     async fn active_boot(&self, node_id: Uuid) -> Result<Uuid, NodeProtocolError> {
@@ -760,12 +785,14 @@ pub fn heartbeat_envelope(
     live_session_ids: Vec<Uuid>,
     inventory_complete: bool,
     host: Option<NodeHostStats>,
+    devenv: Option<NodeDevenvStatus>,
 ) -> WireEnvelope {
     let mut envelope = WireEnvelope::new(node_id, boot_id, "node.heartbeat");
     envelope.payload = json!({
         "live_session_ids": live_session_ids,
         "inventory_complete": inventory_complete,
         "host": host,
+        "devenv": devenv,
     });
     envelope
 }
@@ -794,6 +821,7 @@ mod tests {
         }))
         .expect("a heartbeat without the newer field still parses");
         assert!(older.host.is_none());
+        assert!(older.devenv.is_none());
 
         let newer: HeartbeatPayload = serde_json::from_value(serde_json::json!({
             "live_session_ids": [],

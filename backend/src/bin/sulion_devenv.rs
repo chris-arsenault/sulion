@@ -12,7 +12,10 @@ async fn main() -> anyhow::Result<()> {
         .json()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,sulion=debug".into()),
+                // `sulion_devenv` is this binary's own target — without it the
+                // dial-retry logs are invisible, and a devenv that cannot
+                // reach its node looks identical to one that never tried.
+                .unwrap_or_else(|_| "info,sulion=debug,sulion_devenv=debug".into()),
         )
         .init();
 

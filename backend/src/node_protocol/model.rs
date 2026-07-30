@@ -490,6 +490,22 @@ pub struct NodeHostStats {
     pub cpu_percent: f32,
 }
 
+/// Whether the node's PTY path is actually usable: a node can hold a healthy
+/// control connection while the devenv that new sessions route to has never
+/// dialed in — every spawn then fails although everything reads as
+/// connected. Rides the heartbeat like [`NodeHostStats`]; the control plane
+/// keeps only the latest sample.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeDevenvStatus {
+    /// The devenv identity new sessions are routed to.
+    pub current_ident: String,
+    /// True when a devenv announcing that identity is connected.
+    pub current_connected: bool,
+    /// Every identity currently connected, including older toolsets still
+    /// serving their shells.
+    pub connected_idents: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestResultStatus {

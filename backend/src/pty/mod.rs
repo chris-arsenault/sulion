@@ -227,6 +227,19 @@ impl PtyManager {
             .ok_or_else(|| anyhow::anyhow!("this process hosts no devenv runtime"))
     }
 
+    /// Link connectivity for the node heartbeat: where new sessions route and
+    /// whether that devenv is actually dialed in. None on the control plane,
+    /// which hosts no link.
+    pub async fn devenv_status(&self) -> Option<crate::node_protocol::NodeDevenvStatus> {
+        let link = self.link.as_ref()?;
+        let current_ident = link.current_ident().await;
+        Some(crate::node_protocol::NodeDevenvStatus {
+            current_connected: link.is_connected(&current_ident).await,
+            connected_idents: link.connected_idents().await,
+            current_ident,
+        })
+    }
+
     /// Applies devenv link events to the records and handles: adoption on
     /// (re)connect, death on exit, and orphaning for anything the devenv no
     /// longer hosts.

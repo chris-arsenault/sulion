@@ -78,6 +78,13 @@ export function StatsStrip() {
     : null;
   const cpuDisplay = s.node ? `${s.node.cpu_percent.toFixed(0)}%` : "—";
   const dbSizeDisplay = formatBytes(s.db.database_size_bytes);
+  // A connected node whose shell-hosting devenv is not dialed in cannot
+  // start or resume anything — worse than it looks, so say so. Absence of
+  // the report (older node release) must not read as an outage.
+  const shellsOffline =
+    primaryNode?.connection_state === "connected" &&
+    s.devenv != null &&
+    !s.devenv.current_connected;
   return (
     <div className="stats-strip" data-testid="stats-strip">
       <button
@@ -122,17 +129,25 @@ export function StatsStrip() {
         </Tooltip>
         <Tooltip
           label={
-            primaryNode
-              ? `${primaryNode.display_name}: ${nodeStatusLabel(primaryNode.connection_state)}`
-              : "No development node paired"
+            shellsOffline
+              ? `${primaryNode?.display_name}: connected, but the shell host has not dialed in — new shells cannot start`
+              : primaryNode
+                ? `${primaryNode.display_name}: ${nodeStatusLabel(primaryNode.connection_state)}`
+                : "No development node paired"
           }
         >
           <span
             className="stats-strip__pill stats-strip__node"
-            data-state={primaryNode?.connection_state ?? "none"}
+            data-state={
+              shellsOffline ? "degraded" : (primaryNode?.connection_state ?? "none")
+            }
           >
             <Icon name="activity" size={12} />
-            {primaryNode ? nodeStatusLabel(primaryNode.connection_state) : "no node"}
+            {shellsOffline
+              ? "shells offline"
+              : primaryNode
+                ? nodeStatusLabel(primaryNode.connection_state)
+                : "no node"}
           </span>
         </Tooltip>
       </button>
@@ -222,6 +237,16 @@ export function StatsStrip() {
                     <dt>last heartbeat</dt>
                     <dd>{formatTimestamp(primaryNode.last_heartbeat_at)}</dd>
                   </div>
+                  {s.devenv && (
+                    <div>
+                      <dt>shell host</dt>
+                      <dd>
+                        {s.devenv.current_connected
+                          ? "connected"
+                          : "not connected"}
+                      </dd>
+                    </div>
+                  )}
                   {primaryNode.pending_key_fingerprint && (
                     <div>
                       <dt>identity</dt>

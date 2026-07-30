@@ -170,18 +170,54 @@ async fn ensure_container_loop(
         match ensure_current_container(&socket_path, &image, &home_host_path, &run_volume).await {
             Ok(image_id) => {
                 if published_ident.as_deref() != Some(image_id.as_str()) {
-                    link.set_current_ident(Some(image_id.clone())).await;
-                    published_ident = Some(image_id);
+                    // Publish only once the devenv has dialed in under this
+                    // identity: adoption and `docker run` both report success
+                    // before the server inside has connected, and routing new
+                    // sessions at a devenv that never shows up strands every
+                    // spawn while the previous target still works.
+                    if wait_for_connection(&link, &image_id, CONNECT_PUBLISH_TIMEOUT).await {
+                        link.set_current_ident(Some(image_id.clone())).await;
+                        published_ident = Some(image_id.clone());
+                    } else {
+                        tracing::error!(
+                            ident = %image_id,
+                            "devenv container is running but has not connected; \
+                             new sessions stay on the previous devenv"
+                        );
+                    }
+                }
+                // Reap against the ensured identity, not the published one: a
+                // current container whose hello is still pending must never
+                // read as reapable.
+                if let Err(error) = reap_emptied_containers(&link, &image_id).await {
+                    tracing::warn!(%error, "devenv reap pass failed");
                 }
             }
             Err(error) => {
+                // Without knowing the current identity there is no safe reap
+                // decision either.
                 tracing::error!(%error, "devenv container ensure failed; retrying");
             }
         }
-        if let Err(error) = reap_emptied_containers(&link, published_ident.as_deref()).await {
-            tracing::warn!(%error, "devenv reap pass failed");
-        }
         tokio::time::sleep(Duration::from_secs(60)).await;
+    }
+}
+
+const CONNECT_PUBLISH_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// True once the link holds a connection announced under `ident`. The devenv
+/// dials on its own schedule (reconnect backoff caps at 5s), so publication
+/// waits for the hello rather than assuming container-running means routable.
+async fn wait_for_connection(link: &Arc<DevenvLink>, ident: &str, deadline: Duration) -> bool {
+    let end = tokio::time::Instant::now() + deadline;
+    loop {
+        if link.is_connected(ident).await {
+            return true;
+        }
+        if tokio::time::Instant::now() >= end {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
@@ -193,7 +229,7 @@ async fn ensure_container_loop(
 /// gone and goes regardless.
 async fn reap_emptied_containers(
     link: &Arc<DevenvLink>,
-    current_image_id: Option<&str>,
+    current_image_id: &str,
 ) -> anyhow::Result<()> {
     let output = tokio::process::Command::new("docker")
         .args([
@@ -231,10 +267,10 @@ async fn reap_emptied_containers(
             .image_id
             .as_deref()
             .unwrap_or(super::link::DEFAULT_IDENT);
-        let is_current =
-            current_image_id.is_some() && state.image_id.as_deref() == current_image_id;
+        let is_current = state.image_id.as_deref() == Some(current_image_id);
+        let connected = link.is_connected(ident).await;
         let hosted = link.hosted_sessions(ident).await;
-        if should_reap(state.running, is_current, hosted) {
+        if should_reap(state.running, is_current, connected, hosted) {
             tracing::info!(%name, hosted, running = state.running, "reaping emptied devenv container");
             run_docker(&["rm", "-f", &name]).await?;
         }
@@ -244,14 +280,17 @@ async fn reap_emptied_containers(
 
 /// The reap decision, kept pure for testing: never the current container,
 /// never one still hosting sessions; stopped non-current containers always.
-fn should_reap(running: bool, is_current: bool, hosted: usize) -> bool {
+/// A running container that has not connected has an unknown inventory — a
+/// fresh node boot sees hosted == 0 for every devenv until the hellos arrive,
+/// and reaping on that emptiness would kill shells mid-reconnect.
+fn should_reap(running: bool, is_current: bool, connected: bool, hosted: usize) -> bool {
     if is_current {
         return false;
     }
     if !running {
         return true;
     }
-    hosted == 0
+    connected && hosted == 0
 }
 
 /// Ensures the container for the current image identity and returns that
@@ -573,13 +612,32 @@ mod tests {
     #[test]
     fn reaps_only_emptied_non_current_containers() {
         // The current container is never reaped, whatever its state.
-        assert!(!should_reap(true, true, 0));
-        assert!(!should_reap(false, true, 0));
+        assert!(!should_reap(true, true, true, 0));
+        assert!(!should_reap(false, true, false, 0));
         // A running non-current container survives while it hosts sessions.
-        assert!(!should_reap(true, false, 3));
-        assert!(should_reap(true, false, 0));
+        assert!(!should_reap(true, false, true, 3));
+        assert!(should_reap(true, false, true, 0));
+        // Running but not connected: inventory unknown (a fresh node boot
+        // sees zero hosted for everything until the hellos land) — keep it.
+        assert!(!should_reap(true, false, false, 0));
         // A stopped non-current container's shells are already gone.
-        assert!(should_reap(false, false, 5));
+        assert!(should_reap(false, false, false, 5));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn publication_waits_for_the_devenv_hello() {
+        let (link, _events) = DevenvLink::new();
+        assert!(
+            !wait_for_connection(&link, "sha256:abc", Duration::from_millis(300)).await,
+            "no connection must mean no publication"
+        );
+        let server = Arc::new(crate::devenv::server::DevenvServer::with_ident(Some(
+            "sha256:abc".into(),
+        )));
+        let (node_side, devenv_side) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(server.serve(devenv_side));
+        tokio::spawn(link.clone().handle_connection(node_side));
+        assert!(wait_for_connection(&link, "sha256:abc", Duration::from_secs(10)).await);
     }
 
     #[test]

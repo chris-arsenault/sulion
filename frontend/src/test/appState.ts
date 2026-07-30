@@ -21,6 +21,15 @@ export function statsPayload(overrides: Partial<StatsResponse> = {}): StatsRespo
             cpu_percent: 4.2,
           }
         : overrides.node,
+    // Same convention as `node`: null means the node never reported one.
+    devenv:
+      overrides.devenv === undefined
+        ? {
+            current_ident: "sha256:0123456789abcdef",
+            current_connected: true,
+            connected_idents: ["sha256:0123456789abcdef"],
+          }
+        : overrides.devenv,
     pty: {
       live_sessions: 3,
       live_agent_sessions: 2,

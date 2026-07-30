@@ -683,6 +683,14 @@ export interface StatsResponse {
     memory_total_bytes: number;
     cpu_percent: number;
   } | null;
+  /** The node's PTY path: whether the devenv that hosts new shells is dialed
+   * in. Null while no node has reported one (including a node release that
+   * predates the field), so absence must not render as an outage. */
+  devenv: {
+    current_ident: string;
+    current_connected: boolean;
+    connected_idents: string[];
+  } | null;
   pty: {
     live_sessions: number;
     live_agent_sessions: number;

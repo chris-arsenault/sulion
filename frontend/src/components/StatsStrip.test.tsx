@@ -94,6 +94,36 @@ describe("StatsStrip", () => {
     expect(screen.getByText("v1")).toBeDefined();
   });
 
+  it("flags a connected node whose shell host has not dialed in", async () => {
+    installStatsFetch(
+      statsPayload({
+        devenv: {
+          current_ident: "sha256:0123456789abcdef",
+          current_connected: false,
+          connected_idents: [],
+        },
+      }),
+      [nodeView()],
+    );
+    render(<StatsStrip />);
+    await waitFor(() => {
+      expect(screen.getByText("shells offline")).toBeDefined();
+    });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByLabelText(/toggle stats details/i));
+    expect(screen.getByText("shell host")).toBeDefined();
+    expect(screen.getByText("not connected")).toBeDefined();
+  });
+
+  it("does not invent an outage when the node predates the devenv report", async () => {
+    installStatsFetch(statsPayload({ devenv: null }), [nodeView()]);
+    render(<StatsStrip />);
+    await waitFor(() => {
+      expect(screen.getByText("connected")).toBeDefined();
+    });
+    expect(screen.queryByText("shells offline")).toBeNull();
+  });
+
   it("surfaces a disconnected node without inventing compatibility state", async () => {
     installStatsFetch(statsPayload(), [
       nodeView({

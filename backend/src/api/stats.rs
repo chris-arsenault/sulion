@@ -14,7 +14,7 @@
 use serde::Serialize;
 use tokio::sync::RwLock;
 
-use crate::node_protocol::NodeHostStats;
+use crate::node_protocol::{NodeDevenvStatus, NodeHostStats};
 use crate::AppState;
 
 #[derive(Clone, Serialize)]
@@ -24,6 +24,10 @@ pub struct StatsResponse {
     /// disconnects. The browser renders the absence rather than a stale
     /// number.
     pub node: Option<NodeHostStats>,
+    /// The node's PTY path: whether the devenv new sessions route to is
+    /// dialed in. Same lifecycle as `node`; also None from a node release
+    /// that predates the field.
+    pub devenv: Option<NodeDevenvStatus>,
     pub pty: PtyStats,
     pub db: DbStats,
     pub ingest: IngestStats,
@@ -93,6 +97,7 @@ impl StatsCache {
 pub async fn collect_stats(state: &AppState) -> anyhow::Result<StatsResponse> {
     let uptime_seconds = state.start_time.elapsed().as_secs();
     let node = state.node_control.host_stats().await;
+    let devenv = state.node_control.devenv_status().await;
     let snapshot = stats_snapshot(&state.pool).await?;
     let pty = PtyStats {
         live_sessions: snapshot.live_pty_sessions.max(0) as usize,
@@ -121,6 +126,7 @@ pub async fn collect_stats(state: &AppState) -> anyhow::Result<StatsResponse> {
     Ok(StatsResponse {
         uptime_seconds,
         node,
+        devenv,
         pty,
         db,
         ingest,

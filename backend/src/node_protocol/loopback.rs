@@ -64,6 +64,7 @@ async fn run(
         live_sessions(&runtime).await,
         true,
         host_stats(&runtime).await,
+        devenv_status(&runtime).await,
     );
     if control
         .receive_envelope(connection.connection_id, initial)
@@ -99,6 +100,7 @@ async fn run(
                     live_sessions(&runtime).await,
                     true,
                     host_stats(&runtime).await,
+                    devenv_status(&runtime).await,
                 );
                 if control.receive_envelope(connection.connection_id, envelope).await.is_err() {
                     break;
@@ -179,6 +181,13 @@ async fn live_sessions(runtime: &Option<Arc<NodeRuntime>>) -> Vec<Uuid> {
 async fn host_stats(runtime: &Option<Arc<NodeRuntime>>) -> Option<NodeHostStats> {
     match runtime {
         Some(runtime) => Some(runtime.host_stats().await),
+        None => None,
+    }
+}
+
+async fn devenv_status(runtime: &Option<Arc<NodeRuntime>>) -> Option<super::NodeDevenvStatus> {
+    match runtime {
+        Some(runtime) => runtime.devenv_status().await,
         None => None,
     }
 }

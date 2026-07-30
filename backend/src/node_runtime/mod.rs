@@ -166,6 +166,10 @@ impl NodeRuntime {
         self.host.sample().await
     }
 
+    pub async fn devenv_status(&self) -> Option<crate::node_protocol::NodeDevenvStatus> {
+        self.pty.devenv_status().await
+    }
+
     pub async fn open_terminal(
         self: &Arc<Self>,
         stream_id: Uuid,

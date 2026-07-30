@@ -67,6 +67,13 @@
   color: var(--warn-fg);
 }
 
+/* Node connected but the shell-hosting devenv is not dialed in: the PTY path
+   is down even though the control link is healthy. */
+.stats-strip__node[data-state="degraded"] {
+  color: var(--warn-fg);
+  border-color: color-mix(in srgb, var(--warn-fg) 55%, var(--canvas-3));
+}
+
 .stats-strip__empty {
   color: var(--text-lo);
   font-style: italic;

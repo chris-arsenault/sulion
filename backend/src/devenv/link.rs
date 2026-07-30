@@ -248,6 +248,11 @@ impl DevenvLink {
         !self.state.lock().await.connections.is_empty()
     }
 
+    /// Whether a devenv announcing `ident` is currently connected.
+    pub async fn is_connected(&self, ident: &str) -> bool {
+        self.state.lock().await.connections.contains_key(ident)
+    }
+
     /// Idents of the devenvs currently connected.
     pub async fn connected_idents(&self) -> Vec<String> {
         let mut idents: Vec<String> = self
