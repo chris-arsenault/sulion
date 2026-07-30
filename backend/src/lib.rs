@@ -18,6 +18,7 @@ pub mod container_runner;
 pub mod correlate;
 pub mod credential_helper;
 pub mod db;
+pub mod devenv;
 pub mod e2e;
 pub mod emulator;
 pub mod file_preview;
@@ -36,9 +37,9 @@ pub mod repo_state;
 pub mod retrieval;
 pub mod retrieval_cli;
 pub mod secret_broker;
-pub mod service;
 pub mod secret_protocol;
 pub mod secret_pty;
+pub mod service;
 pub mod workspace;
 pub mod worktree;
 

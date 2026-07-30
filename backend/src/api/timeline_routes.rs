@@ -40,8 +40,7 @@ pub(super) async fn session_timeline(
     Path(id): Path<Uuid>,
     Query(q): Query<TimelineQuery>,
 ) -> ApiResult<Json<TimelineSummaryResponse>> {
-    let resolved =
-        resolve_session_target(&state.pool, id, q.session.or(q.claude_session)).await?;
+    let resolved = resolve_session_target(&state.pool, id, q.session.or(q.claude_session)).await?;
 
     let resolved = match resolved {
         SessionLookup::Resolved(resolved) => resolved,
@@ -71,8 +70,7 @@ pub(super) async fn session_timeline_turn(
     Path((id, turn_id)): Path<(Uuid, i64)>,
     Query(q): Query<TimelineQuery>,
 ) -> ApiResult<Json<TimelineTurnDetailResponse>> {
-    let resolved =
-        resolve_session_target(&state.pool, id, q.session.or(q.claude_session)).await?;
+    let resolved = resolve_session_target(&state.pool, id, q.session.or(q.claude_session)).await?;
 
     let resolved = match resolved {
         SessionLookup::Resolved(resolved) => resolved,

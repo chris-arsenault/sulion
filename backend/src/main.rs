@@ -58,23 +58,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let node_tls = apply_node_policy(&state).await?;
     if let Some(node) = cfg.standalone_node.as_ref() {
-        let runtime = sulion::node_runtime::NodeRuntime::new(
-            node.node_id,
-            uuid::Uuid::new_v4(),
-            pool.clone(),
-            cfg.repos_root.clone(),
-            cfg.workspaces_root.clone(),
-        );
-        let boot_id = state
-            .node_control
-            .start_runtime_loopback(runtime.clone(), &node.display_name)
-            .await?;
-        runtime.run_background_managers().await;
-        tracing::info!(
-            node_id = %node.node_id,
-            %boot_id,
-            "standalone node loopback connected"
-        );
+        start_standalone_node(&state, &cfg, pool.clone(), node).await?;
     }
 
     let maintenance_pool = pool.clone();
@@ -143,6 +127,50 @@ async fn main() -> anyhow::Result<()> {
 /// Applies the node admission boundary, the runtime configuration this control
 /// plane hands to authenticated nodes, and the TLS identity the node port
 /// serves. Returns the TLS material for the listener when one is configured.
+/// The loopback role hosts its devenv as a child process: same PTY
+/// implementation and wire protocol as the dedicated node, no survival
+/// across backend restarts (requirement 4 of the plan).
+async fn start_standalone_node(
+    state: &std::sync::Arc<sulion::AppState>,
+    cfg: &sulion::config::Config,
+    pool: db::Pool,
+    node: &sulion::config::StandaloneNodeConfig,
+) -> anyhow::Result<()> {
+    let (devenv_link, devenv_events) = sulion::devenv::link::DevenvLink::new();
+    sulion::devenv::launcher::start(
+        devenv_link.clone(),
+        sulion::devenv::launcher::LauncherConfig::from_env(),
+    );
+    let devenv_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !devenv_link.connected().await {
+        if tokio::time::Instant::now() >= devenv_deadline {
+            tracing::warn!("devenv did not connect in time; PTY spawns will fail until it does");
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let runtime = sulion::node_runtime::NodeRuntime::new(
+        node.node_id,
+        uuid::Uuid::new_v4(),
+        pool,
+        cfg.repos_root.clone(),
+        cfg.workspaces_root.clone(),
+        devenv_link,
+        devenv_events,
+    );
+    let boot_id = state
+        .node_control
+        .start_runtime_loopback(runtime.clone(), &node.display_name)
+        .await?;
+    runtime.run_background_managers().await;
+    tracing::info!(
+        node_id = %node.node_id,
+        %boot_id,
+        "standalone node loopback connected"
+    );
+    Ok(())
+}
+
 async fn apply_node_policy(
     state: &AppState,
 ) -> anyhow::Result<Option<sulion::node_protocol::tls::ControlTls>> {

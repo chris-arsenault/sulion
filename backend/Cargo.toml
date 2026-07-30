@@ -36,6 +36,10 @@ name = "sulion-node"
 path = "src/bin/sulion_node.rs"
 
 [[bin]]
+name = "sulion-devenv"
+path = "src/bin/sulion_devenv.rs"
+
+[[bin]]
 name = "sulion-ingester"
 path = "src/bin/sulion_ingester.rs"
 

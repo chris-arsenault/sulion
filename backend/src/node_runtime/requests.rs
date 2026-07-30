@@ -8,7 +8,6 @@
 use std::path::PathBuf;
 
 use base64::Engine;
-use portable_pty::PtySize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -116,13 +115,7 @@ impl NodeRuntime {
                     .await
                     .ok_or_else(|| RuntimeError::NotFound("session is not live".into()))?;
                 session
-                    .resize
-                    .send(PtySize {
-                        rows: request.rows,
-                        cols: request.cols,
-                        pixel_width: 0,
-                        pixel_height: 0,
-                    })
+                    .resize(request.rows, request.cols)
                     .await
                     .map_err(|_| RuntimeError::NotFound("session is not live".into()))?;
                 Ok(Value::Null)

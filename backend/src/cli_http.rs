@@ -124,7 +124,10 @@ mod tests {
     fn build_url_handles_a_bare_origin_and_trailing_slashes() {
         // Asserts path and origin rather than the whole string: with no query
         // pairs the URL keeps a bare `?`, which both CLIs have always emitted.
-        for base in ["http://sulion-retrieval:8083", "http://sulion-retrieval:8083/"] {
+        for base in [
+            "http://sulion-retrieval:8083",
+            "http://sulion-retrieval:8083/",
+        ] {
             let url = build_url(base, "/v1/context", &[], "invalid base").unwrap();
             assert_eq!(url.path(), "/v1/context");
             assert_eq!(url.host_str(), Some("sulion-retrieval"));

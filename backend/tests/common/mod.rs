@@ -130,12 +130,15 @@ pub async fn attach_loopback_node(
     repos_root: &Path,
     workspaces_root: &Path,
 ) -> Arc<NodeRuntime> {
+    let (link, events) = in_process_devenv().await;
     let runtime = NodeRuntime::new(
         TEST_NODE_ID,
         uuid::Uuid::new_v4(),
         pool,
         repos_root.to_path_buf(),
         workspaces_root.to_path_buf(),
+        link,
+        events,
     );
     state
         .node_control
@@ -144,4 +147,29 @@ pub async fn attach_loopback_node(
         .expect("start loopback node");
     runtime.clone().run_background_managers().await;
     runtime
+}
+
+/// An in-process devenv: a `DevenvServer` wired to a `DevenvLink` over a
+/// duplex stream — the production wire path minus the unix socket, so tests
+/// exercise exactly the protocol the deployed node speaks.
+pub async fn in_process_devenv() -> (
+    Arc<sulion::devenv::link::DevenvLink>,
+    tokio::sync::mpsc::UnboundedReceiver<sulion::devenv::link::LinkEvent>,
+) {
+    let (link, events) = sulion::devenv::link::DevenvLink::new();
+    let server = Arc::new(sulion::devenv::server::DevenvServer::new());
+    let (node_side, devenv_side) = tokio::io::duplex(1024 * 1024);
+    tokio::spawn(server.clone().serve(devenv_side));
+    tokio::spawn(link.clone().handle_connection(node_side));
+    while !link.connected().await {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    (link, events)
+}
+
+/// A PTY manager backed by an in-process devenv, for suites that drive the
+/// manager directly rather than through a runtime.
+pub async fn devenv_backed_pty_manager(pool: db::Pool) -> Arc<sulion::pty::PtyManager> {
+    let (link, events) = in_process_devenv().await;
+    sulion::pty::PtyManager::with_devenv(pool, link, events)
 }

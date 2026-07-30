@@ -22,7 +22,15 @@ const BROKER_IMAGE = process.env.SULION_E2E_BROKER_IMAGE ?? "sulion-e2e-broker:l
 const E2E_AUTH_CLIENT_ID = "sulion-e2e-client";
 const E2E_BROKER_REGISTRATION_TOKEN = "sulion-e2e-registration-token";
 
-const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sulion-e2e-"));
+// Bind-mount sources must be visible to the docker daemon. In a managed PTY
+// this script runs inside a container while the daemon is the host's: /tmp is
+// container-local and the daemon would mount an empty directory in its place,
+// but $HOME is bind-mounted at the same absolute path on both sides. Keep
+// everything the containers mount under it.
+const tmpParent =
+  process.env.SULION_E2E_TMP_ROOT ?? path.join(os.homedir(), ".cache", "sulion-e2e");
+fs.mkdirSync(tmpParent, { recursive: true });
+const tmpRoot = fs.mkdtempSync(path.join(tmpParent, "stack-"));
 const containerPaths = {
   reposRoot: "/home/sulion/repos",
   workspacesRoot: "/home/sulion/workspaces",
@@ -57,9 +65,19 @@ async function main() {
     await waitForHttp(`${BROKER_BASE_URL}/health`, 120_000);
     startBackendContainer(dbUrl);
     await waitForHttp(`${BACKEND_BASE_URL}/health`, 180_000);
-    const nodeId = await enrollNode();
+    const nodeId = prepareNodeVolumes();
     startNodeContainer(dbUrl, nodeId);
     startIngesterContainer(dbUrl);
+    await approveNodePairing(nodeId, 90_000);
+    // Play the host's activation role: the control plane delivers runtime
+    // config after approval, and the node waits until its own environment
+    // carries the delivered digest. On the enclave a root timer recreates
+    // the container; here the script does.
+    const digest = await waitForDeliveredDigest(90_000);
+    runCommand("docker-rm-node", "docker", ["rm", "-f", nodeContainerName], {
+      cwd: REPO_ROOT,
+    });
+    startNodeContainer(dbUrl, nodeId, digest);
     await waitForNode(nodeId, 60_000);
 
     runCommand(
@@ -67,6 +85,11 @@ async function main() {
       "docker",
       [
         "exec",
+        // As the development user: the node process runs as 7321 and git
+        // refuses root-owned repositories (safe.directory), which silently
+        // strips every git summary the sidebar renders.
+        "--user",
+        "7321:7321",
         "-e",
         `SULION_E2E_DB_URL=${dbUrl}`,
         "-e",
@@ -90,6 +113,10 @@ async function main() {
     });
     await waitForHttp(`${BACKEND_BASE_URL}/health`, 60_000);
     await waitForNode(nodeId, 60_000);
+    // Repo discovery is eventual: the node rescans its repos root on a 30 s
+    // interval, so "stack ready" must mean the seeded repos are actually
+    // served — the first specs assert on the sidebar within seconds.
+    await waitForSeededRepos(["atlas", "zephyr"], 90_000);
 
     frontendProcess = startProcess(
       "frontend",
@@ -112,8 +139,33 @@ async function main() {
     console.log(`sulion e2e stack ready: ${FRONTEND_URL}`);
   } catch (error) {
     console.error(error instanceof Error ? error.stack : String(error));
+    // The containers are removed on cleanup, so this is the only chance to
+    // see why one of them died. Without it a startup failure reports only
+    // "timed out waiting for <url>".
+    dumpContainerLogs();
     await cleanup();
     process.exit(1);
+  }
+}
+
+function dumpContainerLogs() {
+  const containers = [
+    ["db", dbContainerName],
+    ["auth", authContainerName],
+    ["broker", brokerContainerName],
+    ["backend", backendContainerName],
+    ["node", nodeContainerName],
+    ["ingester", ingesterContainerName],
+  ];
+  for (const [label, name] of containers) {
+    if (!name) continue;
+    const result = spawnSync("docker", ["logs", "--tail", "80", name], {
+      encoding: "utf8",
+    });
+    const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+    console.error(
+      `--- ${label} (${name}) logs ---\n${output || "(container gone or produced no output)"}`,
+    );
   }
 }
 
@@ -160,6 +212,8 @@ function prepareBackendDist() {
       "--bin",
       "sulion-node",
       "--bin",
+      "sulion-devenv",
+      "--bin",
       "sulion-ingester",
       "--bin",
       "e2e_seed",
@@ -178,6 +232,10 @@ function prepareBackendDist() {
   copyExecutable(
     path.join(REPO_ROOT, "backend", "target", "debug", "sulion-node"),
     path.join(distDir, "sulion-node"),
+  );
+  copyExecutable(
+    path.join(REPO_ROOT, "backend", "target", "debug", "sulion-devenv"),
+    path.join(distDir, "sulion-devenv"),
   );
   copyExecutable(
     path.join(REPO_ROOT, "backend", "target", "debug", "sulion-ingester"),
@@ -277,7 +335,8 @@ function startAuthFixture() {
     "docker",
     [
       "run",
-      "--rm",
+      // No --rm: a container that dies must stay inspectable for the
+      // failure-path log dump; cleanup force-removes everything anyway.
       "-d",
       "--name",
       authContainerName,
@@ -337,7 +396,8 @@ function startBrokerContainer(dbUrl, authIssuerUrl) {
     "docker",
     [
       "run",
-      "--rm",
+      // No --rm: a container that dies must stay inspectable for the
+      // failure-path log dump; cleanup force-removes everything anyway.
       "-d",
       "--name",
       brokerContainerName,
@@ -348,7 +408,10 @@ function startBrokerContainer(dbUrl, authIssuerUrl) {
       "-e",
       "SULION_SECRET_BROKER_LISTEN=0.0.0.0:8081",
       "-e",
-      `SULION_SECRET_BROKER_DB_URL=${dbUrl}`,
+      // Its own database, as in production: broker and backend each own a
+      // sqlx migration history, and sharing one database makes the second
+      // migrator refuse the first one's checksums.
+      `SULION_SECRET_BROKER_DB_URL=${dbUrl.replace(/\/sulion$/u, "/sulion_broker")}`,
       "-e",
       "SULION_SECRET_BROKER_MASTER_KEY_PATH=/var/lib/sulion-broker/master.key",
       "-e",
@@ -369,7 +432,7 @@ function startBackendContainer(dbUrl) {
   backendContainerName = `sulion-e2e-backend-${process.pid}`;
   const args = [
     "run",
-    "--rm",
+    // No --rm: see the service-container note above.
     "-d",
     "--name",
     backendContainerName,
@@ -392,7 +455,10 @@ function startBackendContainer(dbUrl) {
     "-e",
     "SULION_CODEX_SESSIONS=/var/empty/sulion/codex-sessions",
     "-e",
-    "SULION_LIBRARY_ROOT=/var/empty/sulion/library",
+    // Writable: the library API stores prompt/reference markdown on the
+    // control plane's local disk; the /var/empty sentinel turns every save
+    // into a 500.
+    "SULION_LIBRARY_ROOT=/home/sulion/library",
     "-e",
     "SULION_ENABLE_E2E_FIXTURES=1",
     // The suite's node lives on an ephemeral Docker network, not the dedicated
@@ -413,26 +479,12 @@ function startBackendContainer(dbUrl) {
   runCommand("docker-run-backend", "docker", args, { cwd: REPO_ROOT });
 }
 
-async function enrollNode() {
-  const tokenResponse = await fetch(`${BACKEND_BASE_URL}/api/nodes/enrollment-tokens`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${e2eAccessToken}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      display_name: "e2e development node",
-      target_node_id: null,
-      ttl_seconds: 300,
-    }),
-  });
-  if (!tokenResponse.ok) {
-    throw new Error(
-      `node enrollment-token request failed with HTTP ${tokenResponse.status}: ${await tokenResponse.text()}`,
-    );
-  }
-  const enrollmentToken = await tokenResponse.json();
+// The only node identity pairing accepts. The node generates its own key on
+// first start, requests pairing over /ws/nodes, and waits; approval is the
+// whole enrollment (there are no enrollment tokens).
+const DEDICATED_NODE_ID = "019d4f28-88ac-7a80-932c-b0f53a0708f4";
 
+function prepareNodeVolumes() {
   nodeVolumeName = `sulion-e2e-node-home-${process.pid}`;
   nodeKeyVolumeName = `sulion-e2e-node-key-${process.pid}`;
   runCommand("docker-volume-node-home", "docker", ["volume", "create", nodeVolumeName], {
@@ -460,61 +512,59 @@ async function enrollNode() {
     ],
     { cwd: REPO_ROOT },
   );
-  runCommand(
-    "node-keygen",
-    "docker",
-    [
-      "run",
-      "--rm",
-      "--user",
-      "root",
-      "-v",
-      `${nodeKeyVolumeName}:/var/lib/sulion-node`,
-      "--entrypoint",
-      "/usr/local/bin/sulion-node",
-      BACKEND_IMAGE,
-      "keygen",
-      "--output",
-      "/var/lib/sulion-node/private-key.pk8",
-    ],
-    { cwd: REPO_ROOT },
-  );
-  const enrollment = runCommandCaptured(
-    "node-enroll",
-    "docker",
-    [
-      "run",
-      "--rm",
-      "--network",
-      dockerNetworkName,
-      "--user",
-      "root",
-      "-v",
-      `${nodeKeyVolumeName}:/var/lib/sulion-node:ro`,
-      "--entrypoint",
-      "/usr/local/bin/sulion-node",
-      BACKEND_IMAGE,
-      "enroll",
-      "--control-url",
-      `http://${backendContainerName}:8080`,
-      "--token",
-      enrollmentToken.token,
-      "--key",
-      "/var/lib/sulion-node/private-key.pk8",
-    ],
-    { cwd: REPO_ROOT },
-  );
-  return JSON.parse(enrollment).node_id;
+  return DEDICATED_NODE_ID;
 }
 
-function startNodeContainer(dbUrl, nodeId) {
+/// Reads the delivered-config digest from the node's own log line. The node
+/// writes it right after approval; until then the line does not exist.
+async function waitForDeliveredDigest(timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const logs = spawnSync("docker", ["logs", nodeContainerName], { encoding: "utf8" });
+    const match = /"message":"wrote delivered node runtime configuration"[^\n]*?"digest":"([A-Za-z0-9_-]+)"/u.exec(
+      `${logs.stdout ?? ""}${logs.stderr ?? ""}`,
+    );
+    if (match) {
+      return match[1];
+    }
+    await sleep(500);
+  }
+  throw new Error("node never wrote its delivered runtime configuration");
+}
+
+/// The node dials in, records a pending pairing, and retries until an
+/// operator approves. This plays the operator: approval 404s until the
+/// pairing request has landed, so poll.
+async function approveNodePairing(nodeId, timeoutMs) {
+  const start = Date.now();
+  let lastFailure = "";
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const response = await fetch(`${BACKEND_BASE_URL}/api/nodes/${nodeId}/approve`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${e2eAccessToken}` },
+      });
+      if (response.ok) {
+        return;
+      }
+      lastFailure = `HTTP ${response.status}: ${await response.text()}`;
+    } catch (error) {
+      lastFailure = String(error);
+    }
+    await sleep(500);
+  }
+  throw new Error(`node pairing approval never succeeded (${lastFailure})`);
+}
+
+function startNodeContainer(dbUrl, nodeId, configDigest = "") {
   nodeContainerName = `sulion-e2e-node-${process.pid}`;
   runCommand(
     "docker-run-node",
     "docker",
     [
       "run",
-      "--rm",
+      // No --rm: a container that dies must stay inspectable for the
+      // failure-path log dump; cleanup force-removes everything anyway.
       "-d",
       "--name",
       nodeContainerName,
@@ -537,6 +587,16 @@ function startNodeContainer(dbUrl, nodeId) {
       "-e",
       "SULION_NODE_RUN_GID=7321",
       "-e",
+      // Present on the activation restart, absent on the first start: the
+      // node treats a matching digest as "the host already applied what the
+      // control plane delivered".
+      `SULION_NODE_CONFIG_DIGEST=${configDigest}`,
+      "-e",
+      // The container starts as root (docker would default HOME=/root) but
+      // the entrypoint seeds the development home as the sulion user, same
+      // as the compose graph's node service.
+      "HOME=/home/sulion",
+      "-e",
       "SULION_NODE_ALLOW_INSECURE_WS=1",
       "-e",
       "SULION_DOCKER_MODE=none",
@@ -557,7 +617,9 @@ function startNodeContainer(dbUrl, nodeId) {
       "-v",
       `${nodeVolumeName}:/home/sulion`,
       "-v",
-      `${nodeKeyVolumeName}:/var/lib/sulion-node:ro`,
+      // Writable: the node generates its identity key here on first start
+      // and records delivered configuration beside it.
+      `${nodeKeyVolumeName}:/var/lib/sulion-node`,
       "--entrypoint",
       "/usr/bin/dumb-init",
       BACKEND_IMAGE,
@@ -575,7 +637,8 @@ function startIngesterContainer(dbUrl) {
     "docker",
     [
       "run",
-      "--rm",
+      // No --rm: a container that dies must stay inspectable for the
+      // failure-path log dump; cleanup force-removes everything anyway.
       "-d",
       "--name",
       ingesterContainerName,
@@ -597,6 +660,28 @@ function startIngesterContainer(dbUrl) {
     ],
     { cwd: REPO_ROOT },
   );
+}
+
+async function waitForSeededRepos(names, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const response = await fetch(`${BACKEND_BASE_URL}/api/app-state`, {
+        headers: { authorization: `Bearer ${e2eAccessToken}` },
+      });
+      if (response.ok) {
+        const state = await response.json();
+        const repos = new Set((state.repos ?? []).map((repo) => repo.name));
+        if (names.every((name) => repos.has(name))) {
+          return;
+        }
+      }
+    } catch {
+      // control or node still converging
+    }
+    await sleep(1000);
+  }
+  throw new Error(`seeded repos [${names.join(", ")}] never appeared in app-state`);
 }
 
 async function waitForNode(nodeId, timeoutMs) {
@@ -680,7 +765,8 @@ async function ensureDb() {
     "docker",
     [
       "run",
-      "--rm",
+      // No --rm: a container that dies must stay inspectable for the
+      // failure-path log dump; cleanup force-removes everything anyway.
       "-d",
       "--name",
       dbContainerName,
@@ -696,6 +782,20 @@ async function ensureDb() {
   );
 
   await waitForPostgres(dbContainerName, 30_000);
+  runCommand(
+    "create-broker-db",
+    "docker",
+    [
+      "exec",
+      dbContainerName,
+      "psql",
+      "-U",
+      "postgres",
+      "-c",
+      "CREATE DATABASE sulion_broker",
+    ],
+    { cwd: REPO_ROOT },
+  );
   return `postgres://postgres:testpass@${dbContainerName}:5432/sulion`;
 }
 

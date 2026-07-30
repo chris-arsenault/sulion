@@ -90,25 +90,18 @@ impl NodeStore {
         connection_id: Uuid,
     ) -> Result<(), NodeProtocolError> {
         let mut tx = self.pool.begin().await?;
-        let previous_boot_id: Option<Uuid> = sqlx::query_as::<_, (Option<Uuid>,)>(
+        // Lock the node row for the boot transition. Sessions from a prior
+        // boot are deliberately NOT ended here: shells live in the devenv
+        // server and can outlive a node restart. The first complete
+        // heartbeat of the new boot adopts the sessions the node still
+        // hosts and ends the rest (see `heartbeat`).
+        sqlx::query_as::<_, (Option<Uuid>,)>(
             "SELECT boot_id FROM dev_nodes WHERE id = $1 FOR UPDATE",
         )
         .bind(hello.node_id)
         .fetch_optional(&mut *tx)
         .await?
-        .ok_or(NodeProtocolError::UnknownNode)?
-        .0;
-        if let Some(previous_boot_id) = previous_boot_id {
-            if previous_boot_id != hello.boot_id {
-                end_sessions_from_prior_boot(
-                    &mut tx,
-                    hello.node_id,
-                    previous_boot_id,
-                    hello.boot_id,
-                )
-                .await?;
-            }
-        }
+        .ok_or(NodeProtocolError::UnknownNode)?;
 
         sqlx::query(
             "UPDATE dev_nodes SET protocol_version = $2, boot_id = $3, connection_id = $4, \
@@ -150,6 +143,20 @@ impl NodeStore {
             return Ok(false);
         }
         if !live_session_ids.is_empty() {
+            // Adoption: a session still hosted across a node restart carries
+            // the boot id it was created under. The node reporting it live
+            // re-stamps it onto the current boot — this is what makes a node
+            // release leave shells running instead of recording their loss.
+            sqlx::query(
+                "UPDATE pty_sessions SET node_boot_id = $2, node_disconnected_at = NULL \
+                  WHERE node_id = $1 AND state = 'live' AND id = ANY($3) \
+                    AND node_boot_id IS DISTINCT FROM $2",
+            )
+            .bind(node_id)
+            .bind(boot_id)
+            .bind(live_session_ids)
+            .execute(&mut *tx)
+            .await?;
             sqlx::query(
                 "UPDATE pty_sessions SET node_disconnected_at = NULL \
                   WHERE node_id = $1 AND node_boot_id = $2 AND state = 'live' \
@@ -162,7 +169,7 @@ impl NodeStore {
             .await?;
         }
         if inventory_complete {
-            reconcile_missing_sessions(&mut tx, node_id, boot_id, live_session_ids).await?;
+            reconcile_missing_sessions(&mut tx, node_id, live_session_ids).await?;
         }
         tx.commit().await?;
         Ok(true)
@@ -338,37 +345,13 @@ async fn mark_sessions_disconnected(
     Ok(())
 }
 
-async fn end_sessions_from_prior_boot(
-    tx: &mut Transaction<'_, Postgres>,
-    node_id: Uuid,
-    previous_boot_id: Uuid,
-    current_boot_id: Uuid,
-) -> Result<(), NodeProtocolError> {
-    sqlx::query(
-        "UPDATE pty_sessions SET state = 'dead', ended_at = COALESCE(ended_at, NOW()), \
-                runtime_end_reason = 'node_reboot', node_disconnected_at = NOW(), \
-                agent_runtime_state = CASE \
-                    WHEN agent_runtime_state IN ('starting', 'running') THEN 'exited' \
-                    ELSE agent_runtime_state END, \
-                agent_runtime_ended_at = CASE \
-                    WHEN agent_runtime_state IN ('starting', 'running') \
-                    THEN COALESCE(agent_runtime_ended_at, NOW()) \
-                    ELSE agent_runtime_ended_at END \
-          WHERE node_id = $1 AND node_boot_id = $2 AND node_boot_id <> $3 \
-            AND state = 'live'",
-    )
-    .bind(node_id)
-    .bind(previous_boot_id)
-    .bind(current_boot_id)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
+/// Ends every live session for this node that the node's complete inventory
+/// does not list — whatever boot it was created under. Sessions the node
+/// still hosts were adopted onto the current boot just above; anything left
+/// from a prior boot genuinely died with the devenv that hosted it.
 async fn reconcile_missing_sessions(
     tx: &mut Transaction<'_, Postgres>,
     node_id: Uuid,
-    boot_id: Uuid,
     live_session_ids: &[Uuid],
 ) -> Result<(), NodeProtocolError> {
     sqlx::query(
@@ -381,11 +364,10 @@ async fn reconcile_missing_sessions(
                     WHEN agent_runtime_state IN ('starting', 'running') \
                     THEN COALESCE(agent_runtime_ended_at, NOW()) \
                     ELSE agent_runtime_ended_at END \
-          WHERE node_id = $1 AND node_boot_id = $2 AND state = 'live' \
-            AND NOT (id = ANY($3))",
+          WHERE node_id = $1 AND state = 'live' \
+            AND NOT (id = ANY($2))",
     )
     .bind(node_id)
-    .bind(boot_id)
     .bind(live_session_ids)
     .execute(&mut **tx)
     .await?;

@@ -274,14 +274,25 @@ async function expandTreePath(page: Page, repo: string, filePath: string) {
     const dirRow = treeRow(page, repo, current);
     await expect(dirRow).toBeVisible();
 
-    const nextPath =
-      current === filePath ? current : `${current}/${parts[index + 1]}`;
+    const nextPath = `${current}/${parts[index + 1]}`;
     const nextRow = treeRow(page, repo, nextPath);
-    if (await nextRow.isVisible().catch(() => false)) {
-      continue;
-    }
-
-    await dirRow.click();
-    await expect(nextRow).toBeVisible();
+    // Dirty directories auto-expand asynchronously, so a blind click can race
+    // the auto-expansion and register as a user collapse (which wins). Only
+    // click while the chevron shows closed, and retry until the child row
+    // materialises — the block converges regardless of which state the race
+    // left the row in.
+    await expect(async () => {
+      if (await nextRow.isVisible().catch(() => false)) {
+        return;
+      }
+      const chevronOpen = await dirRow
+        .locator(".sidebar__chevron--open")
+        .isVisible()
+        .catch(() => false);
+      if (!chevronOpen) {
+        await dirRow.click();
+      }
+      await expect(nextRow).toBeVisible({ timeout: 1_000 });
+    }).toPass({ timeout: 15_000 });
   }
 }

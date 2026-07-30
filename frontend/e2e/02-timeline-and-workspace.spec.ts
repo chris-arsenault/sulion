@@ -30,6 +30,12 @@ test("walks timeline details, filters, hover cards, and file trace links", async
 
   await openTreeFile(page, "atlas", "src/lib.rs");
   await expect(page.getByTestId("file-tab")).toBeVisible();
+  // The trace section renders collapsed; expand it before asserting on its
+  // entries.
+  await page
+    .getByLabel("Related timeline turns")
+    .getByRole("button", { name: "Related timeline turns" })
+    .click();
   await expect(page.getByLabel("Related timeline turns")).toContainText("inspect");
   await page.locator(".ft__trace-button").filter({ hasText: "inspect" }).first().click();
   const focusedTimelinePane = visibleTimelinePane(page);

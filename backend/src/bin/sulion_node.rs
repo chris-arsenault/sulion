@@ -43,14 +43,51 @@ async fn main() -> anyhow::Result<()> {
     })
     .await;
     drop_node_privileges()?;
+
+    // The devenv server owns the PTY masters; this node only drives it. Wait
+    // (bounded) for it to dial in and announce its inventory so the first
+    // heartbeat to the control plane reports surviving sessions instead of
+    // an empty list that would get them reconciled away.
+    let (devenv_link, devenv_events) = sulion::devenv::link::DevenvLink::new();
+    sulion::devenv::launcher::start(
+        devenv_link.clone(),
+        sulion::devenv::launcher::LauncherConfig::from_env(),
+    );
+    let devenv_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !devenv_link.connected().await {
+        if tokio::time::Instant::now() >= devenv_deadline {
+            tracing::warn!("devenv did not connect in time; continuing without inventory");
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
     let runtime = sulion::node_runtime::NodeRuntime::new(
         client_config.node_id,
         boot_id,
         pool.clone(),
         config.repos_root,
         config.workspaces_root,
+        devenv_link.clone(),
+        devenv_events,
     );
     runtime.clone().run_background_managers().await;
+
+    // The link learned the inventory when the devenv connected; give the
+    // manager a moment to adopt it before the control plane hears from us.
+    let adopt_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let link_ids = devenv_link.live_ids().await;
+        let manager_ids = runtime.live_session_ids().await;
+        if link_ids.iter().all(|id| manager_ids.contains(id)) {
+            break;
+        }
+        if tokio::time::Instant::now() >= adopt_deadline {
+            tracing::warn!("devenv inventory not fully adopted in time; continuing");
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 
     let correlate_socket = config.correlate_sock_path;
     tokio::spawn(async move {

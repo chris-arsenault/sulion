@@ -30,6 +30,5 @@ pub use reset::{rebuild_ingest_derivatives, ReindexStats};
 pub use canonical::{Block as CanonicalBlock, OperationCategory};
 pub use timeline::{
     load_session_events, resolve_session_target, ProjectionFilters, SessionEventFilter,
-    SessionLookup, SpeakerFacet, TimelineSummaryResponse, TimelineTurn,
-    TimelineTurnDetailResponse,
+    SessionLookup, SpeakerFacet, TimelineSummaryResponse, TimelineTurn, TimelineTurnDetailResponse,
 };

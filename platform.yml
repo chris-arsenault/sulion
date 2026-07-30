@@ -23,6 +23,7 @@ rust_artifacts:
   binaries:
     - { bin: sulion, image: backend }
     - { bin: sulion-node, image: backend }
+    - { bin: sulion-devenv, image: backend }
     - { bin: sulion-ingester, image: backend }
     - { bin: sulion-broker, image: broker }
     - { bin: sulion-retrieval, image: retrieval }

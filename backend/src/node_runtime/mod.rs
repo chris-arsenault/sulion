@@ -118,11 +118,13 @@ impl NodeRuntime {
         pool: crate::db::Pool,
         repos_root: PathBuf,
         workspaces_root: PathBuf,
+        devenv_link: Arc<crate::devenv::link::DevenvLink>,
+        devenv_events: mpsc::UnboundedReceiver<crate::devenv::link::LinkEvent>,
     ) -> Arc<Self> {
         Arc::new(Self {
             node_id,
             boot_id,
-            pty: PtyManager::new(pool.clone()),
+            pty: PtyManager::with_devenv(pool.clone(), devenv_link, devenv_events),
             repo_state: RepoStateManager::new(pool.clone(), repos_root.clone()),
             workspace_state: WorkspaceManager::new(
                 pool.clone(),
@@ -189,7 +191,7 @@ impl NodeRuntime {
                 stream_id,
             };
             let mut sequence = 0_u64;
-            let snapshot = session.emulator.snapshot();
+            let snapshot = session.snapshot().await;
             if !snapshot.is_empty()
                 && stream
                     .send_bytes(sequence, "terminal.snapshot", &snapshot)

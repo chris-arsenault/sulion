@@ -57,8 +57,10 @@ test("supports paste-as-file and reconnects the websocket without losing the ses
 
   const largePaste = Array.from({ length: 220 }, (_, index) => `line-${index}`)
     .join("\n");
-  page.once("dialog", (dialog) => dialog.accept());
   await pasteIntoTerminal(page, largePaste);
+  // Large pastes park behind the in-app ConfirmDialog (not a native browser
+  // dialog): choose the save-as-file path.
+  await page.getByRole("button", { name: "Save as file" }).click();
   await page.waitForTimeout(200);
   await runTerminalCommand(page, "");
 

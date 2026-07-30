@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use sulion::db;
-use sulion::pty::{
-    default_shell, read_meta, reconcile_orphans_on_startup, PtyManager, PtyState, SpawnParams,
-};
+use sulion::pty::{default_shell, read_meta, reconcile_orphans_on_startup, PtyState, SpawnParams};
+
+mod common;
 
 fn test_db_url() -> Option<String> {
     std::env::var("SULION_TEST_DB").ok()
@@ -57,7 +57,7 @@ async fn wait_for_state(
 #[tokio::test]
 async fn spawn_persists_row_in_live_state() {
     let pool = fresh_pool().await;
-    let mgr = PtyManager::new(pool.clone());
+    let mgr = common::devenv_backed_pty_manager(pool.clone()).await;
     let meta = mgr
         .spawn(SpawnParams {
             repo: "testrepo".into(),
@@ -80,7 +80,7 @@ async fn spawn_persists_row_in_live_state() {
 #[tokio::test]
 async fn child_exit_transitions_to_dead() {
     let pool = fresh_pool().await;
-    let mgr = PtyManager::new(pool.clone());
+    let mgr = common::devenv_backed_pty_manager(pool.clone()).await;
     // `/bin/true` exits immediately with code 0.
     let meta = mgr
         .spawn(SpawnParams {
@@ -102,7 +102,7 @@ async fn child_exit_transitions_to_dead() {
 #[tokio::test]
 async fn delete_terminates_live_session_and_marks_deleted() {
     let pool = fresh_pool().await;
-    let mgr = PtyManager::new(pool.clone());
+    let mgr = common::devenv_backed_pty_manager(pool.clone()).await;
     // `/bin/sleep 60` stays live long enough for us to kill it.
     let meta = mgr
         .spawn(SpawnParams {
@@ -125,7 +125,7 @@ async fn delete_terminates_live_session_and_marks_deleted() {
 #[tokio::test]
 async fn list_returns_live_and_dead_but_not_deleted() {
     let pool = fresh_pool().await;
-    let mgr = PtyManager::new(pool.clone());
+    let mgr = common::devenv_backed_pty_manager(pool.clone()).await;
 
     // Live
     let live = mgr
@@ -202,9 +202,52 @@ async fn startup_reconciliation_transitions_live_rows_to_orphaned() {
 }
 
 #[tokio::test]
+async fn input_echoes_back_through_the_devenv_link() {
+    let pool = fresh_pool().await;
+    let mgr = common::devenv_backed_pty_manager(pool.clone()).await;
+    let meta = mgr
+        .spawn(SpawnParams {
+            repo: "echo".into(),
+            working_dir: PathBuf::from("/tmp"),
+            shell: PathBuf::from("/bin/sh"),
+            args: vec!["-c".into(), "cat".into()],
+            ..Default::default()
+        })
+        .await
+        .expect("spawn");
+
+    let mut output = mgr
+        .get(meta.id)
+        .await
+        .expect("live handle")
+        .output
+        .subscribe();
+    mgr.send_input(meta.id, b"echoed-through-devenv\n".to_vec())
+        .await
+        .expect("input");
+
+    let mut seen = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !String::from_utf8_lossy(&seen).contains("echoed-through-devenv") {
+        let chunk = tokio::time::timeout_at(deadline, output.recv())
+            .await
+            .expect("output before deadline");
+        match chunk {
+            Ok(bytes) => seen.extend_from_slice(&bytes),
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                panic!("output closed before echo")
+            }
+        }
+    }
+
+    mgr.delete(meta.id).await.expect("delete");
+}
+
+#[tokio::test]
 async fn pty_id_env_is_propagated_to_shell() {
     let pool = fresh_pool().await;
-    let mgr = PtyManager::new(pool.clone());
+    let mgr = common::devenv_backed_pty_manager(pool.clone()).await;
 
     // The shell will write SULION_PTY_ID to a tempfile, exit, and
     // we'll read the file to verify the env var was propagated. Using a

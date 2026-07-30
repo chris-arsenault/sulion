@@ -133,8 +133,10 @@ nginx upstream, WireGuard ingress, and Sulion deployer permissions already
 exist. The production TrueNAS deploy replaces only control-plane services: a
 backend replacement drops browser attachments, while node-owned PTYs continue
 and reconnect. Switching to the combined role terminates PTYs owned by its
-combined backend. Replacing `sulion-node` is an explicit session-affecting
-operation.
+combined backend. A node release also leaves shells running: PTY masters live
+in the devenv container (`sulion-devenv`, launched and adopted by the node,
+deliberately not a compose service), which keeps serving its shells while the
+node is recreated and redials it after.
 
 The backend/control container owns the main `sulion` database migrations and
 Postgres-only startup repair. Node, ingester, retrieval, and code intelligence

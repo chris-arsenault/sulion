@@ -18,6 +18,14 @@ services:
       SULION_CONTROL_TLS_CA: /run/sulion/control-tls.pem
       SULION_DOCKER_MODE: direct
       DOCKER_HOST: unix:///var/run/docker.sock
+      # The devenv container the node launches for PTY hosting. Deliberately
+      # not a compose service: the node deploy's --remove-orphans must never
+      # recreate it — that is what lets shells outlive node releases.
+      SULION_DEVENV_IMAGE: ${SULION_IMAGE_REGISTRY:-ghcr.io/chris-arsenault/sulion}/backend:${IMAGE_TAG:-latest}
+      SULION_DEVENV_HOME_HOST_PATH: ${SULION_HOME_HOST_PATH:-/home/sulion}
+      # Volume name as the host daemon knows it: <project>_<volume key>,
+      # project pinned to "sulion" by the deploy script.
+      SULION_DEVENV_RUN_VOLUME: sulion_sulion_run
       # Broker and retrieval ride the same encrypted node port: one endpoint,
       # one certificate, one pin. Secrets never cross the LAN in the clear.
       SULION_SECRET_BROKER_URL: ${SULION_SECRET_BROKER_URL:-https://192.168.66.3:30081/broker}

@@ -33,10 +33,12 @@ test("creates a key/value secret, grants it from a terminal tab, redeems it, and
   await openSession(page, label);
 
   await page.getByRole("button", { name: "Open secrets manager" }).click();
-  await expect(page.getByRole("tab", { name: "secrets" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "secrets" }).first()).toBeVisible();
   await expect(page.getByText("Secret editor")).toBeVisible();
 
-  await page.getByLabel("ID").fill(secretId);
+  // exact: the rail's "Unpin sidebar" / "Resize sidebar" labels substring-
+  // match "ID" otherwise.
+  await page.getByLabel("ID", { exact: true }).fill(secretId);
   await page.getByLabel("Description").fill("E2E env bundle");
   await page.getByPlaceholder("ANTHROPIC_API_KEY").fill("E2E_SECRET_VALUE");
   await page.getByPlaceholder("value").fill(secretValue);
@@ -44,7 +46,19 @@ test("creates a key/value secret, grants it from a terminal tab, redeems it, and
 
   await expect(page.getByText(`Saved ${secretId}`)).toBeVisible();
   await expect(page.getByText("Blank existing values are kept; enter a value to overwrite.")).toBeVisible();
-  await expect(page.getByDisplayValue(secretValue)).toHaveCount(0);
+  // The saved value must not remain displayed in any input. (Live input
+  // values are properties, not attributes, so check them via the DOM.)
+  await expect
+    .poll(async () =>
+      page
+        .locator("input")
+        .evaluateAll(
+          (els, value) =>
+            els.filter((el) => (el as HTMLInputElement).value === value).length,
+          secretValue,
+        ),
+    )
+    .toBe(0);
 
   await openContextMenu(tab(page, "terminal", label));
   await page.getByRole("menuitem", { name: "Secrets" }).hover();

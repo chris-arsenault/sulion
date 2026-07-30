@@ -523,7 +523,6 @@ fn print_json(value: &Value) {
     );
 }
 
-
 fn print_usage() {
     eprintln!(
         "usage:

@@ -93,7 +93,6 @@ impl BrokerState {
 
 pub fn app(state: Arc<BrokerState>) -> Router {
     let user_routes = Router::new()
-        .route("/health", get(health))
         .route("/v1/secrets", get(list_secrets))
         .route(
             "/v1/secrets/:id",
@@ -119,6 +118,10 @@ pub fn app(state: Arc<BrokerState>) -> Router {
         ));
 
     Router::new()
+        // Liveness only, static body, no state read — deliberately outside
+        // the auth layers so orchestration (compose healthchecks, the e2e
+        // stack) can gate on it without a token.
+        .route("/health", get(health))
         .merge(user_routes)
         .merge(use_routes)
         .merge(registration_routes)

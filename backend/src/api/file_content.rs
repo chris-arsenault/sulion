@@ -154,7 +154,8 @@ mod tests {
         let payload: Vec<u8> = (0..=9).collect();
 
         // Full body carries the real content type and length.
-        let full = serve_loaded_bytes("pic.png".into(), payload.clone(), &HeaderMap::new()).unwrap();
+        let full =
+            serve_loaded_bytes("pic.png".into(), payload.clone(), &HeaderMap::new()).unwrap();
         assert_eq!(full.status(), StatusCode::OK);
         assert_eq!(full.headers()[header::CONTENT_TYPE], "image/png");
         assert_eq!(full.headers()[header::ACCEPT_RANGES], "bytes");

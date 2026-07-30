@@ -419,13 +419,25 @@ async fn connect_once(
                         };
                         let runtime = runtime.clone();
                         let outbound = outbound_tx.clone();
-                        tokio::spawn(async move {
-                            if let Err(error) =
-                                handle_command(runtime, outbound, envelope).await
-                            {
-                                tracing::warn!(%error, "node command failed");
+                        // Terminal byte streams are order-sensitive: spawned
+                        // handlers acquire the PTY path in whatever order the
+                        // scheduler picks, which swaps keystrokes. Handle
+                        // terminal.* inline on the read loop — envelope order
+                        // is delivery order, as the loopback transport always
+                        // had it. Requests stay concurrent.
+                        if envelope.message_kind.starts_with("terminal.") {
+                            if let Err(error) = handle_command(runtime, outbound, envelope).await {
+                                tracing::warn!(%error, "node terminal command failed");
                             }
-                        });
+                        } else {
+                            tokio::spawn(async move {
+                                if let Err(error) =
+                                    handle_command(runtime, outbound, envelope).await
+                                {
+                                    tracing::warn!(%error, "node command failed");
+                                }
+                            });
+                        }
                     }
                     Message::Ping(payload) => sink.send(Message::Pong(payload)).await?,
                     Message::Pong(_) => {}

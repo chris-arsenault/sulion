@@ -173,7 +173,9 @@ mod tests {
         tokio::fs::write(root.join("pic.png"), [0x89, b'P', b'N', b'G', 0x0D])
             .await
             .unwrap();
-        tokio::fs::write(root.join("vector.svg"), "<svg/>").await.unwrap();
+        tokio::fs::write(root.join("vector.svg"), "<svg/>")
+            .await
+            .unwrap();
 
         let md = build_preview(root.clone(), "notes.md").await.unwrap();
         assert_eq!(md.mime, "text/markdown");

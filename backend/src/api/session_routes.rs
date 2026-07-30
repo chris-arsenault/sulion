@@ -468,8 +468,7 @@ pub(super) async fn session_history(
     Path(id): Path<Uuid>,
     Query(q): Query<HistoryQuery>,
 ) -> ApiResult<Json<HistoryResponse>> {
-    let resolved =
-        resolve_session_target(&state.pool, id, q.session.or(q.claude_session)).await?;
+    let resolved = resolve_session_target(&state.pool, id, q.session.or(q.claude_session)).await?;
 
     let resolved = match resolved {
         SessionLookup::Resolved(resolved) => resolved,
@@ -590,5 +589,4 @@ mod tests {
             vec![b"\x1b[200~hello\rworld\x1b[201~".to_vec(), b"\r".to_vec()],
         );
     }
-
 }

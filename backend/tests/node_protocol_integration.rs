@@ -17,6 +17,8 @@ use sulion::node_runtime::{
     NodeRuntime, RepoCreateRequest, RepoPathRequest, ResourceRequest, SessionCreateRequest,
     SessionLaunch,
 };
+
+mod common;
 use sulion::{app, db, AppState};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
@@ -403,7 +405,7 @@ async fn app_state_reports_the_nodes_machine_and_forgets_it_on_disconnect() {
 }
 
 #[tokio::test]
-async fn same_boot_reconnect_preserves_sessions_and_new_boot_ends_them() {
+async fn same_boot_reconnect_preserves_sessions_and_a_new_boot_defers_to_inventory() {
     let pool = fresh_pool().await;
     let (base, state) = start_server(pool.clone()).await;
     let keypair = generate_keypair();
@@ -435,15 +437,37 @@ async fn same_boot_reconnect_preserves_sessions_and_new_boot_ends_them() {
             .unwrap();
     assert_eq!(state_after_reconnect, "live");
 
-    let _new_boot = connect_node(&base, &keypair, node_id, Uuid::new_v4()).await;
-    let row: (String, Option<String>) =
-        sqlx::query_as("SELECT state, runtime_end_reason FROM pty_sessions WHERE id = $1")
+    // A new boot's hello no longer ends prior-boot sessions — shells can
+    // outlive a node restart in the devenv. The first complete inventory is
+    // what decides; here it reports nothing hosted, so the session ends.
+    let new_boot = Uuid::new_v4();
+    let mut new_socket = connect_node(&base, &keypair, node_id, new_boot).await;
+    let state_after_new_boot: String =
+        sqlx::query_scalar("SELECT state FROM pty_sessions WHERE id = $1")
             .bind(session_id)
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(row.0, "dead");
-    assert_eq!(row.1.as_deref(), Some("node_reboot"));
+    assert_eq!(state_after_new_boot, "live");
+
+    send_heartbeat(&mut new_socket, node_id, new_boot, vec![]).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let row: (String, Option<String>) =
+            sqlx::query_as("SELECT state, runtime_end_reason FROM pty_sessions WHERE id = $1")
+                .bind(session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        if row.0 == "dead" && row.1.as_deref() == Some("node_inventory_missing") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "empty inventory did not end the session: {row:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 #[tokio::test]
@@ -472,12 +496,15 @@ async fn extracted_runtime_preserves_a_pty_across_control_replacement() {
     std::fs::create_dir_all(&repos_root).expect("repos root");
     std::fs::create_dir_all(&workspaces_root).expect("workspaces root");
     let node_id = Uuid::new_v4();
+    let (link, events) = common::in_process_devenv().await;
     let runtime = NodeRuntime::new(
         node_id,
         Uuid::new_v4(),
         pool.clone(),
         repos_root,
         workspaces_root,
+        link,
+        events,
     );
     let first_control = NodeControl::new(pool.clone());
     first_control
@@ -545,6 +572,80 @@ async fn extracted_runtime_preserves_a_pty_across_control_replacement() {
 }
 
 #[tokio::test]
+async fn a_node_restart_adopts_sessions_the_devenv_kept_alive() {
+    let pool = fresh_pool().await;
+    let (base, state) = start_server(pool.clone()).await;
+    let keypair = generate_keypair();
+    pair_and_approve(&base, &state.node_control, &keypair).await;
+
+    // Two sessions created under the previous boot. The devenv kept one shell
+    // alive across the node restart; the other died with it.
+    let survivor = Uuid::new_v4();
+    let casualty = Uuid::new_v4();
+    let boot_a = Uuid::new_v4();
+    for id in [survivor, casualty] {
+        sqlx::query(
+            "INSERT INTO pty_sessions (id, repo, working_dir, state, created_at, node_id, node_boot_id) \
+             VALUES ($1, 'r', '/tmp', 'live', NOW(), $2, $3)",
+        )
+        .bind(id)
+        .bind(DEDICATED_NODE_ID)
+        .bind(boot_a)
+        .execute(&pool)
+        .await
+        .expect("insert prior-boot session");
+    }
+
+    // The node reconnects under a new boot id. The hello alone must no
+    // longer end prior-boot sessions — that decision now belongs to the
+    // first complete inventory.
+    let boot_b = Uuid::new_v4();
+    let mut socket = connect_node(&base, &keypair, DEDICATED_NODE_ID, boot_b).await;
+    let (state_after_hello,): (String,) =
+        sqlx::query_as("SELECT state FROM pty_sessions WHERE id = $1")
+            .bind(survivor)
+            .fetch_one(&pool)
+            .await
+            .expect("read survivor after hello");
+    assert_eq!(
+        state_after_hello, "live",
+        "hello must not end sessions the devenv may still host"
+    );
+
+    // First complete heartbeat: the devenv still hosts only the survivor.
+    send_heartbeat(&mut socket, DEDICATED_NODE_ID, boot_b, vec![survivor]).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let (survivor_state, survivor_boot): (String, Option<Uuid>) =
+            sqlx::query_as("SELECT state, node_boot_id FROM pty_sessions WHERE id = $1")
+                .bind(survivor)
+                .fetch_one(&pool)
+                .await
+                .expect("read survivor");
+        let (casualty_state, casualty_reason): (String, Option<String>) =
+            sqlx::query_as("SELECT state, runtime_end_reason FROM pty_sessions WHERE id = $1")
+                .bind(casualty)
+                .fetch_one(&pool)
+                .await
+                .expect("read casualty");
+        if survivor_state == "live"
+            && survivor_boot == Some(boot_b)
+            && casualty_state == "dead"
+            && casualty_reason.as_deref() == Some("node_inventory_missing")
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "inventory heartbeat did not reconcile: survivor {survivor_state}/{survivor_boot:?}, \
+             casualty {casualty_state}/{casualty_reason:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
 async fn node_file_requests_reject_traversal_and_symlink_escapes() {
     let pool = fresh_pool().await;
     let root = tempfile::tempdir().expect("runtime root");
@@ -553,12 +654,15 @@ async fn node_file_requests_reject_traversal_and_symlink_escapes() {
     std::fs::create_dir_all(&repos_root).expect("repos root");
     std::fs::create_dir_all(&workspaces_root).expect("workspaces root");
     let node_id = Uuid::new_v4();
+    let (link, events) = common::in_process_devenv().await;
     let runtime = NodeRuntime::new(
         node_id,
         Uuid::new_v4(),
         pool.clone(),
         repos_root.clone(),
         workspaces_root,
+        link,
+        events,
     );
     let control = NodeControl::new(pool);
     control

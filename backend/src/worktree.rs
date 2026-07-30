@@ -200,8 +200,9 @@ impl WorkspaceManager {
                             )),
                         }
                     }
-                    Err(err) => Err(err)
-                        .with_context(|| format!("insert main workspace for {repo_name}")),
+                    Err(err) => {
+                        Err(err).with_context(|| format!("insert main workspace for {repo_name}"))
+                    }
                 }
             }
         }

@@ -13,7 +13,9 @@ use sulion::codex::{run_launcher, LauncherConfig};
 use sulion::correlate::{self, ControlRequest, CorrelateMsg, RuntimeEvent, RuntimeMsg};
 use sulion::db;
 use sulion::plans::{NewPhase, UpdatePhaseInput};
-use sulion::pty::{PtyManager, SpawnParams};
+use sulion::pty::SpawnParams;
+
+mod common;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use uuid::Uuid;
@@ -85,7 +87,7 @@ fn write_fake_codex_with_nested_child(path: &Path) {
 #[tokio::test]
 async fn apply_upserts_claude_session_and_points_pty() {
     let pool = fresh_pool().await;
-    let mgr = PtyManager::new(pool.clone());
+    let mgr = common::devenv_backed_pty_manager(pool.clone()).await;
 
     // Create a real PTY so we have a live row to point at.
     let pty = mgr
@@ -133,7 +135,7 @@ async fn apply_upserts_claude_session_and_points_pty() {
 #[tokio::test]
 async fn second_claude_session_in_same_pty_updates_pointer() {
     let pool = fresh_pool().await;
-    let mgr = PtyManager::new(pool.clone());
+    let mgr = common::devenv_backed_pty_manager(pool.clone()).await;
     let pty = mgr
         .spawn(SpawnParams {
             repo: "r".into(),
@@ -193,7 +195,7 @@ async fn second_claude_session_in_same_pty_updates_pointer() {
 #[tokio::test]
 async fn resuming_a_session_in_a_new_pty_releases_the_old_pty() {
     let pool = fresh_pool().await;
-    let mgr = PtyManager::new(pool.clone());
+    let mgr = common::devenv_backed_pty_manager(pool.clone()).await;
     let old_pty = mgr
         .spawn(SpawnParams {
             repo: "r".into(),
@@ -264,7 +266,7 @@ async fn resuming_a_session_in_a_new_pty_releases_the_old_pty() {
 #[tokio::test]
 async fn socket_listener_accepts_json_line_and_updates_db() {
     let pool = fresh_pool().await;
-    let mgr = PtyManager::new(pool.clone());
+    let mgr = common::devenv_backed_pty_manager(pool.clone()).await;
     let pty = mgr
         .spawn(SpawnParams {
             repo: "r".into(),

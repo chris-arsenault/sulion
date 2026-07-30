@@ -8,6 +8,11 @@ const wsTarget =
   apiTarget.replace(/^http/i, (value) => (value.toLowerCase() === "https" ? "wss" : "ws"));
 
 export default defineConfig({
+  // amazon-cognito-identity-js pulls in Node's `buffer`, which reads `global`
+  // at module init. The production build wraps CommonJS so this never bites,
+  // but the dev server's esbuild pre-bundle leaves the bare reference — and
+  // an unmounted React app renders as a blank page.
+  define: { global: "globalThis" },
   plugins: [react()],
   worker: {
     format: "es",

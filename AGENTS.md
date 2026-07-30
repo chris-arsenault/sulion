@@ -33,6 +33,7 @@ Full list in [docs/architecture.md](docs/architecture.md#invariants--do-not-brea
 4. Shadow terminal emulator is fed continuously, including with no clients attached.
 5. Ingester idempotency key is `(session_uuid, byte_offset)`.
 6. Schema carries `parent_session_uuid NULL` from day one.
+7. The node owns no PTY masters — shells live in the devenv server, which is never a compose service.
 
 ## Working rules
 

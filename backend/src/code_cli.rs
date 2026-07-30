@@ -478,4 +478,3 @@ fn parse_budget(value: &str) -> Result<String, CliError> {
         )),
     }
 }
-

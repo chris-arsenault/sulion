@@ -1,30 +1,26 @@
-//! PTY session lifecycle: spawn shells inside allocated pseudo-terminals,
-//! supervise their exit, and broadcast their output to subscribers.
+//! PTY session bookkeeping: rows, metadata, and the node-side handles that
+//! drive shells hosted in the devenv server.
 //!
-//! The manager owns the process tree. Subscribers (WebSocket attach, shadow
-//! emulator) consume bytes via a `broadcast` channel and send input via an
-//! `mpsc`. A spawn_blocking reader pumps PTY master → broadcast; a
-//! spawn_blocking writer pumps mpsc → PTY master.
+//! The manager owns no process tree. Shells live in the devenv server
+//! (`crate::devenv::server`), reached through the link
+//! (`crate::devenv::link`); this module keeps the Postgres records and the
+//! per-session handles the rest of the node subscribes to. A manager built
+//! without a link (the control plane) can only do record-keeping.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use portable_pty::{CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
+use tokio::sync::{broadcast, mpsc, RwLock};
 use uuid::Uuid;
 
 use crate::db::Pool;
-use crate::emulator::ShadowEmulator;
+use crate::devenv::link::{DevenvLink, LinkEvent};
 
-/// Bytes broadcast channel capacity. One slot ~= one PTY read chunk. At
-/// 8 KiB/read a 4096-slot buffer holds ~32 MiB of un-drained backlog.
-const BROADCAST_CAPACITY: usize = 4096;
+pub mod host;
 
-/// Size of each PTY read. Larger = fewer syscalls, smaller = lower latency.
-const READ_CHUNK: usize = 8192;
+use host::HostSpawnSpec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PtyState {
@@ -142,53 +138,44 @@ impl Default for AgentRuntimeMetadata {
     }
 }
 
-/// Live, running PTY session. Holds the master PTY and the channels used
-/// by subscribers to attach.
+/// Node-side handle to a live session hosted in the devenv server.
 pub struct PtySession {
     pub id: Uuid,
     pub repo: String,
     pub working_dir: PathBuf,
     pub workspace: Option<PtyWorkspaceMetadata>,
-    /// Broadcast channel of PTY output bytes. Every subscriber (WS attacher)
-    /// gets a copy. The shadow emulator is fed directly by the reader task.
+    /// Node-side fan-out of PTY output bytes, fed by the devenv link. Every
+    /// subscriber (WS attacher) gets a copy. Closes when the shell exits.
     pub output: broadcast::Sender<Vec<u8>>,
-    /// Inbound-to-PTY mpsc. Input bytes from WS attachers land here and are
-    /// drained by the writer task.
-    pub input: mpsc::Sender<Vec<u8>>,
-    /// Resize requests. Drained by a small task that calls TIOCSWINSZ.
-    pub resize: mpsc::Sender<PtySize>,
-    /// Shadow terminal emulator. Fed every byte read from the PTY by the
-    /// reader task. Used to render the snapshot-on-attach for WS clients.
-    pub emulator: ShadowEmulator,
-    /// Process ID of the shell (for signaling). None if already reaped.
-    pub pid: Arc<std::sync::Mutex<Option<u32>>>,
+    link: Arc<DevenvLink>,
 }
 
-/// In-memory manager of live PTY sessions, plus a Postgres pool for
-/// persistence.
+impl PtySession {
+    /// Current shadow-emulator render, fetched from the devenv. Ordered
+    /// after every output frame the link has already forwarded, so an attach
+    /// can send it and then stream without a gap.
+    pub async fn snapshot(&self) -> Vec<u8> {
+        match self.link.snapshot(self.id).await {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                tracing::warn!(id = %self.id, %err, "devenv snapshot unavailable");
+                Vec::new()
+            }
+        }
+    }
+
+    pub async fn resize(&self, rows: u16, cols: u16) -> anyhow::Result<()> {
+        self.link.resize(self.id, rows, cols).await
+    }
+}
+
+/// Session records plus node-side handles, with a Postgres pool for
+/// persistence. `link` is present on the node runtime and absent on the
+/// control plane, which only ever does record-keeping.
 pub struct PtyManager {
     pool: Pool,
+    link: Option<Arc<DevenvLink>>,
     sessions: RwLock<HashMap<Uuid, Arc<PtySession>>>,
-}
-
-/// Terminal dimension bounds. `vt100` materialises the normal and alternate
-/// grids eagerly, so an unbounded size is an allocation the process cannot
-/// refuse: `handle_alloc_error` aborts rather than unwinds, which would take
-/// every live PTY on the node with it. Applied at the two points every size
-/// passes through — `PtyManager::spawn` and the resize task — so no caller can
-/// route around them.
-const MIN_COLS: u16 = 20;
-const MAX_COLS: u16 = 500;
-const MIN_ROWS: u16 = 5;
-const MAX_ROWS: u16 = 300;
-
-fn clamp_pty_size(size: PtySize) -> PtySize {
-    PtySize {
-        cols: size.cols.clamp(MIN_COLS, MAX_COLS),
-        rows: size.rows.clamp(MIN_ROWS, MAX_ROWS),
-        pixel_width: 0,
-        pixel_height: 0,
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,16 +213,102 @@ impl Default for SpawnParams {
 
 mod environment;
 
-use environment::configure_pty_environment;
+use environment::pty_environment;
 
 impl PtyManager {
+    /// Record-keeping manager with no devenv: the control plane's shape.
+    /// Process operations (spawn, input) fail; metadata and row updates work.
     pub fn new(pool: Pool) -> Arc<Self> {
         Arc::new(Self {
             pool,
+            link: None,
             sessions: RwLock::new(HashMap::new()),
         })
     }
 
+    /// Full manager backed by a devenv link. Consumes the link's event stream
+    /// to keep rows and handles honest across devenv reconnects and exits.
+    pub fn with_devenv(
+        pool: Pool,
+        link: Arc<DevenvLink>,
+        events: mpsc::UnboundedReceiver<LinkEvent>,
+    ) -> Arc<Self> {
+        let manager = Arc::new(Self {
+            pool,
+            link: Some(link),
+            sessions: RwLock::new(HashMap::new()),
+        });
+        tokio::spawn(manager.clone().run_events(events));
+        manager
+    }
+
+    fn link(&self) -> anyhow::Result<&Arc<DevenvLink>> {
+        self.link
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("this process hosts no devenv runtime"))
+    }
+
+    /// Applies devenv link events to the records and handles: adoption on
+    /// (re)connect, death on exit, and death for anything the devenv no
+    /// longer hosts.
+    async fn run_events(self: Arc<Self>, mut events: mpsc::UnboundedReceiver<LinkEvent>) {
+        while let Some(event) = events.recv().await {
+            match event {
+                LinkEvent::Exited { id, exit_code } => {
+                    self.mark_dead(id, exit_code).await;
+                }
+                LinkEvent::Connected { sessions } => {
+                    self.sync_with_inventory(&sessions).await;
+                }
+            }
+        }
+    }
+
+    /// On devenv (re)connect: adopt hosted sessions this manager has no
+    /// handle for, and declare dead anything it tracked that the devenv no
+    /// longer hosts.
+    async fn sync_with_inventory(self: &Arc<Self>, inventory: &[Uuid]) {
+        let Ok(link) = self.link() else { return };
+        let tracked: Vec<Uuid> = self.sessions.read().await.keys().copied().collect();
+        for id in &tracked {
+            if !inventory.contains(id) {
+                self.mark_dead(*id, None).await;
+            }
+        }
+        for id in inventory {
+            if tracked.contains(id) {
+                continue;
+            }
+            let row = match read_meta(&self.pool, *id).await {
+                Ok(Some(meta)) => meta,
+                Ok(None) => {
+                    tracing::warn!(%id, "devenv hosts a session with no record; leaving it alone");
+                    continue;
+                }
+                Err(err) => {
+                    tracing::error!(%id, %err, "failed to load session record for adoption");
+                    continue;
+                }
+            };
+            let Some(output) = link.output_sender(*id).await else {
+                continue;
+            };
+            let session = Arc::new(PtySession {
+                id: *id,
+                repo: row.repo.clone(),
+                working_dir: row.working_dir.clone(),
+                workspace: row.workspace.clone(),
+                output,
+                link: link.clone(),
+            });
+            self.sessions.write().await.insert(*id, session);
+            tracing::info!(%id, "adopted devenv-hosted session");
+        }
+    }
+}
+
+/// Session lifecycle and record-keeping.
+impl PtyManager {
     /// Count of currently-tracked PTY sessions (live + any still in the
     /// map that haven't been reaped). Drives the app-state stats surface.
     pub async fn live_count(&self) -> usize {
@@ -254,57 +327,26 @@ impl PtyManager {
         ids
     }
 
-    /// Spawn a new PTY + shell. Persists a pty_sessions row and starts
-    /// reader / writer / supervisor tasks.
+    /// Spawn a new PTY + shell: persists the pty_sessions row, then asks the
+    /// devenv server to host the process.
+    ///
+    /// The row goes in before the devenv spawn on purpose: a shell can exit
+    /// (and its `Exited` event arrive) faster than this method resumes, and
+    /// an exit event that finds no row would leave a live record for a dead
+    /// process.
     pub async fn spawn(self: &Arc<Self>, params: SpawnParams) -> anyhow::Result<PtyMetadata> {
         let id = params.id.unwrap_or_else(Uuid::new_v4);
         if self.sessions.read().await.contains_key(&id) {
             anyhow::bail!("PTY session {id} is already live");
         }
+        let link = self.link()?.clone();
         let secret_broker_key_path = crate::secret_pty::prepare_pty_credential(id).await?;
-        let size = clamp_pty_size(PtySize {
-            rows: params.rows,
-            cols: params.cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        });
-        let pty_system = portable_pty::native_pty_system();
-        let pair = pty_system
-            .openpty(size)
-            .map_err(|e| anyhow::anyhow!("openpty failed: {e}"))?;
-
-        let cmd = shell_command(id, &params, secret_broker_key_path.as_ref());
-
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| anyhow::anyhow!("spawn shell: {e}"))?;
-        // Drop the slave half in the parent; the child owns it now.
-        drop(pair.slave);
-
-        let pid = Arc::new(std::sync::Mutex::new(child.process_id()));
-
-        let (out_tx, _) = broadcast::channel::<Vec<u8>>(BROADCAST_CAPACITY);
-        let (in_tx, in_rx) = mpsc::channel::<Vec<u8>>(64);
-        let (resize_tx, resize_rx) = mpsc::channel::<PtySize>(16);
-        let emulator = ShadowEmulator::new(size.rows, size.cols);
-
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| anyhow::anyhow!("clone reader: {e}"))?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| anyhow::anyhow!("take writer: {e}"))?;
-        // The master must outlive the reader/writer tasks so that the
-        // kernel keeps the pty alive. Wrap it in an Arc<Mutex> so the
-        // resize task can call resize() on it.
-        let master: Arc<Mutex<Box<dyn MasterPty + Send>>> = Arc::new(Mutex::new(pair.master));
-
-        spawn_reader_task(id, reader, out_tx.clone(), emulator.clone());
-        spawn_writer_task(id, writer, in_rx);
-        spawn_resize_task(id, master.clone(), emulator.clone(), resize_rx);
+        let env = pty_environment(
+            id,
+            &params.shell,
+            secret_broker_key_path.as_ref(),
+            params.workspace.as_ref(),
+        );
 
         let now = chrono::Utc::now();
         let initial_agent_runtime = match params.initial_agent_runtime_agent.clone() {
@@ -367,20 +409,51 @@ impl PtyManager {
         .execute(&self.pool)
         .await?;
 
-        let session = Arc::new(PtySession {
-            id,
-            repo: meta.repo.clone(),
-            working_dir: meta.working_dir.clone(),
-            workspace: meta.workspace.clone(),
-            output: out_tx,
-            input: in_tx,
-            resize: resize_tx,
-            emulator,
-            pid: pid.clone(),
-        });
-        self.sessions.write().await.insert(id, session);
+        if let Err(err) = link
+            .spawn(HostSpawnSpec {
+                id,
+                shell: params.shell.clone(),
+                args: params.args.clone(),
+                working_dir: params.working_dir.clone(),
+                env,
+                cols: params.cols,
+                rows: params.rows,
+            })
+            .await
+        {
+            // The row was written on the promise of a process; without one it
+            // would sit in the sidebar as a live husk. Deleted also keeps it
+            // out of every listing.
+            sqlx::query(
+                "UPDATE pty_sessions SET state = 'deleted', ended_at = NOW() \
+                 WHERE id = $1 AND state = 'live'",
+            )
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .ok();
+            crate::secret_pty::revoke_pty_credential(id).await;
+            return Err(err);
+        }
 
-        spawn_supervisor_task(self.clone(), id, child, pid);
+        match link.output_sender(id).await {
+            Some(output) => {
+                let session = Arc::new(PtySession {
+                    id,
+                    repo: meta.repo.clone(),
+                    working_dir: meta.working_dir.clone(),
+                    workspace: meta.workspace.clone(),
+                    output,
+                    link,
+                });
+                self.sessions.write().await.insert(id, session);
+            }
+            // The shell already exited and the link routed its Exited event;
+            // the row is (or is about to be) marked dead. Nothing to track.
+            None => {
+                tracing::debug!(%id, "session exited before its handle was registered");
+            }
+        }
 
         Ok(meta)
     }
@@ -496,26 +569,22 @@ impl PtyManager {
             .get(id)
             .await
             .ok_or_else(|| anyhow::anyhow!("no live PTY session {id}"))?;
-        session
-            .input
-            .send(bytes)
-            .await
-            .map_err(|_| anyhow::anyhow!("PTY input channel closed"))?;
-        Ok(())
+        session.link.input(id, bytes).await
     }
 
-    /// SIGTERM → grace period → SIGKILL. Marks the DB row deleted.
+    /// Asks the devenv to end the shell (its TERM→grace→KILL ladder), waits
+    /// briefly for the death to land, then marks the DB row deleted.
     pub async fn delete(&self, id: Uuid) -> anyhow::Result<()> {
         let session = self.sessions.write().await.remove(&id);
         if let Some(session) = session {
-            let maybe_pid = { *session.pid.lock().unwrap() };
-            if let Some(pid) = maybe_pid {
-                // SIGTERM first; supervisor will reap. If still alive after
-                // 3s, escalate to SIGKILL.
-                unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-                let alive = wait_for_exit(pid, std::time::Duration::from_secs(3)).await;
-                if alive {
-                    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            if session.link.kill(id).await.is_ok() {
+                // The exit surfaces through the link and closes the fan-out;
+                // bounded wait so a wedged shell cannot wedge the API.
+                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(4);
+                while session.link.output_sender(id).await.is_some()
+                    && tokio::time::Instant::now() < deadline
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             }
         }
@@ -561,32 +630,6 @@ impl PtyManager {
         }
         crate::secret_pty::revoke_pty_credential(id).await;
     }
-}
-
-/// Builds the shell command a session runs, including the environment policy
-/// that decides what the resulting PTY can see.
-fn shell_command(
-    id: Uuid,
-    params: &SpawnParams,
-    secret_broker_key_path: Option<&PathBuf>,
-) -> CommandBuilder {
-    let mut cmd = CommandBuilder::new(&params.shell);
-    for arg in &params.args {
-        cmd.arg(arg);
-    }
-    cmd.cwd(&params.working_dir);
-    configure_pty_environment(
-        &mut cmd,
-        id,
-        &params.shell,
-        secret_broker_key_path,
-        params.workspace.as_ref(),
-    );
-    cmd.env(
-        "TERM",
-        std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string()),
-    );
-    cmd
 }
 
 #[derive(sqlx::FromRow)]
@@ -731,104 +774,6 @@ impl PtyRowWithActivity {
     }
 }
 
-// ─── task spawners ───────────────────────────────────────────────────────
-
-fn spawn_reader_task(
-    id: Uuid,
-    mut reader: Box<dyn Read + Send>,
-    tx: broadcast::Sender<Vec<u8>>,
-    emulator: ShadowEmulator,
-) {
-    tokio::task::spawn_blocking(move || {
-        let mut buf = [0u8; READ_CHUNK];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => break, // EOF: child closed its end of the PTY
-                Ok(n) => {
-                    let chunk = &buf[..n];
-                    // Feed the shadow emulator unconditionally so snapshot-on-attach
-                    // stays current even when no clients are subscribed.
-                    emulator.process(chunk);
-                    let _ = tx.send(chunk.to_vec());
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) => {
-                    tracing::debug!(%id, err = %e, "pty read ended");
-                    break;
-                }
-            }
-        }
-    });
-}
-
-fn spawn_writer_task(id: Uuid, mut writer: Box<dyn Write + Send>, mut rx: mpsc::Receiver<Vec<u8>>) {
-    tokio::task::spawn_blocking(move || {
-        while let Some(bytes) = rx.blocking_recv() {
-            if let Err(err) = writer.write_all(&bytes) {
-                tracing::debug!(%id, %err, "pty write failed");
-                break;
-            }
-            let _ = writer.flush();
-        }
-    });
-}
-
-fn spawn_resize_task(
-    id: Uuid,
-    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
-    emulator: ShadowEmulator,
-    mut rx: mpsc::Receiver<PtySize>,
-) {
-    tokio::spawn(async move {
-        while let Some(size) = rx.recv().await {
-            let size = clamp_pty_size(size);
-            {
-                let m = master.lock().await;
-                if let Err(err) = m.resize(size) {
-                    tracing::warn!(%id, %err, "pty resize failed");
-                }
-            }
-            // Keep the emulator dimensions in sync so the next snapshot
-            // is correctly shaped.
-            emulator.resize(size.rows, size.cols);
-        }
-    });
-}
-
-fn spawn_supervisor_task(
-    manager: Arc<PtyManager>,
-    id: Uuid,
-    mut child: Box<dyn portable_pty::Child + Send + Sync>,
-    pid: Arc<std::sync::Mutex<Option<u32>>>,
-) {
-    tokio::task::spawn_blocking(move || {
-        let status = child.wait();
-        // ExitCode is u32; signal-terminated processes encode the signal
-        // differently across impls — we just cast to i32 for storage.
-        let exit_code = status.ok().map(|s| s.exit_code() as i32);
-        *pid.lock().unwrap() = None;
-        let manager = manager.clone();
-        tokio::runtime::Handle::current().spawn(async move {
-            manager.mark_dead(id, exit_code).await;
-        });
-    });
-}
-
-async fn wait_for_exit(pid: u32, timeout: std::time::Duration) -> bool {
-    let deadline = tokio::time::Instant::now() + timeout;
-    while tokio::time::Instant::now() < deadline {
-        // Sending signal 0 probes whether the pid is alive without harming it.
-        let rc = unsafe { libc::kill(pid as i32, 0) };
-        if rc != 0 {
-            // errno ESRCH = no such process → already exited
-            return false;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    // Still alive at deadline.
-    unsafe { libc::kill(pid as i32, 0) == 0 }
-}
-
 /// Helper: read the most recent PtyMetadata for an id directly from DB.
 /// Used by tests to assert final state.
 pub async fn read_meta(pool: &Pool, id: Uuid) -> anyhow::Result<Option<PtyMetadata>> {
@@ -857,42 +802,5 @@ pub fn default_shell() -> PathBuf {
         PathBuf::from("/bin/bash")
     } else {
         PathBuf::from("/bin/sh")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn size(cols: u16, rows: u16) -> PtySize {
-        PtySize {
-            cols,
-            rows,
-            pixel_width: 0,
-            pixel_height: 0,
-        }
-    }
-
-    #[test]
-    fn clamps_hostile_dimensions() {
-        // A client can send this on an open terminal socket. Unclamped it is
-        // ~275 GB of eager vt100 grid allocation, which aborts the process.
-        let clamped = clamp_pty_size(size(u16::MAX, u16::MAX));
-        assert_eq!(clamped.cols, MAX_COLS);
-        assert_eq!(clamped.rows, MAX_ROWS);
-    }
-
-    #[test]
-    fn clamps_degenerate_dimensions() {
-        let clamped = clamp_pty_size(size(0, 0));
-        assert_eq!(clamped.cols, MIN_COLS);
-        assert_eq!(clamped.rows, MIN_ROWS);
-    }
-
-    #[test]
-    fn leaves_ordinary_dimensions_alone() {
-        let clamped = clamp_pty_size(size(120, 30));
-        assert_eq!(clamped.cols, 120);
-        assert_eq!(clamped.rows, 30);
     }
 }

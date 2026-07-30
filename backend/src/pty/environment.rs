@@ -4,30 +4,35 @@
 //! its own: it decides which credentials, roots, and helper paths reach an
 //! agent's session, and it is read far more often than the spawn machinery
 //! around it.
+//!
+//! Returns plain pairs rather than mutating a `CommandBuilder`: the policy is
+//! evaluated against the node's environment, but the spawn may happen in a
+//! different process, so the result has to cross a wire.
 
 use std::path::{Path, PathBuf};
 
-use portable_pty::CommandBuilder;
 use uuid::Uuid;
 
 use super::PtyWorkspaceMetadata;
 
-pub(super) fn configure_pty_environment(
-    cmd: &mut CommandBuilder,
+/// The complete environment for a PTY shell. The caller starts from an empty
+/// environment (`env_clear`) and applies exactly these pairs.
+pub(crate) fn pty_environment(
     id: Uuid,
     shell: &Path,
     secret_broker_key_path: Option<&PathBuf>,
     workspace: Option<&PtyWorkspaceMetadata>,
-) {
-    cmd.env_clear();
+) -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = Vec::new();
+    let mut set = |key: &str, value: String| env.push((key.to_string(), value));
 
     let home = std::env::var("HOME").unwrap_or_else(|_| "/home/sulion".to_string());
     let user = std::env::var("USER").unwrap_or_else(|_| "sulion".to_string());
-    cmd.env("HOME", &home);
-    cmd.env("USER", &user);
-    cmd.env("LOGNAME", &user);
-    cmd.env("SHELL", shell.as_os_str());
-    cmd.env("PATH", default_pty_path(&home));
+    set("HOME", home.clone());
+    set("USER", user.clone());
+    set("LOGNAME", user);
+    set("SHELL", shell.to_string_lossy().into_owned());
+    set("PATH", default_pty_path(&home));
 
     for key in [
         "LANG",
@@ -44,44 +49,44 @@ pub(super) fn configure_pty_environment(
         "SSL_CERT_FILE",
         "SSL_CERT_DIR",
     ] {
-        forward_env(cmd, key);
+        forward_env(&mut env, key);
     }
 
-    cmd.env("SULION_PTY_ID", id.to_string());
+    env.push(("SULION_PTY_ID".to_string(), id.to_string()));
     if let Some(workspace) = workspace {
-        cmd.env("SULION_REPO_NAME", &workspace.repo_name);
-        cmd.env("SULION_WORKSPACE_ID", workspace.id.to_string());
-        cmd.env("SULION_WORKSPACE_KIND", &workspace.kind);
-        cmd.env(
-            "SULION_WORKSPACE_PATH",
-            workspace.path.to_string_lossy().as_ref(),
-        );
-        cmd.env(
-            "SULION_CANONICAL_REPO",
+        env.push(("SULION_REPO_NAME".to_string(), workspace.repo_name.clone()));
+        env.push(("SULION_WORKSPACE_ID".to_string(), workspace.id.to_string()));
+        env.push(("SULION_WORKSPACE_KIND".to_string(), workspace.kind.clone()));
+        env.push((
+            "SULION_WORKSPACE_PATH".to_string(),
+            workspace.path.to_string_lossy().into_owned(),
+        ));
+        env.push((
+            "SULION_CANONICAL_REPO".to_string(),
             std::env::var("SULION_REPOS_ROOT")
                 .map(|root| PathBuf::from(root).join(&workspace.repo_name))
                 .unwrap_or_else(|_| PathBuf::from("/home/sulion/repos").join(&workspace.repo_name))
                 .to_string_lossy()
-                .as_ref(),
-        );
+                .into_owned(),
+        ));
         if let Some(branch) = &workspace.branch_name {
-            cmd.env("SULION_BRANCH", branch);
+            env.push(("SULION_BRANCH".to_string(), branch.clone()));
         }
         if let Some(base_ref) = &workspace.base_ref {
-            cmd.env("SULION_BASE_REF", base_ref);
+            env.push(("SULION_BASE_REF".to_string(), base_ref.clone()));
         }
         if let Some(base_sha) = &workspace.base_sha {
-            cmd.env("SULION_BASE_SHA", base_sha);
+            env.push(("SULION_BASE_SHA".to_string(), base_sha.clone()));
         }
         if let Some(merge_target) = &workspace.merge_target {
-            cmd.env("SULION_MERGE_TARGET", merge_target);
+            env.push(("SULION_MERGE_TARGET".to_string(), merge_target.clone()));
         }
     }
-    cmd.env(
-        "SULION_CORRELATE_SOCK",
+    env.push((
+        "SULION_CORRELATE_SOCK".to_string(),
         std::env::var("SULION_CORRELATE_SOCK")
             .unwrap_or_else(|_| "/run/sulion/correlate.sock".to_string()),
-    );
+    ));
     for key in [
         "SULION_CLAUDE_PROJECTS",
         "SULION_CODEX_SESSIONS",
@@ -99,14 +104,19 @@ pub(super) fn configure_pty_environment(
         "DOCKER_HOST",
         "XDG_RUNTIME_DIR",
     ] {
-        forward_env(cmd, key);
+        forward_env(&mut env, key);
     }
     if let Some(path) = secret_broker_key_path {
-        cmd.env(
-            "SULION_SECRET_BROKER_KEY_PATH",
-            path.to_string_lossy().as_ref(),
-        );
+        env.push((
+            "SULION_SECRET_BROKER_KEY_PATH".to_string(),
+            path.to_string_lossy().into_owned(),
+        ));
     }
+    env.push((
+        "TERM".to_string(),
+        std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string()),
+    ));
+    env
 }
 
 fn default_pty_path(home: &str) -> String {
@@ -115,8 +125,35 @@ fn default_pty_path(home: &str) -> String {
     format!("{home}/.local/bin:/opt/sulion/bin:{base}")
 }
 
-fn forward_env(cmd: &mut CommandBuilder, key: &str) {
+fn forward_env(env: &mut Vec<(String, String)>, key: &str) {
     if let Ok(value) = std::env::var(key) {
-        cmd.env(key, value);
+        env.push((key.to_string(), value));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn environment_pairs_carry_the_session_identity_and_broker_wiring() {
+        let id = Uuid::new_v4();
+        let key_path = PathBuf::from("/run/sulion/pty-keys/test.pk8");
+        let env = pty_environment(id, Path::new("/bin/bash"), Some(&key_path), None);
+        let get = |key: &str| {
+            env.iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_else(|| panic!("missing env pair {key}"))
+        };
+        assert_eq!(get("SULION_PTY_ID"), id.to_string());
+        assert_eq!(get("SHELL"), "/bin/bash");
+        assert_eq!(
+            get("SULION_SECRET_BROKER_KEY_PATH"),
+            key_path.to_string_lossy()
+        );
+        assert!(get("PATH").contains("/opt/sulion/bin"));
+        assert!(!get("TERM").is_empty());
+        assert!(env.iter().any(|(k, _)| k == "SULION_CORRELATE_SOCK"));
     }
 }

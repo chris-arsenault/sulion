@@ -634,9 +634,8 @@ mod tests {
     fn parse_correlate_msg() {
         let pty = Uuid::new_v4();
         let session = Uuid::new_v4();
-        let json = format!(
-            r#"{{"pty_id":"{pty}","session_uuid":"{session}","agent":"claude-code"}}"#
-        );
+        let json =
+            format!(r#"{{"pty_id":"{pty}","session_uuid":"{session}","agent":"claude-code"}}"#);
         let parsed: CorrelateMsg = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.pty_id, pty);
         assert_eq!(parsed.session_uuid, session);

@@ -13,8 +13,18 @@ intelligence as separate processes. The portable standalone role can still run
 the ownership logic through an in-process loopback node for TrueNAS and
 generic-Linux rollback.
 
+Shells do not live in the node process: the **devenv server**
+(`sulion-devenv`, `backend/src/devenv/`) owns the PTY masters and the shadow
+emulators, and dials the node over a unix socket on the shared run volume. On
+the dedicated host it runs as a label-owned container the node launches and
+adopts — never a compose service — so recreating `sulion-node` leaves every
+shell running and the devenv redials the new node. Where there is no Docker
+daemon (e2e, loopback standalone), the same binary runs as a supervised child
+process of the node: one PTY implementation, one wire protocol, no survival
+promise. See `docs/plans/pty-survives-deploy.md`.
+
 ```
-PTY shell ──► node shadow ──► node protocol ──► control WebSocket ──► xterm.js
+PTY shell ──► devenv shadow ──► node ──► node protocol ──► control WS ──► xterm.js
            └► JSONL file ──► node ingester ──► Postgres ──► timeline pane
 
 browser UI ──► frontend ──► control API ──► typed node operations
@@ -106,9 +116,10 @@ Code boundary:
 1. **Only the ingester reads JSONL.** REST handlers and WebSocket event pushes query Postgres. Never `fs::read` the `~/.claude/projects/` files from the request path.
 2. **The terminal pane lives outside React's reconciliation.** `xterm.js` is mounted imperatively; WebSocket bytes pipe directly. React must not re-render the terminal container in response to PTY data.
 3. **The ingester tolerates partial lines and unknown event types.** Only commit on trailing `\n`. Log and skip unknown types. JSONL format is not a stable public API.
-4. **The shadow terminal emulator is fed continuously**, including while no clients are attached. Otherwise snapshot-on-reconnect lags.
+4. **The shadow terminal emulator is fed continuously**, including while no clients are attached. Otherwise snapshot-on-reconnect lags. It lives in the devenv server process, next to the PTY masters.
 5. **Ingester idempotency key: `(session_uuid, byte_offset)`.** JSONL is append-only, so byte offset is stable.
 6. **Schema carries `parent_session_uuid NULL`** from day one.
+7. **The node process owns no PTY masters.** Shells live in the devenv server (`backend/src/devenv/`), which dials the node over `/run/sulion/devenv.sock` and reconnects on its own; recreating the node container leaves shells running. The devenv container is never a compose service — `--remove-orphans` must not know it exists.
 
 ## Frontend shape
 
