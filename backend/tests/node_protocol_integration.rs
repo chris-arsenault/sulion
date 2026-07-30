@@ -439,7 +439,8 @@ async fn same_boot_reconnect_preserves_sessions_and_a_new_boot_defers_to_invento
 
     // A new boot's hello no longer ends prior-boot sessions — shells can
     // outlive a node restart in the devenv. The first complete inventory is
-    // what decides; here it reports nothing hosted, so the session ends.
+    // what decides; here it reports nothing hosted, so the session is
+    // orphaned (resumable), not dead — no exit was ever reported.
     let new_boot = Uuid::new_v4();
     let mut new_socket = connect_node(&base, &keypair, node_id, new_boot).await;
     let state_after_new_boot: String =
@@ -459,7 +460,7 @@ async fn same_boot_reconnect_preserves_sessions_and_a_new_boot_defers_to_invento
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        if row.0 == "dead" && row.1.as_deref() == Some("node_inventory_missing") {
+        if row.0 == "orphaned" && row.1.as_deref() == Some("node_inventory_missing") {
             break;
         }
         assert!(
@@ -631,7 +632,7 @@ async fn a_node_restart_adopts_sessions_the_devenv_kept_alive() {
                 .expect("read casualty");
         if survivor_state == "live"
             && survivor_boot == Some(boot_b)
-            && casualty_state == "dead"
+            && casualty_state == "orphaned"
             && casualty_reason.as_deref() == Some("node_inventory_missing")
         {
             break;

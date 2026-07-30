@@ -486,6 +486,13 @@ fn container_run_args(
         format!("{home_host_path}:/home/sulion"),
         "-v".into(),
         format!("{run_volume}:/run/sulion"),
+        // The dedicated node's whole reason to exist is giving shells direct
+        // Docker; the PTY environment advertises it (SULION_DOCKER_MODE=
+        // direct + DOCKER_HOST), so the socket must be where it points.
+        // This launcher only runs in direct mode — child-mode devenvs never
+        // see a daemon.
+        "-v".into(),
+        "/var/run/docker.sock:/var/run/docker.sock".into(),
         "--entrypoint".into(),
         "/usr/bin/dumb-init".into(),
         image.into(),
@@ -534,6 +541,7 @@ mod tests {
         assert!(joined.contains("--network host"));
         assert!(joined.contains("-v /home/sulion:/home/sulion"));
         assert!(joined.contains("-v sulion_sulion_run:/run/sulion"));
+        assert!(joined.contains("-v /var/run/docker.sock:/var/run/docker.sock"));
         assert!(joined.contains("--restart unless-stopped"));
         assert!(joined.contains("-e SULION_DEVENV_SOCK=/run/sulion/devenv.sock"));
         assert!(joined.contains("-e SULION_DEVENV_IDENT=sha256:0123456789abcdef"));

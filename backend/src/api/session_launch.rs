@@ -68,10 +68,12 @@ pub(super) fn resolve_protocol_launch(req: &CreateSessionReq) -> ApiResult<NodeS
 /// Rewrites an absolute `working_dir` as a path relative to its repo, which is
 /// what the node resolves against its own checkout.
 ///
-/// `repos_root` comes from configuration rather than a literal: control and
-/// node agree on it in every deployment, and hardcoding one node's layout means
-/// any other root — a test's temporary directory, a differently-provisioned
-/// host — is rejected as being outside "the canonical repo path".
+/// The configured `repos_root` is tried first, but an absolute path stored in
+/// a session row reflects the layout of the node that hosted it — a control
+/// plane that owns no repos (its root points at an empty directory) can still
+/// see such paths on resume. The fallback splits on the repo-name component,
+/// which is the only part of the layout both sides agree on; the node
+/// re-validates whatever relative path comes out against its own checkout.
 pub(super) fn protocol_working_dir(
     repos_root: &StdPath,
     repo: &str,
@@ -82,14 +84,18 @@ pub(super) fn protocol_working_dir(
         return Ok(value.to_string());
     }
     let repo_root = repos_root.join(repo);
-    path.strip_prefix(&repo_root)
-        .map(|relative| relative.to_string_lossy().into_owned())
-        .map_err(|_| {
-            ApiError::BadRequest(format!(
-                "absolute working_dir must be inside {}",
-                repo_root.display()
-            ))
-        })
+    if let Ok(relative) = path.strip_prefix(&repo_root) {
+        return Ok(relative.to_string_lossy().into_owned());
+    }
+    let mut components = path.components();
+    for component in components.by_ref() {
+        if component.as_os_str() == repo {
+            return Ok(components.as_path().to_string_lossy().into_owned());
+        }
+    }
+    Err(ApiError::BadRequest(format!(
+        "absolute working_dir must be inside a {repo} checkout"
+    )))
 }
 
 pub(super) fn requested_workspace_mode(req: &CreateSessionReq) -> &str {
@@ -135,5 +141,53 @@ pub(super) fn validate_workspace_request(
         _ => Err(ApiError::BadRequest(
             "workspace_mode must be one of: main, isolated".into(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::protocol_working_dir;
+    use std::path::Path;
+
+    #[test]
+    fn relative_paths_pass_through() {
+        let out = protocol_working_dir(Path::new("/srv/repos"), "app", "sub/dir").unwrap();
+        assert_eq!(out, "sub/dir");
+    }
+
+    #[test]
+    fn absolute_path_under_configured_root_is_stripped() {
+        let out =
+            protocol_working_dir(Path::new("/srv/repos"), "app", "/srv/repos/app/sub").unwrap();
+        assert_eq!(out, "sub");
+    }
+
+    #[test]
+    fn node_layout_path_falls_back_to_the_repo_component() {
+        let out = protocol_working_dir(
+            Path::new("/var/empty/sulion/repos"),
+            "the-canonry-game",
+            "/home/sulion/repos/the-canonry-game",
+        )
+        .unwrap();
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn node_layout_subdirectory_keeps_its_tail() {
+        let out = protocol_working_dir(
+            Path::new("/var/empty/sulion/repos"),
+            "app",
+            "/home/sulion/repos/app/crates/core",
+        )
+        .unwrap();
+        assert_eq!(out, "crates/core");
+    }
+
+    #[test]
+    fn a_path_without_the_repo_component_is_rejected() {
+        let err = protocol_working_dir(Path::new("/srv/repos"), "app", "/etc/passwd").unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("must be inside"), "unexpected error: {msg}");
     }
 }

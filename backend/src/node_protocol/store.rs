@@ -345,17 +345,20 @@ async fn mark_sessions_disconnected(
     Ok(())
 }
 
-/// Ends every live session for this node that the node's complete inventory
-/// does not list — whatever boot it was created under. Sessions the node
-/// still hosts were adopted onto the current boot just above; anything left
-/// from a prior boot genuinely died with the devenv that hosted it.
+/// Orphans every live session for this node that the node's complete
+/// inventory does not list — whatever boot it was created under. Sessions the
+/// node still hosts were adopted onto the current boot just above. The rest
+/// lost their process without a supervised exit (devenv gone, host reboot, or
+/// an exit that raced a disconnect), so they land in 'orphaned' — resumable
+/// into a fresh PTY — never 'dead', which is reserved for a reported shell
+/// exit.
 async fn reconcile_missing_sessions(
     tx: &mut Transaction<'_, Postgres>,
     node_id: Uuid,
     live_session_ids: &[Uuid],
 ) -> Result<(), NodeProtocolError> {
     sqlx::query(
-        "UPDATE pty_sessions SET state = 'dead', ended_at = COALESCE(ended_at, NOW()), \
+        "UPDATE pty_sessions SET state = 'orphaned', ended_at = COALESCE(ended_at, NOW()), \
                 runtime_end_reason = 'node_inventory_missing', node_disconnected_at = NULL, \
                 agent_runtime_state = CASE \
                     WHEN agent_runtime_state IN ('starting', 'running') THEN 'exited' \

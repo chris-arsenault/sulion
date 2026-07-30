@@ -58,7 +58,7 @@ export function SessionEndedPane({ session }: Props) {
 
   const explanation = (() => {
     if (session.state === "orphaned") {
-      return "The shell was running when the backend restarted. Its process is gone and the live terminal buffer is lost, but the transcript is preserved in the timeline below.";
+      return "The shell was lost without exiting — a restart took its host away. Its process is gone and the live terminal buffer is lost, but the transcript is preserved in the timeline below.";
     }
     if (session.state === "dead") {
       return `The shell exited${

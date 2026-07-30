@@ -110,7 +110,7 @@ describe("SessionEndedPane", () => {
     setup(orphanedSession);
     expect(screen.getByText("Session orphaned")).toBeDefined();
     expect(
-      screen.getByText(/backend restarted/i),
+      screen.getByText(/lost without exiting/i),
     ).toBeDefined();
     expect(screen.getByText("ahara")).toBeDefined();
   });

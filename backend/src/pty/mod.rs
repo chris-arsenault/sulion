@@ -228,7 +228,7 @@ impl PtyManager {
     }
 
     /// Applies devenv link events to the records and handles: adoption on
-    /// (re)connect, death on exit, and death for anything the devenv no
+    /// (re)connect, death on exit, and orphaning for anything the devenv no
     /// longer hosts.
     async fn run_events(self: Arc<Self>, mut events: mpsc::UnboundedReceiver<LinkEvent>) {
         while let Some(event) = events.recv().await {
@@ -244,9 +244,10 @@ impl PtyManager {
     }
 
     /// On a devenv's (re)connect: adopt hosted sessions this manager has no
-    /// handle for, and declare dead anything it tracked *on that devenv*
-    /// that it no longer hosts. Sessions hosted by other devenvs are not
-    /// this hello's to judge.
+    /// handle for, and orphan anything it tracked *on that devenv* that it
+    /// no longer hosts — the shell was lost without a supervised exit
+    /// (a real exit arrives as `LinkEvent::Exited` and goes to 'dead').
+    /// Sessions hosted by other devenvs are not this hello's to judge.
     async fn sync_with_inventory(self: &Arc<Self>, ident: &str, inventory: &[Uuid]) {
         let Ok(link) = self.link() else { return };
         let tracked: Vec<(Uuid, String)> = self
@@ -258,7 +259,7 @@ impl PtyManager {
             .collect();
         for (id, host) in &tracked {
             if host == ident && !inventory.contains(id) {
-                self.mark_dead(*id, None).await;
+                self.mark_orphaned(*id).await;
             }
         }
         for id in inventory {
@@ -696,6 +697,35 @@ impl PtyManager {
         .await
         {
             tracing::error!(%id, %err, "mark_dead failed");
+        }
+        crate::secret_pty::revoke_pty_credential(id).await;
+    }
+
+    /// Called when a devenv's inventory no longer lists a tracked session:
+    /// the process is gone but never reported an exit, so the row stays
+    /// resumable rather than reading as a shell that chose to end.
+    async fn mark_orphaned(&self, id: Uuid) {
+        self.sessions.write().await.remove(&id);
+        if let Err(err) = sqlx::query(
+            "UPDATE pty_sessions \
+             SET state = 'orphaned', \
+                 ended_at = NOW(), \
+                 runtime_end_reason = 'devenv_inventory_missing', \
+                 agent_runtime_state = CASE \
+                     WHEN agent_runtime_state IN ('starting', 'running') THEN 'exited' \
+                     ELSE agent_runtime_state \
+                 END, \
+                 agent_runtime_ended_at = CASE \
+                     WHEN agent_runtime_state IN ('starting', 'running') THEN NOW() \
+                     ELSE agent_runtime_ended_at \
+                 END \
+             WHERE id = $1 AND state = 'live'",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        {
+            tracing::error!(%id, %err, "mark_orphaned failed");
         }
         crate::secret_pty::revoke_pty_credential(id).await;
     }
