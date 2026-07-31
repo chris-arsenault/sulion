@@ -23,6 +23,7 @@ Session broker for Claude Code and Codex terminal sessions. Persistent PTYs with
 - [Development](docs/development.md) — local dev, make targets, test contracts
 - [E2E coverage plan](docs/e2e-coverage-plan.md) — real-stack Playwright suite
 - [Deploy](docs/deploy.md) — TrueNAS / Komodo first-run and ongoing
+- [Agent instructions](docs/agent-instructions/README.md) — user-wide CLAUDE.md / AGENTS.md templates that teach agents the sulion tooling
 - [Backlog](docs/backlog.md) — active candidates and speculative bets
 - [Changelog](CHANGELOG.md) — user-visible feature history
 
