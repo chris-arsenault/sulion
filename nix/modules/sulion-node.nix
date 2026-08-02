@@ -123,6 +123,9 @@ in
     networking.firewall.enable = true;
     networking.networkmanager = {
       enable = true;
+      connectionConfig = {
+        "ipv4.dhcp-send-hostname" = true;
+      };
       unmanaged = [
         "interface-name:br-*"
         "interface-name:docker0"

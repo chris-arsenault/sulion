@@ -92,17 +92,18 @@ The copied `.pub` file is not secret, but it can now be removed from the shared
 repository directory. Do not change ownership of `/etc/sulion`; it remains a
 root-owned migration checkout.
 
-## Subsequent host updates
+## Install automated host updates
 
-After this transition, the checkout is no longer required for host updates.
-Test and activate the repository flake directly:
+After this transition, the checkout is no longer required. Activate the exact
+CI-approved SHA currently published by `node-release` once:
 
 ```bash
 sudo nixos-rebuild test \
-  --flake github:chris-arsenault/sulion/main#sulion-enclave
+  --flake github:chris-arsenault/sulion/RELEASE_SHA#sulion-enclave
 sudo nixos-rebuild switch \
-  --flake github:chris-arsenault/sulion/main#sulion-enclave
+  --flake github:chris-arsenault/sulion/RELEASE_SHA#sulion-enclave
 ```
 
 `test` activates the candidate only until reboot; run `switch` only after the
-SSH and host checks pass.
+SSH and host checks pass. That generation installs the release poller that
+subsequently applies matching NixOS and application releases automatically.

@@ -60,7 +60,7 @@ or improvise different storage choices during installation.
 | Disk encryption | none, so the dedicated node can reboot unattended |
 | Swap and hibernation | none; the machine has 32 GB RAM and does not hibernate |
 | Host name | `sulion-enclave` |
-| Network | wired DHCP on `192.168.66.0/24`; optional Wi-Fi after installation |
+| Network | wired DHCP as hostname `sulion-enclave` on `192.168.66.0/24`; optional Wi-Fi after installation |
 | Time zone | UTC |
 | Console | US keymap, English UTF-8 environment, no graphical desktop |
 | Interactive identity | `sulion`, UID/GID 7321, wheel and NetworkManager member |
@@ -247,13 +247,15 @@ From another LAN machine, connect to `\\sulion-enclave\repos` on Windows or
 `smb://sulion-enclave.local/repos` on macOS and create a test directory. On the
 node it must appear under `/home/sulion/repos` owned by `sulion:sulion`.
 
-## Apply host configuration updates
+## Bootstrap automated host updates
 
-Test the repository flake before making it the boot default:
+The release poller below normally applies NixOS host and application changes
+together. An existing installation that predates host activation in the poller
+needs one exact, CI-approved generation activated to install that behavior:
 
 ```bash
 sudo nixos-rebuild test \
-  --flake github:chris-arsenault/sulion/main#sulion-enclave
+  --flake github:chris-arsenault/sulion/RELEASE_SHA#sulion-enclave
 ```
 
 Verify SSH, Docker, and Samba from another LAN machine while the test
@@ -261,10 +263,12 @@ configuration is active. Then persist it:
 
 ```bash
 sudo nixos-rebuild switch \
-  --flake github:chris-arsenault/sulion/main#sulion-enclave
+  --flake github:chris-arsenault/sulion/RELEASE_SHA#sulion-enclave
 ```
 
-Application images update independently through the node release poller below.
+Use the full SHA currently published by `node-release`, not `main`. This command
+activates an immutable release and creates no machine-local configuration.
+Afterward, recurring host changes flow only through the release poller.
 
 ## Runtime files
 
@@ -378,8 +382,10 @@ the broker master key remains protected by staying on TrueNAS.
 CI publishes every application image under the full Git commit SHA. After the
 images and TrueNAS control-plane deployment succeed, CI advances the
 `node-release` branch to that commit. `sulion-node-update.timer` polls that
-branch every two minutes and deploys a changed SHA through the root-owned
-Compose deployment command.
+branch every two minutes. For a changed SHA it builds and activates that exact
+commit's NixOS generation, makes it the boot generation without rebooting, and
+then runs the new generation's root-owned Compose deployment command for the
+same SHA.
 
 Replacing `sulion-node` terminates its PTYs. Automatic node delivery therefore
 assumes running PTYs may be replaced by a successful `main` deployment. Check
@@ -396,13 +402,15 @@ The underlying command remains available for an immediate deployment:
 sudo sulion-node-deploy FULL_40_CHARACTER_GIT_SHA
 ```
 
-The command accepts no mutable tags. It renders the dedicated Compose role
-with a temporary root-only environment, pulls the node, ingester, and
-code-intelligence images, applies the stack, verifies that all three containers
-are running, and then records the selected SHA in `bootstrap.env`. A failed
-activation leaves the previous SHA recorded so the poller retries. NixOS host
-changes remain a separate
-`nixos-rebuild switch --flake ...#sulion-enclave` operation.
+The application-stage command accepts no mutable tags. It renders the dedicated
+Compose role with a temporary root-only environment, pulls the node, ingester,
+and code-intelligence images, applies the stack, verifies that all three
+containers are running, and then records the selected SHA in `bootstrap.env`.
+A failed activation leaves the previous application SHA recorded so the poller
+retries.
+Host activation failure prevents the application stage; application failure
+does not undo a successfully activated host generation, and the next poll
+retries the incomplete stage.
 
 ## Host checks
 

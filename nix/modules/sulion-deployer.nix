@@ -7,6 +7,11 @@
 let
   host = config.sulion;
   cfg = host.deployer;
+  hostRevision =
+    if config.system.configurationRevision == null then
+      "unreleased"
+    else
+      config.system.configurationRevision;
   compose = "${pkgs.docker-compose}/bin/docker-compose";
   # The delivered file is listed last so control-plane values win over the
   # host-generated defaults beside them. The project name is pinned because
@@ -104,6 +109,7 @@ let
     runtimeInputs = [
       pkgs.coreutils
       pkgs.git
+      pkgs.nix
       pkgs.gnused
       nodeDeploy
     ];
@@ -122,11 +128,34 @@ let
       fi
 
       current="$(sed -n 's/^IMAGE_TAG=//p' "$env_file")"
-      if [[ "$current" == "$release" ]]; then
+      current_host=${lib.escapeShellArg hostRevision}
+      if [[ "$current_host" == "$release" && "$current" == "$release" ]]; then
         exit 0
       fi
 
-      exec sulion-node-deploy "$release"
+      if [[ "$current_host" != "$release" ]]; then
+        echo "Building NixOS host release $release"
+        next="$(
+          nix --extra-experimental-features "nix-command flakes" \
+            build --no-link --print-out-paths \
+            "git+${cfg.releaseRepository}?rev=$release#nixosConfigurations.sulion-enclave.config.system.build.toplevel"
+        )"
+        previous="$(readlink -f /run/current-system)"
+
+        echo "Activating NixOS host release $release"
+        if "$next/bin/switch-to-configuration" test; then
+          nix-env --profile /nix/var/nix/profiles/system --set "$next"
+          "$next/bin/switch-to-configuration" boot
+        else
+          echo "Host activation failed; restoring $previous" >&2
+          "$previous/bin/switch-to-configuration" test
+          exit 1
+        fi
+      else
+        next="$(readlink -f /run/current-system)"
+      fi
+
+      exec "$next/sw/bin/sulion-node-deploy" "$release"
     '';
   };
 in
@@ -315,6 +344,10 @@ in
         TimeoutStartSec = "20min";
         TimeoutStopSec = "5min";
       };
+      # The release updater applies the matching Compose release after a host
+      # activation. Do not let switch-to-configuration race that deployment by
+      # restarting the stack merely because its immutable source path changed.
+      restartIfChanged = false;
     };
 
     # The node writes delivered configuration as root once it is approved; this
@@ -353,6 +386,10 @@ in
         Type = "oneshot";
         ExecStart = "${nodeUpdate}/bin/sulion-node-update";
       };
+      # This service activates its own replacement generation. Keep the running
+      # transaction alive until both the host and application stages complete.
+      restartIfChanged = false;
+      unitConfig.X-StopOnRemoval = false;
     };
 
     systemd.timers.sulion-node-update = {

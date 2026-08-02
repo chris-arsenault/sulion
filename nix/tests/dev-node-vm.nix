@@ -22,6 +22,8 @@ pkgs.testers.runNixOSTest {
         deployer = {
           enable = true;
           startAtBoot = true;
+          # The VM exercises generated units, never the live release branch.
+          releaseRepository = "file:///var/empty/sulion-test-release.git";
         };
       };
 
@@ -59,6 +61,9 @@ pkgs.testers.runNixOSTest {
     machine.fail("id sulion-broker")
     machine.fail("test -e /var/lib/sulion/broker")
     machine.wait_for_unit("NetworkManager.service")
+    machine.succeed(
+      "grep -F 'ipv4.dhcp-send-hostname=true' /etc/NetworkManager/NetworkManager.conf"
+    )
 
     machine.succeed("ssh-keygen -q -t ed25519 -N \"\" -f /tmp/enclave-admin")
     machine.succeed("sulion-admin-key add /tmp/enclave-admin.pub")
@@ -197,6 +202,15 @@ pkgs.testers.runNixOSTest {
     )
     machine.succeed(
       "systemctl cat sulion-node-update.service | grep -F 'Poll and deploy the current Sulion node release'"
+    )
+    machine.succeed(
+      "systemctl cat sulion-node-update.service | grep -F 'X-RestartIfChanged=false'"
+    )
+    machine.succeed(
+      "systemctl cat sulion-node-update.service | grep -F 'X-StopOnRemoval=false'"
+    )
+    machine.succeed(
+      "systemctl cat sulion-stack.service | grep -F 'X-RestartIfChanged=false'"
     )
   '';
 }
