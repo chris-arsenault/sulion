@@ -83,7 +83,7 @@ in
     };
 
     networking.firewall.extraInputRules = ''
-      ip saddr ${host.lanCidr} tcp dport 445 accept comment "Sulion SMB"
+      ip saddr { ${lib.concatStringsSep ", " host.clientCidrs} } tcp dport 445 accept comment "Sulion SMB"
     '';
   };
 }

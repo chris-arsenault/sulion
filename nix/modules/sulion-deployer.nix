@@ -403,7 +403,7 @@ in
     };
 
     networking.firewall.extraInputRules = ''
-      ip saddr ${host.lanCidr} tcp dport ${toString host.devPortFrom}-${toString host.devPortTo} accept comment "Sulion development ports"
+      ip saddr { ${lib.concatStringsSep ", " host.clientCidrs} } tcp dport ${toString host.devPortFrom}-${toString host.devPortTo} accept comment "Sulion development ports"
     '';
   };
 }

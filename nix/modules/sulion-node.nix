@@ -57,7 +57,13 @@ in
     lanCidr = lib.mkOption {
       type = lib.types.str;
       default = "192.168.66.0/24";
-      description = "IPv4 LAN allowed to reach SSH, SMB, and development ports.";
+      description = "IPv4 subnet this host lives on; Samba binds its address here.";
+    };
+
+    clientCidrs = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ cfg.lanCidr ];
+      description = "IPv4 client networks admitted to SSH, SMB, and development ports.";
     };
 
     devPortFrom = lib.mkOption {
