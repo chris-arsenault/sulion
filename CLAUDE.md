@@ -11,6 +11,15 @@ tells you to push _this_ change.** A "push" in an earlier turn is never standing
 permission. When in doubt, stop and ask. Never force-push to undo a push without
 explicit approval.
 
+## Scope default — LAN only
+
+Treat Sulion and every operational path in this repository as LAN-only unless
+the user explicitly asks for public access or public-edge work in the current
+request. Do not infer that ALB, WAF, public DNS, VPN ingress, or `ahara-infra`
+changes are in scope merely because those paths exist in deployment docs.
+Diagnose and fix the LAN path first; ask before expanding a task into public
+infrastructure.
+
 Read these before editing:
 
 - [docs/architecture.md](docs/architecture.md) — shape, session model, **invariants**

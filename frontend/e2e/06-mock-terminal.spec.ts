@@ -79,6 +79,28 @@ test("supports paste-as-file and reconnects the websocket without losing the ses
   await expectTerminalToContain(page, "MOCK_STATUS ok");
 });
 
+test("uploads a file larger than nginx's default body limit", async ({ request }) => {
+  const payload = Buffer.alloc(2 * 1024 * 1024, 0x20);
+  payload.write("%PDF-1.7\n", 0, "ascii");
+
+  const upload = await request.post("/api/repos/atlas/upload?path=.upload-test", {
+    multipart: {
+      file: {
+        name: "proxy-limit.pdf",
+        mimeType: "application/pdf",
+        buffer: payload,
+      },
+    },
+  });
+  expect(upload.ok(), await upload.text()).toBeTruthy();
+
+  const raw = await request.get(
+    "/api/repos/atlas/file/raw?path=.upload-test%2Fproxy-limit.pdf",
+  );
+  expect(raw.ok()).toBeTruthy();
+  expect((await raw.body()).equals(payload)).toBe(true);
+});
+
 test("surfaces terminal exit immediately and on reload via the ended-session UI", async ({
   page,
   request,
