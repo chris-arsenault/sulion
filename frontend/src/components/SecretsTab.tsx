@@ -174,124 +174,132 @@ export function SecretsTab() {
 
   return (
     <div className="secrets-tab">
-      <aside className="secrets-tab__sidebar">
-        <div className="secrets-tab__sidebar-head">
-          <div>
-            <div className="secrets-tab__eyebrow">Secrets</div>
-            <h2>Bundles</h2>
-          </div>
-          <button type="button" className="secrets-tab__button" onClick={startNew}>
-            <Icon name="plus" size={14} />
-            <span>New</span>
-          </button>
-        </div>
-        {loading ? (
-          <div className="secrets-tab__empty">loading...</div>
-        ) : secrets.length === 0 ? (
-          <div className="secrets-tab__empty">No secrets yet.</div>
-        ) : (
-          <ul className="secrets-tab__list">
-            {secrets.map((secret) => (
-              <SecretListItem
-                key={secret.id}
-                secret={secret}
-                active={secret.id === draftId}
-                onSelect={selectSecret}
-              />
-            ))}
-          </ul>
-        )}
-      </aside>
+      <header className="secrets-tab__bar">
+        <h2>Secrets</h2>
+        {!loading ? (
+          <span className="secrets-tab__bar-count tabular">
+            {secrets.length} {secrets.length === 1 ? "bundle" : "bundles"}
+          </span>
+        ) : null}
+        <div className="secrets-tab__bar-spacer" />
+        <button type="button" className="secrets-tab__button" onClick={startNew}>
+          <Icon name="plus" size={14} />
+          <span>New bundle</span>
+        </button>
+      </header>
 
-      <section className="secrets-tab__main">
-        <header className="secrets-tab__header">
-          <div>
-            <div className="secrets-tab__eyebrow">Secret editor</div>
-            <h2>{draftId || "New bundle"}</h2>
-          </div>
-          <div className="secrets-tab__header-actions">
-            {notice ? <span className="secrets-tab__notice">{notice}</span> : null}
-            {error ? <span className="secrets-tab__error">{error}</span> : null}
-          </div>
-        </header>
+      <div className="secrets-tab__body">
+        <aside className="secrets-tab__nav">
+          {loading ? (
+            <div className="secrets-tab__empty">loading...</div>
+          ) : secrets.length === 0 ? (
+            <div className="secrets-tab__empty">No secrets yet.</div>
+          ) : (
+            <ul className="secrets-tab__list">
+              {secrets.map((secret) => (
+                <SecretListItem
+                  key={secret.id}
+                  secret={secret}
+                  active={secret.id === draftId}
+                  onSelect={selectSecret}
+                />
+              ))}
+            </ul>
+          )}
+        </aside>
 
-        <div className="secrets-tab__panel secrets-tab__panel--editor">
-          <label className="secrets-tab__field">
-            <span>ID</span>
-            <input
-              value={draftId}
-              onChange={onDraftIdChange}
-              placeholder="claude-api"
-              disabled={selectedId != null}
-            />
-          </label>
-          <label className="secrets-tab__field">
-            <span>Description</span>
-            <input
-              value={draft.description}
-              onChange={onDescriptionChange}
-              placeholder="Anthropic API key"
-            />
-          </label>
-          <div className="secrets-tab__field-row">
-            <label className="secrets-tab__field">
-              <span>Scope</span>
-              <input
-                value={draft.scope}
-                onChange={onScopeChange}
-                placeholder="global"
-              />
-            </label>
-            <label className="secrets-tab__field">
-              <span>Repo</span>
-              <input
-                value={draft.repo ?? ""}
-                onChange={onRepoChange}
-                placeholder="optional repo"
-              />
-            </label>
-          </div>
+        <section className="secrets-tab__editor">
+          <div className="secrets-tab__editor-scroll">
+            <div className="secrets-tab__form">
+              <h3 className="secrets-tab__editor-title">
+                {draftId || "New bundle"}
+              </h3>
+              <div className="secrets-tab__field-row secrets-tab__field-row--id">
+                <label className="secrets-tab__field">
+                  <span>ID</span>
+                  <input
+                    className="secrets-tab__input--mono"
+                    value={draftId}
+                    onChange={onDraftIdChange}
+                    placeholder="claude-api"
+                    disabled={selectedId != null}
+                  />
+                </label>
+                <label className="secrets-tab__field">
+                  <span>Description</span>
+                  <input
+                    value={draft.description}
+                    onChange={onDescriptionChange}
+                    placeholder="Anthropic API key"
+                  />
+                </label>
+              </div>
+              <div className="secrets-tab__field-row">
+                <label className="secrets-tab__field">
+                  <span>Scope</span>
+                  <input
+                    value={draft.scope}
+                    onChange={onScopeChange}
+                    placeholder="global"
+                  />
+                </label>
+                <label className="secrets-tab__field">
+                  <span>Repo</span>
+                  <input
+                    value={draft.repo ?? ""}
+                    onChange={onRepoChange}
+                    placeholder="optional repo"
+                  />
+                </label>
+              </div>
 
-          <div className="secrets-tab__env-head">
-            <div>
-              <h3>Environment</h3>
-              {selectedId ? (
-                <span className="secrets-tab__field-hint">
-                  Blank existing values are kept; enter a value to overwrite.
-                </span>
-              ) : null}
+              <div className="secrets-tab__env-head">
+                <div>
+                  <h3>Environment</h3>
+                  {selectedId ? (
+                    <span className="secrets-tab__field-hint">
+                      Blank existing values are kept; enter a value to overwrite.
+                    </span>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  className="secrets-tab__button secrets-tab__button--ghost"
+                  onClick={addEnvPair}
+                >
+                  <Icon name="plus" size={14} />
+                  <span>Add pair</span>
+                </button>
+              </div>
+              <div className="secrets-tab__env-list">
+                {Object.entries(draft.env).map(([key, value], index) => (
+                  <EnvRow
+                    key={index}
+                    name={key}
+                    value={value}
+                    existing={selectedId != null}
+                    onRename={renameEnv}
+                    onChange={updateEnv}
+                    onRemove={removeEnv}
+                  />
+                ))}
+              </div>
             </div>
+          </div>
+
+          <footer className="secrets-tab__footer">
             <button
               type="button"
-              className="secrets-tab__button secrets-tab__button--ghost"
-              onClick={addEnvPair}
-            >
-              <Icon name="plus" size={14} />
-              <span>Add pair</span>
-            </button>
-          </div>
-          <div className="secrets-tab__env-list">
-            {Object.entries(draft.env).map(([key, value], index) => (
-              <EnvRow
-                key={index}
-                name={key}
-                value={value}
-                existing={selectedId != null}
-                onRename={renameEnv}
-                onChange={updateEnv}
-                onRemove={removeEnv}
-              />
-            ))}
-          </div>
-          <div className="secrets-tab__actions">
-            <button
-              type="button"
-              className="secrets-tab__button"
+              className="secrets-tab__button secrets-tab__button--primary"
               onClick={saveSecret}
               disabled={saving || loadingDetail}
             >
               Save
             </button>
+            <div className="secrets-tab__footer-status">
+              {notice ? <span className="secrets-tab__notice">{notice}</span> : null}
+              {error ? <span className="secrets-tab__error">{error}</span> : null}
+            </div>
             {selectedId ? (
               <button
                 type="button"
@@ -301,9 +309,9 @@ export function SecretsTab() {
                 Delete
               </button>
             ) : null}
-          </div>
-        </div>
-      </section>
+          </footer>
+        </section>
+      </div>
     </div>
   );
 }
@@ -364,11 +372,13 @@ function EnvRow({
   return (
     <div className="secrets-tab__env-row">
       <input
+        className="secrets-tab__env-key secrets-tab__input--mono"
         value={name}
         onChange={rename}
         placeholder="ANTHROPIC_API_KEY"
       />
       <input
+        className="secrets-tab__env-value secrets-tab__input--mono"
         value={value}
         onChange={change}
         placeholder={existing ? "keep existing" : "value"}

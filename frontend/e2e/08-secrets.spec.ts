@@ -34,7 +34,7 @@ test("creates a key/value secret, grants it from a terminal tab, redeems it, and
 
   await page.getByRole("button", { name: "Open secrets manager" }).click();
   await expect(page.getByRole("tab", { name: "secrets" }).first()).toBeVisible();
-  await expect(page.getByText("Secret editor")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "New bundle" })).toBeVisible();
 
   // exact: the rail's "Unpin sidebar" / "Resize sidebar" labels substring-
   // match "ID" otherwise.

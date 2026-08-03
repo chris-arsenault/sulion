@@ -232,18 +232,28 @@ fn filter_descendant_projection_events(
 
 pub async fn backfill_timeline_projection(pool: &Pool) -> anyhow::Result<usize> {
     let sessions: Vec<(Uuid,)> = sqlx::query_as(
-        "SELECT DISTINCT e.session_uuid \
-           FROM events e \
-          WHERE NOT EXISTS ( \
-                SELECT 1 \
-                  FROM timeline_turns tt \
-                 WHERE tt.session_uuid = e.session_uuid \
-          ) \
-          ORDER BY e.session_uuid ASC",
+        "WITH sessions_to_rebuild AS ( \
+             SELECT DISTINCT e.session_uuid \
+               FROM events e \
+              WHERE NOT EXISTS ( \
+                    SELECT 1 \
+                      FROM timeline_turns tt \
+                     WHERE tt.session_uuid = e.session_uuid \
+              ) \
+             UNION \
+             SELECT DISTINCT e.session_uuid \
+               FROM events e \
+              WHERE e.agent = 'claude-code' \
+                AND e.kind = 'user' \
+                AND e.payload #>> '{origin,kind}' = 'task-notification' \
+         ) \
+         SELECT session_uuid \
+           FROM sessions_to_rebuild \
+          ORDER BY session_uuid ASC",
     )
     .fetch_all(pool)
     .await
-    .context("list sessions missing timeline projection")?;
+    .context("list sessions requiring timeline projection rebuild")?;
 
     for (session_uuid,) in &sessions {
         rebuild_session_projection(pool, *session_uuid).await?;

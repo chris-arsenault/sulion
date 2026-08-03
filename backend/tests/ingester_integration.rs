@@ -7,7 +7,9 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use sulion::db;
-use sulion::ingest::{rebuild_ingest_derivatives, Ingester, IngesterConfig};
+use sulion::ingest::{
+    backfill_timeline_projection, rebuild_ingest_derivatives, Ingester, IngesterConfig,
+};
 use uuid::Uuid;
 
 const CODEX_RICH_LINEAGE_PARENT: &str = include_str!("fixtures/codex-rich-lineage-parent.jsonl");
@@ -641,6 +643,76 @@ async fn append_rebuilds_only_the_affected_projection_suffix() {
     assert_eq!(updated[1].1, 1);
     assert_eq!(updated[1].2, "second prompt");
     assert_eq!(updated[1].3, 3);
+}
+
+#[tokio::test]
+async fn claude_task_notifications_collapse_into_primary_projected_turns() {
+    let pool = fresh_pool().await;
+    let fx = Fixture::new();
+    fx.append(
+        r#"{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"start the background work"}}"#,
+    );
+    fx.append("\n");
+    fx.append(
+        r#"{"type":"assistant","timestamp":"2025-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"started"}]}}"#,
+    );
+    fx.append("\n");
+    fx.append(
+        r#"{"type":"user","timestamp":"2025-01-01T00:00:02Z","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification>\n<task-id>bg-1</task-id>\n<status>completed</status>\n</task-notification>"}}"#,
+    );
+    fx.append("\n");
+    fx.append(
+        r#"{"type":"assistant","timestamp":"2025-01-01T00:00:03Z","message":{"role":"assistant","content":[{"type":"text","text":"the background work completed"}]}}"#,
+    );
+    fx.append("\n");
+    fx.append(
+        r#"{"type":"user","timestamp":"2025-01-01T00:00:04Z","message":{"role":"user","content":"summarize the result"}}"#,
+    );
+    fx.append("\n");
+    fx.append(
+        r#"{"type":"assistant","timestamp":"2025-01-01T00:00:05Z","message":{"role":"assistant","content":[{"type":"text","text":"summary"}]}}"#,
+    );
+    fx.append("\n");
+
+    Ingester::new().tick(&pool, &fx.config()).await.unwrap();
+
+    let turns: Vec<(String, Option<String>, i32)> = sqlx::query_as(
+        "SELECT preview, user_prompt_text, event_count \
+           FROM timeline_turns \
+          WHERE session_uuid = $1 \
+          ORDER BY turn_ord ASC",
+    )
+    .bind(fx.session_uuid)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[0].0, "start the background work");
+    assert_eq!(turns[0].1.as_deref(), Some("start the background work"));
+    assert_eq!(turns[0].2, 4);
+    assert_eq!(turns[1].0, "summarize the result");
+
+    sqlx::query(
+        "UPDATE timeline_turns \
+            SET preview = 'sentinel-stale-task-notification-projection' \
+          WHERE session_uuid = $1 AND turn_ord = 0",
+    )
+    .bind(fx.session_uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(backfill_timeline_projection(&pool).await.unwrap(), 1);
+    let repaired_preview: String = sqlx::query_scalar(
+        "SELECT preview \
+           FROM timeline_turns \
+          WHERE session_uuid = $1 AND turn_ord = 0",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(repaired_preview, "start the background work");
 }
 
 #[tokio::test]

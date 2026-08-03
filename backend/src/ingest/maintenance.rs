@@ -5,7 +5,7 @@ use crate::db::Pool;
 const CANONICAL_BLOCKS_KEY: &str = "canonical_blocks";
 const CANONICAL_BLOCKS_VERSION: i32 = 1;
 const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
-const TIMELINE_PROJECTION_VERSION: i32 = 1;
+const TIMELINE_PROJECTION_VERSION: i32 = 2;
 
 #[derive(Debug, Default, Clone, Copy, serde::Serialize)]
 pub struct StartupMaintenanceStats {

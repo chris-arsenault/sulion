@@ -99,6 +99,61 @@ fn projects_turns_and_pairs() {
 }
 
 #[test]
+fn claude_task_notifications_stay_inside_the_primary_turn() {
+    let events = vec![
+        event(1, "user", vec![text(0, "start the background work")]),
+        event(2, "assistant", vec![text(0, "started")]),
+        event(
+            3,
+            "user",
+            vec![text(
+                0,
+                "<task-notification>\n<task-id>bg-1</task-id>\n<status>completed</status>\n</task-notification>",
+            )],
+        ),
+        event(4, "assistant", vec![text(0, "the background work completed")]),
+        event(5, "user", vec![text(0, "summarize the result")]),
+        event(6, "assistant", vec![text(0, "summary")]),
+    ];
+
+    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
+
+    assert_eq!(projected.turns.len(), 2);
+    assert_eq!(projected.turns[0].preview, "start the background work");
+    assert_eq!(projected.turns[0].event_count, 4);
+    assert!(projected.turns[0]
+        .chunks
+        .iter()
+        .any(|chunk| matches!(chunk, TimelineChunk::Generic { label, .. } if label == "user")));
+    assert_eq!(projected.turns[1].preview, "summarize the result");
+}
+
+#[test]
+fn codex_task_lifecycle_bookkeeping_does_not_start_turns() {
+    let mut started = event(2, "system", Vec::new());
+    started.agent = "codex".to_string();
+    started.is_meta = true;
+    started.subtype = Some("task_started".to_string());
+
+    let mut complete = event(4, "system", Vec::new());
+    complete.agent = "codex".to_string();
+    complete.is_meta = true;
+    complete.subtype = Some("task_complete".to_string());
+
+    let mut prompt = event(1, "user", vec![text(0, "do the work")]);
+    prompt.agent = "codex".to_string();
+    let mut reply = event(3, "assistant", vec![text(0, "done")]);
+    reply.agent = "codex".to_string();
+
+    let events = vec![prompt, started, reply, complete];
+    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
+
+    assert_eq!(projected.turns.len(), 1);
+    assert_eq!(projected.turns[0].preview, "do the work");
+    assert_eq!(projected.turns[0].event_count, 2);
+}
+
+#[test]
 fn hidden_categories_merge_assistant_chunks() {
     let events = vec![
         event(1, "user", vec![text(0, "prompt")]),

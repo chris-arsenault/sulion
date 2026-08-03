@@ -519,7 +519,25 @@ pub(crate) fn is_tool_result_event(event: &StoredEvent) -> bool {
 }
 
 fn is_real_user_prompt(event: &StoredEvent) -> bool {
-    event_speaker(event) == "user" && !is_tool_result_event(event)
+    event_speaker(event) == "user"
+        && !is_tool_result_event(event)
+        && !is_claude_task_notification(event)
+}
+
+fn is_claude_task_notification(event: &StoredEvent) -> bool {
+    event.agent == "claude-code"
+        && event.blocks.iter().any(|block| {
+            if block.kind != BlockKind::Text {
+                return false;
+            }
+            let Some(text) = block.text.as_deref() else {
+                return false;
+            };
+            let text = text.trim();
+            text.starts_with("<task-notification>")
+                && text.ends_with("</task-notification>")
+                && text.contains("<task-id>")
+        })
 }
 
 pub(crate) fn is_assistant_event(event: &StoredEvent) -> bool {
