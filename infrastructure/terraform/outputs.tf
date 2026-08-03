@@ -25,3 +25,7 @@ output "retrieval_token_ssm_path" {
 output "code_intel_token_ssm_path" {
   value = aws_ssm_parameter.code_intel_token.name
 }
+
+output "enclave_admin_ssh_key_secret_name" {
+  value = aws_secretsmanager_secret.enclave_admin_ssh_key.name
+}

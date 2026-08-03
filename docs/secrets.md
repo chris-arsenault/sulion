@@ -22,6 +22,15 @@ flow. They authorize break-glass NixOS maintenance, live in a root-owned runtime
 file on `sulion-enclave`, and are never exposed to PTYs or used for node
 authentication.
 
+Terraform creates the metadata-only AWS Secrets Manager entry
+`sulion-enclave-admin-ssh-key` as an operator recovery backup for the matching
+private key. Terraform deliberately does not manage a secret version, so key
+material never enters Terraform configuration or state. The resource also
+blocks Terraform destruction and retains AWS's 30-day deletion recovery
+window. Populate and rotate the value manually from the administration
+workstation that owns the key; the entry is not granted to Sulion services,
+the broker, or PTYs.
+
 ## Shape
 
 Three components participate:
