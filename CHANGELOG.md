@@ -2,6 +2,24 @@
 
 All notable user-visible changes to Sulion are recorded here.
 
+## v2.1.0 - 2026-08-03
+
+### Timeline
+
+- Changed Claude background-task notifications to stay inside their owning
+  primary turn instead of appearing as standalone prompt rows in the timeline
+  rail. The notification detail remains available inside the turn, and startup
+  automatically repairs affected historical projections without changing the
+  canonical transcript data.
+
+### Secrets
+
+- Reworked the Secrets tab into a pane-responsive bundle workspace with a
+  compact toolbar and bundle count, independently scrolling bundle list and
+  editor, and a pinned Save/Delete footer that remains reachable in split and
+  narrow layouts. Narrow panes switch the bundle list to a horizontal strip
+  while preserving the existing create, edit, and delete behavior.
+
 ## v2.0.0 - 2026-07-29
 
 ### Dedicated development node
