@@ -12,6 +12,7 @@
 //!   survival — the fallback for processes with no Docker daemon (e2e,
 //!   loopback standalone, tests).
 
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,6 +21,7 @@ use super::link::DevenvLink;
 
 pub const CONTAINER_NAME: &str = "sulion-devenv";
 pub const OWNER_LABEL: &str = "sulion.devenv";
+const DOCKER_SOCKET_PATH: &str = "/var/run/docker.sock";
 
 #[derive(Debug, Clone)]
 pub enum LaunchMode {
@@ -334,11 +336,13 @@ async fn ensure_current_container(
     if let Err(error) = deliver_cli_binary(socket_path).await {
         tracing::warn!(%error, "sulion CLI delivery failed; PTY wrappers may not resolve");
     }
+    let docker_socket_gid = docker_socket_gid(std::path::Path::new(DOCKER_SOCKET_PATH))?;
     let args = container_run_args(
         socket_path,
         image,
         home_host_path,
         run_volume,
+        docker_socket_gid,
         &image_id,
         &exec_path,
     );
@@ -496,6 +500,7 @@ fn container_run_args(
     image: &str,
     home_host_path: &str,
     run_volume: &str,
+    docker_socket_gid: u32,
     image_id: &str,
     exec_path: &std::path::Path,
 ) -> Vec<String> {
@@ -517,6 +522,11 @@ fn container_run_args(
         // exactly as they did inside the node container.
         "--network".into(),
         "host".into(),
+        // The node inherits this group before dropping privileges, but groups
+        // do not cross into a container. Add the socket's numeric host GID so
+        // the non-root devenv user can reach the bind-mounted daemon socket.
+        "--group-add".into(),
+        docker_socket_gid.to_string(),
         "-e".into(),
         format!("SULION_DEVENV_SOCK={}", socket_path.display()),
         "-e".into(),
@@ -531,7 +541,7 @@ fn container_run_args(
         // This launcher only runs in direct mode — child-mode devenvs never
         // see a daemon.
         "-v".into(),
-        "/var/run/docker.sock:/var/run/docker.sock".into(),
+        format!("{DOCKER_SOCKET_PATH}:{DOCKER_SOCKET_PATH}"),
         "--entrypoint".into(),
         "/usr/bin/dumb-init".into(),
         image.into(),
@@ -542,6 +552,12 @@ fn container_run_args(
         "/opt/sulion/entrypoint.sh".into(),
         exec_path.display().to_string(),
     ]
+}
+
+fn docker_socket_gid(path: &std::path::Path) -> anyhow::Result<u32> {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.gid())
+        .map_err(|error| anyhow::anyhow!("read Docker socket {}: {error}", path.display()))
 }
 
 async fn run_docker(args: &[&str]) -> anyhow::Result<()> {
@@ -570,6 +586,7 @@ mod tests {
             "ghcr.io/example/devenv:abc",
             "/home/sulion",
             "sulion_sulion_run",
+            131,
             "sha256:0123456789abcdef",
             std::path::Path::new("/run/sulion/devenv-bin/cafe/sulion-devenv"),
         );
@@ -578,6 +595,7 @@ mod tests {
         assert!(joined.contains("--label sulion.devenv=1"));
         assert!(joined.contains("--label sulion.devenv.image-id=sha256:0123456789abcdef"));
         assert!(joined.contains("--network host"));
+        assert!(joined.contains("--group-add 131"));
         assert!(joined.contains("-v /home/sulion:/home/sulion"));
         assert!(joined.contains("-v sulion_sulion_run:/run/sulion"));
         assert!(joined.contains("-v /var/run/docker.sock:/var/run/docker.sock"));
@@ -587,6 +605,20 @@ mod tests {
         assert!(joined.ends_with(
             "ghcr.io/example/devenv:abc -- /opt/sulion/entrypoint.sh /run/sulion/devenv-bin/cafe/sulion-devenv"
         ));
+    }
+
+    #[test]
+    fn docker_socket_group_comes_from_filesystem_metadata() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let file = tempfile::NamedTempFile::new().expect("create socket metadata fixture");
+        let expected = file
+            .as_file()
+            .metadata()
+            .expect("read fixture metadata")
+            .gid();
+
+        assert_eq!(docker_socket_gid(file.path()).unwrap(), expected);
     }
 
     #[test]

@@ -108,6 +108,41 @@ describe("SecretsTab", () => {
     });
   });
 
+  it("preserves multiline values and their trailing newline", async () => {
+    const server = installSecretFetchMock();
+    const user = userEvent.setup();
+    const sshPrivateKey = [
+      "-----BEGIN OPENSSH PRIVATE KEY-----",
+      "ZmFrZS1vcGVuc3NoLWtleQ==",
+      "-----END OPENSSH PRIVATE KEY-----",
+      "",
+    ].join("\n");
+    render(<SecretsTab />);
+
+    await screen.findByText("No secrets yet.");
+
+    await user.type(screen.getByLabelText("ID"), "ssh-deploy-key");
+    fireEvent.change(screen.getByDisplayValue("EXAMPLE_KEY"), {
+      target: { value: "SSH_PRIVATE_KEY" },
+    });
+    const valueEditor = screen.getByLabelText("Value for SSH_PRIVATE_KEY");
+    expect(valueEditor.tagName).toBe("TEXTAREA");
+    fireEvent.change(valueEditor, { target: { value: sshPrivateKey } });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await screen.findByText("Saved ssh-deploy-key");
+    const put = server.requests.find(
+      (request) =>
+        request.url === "/broker/v1/secrets/ssh-deploy-key" && request.method === "PUT",
+    );
+    expect(put?.body).toEqual({
+      description: "",
+      scope: "global",
+      repo: null,
+      env: { SSH_PRIVATE_KEY: sshPrivateKey },
+    });
+  });
+
   it("does not display existing secret values and sends blank values to preserve them", async () => {
     const server = installSecretFetchMock([
       {
@@ -132,7 +167,7 @@ describe("SecretsTab", () => {
 
     await screen.findByText("Blank existing values are kept; enter a value to overwrite.");
     expect(screen.queryByDisplayValue("sulion-secret-value")).toBeNull();
-    expect((screen.getByPlaceholderText("keep existing") as HTMLInputElement).value).toBe("");
+    expect((screen.getByPlaceholderText("keep existing") as HTMLTextAreaElement).value).toBe("");
 
     fireEvent.change(screen.getByLabelText("Description"), {
       target: { value: "Claude rotated elsewhere" },

@@ -19,7 +19,7 @@ test.afterEach(async ({ request }) => {
   sessionId = null;
 });
 
-test("creates a key/value secret, grants it from a terminal tab, redeems it, and revokes it", async ({
+test("creates single-line and multiline secret values, redeems them, and revokes the grant", async ({
   page,
   request,
 }) => {
@@ -27,6 +27,12 @@ test("creates a key/value secret, grants it from a terminal tab, redeems it, and
   const label = `Secrets Shell ${suffix.slice(-5)}`;
   const secretId = `e2e-secret-${suffix}`;
   const secretValue = `sulion-secret-value-${suffix}`;
+  const sshPrivateKey = [
+    "-----BEGIN OPENSSH PRIVATE KEY-----",
+    "ZmFrZS1vcGVuc3NoLWtleQ==",
+    "-----END OPENSSH PRIVATE KEY-----",
+    "",
+  ].join("\n");
   sessionId = await createLabeledSession(request, "atlas", label);
 
   await gotoApp(page);
@@ -42,6 +48,9 @@ test("creates a key/value secret, grants it from a terminal tab, redeems it, and
   await page.getByLabel("Description").fill("E2E env bundle");
   await page.getByPlaceholder("ANTHROPIC_API_KEY").fill("E2E_SECRET_VALUE");
   await page.getByPlaceholder("value").fill(secretValue);
+  await page.getByRole("button", { name: "Add pair" }).click();
+  await page.getByDisplayValue("NEW_KEY_1").fill("SSH_PRIVATE_KEY");
+  await page.getByPlaceholder("value").last().fill(sshPrivateKey);
   await page.getByRole("button", { name: "Save" }).click();
 
   await expect(page.getByText(`Saved ${secretId}`)).toBeVisible();
@@ -51,7 +60,7 @@ test("creates a key/value secret, grants it from a terminal tab, redeems it, and
   await expect
     .poll(async () =>
       page
-        .locator("input")
+        .locator("input, textarea")
         .evaluateAll(
           (els, value) =>
             els.filter((el) => (el as HTMLInputElement).value === value).length,
@@ -78,6 +87,11 @@ test("creates a key/value secret, grants it from a terminal tab, redeems it, and
     `with-cred ${secretId} -- sh -lc 'printf "E2E_SECRET_VALUE=$E2E_SECRET_VALUE\\n"'`,
   );
   await expectTerminalToContain(page, `E2E_SECRET_VALUE=${secretValue}`);
+  await runTerminalCommand(
+    page,
+    `with-cred ${secretId} -- sh -lc 'key_lines=$(printf "%s" "$SSH_PRIVATE_KEY" | wc -l); printf "SSH_KEY_LINES=%s\\n" "$key_lines"'`,
+  );
+  await expectTerminalToContain(page, "SSH_KEY_LINES=3");
 
   await openContextMenu(page.locator(`[data-session-name="${label}"]`));
   await page.getByRole("menuitem", { name: "Secrets" }).hover();

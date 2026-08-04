@@ -816,6 +816,11 @@ mod tests {
         let env = HashMap::from([
             ("ANTHROPIC_API_KEY".to_string(), "sk-ant-test".to_string()),
             ("CLAUDE_API_KEY".to_string(), "claude-test".to_string()),
+            (
+                "SSH_PRIVATE_KEY".to_string(),
+                "-----BEGIN OPENSSH PRIVATE KEY-----\nZmFrZQ==\n-----END OPENSSH PRIVATE KEY-----\n"
+                    .to_string(),
+            ),
         ]);
 
         let (ciphertext, nonce) = crypto.encrypt_env(&env).expect("encrypt env");

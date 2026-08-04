@@ -58,8 +58,49 @@ export PATH="$HOME/.local/bin:/opt/sulion/bin:$PATH"
 alias ll='ls -la'
 alias la='ls -A'
 
-# Prompt: user@host:cwd$
-PS1='\[\e[36m\]\u@sulion\[\e[0m\]:\[\e[33m\]\w\[\e[0m\]\$ '
+# Prompt: [exit-code] user@sulion:cwd (git branch + dirty markers)$
+# git-prompt.sh location varies by distro; take the first readable one.
+for __gp in /usr/share/git-core/contrib/completion/git-prompt.sh \
+            /usr/lib/git-core/git-sh-prompt \
+            /usr/share/git/completion/git-prompt.sh; do
+  if [[ -r "$__gp" ]]; then . "$__gp"; break; fi
+done
+unset __gp
+GIT_PS1_SHOWDIRTYSTATE=1
+GIT_PS1_SHOWSTASHSTATE=1
+GIT_PS1_SHOWUPSTREAM=auto
+# Deep cwds get shortened: the first three and last two components survive,
+# so the repo name under ~/repos stays visible.
+__sulion_path() {
+  local p=${PWD/#"$HOME"/\~} parts
+  local IFS=/
+  read -ra parts <<< "$p"
+  local n=${#parts[@]}
+  if (( n <= 6 )); then
+    printf '%s' "$p"
+  else
+    printf '%s/%s/%s/…/%s/%s' "${parts[0]}" "${parts[1]}" "${parts[2]}" \
+      "${parts[n-2]}" "${parts[n-1]}"
+  fi
+}
+__sulion_prompt() {
+  local status=$?
+  local exit_seg=''
+  (( status != 0 )) && exit_seg="\[\e[1;31m\]✗${status}\[\e[0m\] "
+  local pre="${exit_seg}\[\e[36m\]\u@sulion\[\e[0m\]:\[\e[33m\]$(__sulion_path)\[\e[0m\]"
+  local post='\$ '
+  if declare -F __git_ps1 >/dev/null; then
+    # pc mode: __git_ps1 sets PS1 itself and keeps branch names inert.
+    __git_ps1 "$pre" "$post" ' \[\e[35m\](%s)\[\e[0m\]'
+  else
+    PS1="${pre}${post}"
+  fi
+}
+PROMPT_COMMAND=__sulion_prompt
+# The cwd is embedded literally in PS1; with prompt-string expansion off,
+# oddly named directories are displayed, never executed. git-prompt.sh
+# detects this and inlines the branch name the same way.
+shopt -u promptvars
 EOF
 fi
 

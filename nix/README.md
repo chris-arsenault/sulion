@@ -15,8 +15,9 @@ belongs to the `docker` group. The dedicated Compose role mounts
 authority on a dedicated machine; it keeps standard Docker, Compose, BuildKit,
 privileged containers, networking, and local Supabase behavior intact.
 The node reads the mounted socket's actual group at startup before dropping
-privileges, so the Docker GID is not hard-coded and generic Linux hosts use the
-same image.
+privileges. When it launches a devenv container, it also passes that numeric
+GID as a supplementary group alongside the socket bind. The Docker GID is not
+hard-coded, so generic Linux hosts use the same images.
 
 The TrueNAS control plane is not present on this host, and the node-local
 ingester sees only transcript directories.

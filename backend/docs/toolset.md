@@ -18,6 +18,16 @@ Useful defaults:
 Use `sudo` only for container-local package or file work. Host resources are not
 available unless compose explicitly mounts them.
 
+## Docker
+
+The `docker` wrapper follows `SULION_DOCKER_MODE`:
+
+- On the dedicated development node, `direct` mode uses the host Docker daemon.
+  Standard Docker, Compose, BuildKit, bind mounts, and local test stacks are
+  available from the PTY.
+- In portable brokered deployments, commands go through Sulion's constrained
+  runner and remain subject to its command and container policy.
+
 ## Agent Shortcuts
 
 Sulion installs executable wrapper shortcuts for agent sessions:

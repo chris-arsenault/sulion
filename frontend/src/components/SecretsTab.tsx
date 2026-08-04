@@ -365,7 +365,7 @@ function EnvRow({
     [name, onRename],
   );
   const change = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => onChange(name, event.target.value),
+    (event: ChangeEvent<HTMLTextAreaElement>) => onChange(name, event.target.value),
     [name, onChange],
   );
   const remove = useCallback(() => onRemove(name), [name, onRemove]);
@@ -377,11 +377,12 @@ function EnvRow({
         onChange={rename}
         placeholder="ANTHROPIC_API_KEY"
       />
-      <input
+      <textarea
         className="secrets-tab__env-value secrets-tab__input--mono"
         value={value}
         onChange={change}
         placeholder={existing ? "keep existing" : "value"}
+        aria-label={`Value for ${name}`}
       />
       <button
         type="button"

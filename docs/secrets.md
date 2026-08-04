@@ -203,10 +203,13 @@ It supports:
 
 - creating and editing env-bundle secrets
 - setting metadata such as id, description, scope, and repo
-- adding explicit key/value pairs
+- adding explicit key/value pairs, including multiline values such as SSH and PEM keys
 - overwriting an existing env value without reading the old value
 
 Existing secret values are not returned by browser read endpoints. Editing an existing bundle shows only the env key names. Leaving an existing value blank preserves it; entering a new value overwrites it.
+Multiline values preserve embedded and trailing newlines through broker storage
+and wrapper redemption. This does not change the separate host-administration
+SSH key boundary described above.
 
 Grants are managed from terminal/session context menus:
 

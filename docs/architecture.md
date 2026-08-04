@@ -267,7 +267,7 @@ headers from the PTY environment. Scope is inferred from cwd. See
 
 ## Container Runner and direct Docker
 
-The runner is a separate Rust service and container. It is the only Sulion
+In brokered mode, the runner is a separate Rust service and the only Sulion
 container with the host Docker socket mounted. PTYs see a `docker` wrapper that
 sends the current working directory, PTY id, and argv to the runner. The runner
 executes the Docker CLI from the same mounted workspace path after applying
@@ -283,9 +283,12 @@ is bounded by runner policy.
 
 On the dedicated host, the runner is absent. `SULION_DOCKER_MODE=direct` makes
 the wrapper exec the real Docker CLI against the system daemon on that
-single-user machine.
-Only `sulion-node` receives that socket; control cannot manage either Docker
-daemon, and PTYs cannot manage the system daemon that runs Sulion.
+single-user machine. The node passes the mounted socket and its numeric host GID
+to each devenv container, so non-root PTY processes inherit direct access
+without hard-coding the host's Docker group.
+The control plane never receives that socket and cannot manage either Docker
+daemon. On the dedicated host, the node and its launched devenv can manage the
+system daemon; the other services cannot.
 
 ## Deployment shape
 
@@ -296,7 +299,8 @@ contract. The production Compose selections divide the graph by ownership:
   broker, and retrieval, with no source, workspace, transcript, code-intel,
   runner, or Docker mounts;
 - `node` owns `/home/sulion`, PTYs, filesystem/worktree state, correlation, and
-  the dedicated host's Docker socket; and
+  the dedicated host's Docker socket, which it passes only to its launched
+  devenv containers; and
 - `ingester` mounts only Claude and Codex transcript roots read-only.
 
 Code intelligence mounts local repos/workspaces on the node host. Broker and
