@@ -68,6 +68,14 @@ RUN dnf install -y --setopt=install_weak_deps=False dnf-plugins-core epel-releas
   && ln -sf /usr/bin/python3.12 /usr/local/bin/python3 \
   && ln -sf /usr/bin/python3.12 /usr/local/bin/python
 
+# Rocky maintains the CA bundle under /etc/pki, while Nix and other
+# cross-distribution tools also probe Debian's conventional bundle path.
+RUN install -d -m 0755 /etc/ssl/certs \
+  && ln -sfn /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
+    /etc/ssl/certs/ca-certificates.crt \
+  && test -s /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
+  && test -s /etc/ssl/certs/ca-certificates.crt
+
 # Brokered mode uses the constrained runner service. Direct mode uses the
 # dedicated host's Docker socket. Install only the CLI and Compose plugin.
 RUN dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo \
