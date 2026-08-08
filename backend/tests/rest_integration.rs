@@ -1307,6 +1307,18 @@ async fn rename_repo_moves_checkout_and_updates_session_records() {
     .execute(&h.state.pool)
     .await
     .unwrap();
+    sqlx::query(
+        "INSERT INTO code_roots (root_kind, name, path, repo_name) \
+         VALUES ('repo', 'oldrepo', $1, 'oldrepo'), \
+                ('repo', 'oldrepo', $2, 'oldrepo'), \
+                ('repo', 'newrepo', $3, 'newrepo')",
+    )
+    .bind(old_path.to_string_lossy().as_ref())
+    .bind("/home/dev/repos/oldrepo")
+    .bind(h.repos_root().join("newrepo").to_string_lossy().as_ref())
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
 
     let gate = h.runtime.repo_lifecycle_gate_for_tests();
     let mutation_guard = gate.hold_write_for_test().await;
@@ -1364,6 +1376,26 @@ async fn rename_repo_moves_checkout_and_updates_session_records() {
             .to_string_lossy()
             .into_owned()
     );
+    let active_code_roots: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM code_roots \
+          WHERE deleted_at IS NULL \
+            AND (name IN ('oldrepo', 'newrepo') \
+                 OR repo_name IN ('oldrepo', 'newrepo'))",
+    )
+    .fetch_one(&h.state.pool)
+    .await
+    .unwrap();
+    assert_eq!(active_code_roots, 0);
+    let retired_code_roots: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM code_roots \
+          WHERE deleted_at IS NOT NULL \
+            AND (name IN ('oldrepo', 'newrepo') \
+                 OR repo_name IN ('oldrepo', 'newrepo'))",
+    )
+    .fetch_one(&h.state.pool)
+    .await
+    .unwrap();
+    assert_eq!(retired_code_roots, 3);
 }
 
 #[tokio::test]

@@ -383,17 +383,11 @@ async fn rename_repo_index_records(
     sqlx::query(
         "UPDATE code_roots \
             SET deleted_at = NOW(), updated_at = NOW() \
-          WHERE root_kind = 'repo' AND path = $1 AND deleted_at IS NULL",
-    )
-    .bind(new_path)
-    .execute(&mut **tx)
-    .await?;
-    sqlx::query(
-        "UPDATE code_roots \
-            SET name = $2, path = $4, repo_name = $2, updated_at = NOW() \
           WHERE root_kind = 'repo' \
             AND deleted_at IS NULL \
-            AND (name = $1 OR path = $3 OR repo_name = $1)",
+            AND (name IN ($1, $2) \
+                 OR path IN ($3, $4) \
+                 OR repo_name IN ($1, $2))",
     )
     .bind(old_name)
     .bind(new_name)
