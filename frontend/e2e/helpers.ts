@@ -174,6 +174,36 @@ export async function pasteIntoTerminal(page: Page, text: string) {
   }, text);
 }
 
+export async function pasteImageIntoTerminal(
+  page: Page,
+  image: { base64: string; mediaType: string },
+) {
+  await page.locator('.terminal-pane__host:visible').evaluate((host, payload) => {
+    const textarea = host.querySelector("textarea");
+    if (!(textarea instanceof HTMLTextAreaElement)) {
+      throw new Error("terminal textarea not found");
+    }
+    const binary = atob(payload.base64);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const file = new File([bytes], "clipboard-image", { type: payload.mediaType });
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        files: [file],
+        getData: () => "",
+        items: [
+          {
+            kind: "file",
+            type: payload.mediaType,
+            getAsFile: () => file,
+          },
+        ],
+      },
+    });
+    textarea.dispatchEvent(event);
+  }, image);
+}
+
 export async function expectTerminalToContain(page: Page, text: string) {
   await expect
     .poll(async () => terminalText(page), {

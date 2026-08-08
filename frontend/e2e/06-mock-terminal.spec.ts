@@ -8,6 +8,7 @@ import {
   gotoApp,
   listRepoEntries,
   openSession,
+  pasteImageIntoTerminal,
   pasteIntoTerminal,
   runTerminalCommand,
   readRepoFile,
@@ -46,7 +47,7 @@ test("renders the seeded snapshot, echoes input, streams chunks, and reports res
   await expectTerminalToContain(page, "MOCK_RESIZE rows=");
 });
 
-test("supports paste-as-file and reconnects the websocket without losing the session", async ({
+test("supports text and image paste-as-file across a websocket reconnect", async ({
   page,
   request,
 }) => {
@@ -71,6 +72,28 @@ test("supports paste-as-file and reconnects the websocket without losing the ses
   expect(uploaded).toBeDefined();
   const uploadedFile = await readRepoFile(request, "atlas", `.sulion-paste/${uploaded!.name}`);
   expect(uploadedFile.content).toContain("line-219");
+
+  const imageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  await pasteImageIntoTerminal(page, {
+    base64: imageBytes.toString("base64"),
+    mediaType: "image/png",
+  });
+  await page.getByRole("button", { name: "Upload image" }).click();
+  await page.waitForTimeout(200);
+
+  const uploadsWithImage = await listRepoEntries(request, "atlas", ".sulion-paste", true);
+  const uploadedImage = uploadsWithImage.entries.find(
+    (entry) => entry.kind === "file" && entry.name.endsWith(".png"),
+  );
+  expect(uploadedImage).toBeDefined();
+  await expectTerminalToContain(page, uploadedImage!.name);
+  const uploadedImagePath = `.sulion-paste/${uploadedImage!.name}`;
+  const rawImage = await request.get(
+    `/api/repos/atlas/file/raw?path=${encodeURIComponent(uploadedImagePath)}`,
+  );
+  expect(rawImage.ok()).toBeTruthy();
+  expect((await rawImage.body()).equals(imageBytes)).toBe(true);
+  await runTerminalCommand(page, "");
 
   await dropSessionWebSocket(request, mockSessionId);
   await page.waitForTimeout(600);

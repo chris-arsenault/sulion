@@ -6,9 +6,9 @@
 // Copy/paste model (Windows Terminal-ish):
 //   - Right-click: if there's a selection, copy it; otherwise paste
 //     from clipboard. Prevents the browser's default context menu.
-//   - Ctrl+V: handled by xterm's native paste path (native `paste`
-//     event on the textarea); we intercept to sanitize the data
-//     before handing it to the PTY.
+//   - Ctrl+V: handled through the native `paste` event on xterm's
+//     textarea. Text is sanitized before it reaches the PTY; clipboard
+//     images can be saved under .sulion-paste/ and injected by path.
 //   - Ctrl+C with selection: copy + clear selection. Ctrl+C with no
 //     selection: passes through as SIGINT to the shell (default xterm
 //     behavior). This is how Windows Terminal does "copy AND kill".
@@ -44,19 +44,23 @@ type ExitStatus =
   | { kind: "alive" }
   | { kind: "dead"; code: number | null };
 
-/** Parked paste waiting on the user to choose inline vs save-as-file.
+/** Parked paste waiting on the user to choose inline vs save-as-file or
+ * confirm a clipboard image upload.
  * Kept in component state instead of a synchronous browser confirm()
  * so the modal is styled, keyboard-accessible, and doesn't steal
  * focus / block the event loop. */
-interface PendingLargePaste {
-  raw: string;
-  size: number;
-  lines: number;
-  repo: string;
-}
+type PendingPaste =
+  | { kind: "text"; raw: string; size: number; lines: number; repo: string }
+  | { kind: "image"; file: File; repo: string };
 
 import { ConfirmDialog } from "./common/ConfirmDialog";
-import { copyToClipboard, readClipboard, sanitizePaste } from "./terminal/clipboard";
+import {
+  copyToClipboard,
+  createClipboardImageUpload,
+  imageFromClipboard,
+  readClipboard,
+  sanitizePaste,
+} from "./terminal/clipboard";
 import "@xterm/xterm/css/xterm.css";
 import "./TerminalPane.css";
 
@@ -72,8 +76,8 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
   const [connState, setConnState] = useState<ConnectionState>("connecting");
   const [exitStatus, setExitStatus] = useState<ExitStatus>({ kind: "alive" });
   const [focused, setFocused] = useState(false);
-  const [pendingLargePaste, setPendingLargePaste] =
-    useState<PendingLargePaste | null>(null);
+  const [pendingPaste, setPendingPaste] = useState<PendingPaste | null>(null);
+  const [pasteError, setPasteError] = useState<string | null>(null);
   const sessions = useSessions((store) => store.sessions);
   const repoName = sessions.find((s) => s.id === sessionId)?.repo ?? null;
   const repoRef = useRef<string | null>(repoName);
@@ -242,6 +246,22 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
       ev.preventDefault();
       ce.stopPropagation();
       ce.stopImmediatePropagation();
+      setPasteError(null);
+
+      const clipboardImage = imageFromClipboard(ce.clipboardData);
+      if (clipboardImage) {
+        if (!repoRef.current) {
+          setPasteError("Clipboard images require a repository-backed terminal.");
+          return;
+        }
+        setPendingPaste({
+          kind: "image",
+          file: createClipboardImageUpload(clipboardImage),
+          repo: repoRef.current,
+        });
+        return;
+      }
+
       const raw = ce.clipboardData.getData("text/plain");
       const lineCount = (raw.match(/\n/g)?.length ?? 0) + 1;
       const large =
@@ -250,7 +270,8 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
         // Park the paste; the ConfirmDialog decides inline vs file.
         // Defers both the upload call and term.paste to the user's
         // choice — neither happens synchronously on the paste event.
-        setPendingLargePaste({
+        setPendingPaste({
+          kind: "text",
           raw,
           size: raw.length,
           lines: lineCount,
@@ -345,30 +366,48 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
     termRef.current?.focus();
   });
 
-  const acceptLargePasteAsFile = useCallback(async () => {
-    const pending = pendingLargePaste;
+  const acceptPasteAsFile = useCallback(async () => {
+    const pending = pendingPaste;
     if (!pending) return;
-    setPendingLargePaste(null);
-    const ts = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_");
-    const blob = new File([pending.raw], `paste-${ts}.txt`, {
-      type: "text/plain",
-    });
+    setPendingPaste(null);
+    setPasteError(null);
+    const file =
+      pending.kind === "image"
+        ? pending.file
+        : new File(
+            [pending.raw],
+            `paste-${new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_")}.txt`,
+            { type: "text/plain" },
+          );
     try {
-      const res = await uploadRepoFile(pending.repo, ".sulion-paste", blob);
+      const res = await uploadRepoFile(pending.repo, ".sulion-paste", file);
       termRef.current?.paste(res.path + " ");
-    } catch {
-      // On upload failure, fall back to the inline path so the user
-      // isn't left with nothing pasted.
+      termRef.current?.focus();
+    } catch (error) {
+      // Text still has an inline fallback. Binary clipboard content cannot be
+      // represented in the PTY, so keep its upload failure visible instead.
+      if (pending.kind === "text") {
+        termRef.current?.paste(sanitizePaste(pending.raw));
+        termRef.current?.focus();
+      } else {
+        setPasteError(
+          error instanceof Error
+            ? `Clipboard image upload failed: ${error.message}`
+            : "Clipboard image upload failed.",
+        );
+      }
+    }
+  }, [pendingPaste]);
+
+  const cancelPendingPaste = useCallback(() => {
+    const pending = pendingPaste;
+    if (!pending) return;
+    setPendingPaste(null);
+    if (pending.kind === "text") {
       termRef.current?.paste(sanitizePaste(pending.raw));
     }
-  }, [pendingLargePaste]);
-
-  const acceptLargePasteInline = useCallback(() => {
-    const pending = pendingLargePaste;
-    if (!pending) return;
-    setPendingLargePaste(null);
-    termRef.current?.paste(sanitizePaste(pending.raw));
-  }, [pendingLargePaste]);
+    termRef.current?.focus();
+  }, [pendingPaste]);
 
   const decreaseFontSize = useCallback(() => {
     setTerminalFontSize((value) => clampTerminalFontSize(value - 1));
@@ -440,18 +479,26 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
           session no longer receiving input
         </div>
       )}
-      {pendingLargePaste && (
+      {pasteError && exitStatus.kind === "alive" && (
+        <div className="terminal-pane__banner" role="alert">
+          {pasteError}
+        </div>
+      )}
+      {pendingPaste && (
         <ConfirmDialog
-          title="Large paste"
+          title={pendingPaste.kind === "text" ? "Large paste" : "Clipboard image"}
           message={
-            `Clipboard is ${pendingLargePaste.size} bytes / ${pendingLargePaste.lines} lines. ` +
-            "Save it to .sulion-paste/ and inject the path, or paste the raw contents inline? " +
-            "Inline pastes can overwhelm the PTY on large inputs."
+            pendingPaste.kind === "text"
+              ? `Clipboard is ${pendingPaste.size} bytes / ${pendingPaste.lines} lines. ` +
+                "Save it to .sulion-paste/ and inject the path, or paste the raw contents inline? " +
+                "Inline pastes can overwhelm the PTY on large inputs."
+              : `Upload ${pendingPaste.file.name} (${pendingPaste.file.size} bytes) to ` +
+                ".sulion-paste/ and inject its path?"
           }
-          confirmLabel="Save as file"
-          cancelLabel="Paste inline"
-          onConfirm={acceptLargePasteAsFile}
-          onCancel={acceptLargePasteInline}
+          confirmLabel={pendingPaste.kind === "text" ? "Save as file" : "Upload image"}
+          cancelLabel={pendingPaste.kind === "text" ? "Paste inline" : "Cancel"}
+          onConfirm={acceptPasteAsFile}
+          onCancel={cancelPendingPaste}
         />
       )}
     </div>

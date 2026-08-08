@@ -67,6 +67,7 @@ vi.mock("../api/ws", () => ({
 }));
 
 import { appCommands } from "../state/AppCommands";
+import { useSessionStore } from "../state/SessionStore";
 import { TerminalPane } from "./TerminalPane";
 import { appStatePayload, jsonResponse } from "../test/appState";
 
@@ -169,10 +170,79 @@ describe("TerminalPane", () => {
     };
     (pasteEvent as unknown as { clipboardData: typeof clipboardData }).clipboardData =
       clipboardData;
-    mockTerm.textarea.dispatchEvent(pasteEvent);
+    act(() => {
+      mockTerm.textarea.dispatchEvent(pasteEvent);
+    });
 
     expect(mockTerm.paste).toHaveBeenCalledWith("helloworld\nend");
     expect(mockTerm.paste).toHaveBeenCalledTimes(1);
+  });
+
+  it("uploads a clipboard image and pastes the saved path", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "/api/app-state") {
+        return jsonResponse(
+          appStatePayload({ sessions: [{ id: "abc", repo: "atlas" }] }),
+        );
+      }
+      if (url.startsWith("/api/repos/atlas/upload")) {
+        return jsonResponse({
+          path: "/home/sulion/repos/atlas/.sulion-paste/paste-image.png",
+          size: 8,
+        });
+      }
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<TerminalPane sessionId="abc" />);
+    await waitFor(() => {
+      expect(useSessionStore.getState().sessions[0]?.repo).toBe("atlas");
+    });
+
+    const image = new File(
+      [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+      "clipboard-image",
+      { type: "image/png" },
+    );
+    const clipboardData = {
+      files: [image],
+      getData: vi.fn(() => ""),
+      items: [
+        {
+          kind: "file",
+          type: "image/png",
+          getAsFile: () => image,
+        },
+      ],
+    };
+    const pasteEvent = new Event("paste", { cancelable: true }) as Event & {
+      clipboardData: typeof clipboardData;
+    };
+    pasteEvent.clipboardData = clipboardData;
+    act(() => {
+      mockTerm.textarea.dispatchEvent(pasteEvent);
+    });
+
+    expect(await screen.findByRole("dialog", { name: "Clipboard image" })).toBeDefined();
+    expect(mockTerm.paste).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Upload image" }));
+
+    await waitFor(() => {
+      expect(mockTerm.paste).toHaveBeenCalledWith(
+        "/home/sulion/repos/atlas/.sulion-paste/paste-image.png ",
+      );
+    });
+    const uploadCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).startsWith("/api/repos/atlas/upload"),
+    );
+    const form = uploadCall?.[1]?.body as FormData;
+    const uploadedImage = form.get("file") as File;
+    expect(uploadedImage.name).toMatch(/^paste-.*\.png$/);
+    expect(uploadedImage.type).toBe("image/png");
+    expect(uploadedImage.size).toBe(image.size);
+    expect(mockTerm.focus).toHaveBeenCalled();
   });
 
   it("pastes injected terminal text from the app command layer", async () => {
