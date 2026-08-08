@@ -121,11 +121,17 @@ impl AppState {
         auth: Option<Arc<auth::AuthState>>,
     ) -> Arc<Self> {
         let pty = pty::PtyManager::new(pool.clone());
-        let repo_state = repo_state::RepoStateManager::new(pool.clone(), repos_root.clone());
+        let repo_lifecycle_gate = repo_lifecycle::RepoLifecycleGate::default();
+        let repo_state = repo_state::RepoStateManager::new(
+            pool.clone(),
+            repos_root.clone(),
+            repo_lifecycle_gate.clone(),
+        );
         let workspace_state = worktree::WorkspaceManager::new(
             pool.clone(),
             repos_root.clone(),
             workspaces_root.clone(),
+            repo_lifecycle_gate,
         );
         let node_control = node_protocol::NodeControl::new(pool.clone());
         Arc::new(Self {

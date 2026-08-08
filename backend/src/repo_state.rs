@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::Pool;
 use crate::git::{self, DiffStat, GitStatus};
+use crate::repo_lifecycle::RepoLifecycleGate;
 
 const REPO_SCAN_INTERVAL: Duration = Duration::from_secs(30);
 const REPO_STATUS_CADENCE_SECS: i32 = 30;
@@ -38,11 +39,16 @@ pub struct RepoDirtyPaths {
 pub struct RepoStateManager {
     pool: Pool,
     repos_root: PathBuf,
+    lifecycle_gate: RepoLifecycleGate,
 }
 
 impl RepoStateManager {
-    pub fn new(pool: Pool, repos_root: PathBuf) -> Arc<Self> {
-        Arc::new(Self { pool, repos_root })
+    pub fn new(pool: Pool, repos_root: PathBuf, lifecycle_gate: RepoLifecycleGate) -> Arc<Self> {
+        Arc::new(Self {
+            pool,
+            repos_root,
+            lifecycle_gate,
+        })
     }
 
     pub async fn run(self: Arc<Self>) {
@@ -62,6 +68,7 @@ impl RepoStateManager {
     }
 
     pub async fn sync_repos_once(&self) -> anyhow::Result<()> {
+        let _lifecycle_guard = self.lifecycle_gate.read().await;
         let repos = discover_repo_dirs(&self.repos_root).await?;
         let mut tx = self.pool.begin().await.context("begin repo state sync")?;
         sqlx::query("UPDATE repo_runtime_state SET exists = FALSE, updated_at = NOW()")
@@ -120,6 +127,7 @@ impl RepoStateManager {
     }
 
     pub async fn reconcile_due_once(&self, limit: i64) -> anyhow::Result<usize> {
+        let _lifecycle_guard = self.lifecycle_gate.read().await;
         let rows: Vec<(String, String)> = sqlx::query_as(
             "SELECT repo_name, path \
                FROM repo_runtime_state \

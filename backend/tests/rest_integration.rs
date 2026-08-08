@@ -11,6 +11,7 @@ use axum::http::HeaderMap;
 use chrono::{DateTime, Utc};
 use serde_json::json;
 use sulion::db;
+use sulion::node_runtime::NodeRuntime;
 use sulion::{app, AppState};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
@@ -59,6 +60,7 @@ async fn insert_test_pty(pool: &db::Pool, repo: &str, working_dir: &Path) -> Uui
 struct Harness {
     base: String,
     state: Arc<AppState>,
+    runtime: Arc<NodeRuntime>,
     client: reqwest::Client,
     _tmp_repos: tempfile::TempDir,
 }
@@ -67,7 +69,7 @@ impl Harness {
     async fn new() -> Self {
         let pool = fresh_pool().await;
         let tmp_repos = tempfile::tempdir().unwrap();
-        let (state, _runtime) = common::state_with_loopback_node(
+        let (state, runtime) = common::state_with_loopback_node(
             pool,
             tmp_repos.path(),
             &tmp_repos.path().join(".workspaces"),
@@ -83,6 +85,7 @@ impl Harness {
         Self {
             base: format!("http://{addr}"),
             state,
+            runtime,
             client: reqwest::Client::new(),
             _tmp_repos: tmp_repos,
         }
@@ -1289,6 +1292,11 @@ async fn rename_repo_moves_checkout_and_updates_session_records() {
         .upsert_repo("oldrepo", &old_path)
         .await
         .unwrap();
+    h.runtime
+        .workspace_state()
+        .ensure_main_workspace("oldrepo", &old_path)
+        .await
+        .unwrap();
     let pty_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO pty_sessions (id, repo, working_dir, state, created_at) \
@@ -1300,13 +1308,42 @@ async fn rename_repo_moves_checkout_and_updates_session_records() {
     .await
     .unwrap();
 
-    let resp = h
-        .client
-        .patch(format!("{}/api/repos/oldrepo", h.base))
-        .json(&json!({ "name": "newrepo" }))
-        .send()
-        .await
-        .unwrap();
+    let gate = h.runtime.repo_lifecycle_gate_for_tests();
+    let mutation_guard = gate.hold_write_for_test().await;
+    let workspace_state = h.runtime.workspace_state();
+    let mut discovery =
+        tokio::spawn(async move { workspace_state.sync_main_workspaces_once().await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut discovery)
+            .await
+            .is_err(),
+        "workspace discovery must wait for repository lifecycle mutations"
+    );
+    drop(mutation_guard);
+    discovery.await.unwrap().unwrap();
+
+    let scan_guard = gate.hold_read_for_test().await;
+    let client = h.client.clone();
+    let url = format!("{}/api/repos/oldrepo", h.base);
+    let mut rename = tokio::spawn(async move {
+        client
+            .patch(url)
+            .json(&json!({ "name": "newrepo" }))
+            .send()
+            .await
+            .unwrap()
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut rename)
+            .await
+            .is_err(),
+        "repo rename must wait for repository discovery readers"
+    );
+    assert!(h.repos_root().join("oldrepo").is_dir());
+    assert!(!h.repos_root().join("newrepo").exists());
+    drop(scan_guard);
+
+    let resp = rename.await.unwrap();
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["name"], "newrepo");

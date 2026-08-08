@@ -11,8 +11,39 @@
 //! the fragile part — a schema change in either module lands here.
 
 use std::path::Path as StdPath;
+use std::sync::Arc;
+
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 
 use crate::git;
+
+/// Serializes repository lifecycle mutations against work that discovers or
+/// uses repository paths. Readers may run together; create, rename, and delete
+/// hold the exclusive side across their filesystem and database changes.
+#[derive(Clone, Default)]
+pub struct RepoLifecycleGate(Arc<RwLock<()>>);
+
+impl RepoLifecycleGate {
+    pub(crate) async fn read(&self) -> OwnedRwLockReadGuard<()> {
+        self.0.clone().read_owned().await
+    }
+
+    pub(crate) async fn write(&self) -> OwnedRwLockWriteGuard<()> {
+        self.0.clone().write_owned().await
+    }
+
+    #[cfg(feature = "integration-tests")]
+    #[doc(hidden)]
+    pub async fn hold_read_for_test(&self) -> OwnedRwLockReadGuard<()> {
+        self.read().await
+    }
+
+    #[cfg(feature = "integration-tests")]
+    #[doc(hidden)]
+    pub async fn hold_write_for_test(&self) -> OwnedRwLockWriteGuard<()> {
+        self.write().await
+    }
+}
 
 /// Why a lifecycle operation was refused. Each variant is a distinct outcome
 /// for the caller: a repo that is not there, a refusal it can act on, and
@@ -44,9 +75,11 @@ fn validate_repo_name(name: &str) -> ApiResult<()> {
 pub async fn rename_repo_runtime(
     pool: &crate::db::Pool,
     root: &StdPath,
+    lifecycle_gate: &RepoLifecycleGate,
     old_name: &str,
     new_name: &str,
 ) -> ApiResult<std::path::PathBuf> {
+    let _lifecycle_guard = lifecycle_gate.write().await;
     validate_repo_name(old_name)?;
     validate_repo_name(new_name)?;
     let old_path = root.join(old_name);
@@ -84,9 +117,11 @@ pub async fn rename_repo_runtime(
 pub async fn delete_repo_runtime(
     pool: &crate::db::Pool,
     root: &StdPath,
+    lifecycle_gate: &RepoLifecycleGate,
     name: &str,
     force: bool,
 ) -> ApiResult<()> {
+    let _lifecycle_guard = lifecycle_gate.write().await;
     validate_repo_name(name)?;
     let path = root.join(name);
     if !path.is_dir() {

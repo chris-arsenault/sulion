@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::db::Pool;
 use crate::git::{self, DiffStat};
+use crate::repo_lifecycle::RepoLifecycleGate;
 use crate::repo_state::RepoGitSummary;
 
 const WORKSPACE_SCAN_INTERVAL: Duration = Duration::from_secs(30);
@@ -76,14 +77,21 @@ pub struct WorkspaceManager {
     pool: Pool,
     repos_root: PathBuf,
     workspaces_root: PathBuf,
+    lifecycle_gate: RepoLifecycleGate,
 }
 
 impl WorkspaceManager {
-    pub fn new(pool: Pool, repos_root: PathBuf, workspaces_root: PathBuf) -> Arc<Self> {
+    pub fn new(
+        pool: Pool,
+        repos_root: PathBuf,
+        workspaces_root: PathBuf,
+        lifecycle_gate: RepoLifecycleGate,
+    ) -> Arc<Self> {
         Arc::new(Self {
             pool,
             repos_root,
             workspaces_root,
+            lifecycle_gate,
         })
     }
 
@@ -104,6 +112,7 @@ impl WorkspaceManager {
     }
 
     pub async fn sync_main_workspaces_once(&self) -> anyhow::Result<()> {
+        let _lifecycle_guard = self.lifecycle_gate.read().await;
         let repos = discover_repo_dirs(&self.repos_root).await?;
         for (name, path) in repos {
             self.ensure_main_workspace(&name, &path).await?;
@@ -452,6 +461,7 @@ impl WorkspaceManager {
 
 impl WorkspaceManager {
     pub async fn reconcile_due_once(&self, limit: i64) -> anyhow::Result<usize> {
+        let _lifecycle_guard = self.lifecycle_gate.read().await;
         let rows: Vec<(Uuid, String)> = sqlx::query_as(
             "SELECT id, path \
                FROM workspaces \

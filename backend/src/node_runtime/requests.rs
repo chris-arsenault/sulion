@@ -34,24 +34,34 @@ impl NodeRuntime {
     ) -> Result<Value, RuntimeError> {
         match kind {
             NodeRequestKind::ProbeEcho => Ok(json!({ "echo": request })),
+            NodeRequestKind::SessionCreate => {
+                let _lifecycle_guard = self.repo_lifecycle_gate.read().await;
+                self.execute_session_request(kind, request).await
+            }
             NodeRequestKind::SessionAgentInterrupt
             | NodeRequestKind::SessionAgentStart
-            | NodeRequestKind::SessionCreate
             | NodeRequestKind::SessionDelete
             | NodeRequestKind::SessionUpgrade
             | NodeRequestKind::SessionInput
             | NodeRequestKind::SessionResize => self.execute_session_request(kind, request).await,
-            NodeRequestKind::RepoCreate
-            | NodeRequestKind::RepoDelete
-            | NodeRequestKind::RepoDiff
+            NodeRequestKind::RepoCreate => {
+                let _lifecycle_guard = self.repo_lifecycle_gate.write().await;
+                self.execute_repo_request(kind, request).await
+            }
+            NodeRequestKind::RepoDelete | NodeRequestKind::RepoRename => {
+                self.execute_repo_request(kind, request).await
+            }
+            NodeRequestKind::RepoDiff
             | NodeRequestKind::RepoDirtyPaths
             | NodeRequestKind::RepoFilePreview
             | NodeRequestKind::RepoFileRaw
             | NodeRequestKind::RepoFiles
             | NodeRequestKind::RepoRefresh
-            | NodeRequestKind::RepoRename
             | NodeRequestKind::RepoStage
-            | NodeRequestKind::RepoUpload => self.execute_repo_request(kind, request).await,
+            | NodeRequestKind::RepoUpload => {
+                let _lifecycle_guard = self.repo_lifecycle_gate.read().await;
+                self.execute_repo_request(kind, request).await
+            }
             NodeRequestKind::WorkspaceDelete
             | NodeRequestKind::WorkspaceDiff
             | NodeRequestKind::WorkspaceDirtyPaths
@@ -61,6 +71,7 @@ impl NodeRuntime {
             | NodeRequestKind::WorkspaceRefresh
             | NodeRequestKind::WorkspaceStage
             | NodeRequestKind::WorkspaceUpload => {
+                let _lifecycle_guard = self.repo_lifecycle_gate.read().await;
                 self.execute_workspace_request(kind, request).await
             }
         }
@@ -157,6 +168,7 @@ impl NodeRuntime {
                 crate::repo_lifecycle::rename_repo_runtime(
                     &self.pool,
                     &self.repos_root,
+                    &self.repo_lifecycle_gate,
                     &request.old_name,
                     &request.new_name,
                 )
@@ -171,6 +183,7 @@ impl NodeRuntime {
                 crate::repo_lifecycle::delete_repo_runtime(
                     &self.pool,
                     &self.repos_root,
+                    &self.repo_lifecycle_gate,
                     &request.name,
                     request.force,
                 )

@@ -19,6 +19,7 @@ use crate::node_protocol::{
     NodeRequestKind, RequestResultPayload, RequestResultStatus, TerminalBytesPayload, WireEnvelope,
 };
 use crate::pty::{PtyManager, PtyMetadata, PtyWorkspaceMetadata, SpawnParams};
+use crate::repo_lifecycle::RepoLifecycleGate;
 use crate::repo_state::RepoStateManager;
 use crate::worktree::{WorkspaceManager, WorkspaceRecord};
 
@@ -107,6 +108,7 @@ pub struct NodeRuntime {
     pty: Arc<PtyManager>,
     repo_state: Arc<RepoStateManager>,
     workspace_state: Arc<WorkspaceManager>,
+    repo_lifecycle_gate: RepoLifecycleGate,
     attachments: Mutex<HashMap<Uuid, watch::Sender<bool>>>,
     host: HostProbe,
 }
@@ -121,18 +123,25 @@ impl NodeRuntime {
         devenv_link: Arc<crate::devenv::link::DevenvLink>,
         devenv_events: mpsc::UnboundedReceiver<crate::devenv::link::LinkEvent>,
     ) -> Arc<Self> {
+        let repo_lifecycle_gate = RepoLifecycleGate::default();
         Arc::new(Self {
             node_id,
             boot_id,
             pty: PtyManager::with_devenv(pool.clone(), devenv_link, devenv_events),
-            repo_state: RepoStateManager::new(pool.clone(), repos_root.clone()),
+            repo_state: RepoStateManager::new(
+                pool.clone(),
+                repos_root.clone(),
+                repo_lifecycle_gate.clone(),
+            ),
             workspace_state: WorkspaceManager::new(
                 pool.clone(),
                 repos_root.clone(),
                 workspaces_root,
+                repo_lifecycle_gate.clone(),
             ),
             pool,
             repos_root,
+            repo_lifecycle_gate,
             attachments: Mutex::new(HashMap::new()),
             host: HostProbe::new(),
         })
@@ -156,6 +165,12 @@ impl NodeRuntime {
 
     pub fn workspace_state(&self) -> Arc<WorkspaceManager> {
         self.workspace_state.clone()
+    }
+
+    #[cfg(feature = "integration-tests")]
+    #[doc(hidden)]
+    pub fn repo_lifecycle_gate_for_tests(&self) -> RepoLifecycleGate {
+        self.repo_lifecycle_gate.clone()
     }
 
     pub async fn live_session_ids(&self) -> Vec<Uuid> {
