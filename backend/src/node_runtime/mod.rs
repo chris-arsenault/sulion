@@ -290,7 +290,9 @@ impl NodeRuntime {
         tokio::spawn(self.repo_state.clone().run());
         tokio::spawn(self.workspace_state.clone().run());
     }
+}
 
+impl NodeRuntime {
     /// Claims workspaces this node is responsible for.
     ///
     /// Repos are no longer claimed: ownership lived in `repos.node_id`, which

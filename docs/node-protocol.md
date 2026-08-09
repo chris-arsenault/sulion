@@ -15,8 +15,9 @@ fork.
 ## Stability choices
 
 The production target has one configured node. The protocol deliberately does
-not implement a multi-node scheduler, capability negotiation, rolling protocol
-ranges, release reconciliation, durable remote-operation ledger, replay cache,
+not implement a multi-node scheduler, generalized capability negotiation,
+rolling protocol ranges, release reconciliation, a durable remote-operation
+ledger, replay cache,
 credential history, drain controller, or remote shell.
 
 There is one protocol version and four persisted connection states: `pending`,
@@ -42,8 +43,8 @@ This leaves four mechanisms:
 1. one-click pairing approval and an Ed25519 node identity;
 2. an outbound authenticated WebSocket;
 3. direct typed request/response messages and terminal streams; and
-4. a heartbeat containing boot identity, live PTY inventory, and a
-   whole-machine resource sample.
+4. a heartbeat containing boot identity, live PTY inventory, a small additive
+   feature list, and a whole-machine resource sample.
 
 ## Ownership
 
@@ -236,7 +237,11 @@ stall the PTY reader or shadow emulator.
 ## Heartbeat and reboot behavior
 
 The heartbeat reports the node's current boot ID, complete live PTY ID
-inventory, and a whole-machine memory and CPU sample.
+inventory, supported additive features, and a whole-machine memory and CPU
+sample. `multi_repo_session_v1` gates collection launches during a rolling
+control/node update: an old node continues to serve single-repository requests,
+while control returns a specific `503` before dispatching a collection request.
+The feature list does not select between implementations or versions.
 
 - The machine sample is the only source of the memory and CPU figures the
   browser shows. Control keeps the latest one per connected node and drops it

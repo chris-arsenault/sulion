@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import {
   createLabeledSession,
@@ -30,6 +30,28 @@ const roundtripCases = [
 ] as const;
 
 const sessionIds = new Map<string, string>();
+
+async function expectSubagentReport(page: Page, expected: string) {
+  const openAgentLog = page.getByRole("button", { name: /View agent log/i });
+  await expect
+    .poll(
+      async () => {
+        await openAgentLog.click();
+        const modal = page.getByTestId("subagent-modal");
+        await expect(modal).toBeVisible();
+        const text = await modal.textContent();
+        if (!text?.includes(expected)) {
+          await page.keyboard.press("Escape");
+        }
+        return text;
+      },
+      {
+        message: "expected the complete subagent projection",
+        timeout: 30_000,
+      },
+    )
+    .toContain(expected);
+}
 
 test.afterEach(async ({ request }) => {
   for (const sessionId of sessionIds.values()) {
@@ -81,8 +103,7 @@ for (const scenario of roundtripCases) {
         page.locator('[data-testid="tool-pair-row"][data-tool-type="task"]'),
       ).toBeVisible();
 
-      await page.getByRole("button", { name: /View agent log/i }).click();
-      await expect(page.getByTestId("subagent-modal")).toContainText(scenario.subagentText);
+      await expectSubagentReport(page, scenario.subagentText);
       return;
     }
 
@@ -96,7 +117,6 @@ for (const scenario of roundtripCases) {
       page.locator('[data-testid="tool-pair-row"][data-tool-type="web_search"]'),
     ).toBeVisible();
     await expect(page.locator('[data-testid="tool-pair-row"][data-tool-type="task"]')).toBeVisible();
-    await page.getByRole("button", { name: /View agent log/i }).click();
-    await expect(page.getByTestId("subagent-modal")).toContainText(scenario.subagentText);
+    await expectSubagentReport(page, scenario.subagentText);
   });
 }

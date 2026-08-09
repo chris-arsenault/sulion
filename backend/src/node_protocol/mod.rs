@@ -380,7 +380,9 @@ impl NodeControl {
         });
         self.register(hello, proof).await
     }
+}
 
+impl NodeControl {
     pub(crate) async fn register_internal(
         &self,
         hello: NodeHello,

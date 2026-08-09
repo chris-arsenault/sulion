@@ -17,11 +17,13 @@ references.
 
 ---
 
-## Sidebar — repos, plans, sessions, files, library
+## Sidebar — meta-repos, repos, sessions, files, library
 
-The left rail is the navigation surface. Repos group their published plans,
-PTY sessions, isolated workspaces, a lightweight file tree, and per-repo git
-staleness. The **Library**
+The left rail is the navigation surface. Meta-repositories provide one optional
+organization level above repos without moving any checkout. Their collection
+sessions appear at the parent; each member repo keeps its published plans,
+single-repo sessions, isolated workspaces, lightweight file tree, and Git
+status. Ungrouped repos remain first-class. The **Library**
 section at the bottom lists saved prompts and references. Just above the
 command palette entry, the rail also exposes the **Secrets** manager tab.
 Saved prompts can include `$name` placeholders; `$$` sends a literal
@@ -31,15 +33,18 @@ Saved prompts can include `$name` placeholders; `$$` sends a literal
 
 Right-click a session for rename / pin / colour / open-timeline /
 delete actions, including the shortcut to manage secrets for that PTY.
-New agent sessions can run in an isolated Sulion Git worktree by
-default, while explicit main-worktree sessions stay bound to the
-canonical checkout. Right-click a repo for repo-level actions (open plans, open
+New agent sessions can target one repo or every member of a meta-repository.
+Collection sessions create one isolated worktree per member by default, or bind
+all members to their canonical checkouts in main mode. The primary repo supplies
+the cwd; Claude and Codex receive the other roots as additional directories.
+Right-click a repo for repo-level actions (open plans, open
 repo timeline, repo diff). Double-click a session name to rename in place.
 
 ## Command palette
 
-`Cmd+K` / `Ctrl+K` opens the command palette. It jumps to repos and
-sessions, and drives the same navigation the sidebar does — handy
+`Cmd+K` / `Ctrl+K` opens the command palette. It jumps to meta-repositories,
+repos, and sessions, and can open a collection-session form. It drives the same
+navigation the sidebar does — handy
 when the tree is tall.
 
 ![Command palette](screenshots/02-command-palette.png)

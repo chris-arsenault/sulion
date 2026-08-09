@@ -56,7 +56,10 @@ When contributing, ask "which tier is this?" before picking a component.
 
 `[rail 36px] [sidebar 260–360px drag-resize] [work area 1fr]`.
 
-- **Rail** is functional — a vertical strip of repo sigils (staleness-ring letter) that scrolls the sidebar to that repo when clicked. It also houses the pin toggle and command palette trigger.
+- **Rail** is functional — a vertical strip of top-level scope sigils that
+  scrolls the sidebar to a meta-repository or ungrouped repo. Meta-repository
+  sigils aggregate unread state, dirty count, and worst member staleness. The
+  rail also houses the pin toggle and command palette trigger.
 - **Sidebar** is drag-resizable and persisted (`sulion.sidebar.width.v1`); pinned state persists in `sulion.sidebar.pinned.v1`.
 - **Work area** keeps its existing two-pane split + tab strip. Terminal pane gets a 2px accent border when focused — xterm swallows keys, the frame tells you it's live.
 - **Mobile** (<768px) hides the rail, keeps a hamburger top bar, and makes the sidebar a drawer.
@@ -74,7 +77,7 @@ Live in `frontend/src/components/ui/`. Re-export from `./ui` barrel.
 - **Tab** — icon-forward tab with binding-sigil slot, accent underline for active state.
 - **Tooltip** — Tier-1 primitive.
 - **Overlay** — modal or anchored transient frame. Shared header / close / Esc / z-index for ToolHoverCard, ThinkingFlyout, SubagentModal.
-- **CommandPalette** — Cmd/Ctrl-K. Single entry for navigation and actions. Query-gated: an empty palette lists only action commands; navigation entries (live sessions, repos, plans) are `searchOnly` and surface as the user types, ranked labeled sessions > repos > plans > unlabeled sessions with sessions in recency order. Keeps the "only four shortcuts" rule (palette, monitor toggle, Esc, Enter). Cmd/Ctrl-M toggles the monitor overview as a modal overlay; TerminalPane excludes the chord from xterm so it never reaches the PTY.
+- **CommandPalette** — Cmd/Ctrl-K. Single entry for navigation and actions. Query-gated: an empty palette lists only action commands; navigation entries (live sessions, meta-repos, repos, plans) are `searchOnly` and surface as the user types. Meta-repository entries can reveal the group or open its collection-session form. Keeps the "only four shortcuts" rule (palette, monitor toggle, Esc, Enter). Cmd/Ctrl-M toggles the monitor overview as a modal overlay; TerminalPane excludes the chord from xterm so it never reaches the PTY.
 
 ## Motion
 

@@ -306,132 +306,13 @@ async fn resolve_session_scope(
     }
 
     if let Some(source_id) = req.scope_source_session_id {
-        if req.workspace_id.is_some() {
-            return Err(ApiError::BadRequest(
-                "workspace_id cannot be combined with scope_source_session_id".into(),
-            ));
-        }
-        let source: Option<(Option<Uuid>, Option<String>)> = sqlx::query_as(
-            "SELECT meta_repo_id, meta_repo_name FROM pty_sessions \
-              WHERE id = $1 AND state <> 'deleted'",
-        )
-        .bind(source_id)
-        .fetch_optional(&state.pool)
-        .await?;
-        let Some((meta_repo_id, meta_repo_name)) = source else {
-            return Err(ApiError::NotFound);
-        };
-        let rows = sqlx::query_as::<_, SourceSessionRepoRow>(
-            "SELECT psr.repo_name, psr.workspace_id, psr.role, psr.position, \
-                    ws.kind AS workspace_kind \
-               FROM pty_session_repos psr \
-               LEFT JOIN workspaces ws ON ws.id = psr.workspace_id \
-              WHERE psr.pty_session_id = $1 \
-              ORDER BY psr.position",
-        )
-        .bind(source_id)
-        .fetch_all(&state.pool)
-        .await?;
-        if rows.is_empty() || rows.first().is_none_or(|row| row.role != "primary") {
-            return Err(ApiError::BadRequest(
-                "source session has no reusable repository scope".into(),
-            ));
-        }
-        let workspace_mode = source_workspace_mode(&rows)?;
-        if req
-            .workspace_mode
-            .as_deref()
-            .is_some_and(|requested| requested != workspace_mode)
-        {
-            return Err(ApiError::BadRequest(
-                "workspace_mode must match the source session".into(),
-            ));
-        }
-        if req.working_dir.is_some() && workspace_mode != "main" {
-            return Err(ApiError::BadRequest(
-                "working_dir is only supported with workspace_mode=main".into(),
-            ));
-        }
-        let members = rows
-            .into_iter()
-            .map(|row| {
-                let workspace_id = row.workspace_id.ok_or_else(|| {
-                    ApiError::BadRequest(format!(
-                        "source session repository {} has no workspace",
-                        row.repo_name
-                    ))
-                })?;
-                Ok(SessionRepoRequest {
-                    repo: row.repo_name,
-                    allocated_workspace_id: Uuid::new_v4(),
-                    existing_workspace_id: Some(workspace_id),
-                    position: row.position,
-                })
-            })
-            .collect::<ApiResult<Vec<_>>>()?;
-        let meta_repo = meta_repo_id.map(|id| SessionMetaRepoRequest {
-            id,
-            name: meta_repo_name.unwrap_or_else(|| "Deleted meta-repository".into()),
-        });
-        let collection = meta_repo.is_some() || members.len() > 1;
-        return Ok(ResolvedSessionScope {
-            meta_repo,
-            members,
-            workspace_mode: workspace_mode.into(),
-            collection,
-        });
+        return resolve_source_session_scope(state, req, source_id).await;
     }
 
     let workspace_mode = requested_workspace_mode(req).to_string();
     validate_workspace_request(req, &workspace_mode)?;
     if let Some(meta_repo_id) = req.meta_repo_id {
-        if req.workspace_id.is_some() {
-            return Err(ApiError::BadRequest(
-                "workspace_id cannot be combined with meta_repo_id".into(),
-            ));
-        }
-        let group = crate::meta_repos::get(&state.pool, meta_repo_id).await?;
-        if group.members.is_empty() {
-            return Err(ApiError::BadRequest(
-                "meta-repository needs at least one member before launching a session".into(),
-            ));
-        }
-        let missing = group
-            .members
-            .iter()
-            .filter(|member| !member.exists)
-            .map(|member| member.repo_name.as_str())
-            .collect::<Vec<_>>();
-        if !missing.is_empty() {
-            return Err(ApiError::BadRequest(format!(
-                "meta-repository member is missing: {}",
-                missing.join(", ")
-            )));
-        }
-        let primary = group.primary_repo_name.as_deref().ok_or_else(|| {
-            ApiError::BadRequest("meta-repository has no primary repository".into())
-        })?;
-        let mut ordered = group.members;
-        ordered.sort_by_key(|member| (member.repo_name != primary, member.position));
-        let members = ordered
-            .into_iter()
-            .enumerate()
-            .map(|(position, member)| SessionRepoRequest {
-                repo: member.repo_name,
-                allocated_workspace_id: Uuid::new_v4(),
-                existing_workspace_id: None,
-                position: position as i32,
-            })
-            .collect();
-        return Ok(ResolvedSessionScope {
-            meta_repo: Some(SessionMetaRepoRequest {
-                id: group.id,
-                name: group.name,
-            }),
-            members,
-            workspace_mode,
-            collection: true,
-        });
+        return resolve_meta_repo_scope(state, req, meta_repo_id, workspace_mode).await;
     }
 
     let repo = req
@@ -450,6 +331,143 @@ async fn resolve_session_scope(
         }],
         workspace_mode,
         collection: false,
+    })
+}
+
+async fn resolve_source_session_scope(
+    state: &AppState,
+    req: &CreateSessionReq,
+    source_id: Uuid,
+) -> ApiResult<ResolvedSessionScope> {
+    if req.workspace_id.is_some() {
+        return Err(ApiError::BadRequest(
+            "workspace_id cannot be combined with scope_source_session_id".into(),
+        ));
+    }
+    let source: Option<(Option<Uuid>, Option<String>)> = sqlx::query_as(
+        "SELECT meta_repo_id, meta_repo_name FROM pty_sessions \
+          WHERE id = $1 AND state <> 'deleted'",
+    )
+    .bind(source_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((meta_repo_id, meta_repo_name)) = source else {
+        return Err(ApiError::NotFound);
+    };
+    let rows = sqlx::query_as::<_, SourceSessionRepoRow>(
+        "SELECT psr.repo_name, psr.workspace_id, psr.role, psr.position, \
+                ws.kind AS workspace_kind \
+           FROM pty_session_repos psr \
+           LEFT JOIN workspaces ws ON ws.id = psr.workspace_id \
+          WHERE psr.pty_session_id = $1 \
+          ORDER BY psr.position",
+    )
+    .bind(source_id)
+    .fetch_all(&state.pool)
+    .await?;
+    if rows.is_empty() || rows.first().is_none_or(|row| row.role != "primary") {
+        return Err(ApiError::BadRequest(
+            "source session has no reusable repository scope".into(),
+        ));
+    }
+    let workspace_mode = source_workspace_mode(&rows)?;
+    if req
+        .workspace_mode
+        .as_deref()
+        .is_some_and(|requested| requested != workspace_mode)
+    {
+        return Err(ApiError::BadRequest(
+            "workspace_mode must match the source session".into(),
+        ));
+    }
+    if req.working_dir.is_some() && workspace_mode != "main" {
+        return Err(ApiError::BadRequest(
+            "working_dir is only supported with workspace_mode=main".into(),
+        ));
+    }
+    let members = rows
+        .into_iter()
+        .map(|row| {
+            let workspace_id = row.workspace_id.ok_or_else(|| {
+                ApiError::BadRequest(format!(
+                    "source session repository {} has no workspace",
+                    row.repo_name
+                ))
+            })?;
+            Ok(SessionRepoRequest {
+                repo: row.repo_name,
+                allocated_workspace_id: Uuid::new_v4(),
+                existing_workspace_id: Some(workspace_id),
+                position: row.position,
+            })
+        })
+        .collect::<ApiResult<Vec<_>>>()?;
+    let meta_repo = meta_repo_id.map(|id| SessionMetaRepoRequest {
+        id,
+        name: meta_repo_name.unwrap_or_else(|| "Deleted meta-repository".into()),
+    });
+    let collection = meta_repo.is_some() || members.len() > 1;
+    Ok(ResolvedSessionScope {
+        meta_repo,
+        members,
+        workspace_mode: workspace_mode.into(),
+        collection,
+    })
+}
+
+async fn resolve_meta_repo_scope(
+    state: &AppState,
+    req: &CreateSessionReq,
+    meta_repo_id: Uuid,
+    workspace_mode: String,
+) -> ApiResult<ResolvedSessionScope> {
+    if req.workspace_id.is_some() {
+        return Err(ApiError::BadRequest(
+            "workspace_id cannot be combined with meta_repo_id".into(),
+        ));
+    }
+    let group = crate::meta_repos::get(&state.pool, meta_repo_id).await?;
+    if group.members.is_empty() {
+        return Err(ApiError::BadRequest(
+            "meta-repository needs at least one member before launching a session".into(),
+        ));
+    }
+    let missing = group
+        .members
+        .iter()
+        .filter(|member| !member.exists)
+        .map(|member| member.repo_name.as_str())
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(ApiError::BadRequest(format!(
+            "meta-repository member is missing: {}",
+            missing.join(", ")
+        )));
+    }
+    let primary = group
+        .primary_repo_name
+        .as_deref()
+        .ok_or_else(|| ApiError::BadRequest("meta-repository has no primary repository".into()))?;
+    let mut ordered = group.members;
+    ordered.sort_by_key(|member| (member.repo_name != primary, member.position));
+    let members = ordered
+        .into_iter()
+        .enumerate()
+        .map(|(position, member)| SessionRepoRequest {
+            repo: member.repo_name,
+            allocated_workspace_id: Uuid::new_v4(),
+            existing_workspace_id: None,
+            position: position as i32,
+        })
+        .collect();
+    Ok(ResolvedSessionScope {
+        meta_repo: Some(SessionMetaRepoRequest {
+            id: group.id,
+            name: group.name,
+        }),
+        members,
+        workspace_mode,
+        collection: true,
     })
 }
 

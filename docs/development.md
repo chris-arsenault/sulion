@@ -78,7 +78,11 @@ SULION_TEST_DB='postgres://postgres:testpass@127.0.0.1:55432/sulion' \
 
 ## E2E
 
-Real stack + Postgres + seeded ingest data via `scripts/run-e2e-stack.mjs`. Specs live in `frontend/e2e/`. Current coverage and the prioritized next-test list live in [`e2e-coverage-plan.md`](e2e-coverage-plan.md).
+Real stack + Postgres + seeded ingest data via `scripts/run-e2e-stack.mjs`.
+Specs live in `frontend/e2e/`; the meta-repository spec creates and removes its
+own grouping and collection PTY while reusing the seeded repos. Current
+coverage and the prioritized next-test list live in
+[`e2e-coverage-plan.md`](e2e-coverage-plan.md).
 
 ## CI
 
