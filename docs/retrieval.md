@@ -24,14 +24,11 @@ sulion-retrieve index-status
 The CLI adds auth and context headers from the PTY environment:
 
 - `SULION_REPO_NAME`
-- `SULION_REPO_NAMES_JSON`
 - `SULION_WORKSPACE_ID`
 - `SULION_PTY_ID`
 - current working directory
 
-Repo scope is the default. In a collection PTY it searches every repository in
-the stored launch snapshot; `--repo` narrows an individual request to one repo,
-and `--all` keeps its global meaning. Session scope is explicit:
+Repo scope is the default. Session scope is explicit:
 
 ```sh
 sulion-retrieve search "exact thing" --scope session --session <agent-session-uuid>
@@ -78,10 +75,6 @@ Results include:
 - snippet and preview text
 - per-turn evidence (`operations`, `file_touches`)
 - `tool` details for tool result kinds
-
-The resolved context includes `repo` for primary-repo compatibility and an
-ordered `repos` array used by lexical and semantic filters. Old single-repo
-PTYs fall back to their scalar `pty_sessions.repo` value.
 
 ## Semantic Indexing
 

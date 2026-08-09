@@ -84,7 +84,6 @@ struct RetrievalCliEnv {
     base_url: String,
     token: String,
     repo: Option<String>,
-    repo_names_json: Option<String>,
     cwd: Option<String>,
     pty_id: Option<String>,
     workspace_id: Option<String>,
@@ -100,7 +99,6 @@ impl RetrievalCliEnv {
             base_url: env_required("SULION_RETRIEVAL_URL")?,
             token: env_required("SULION_RETRIEVAL_TOKEN")?,
             repo: env_optional("SULION_REPO_NAME").or_else(|| cwd.as_deref().and_then(infer_repo)),
-            repo_names_json: env_optional("SULION_REPO_NAMES_JSON"),
             cwd,
             pty_id: env_optional("SULION_PTY_ID"),
             workspace_id: env_optional("SULION_WORKSPACE_ID"),
@@ -111,11 +109,6 @@ impl RetrievalCliEnv {
     fn headers(&self) -> anyhow::Result<HeaderMap> {
         let mut headers = bearer_headers(&self.token, "invalid retrieval token header")?;
         insert_header(&mut headers, "x-sulion-repo", self.repo.as_deref())?;
-        insert_header(
-            &mut headers,
-            "x-sulion-repos",
-            self.repo_names_json.as_deref(),
-        )?;
         insert_header(&mut headers, "x-sulion-cwd", self.cwd.as_deref())?;
         insert_header(&mut headers, "x-sulion-pty-id", self.pty_id.as_deref())?;
         insert_header(
@@ -610,7 +603,6 @@ mod tests {
             base_url: "https://192.168.66.3:30081/retrieval".to_string(),
             token: "token".to_string(),
             repo: None,
-            repo_names_json: None,
             cwd: None,
             pty_id: None,
             workspace_id: None,
@@ -631,25 +623,6 @@ mod tests {
         assert_eq!(
             direct.url("/v1/index/status", &[]).unwrap().path(),
             "/v1/index/status"
-        );
-    }
-
-    #[test]
-    fn forwards_collection_repository_names() {
-        let env = RetrievalCliEnv {
-            base_url: "http://retrieval".to_string(),
-            token: "token".to_string(),
-            repo: Some("alpha".to_string()),
-            repo_names_json: Some(r#"["alpha","beta"]"#.to_string()),
-            cwd: None,
-            pty_id: None,
-            workspace_id: None,
-            agent_session_id: None,
-        };
-        let headers = env.headers().unwrap();
-        assert_eq!(
-            headers.get("x-sulion-repos").unwrap().to_str().unwrap(),
-            r#"["alpha","beta"]"#
         );
     }
 }

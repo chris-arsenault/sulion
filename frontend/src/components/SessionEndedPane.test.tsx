@@ -140,7 +140,7 @@ describe("SessionEndedPane", () => {
       expect(state.deletedIds).toEqual([orphanedSession.id]);
     });
     expect(state.createSessionCalls[0]).toMatchObject({
-      scope_source_session_id: orphanedSession.id,
+      repo: "ahara",
       resume_session_uuid: resumeSessionUuid,
       resume_agent: "claude-code",
     });
@@ -218,7 +218,7 @@ describe("SessionEndedPane", () => {
     });
   });
 
-  it("resumes workspace-bound orphaned sessions in the same workspace", async () => {
+  it("resumes workspace-bound orphaned sessions in a fresh workspace", async () => {
     setup({
       ...orphanedSession,
       working_dir: "/home/dev/workspaces/ahara/ws-1",
@@ -239,7 +239,7 @@ describe("SessionEndedPane", () => {
       expect(state.createSessionCalls.length).toBe(1);
     });
     expect(state.createSessionCalls[0]).toMatchObject({
-      scope_source_session_id: orphanedSession.id,
+      repo: "ahara",
       resume_session_uuid: resumeSessionUuid,
       resume_agent: "claude-code",
     });
@@ -268,12 +268,46 @@ describe("SessionEndedPane", () => {
       expect(state.createSessionCalls.length).toBe(1);
     });
     expect(state.createSessionCalls[0]).toMatchObject({
-      scope_source_session_id: orphanedSession.id,
+      repo: "ahara",
       working_dir: "/home/dev/repos/ahara/packages/api",
       resume_session_uuid: resumeSessionUuid,
       resume_agent: "claude-code",
     });
     expect(state.createSessionCalls[0]).not.toHaveProperty("workspace_id");
+  });
+
+  it("resolves a collection resume from the group's current primary", async () => {
+    setup({
+      ...orphanedSession,
+      working_dir: "/home/dev/repos/ahara/packages/api",
+      meta_repo: {
+        id: "33333333-3333-3333-3333-333333333333",
+        name: "Ahara platform",
+      },
+      workspace: {
+        id: workspaceSessionId,
+        repo_name: "ahara",
+        kind: "main",
+        path: "/home/dev/repos/ahara",
+        branch_name: "main",
+        base_ref: "main",
+        base_sha: "abc123",
+        merge_target: "main",
+      },
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /resume/i }));
+    await waitFor(() => {
+      expect(state.createSessionCalls.length).toBe(1);
+    });
+    expect(state.createSessionCalls[0]).toMatchObject({
+      meta_repo_id: "33333333-3333-3333-3333-333333333333",
+      workspace_mode: "main",
+      resume_session_uuid: resumeSessionUuid,
+      resume_agent: "claude-code",
+    });
+    expect(state.createSessionCalls[0]).not.toHaveProperty("repo");
+    expect(state.createSessionCalls[0]).not.toHaveProperty("working_dir");
   });
 
   it("clicking Delete fires DELETE against the session id", async () => {

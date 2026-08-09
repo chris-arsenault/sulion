@@ -201,12 +201,9 @@ function handleMetaRepoRequest(
     const metaRepo = {
       id: `aaaaaaaa-aaaa-aaaa-aaaa-${String(state.metaRepos.length).padStart(12, "0")}`,
       name: body.name,
-      primary_repo_name: body.primary_repo_name ?? body.members[0] ?? null,
-      position: state.metaRepos.length,
-      revision: 1,
-      members: body.members.map((repoName: string, position: number) => ({
+      primary_repo_name: body.primary_repo_name,
+      members: body.members.map((repoName: string) => ({
         repo_name: repoName,
-        position,
         exists: true,
       })),
       created_at: now,
@@ -215,29 +212,20 @@ function handleMetaRepoRequest(
     state.metaRepos.push(metaRepo);
     return jsonResponse(metaRepo, 201);
   }
-  const match = url.match(/^\/api\/meta-repos\/([^/]+)(\/members)?$/);
-  if (match && (method === "PATCH" || method === "PUT")) {
+  const match = url.match(/^\/api\/meta-repos\/([^/]+)$/);
+  if (match && method === "PUT") {
     const id = decodeURIComponent(match[1]);
     const body = JSON.parse(init!.body as string);
     state.metaRepoCalls.push({ method, id, body });
     const current = state.metaRepos.find((metaRepo) => metaRepo.id === id)!;
-    if (method === "PATCH") {
-      Object.assign(current, {
-        name: body.name ?? current.name,
-        position: body.position ?? current.position,
-        revision: (current.revision as number) + 1,
-      });
-    } else {
-      Object.assign(current, {
-        primary_repo_name: body.primary_repo_name ?? body.members[0] ?? null,
-        members: body.members.map((repoName: string, position: number) => ({
-          repo_name: repoName,
-          position,
-          exists: true,
-        })),
-        revision: (current.revision as number) + 1,
-      });
-    }
+    Object.assign(current, {
+      name: body.name,
+      primary_repo_name: body.primary_repo_name,
+      members: body.members.map((repoName: string) => ({
+        repo_name: repoName,
+        exists: true,
+      })),
+    });
     return jsonResponse(current);
   }
   if (match && method === "DELETE") {
@@ -317,11 +305,9 @@ function metaRepoFixture(overrides: Record<string, unknown> = {}) {
     id: META_REPO_ID,
     name: "Ahara platform",
     primary_repo_name: REPO_ALPHA,
-    position: 0,
-    revision: 1,
     members: [
-      { repo_name: REPO_ALPHA, position: 0, exists: true },
-      { repo_name: "beta", position: 1, exists: true },
+      { repo_name: REPO_ALPHA, exists: true },
+      { repo_name: "beta", exists: true },
     ],
     created_at: "2026-08-09T00:00:00Z",
     updated_at: "2026-08-09T00:00:00Z",
@@ -424,7 +410,7 @@ describe("Sidebar", () => {
     expect(metaGroup?.textContent).toContain("cccccccc");
   });
 
-  it("creates a meta-repository with ordered members and an explicit primary", async () => {
+  it("creates a meta-repository with members and an explicit primary", async () => {
     const state = installFetchMock();
     state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
     state.repos.push({ name: "beta", path: "/tmp/beta" });
@@ -452,6 +438,36 @@ describe("Sidebar", () => {
     });
   });
 
+  it("updates a meta-repository with one atomic request", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.repos.push({ name: "beta", path: "/tmp/beta" });
+    state.repos.push({ name: "gamma", path: "/tmp/gamma" });
+    state.metaRepos.push(metaRepoFixture());
+    setup();
+    const user = userEvent.setup();
+
+    await screen.findByText("Ahara platform");
+    await user.click(screen.getByLabelText("Edit Ahara platform"));
+    const name = screen.getByLabelText("meta-repository name");
+    await user.clear(name);
+    await user.type(name, "Platform tools");
+    await user.click(screen.getByRole("checkbox", { name: "beta" }));
+    await user.click(screen.getByRole("checkbox", { name: "gamma" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(state.metaRepoCalls).toHaveLength(1));
+    expect(state.metaRepoCalls[0]).toEqual({
+      method: "PUT",
+      id: META_REPO_ID,
+      body: {
+        name: "Platform tools",
+        members: [REPO_ALPHA, "gamma"],
+        primary_repo_name: REPO_ALPHA,
+      },
+    });
+  });
+
   it("creates a collection session from a meta-repository", async () => {
     const state = installFetchMock();
     state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
@@ -467,7 +483,7 @@ describe("Sidebar", () => {
     await waitFor(() => expect(state.createSessionCalls).toHaveLength(1));
     expect(state.createSessionCalls[0]).toEqual({
       meta_repo_id: META_REPO_ID,
-      workspace_mode: "isolated",
+      workspace_mode: "main",
     });
   });
 

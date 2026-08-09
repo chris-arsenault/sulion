@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -10,7 +11,7 @@ use crate::db::Pool;
 use crate::ingest::canonical::OperationCategory;
 
 use super::timeline::{
-    load_all_session_events, ProjectionFilters, StoredEvent, TimelineFileTouch,
+    load_all_session_events, FileTouchContext, ProjectionFilters, StoredEvent, TimelineFileTouch,
     TimelineOperationBadge, TimelineResponse, TimelineSubagent, TimelineSummaryResponse,
     TimelineToolPair, TimelineToolResult, TimelineTurn, TimelineTurnSummary,
 };
@@ -19,7 +20,6 @@ mod file_trace;
 mod filters;
 mod write;
 
-use file_trace::load_file_touch_context;
 pub use file_trace::{load_repo_file_trace, RepoFileTraceTouch};
 use filters::apply_projection_filters;
 pub use write::{rebuild_session_projection, rebuild_session_projection_after_insert};
@@ -88,6 +88,43 @@ struct ProjectedTouchRow {
     repo_rel_path: String,
     touch_kind: String,
     is_write: bool,
+}
+
+async fn load_file_touch_context(
+    pool: &Pool,
+    session_uuid: Uuid,
+) -> anyhow::Result<Option<FileTouchContext>> {
+    #[derive(FromRow)]
+    struct ContextRow {
+        repo: Option<String>,
+        working_dir: Option<String>,
+        repo_path: Option<String>,
+    }
+
+    let row: Option<ContextRow> = sqlx::query_as(
+        "SELECT ps.repo, ps.working_dir, r.path AS repo_path \
+           FROM claude_sessions cs \
+           LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
+           LEFT JOIN repos r ON r.name = ps.repo \
+          WHERE cs.session_uuid = $1",
+    )
+    .bind(session_uuid)
+    .fetch_optional(pool)
+    .await
+    .context("load projection file-touch context")?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let (Some(repo_name), Some(working_dir)) = (row.repo, row.working_dir) else {
+        return Ok(None);
+    };
+    let repo_root = row.repo_path.unwrap_or_else(|| working_dir.clone());
+    Ok(Some(FileTouchContext {
+        repo_name,
+        repo_root: PathBuf::from(repo_root),
+        working_dir: PathBuf::from(working_dir),
+    }))
 }
 
 async fn load_projection_source_events(

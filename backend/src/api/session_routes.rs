@@ -22,7 +22,7 @@ use crate::ingest::{
 use crate::node_protocol::NodeRequestKind;
 use crate::node_runtime::{
     AgentRequest, ResourceRequest, SessionCreateRequest, SessionInputRequest,
-    SessionMetaRepoRequest, SessionRepoRequest,
+    SessionMetaRepoRequest,
 };
 use crate::pty::{self, AgentRuntimeMetadata, PtyMetadata};
 use crate::AppState;
@@ -34,7 +34,6 @@ pub(super) struct SessionView {
     working_dir: String,
     workspace: Option<SessionWorkspaceView>,
     meta_repo: Option<SessionMetaRepoView>,
-    repositories: Vec<SessionRepositoryView>,
     state: &'static str,
     created_at: chrono::DateTime<chrono::Utc>,
     ended_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -75,14 +74,6 @@ pub(super) struct SessionWorkspaceView {
 pub(super) struct SessionMetaRepoView {
     id: Uuid,
     name: String,
-}
-
-#[derive(Serialize)]
-pub(super) struct SessionRepositoryView {
-    repo_name: String,
-    workspace_id: Option<Uuid>,
-    role: String,
-    position: i32,
 }
 
 #[derive(Serialize)]
@@ -151,16 +142,6 @@ impl From<PtyMetadata> for SessionView {
                 id: group.id,
                 name: group.name,
             }),
-            repositories: m
-                .repositories
-                .into_iter()
-                .map(|repository| SessionRepositoryView {
-                    repo_name: repository.repo_name,
-                    workspace_id: repository.workspace.map(|workspace| workspace.id),
-                    role: repository.role,
-                    position: repository.position,
-                })
-                .collect(),
             state,
             created_at: m.created_at,
             ended_at: m.ended_at,
@@ -184,8 +165,6 @@ pub(super) struct CreateSessionReq {
     pub(super) repo: Option<String>,
     #[serde(default)]
     pub(super) meta_repo_id: Option<Uuid>,
-    #[serde(default)]
-    pub(super) scope_source_session_id: Option<Uuid>,
     pub(super) working_dir: Option<String>,
     #[serde(default)]
     pub(super) workspace_id: Option<Uuid>,
@@ -226,18 +205,9 @@ pub(super) async fn create_session(
 
 struct ResolvedSessionScope {
     meta_repo: Option<SessionMetaRepoRequest>,
-    members: Vec<SessionRepoRequest>,
+    repo: String,
+    additional_repos: Vec<String>,
     workspace_mode: String,
-    collection: bool,
-}
-
-#[derive(sqlx::FromRow)]
-struct SourceSessionRepoRow {
-    repo_name: String,
-    workspace_id: Option<Uuid>,
-    role: String,
-    position: i32,
-    workspace_kind: Option<String>,
 }
 
 async fn create_session_on_node(
@@ -246,40 +216,25 @@ async fn create_session_on_node(
 ) -> ApiResult<(StatusCode, Json<SessionView>)> {
     let launch = resolve_protocol_launch(&req)?;
     let scope = resolve_session_scope(state, &req).await?;
-    let primary = scope
-        .members
-        .first()
-        .ok_or_else(|| ApiError::BadRequest("session requires a repository".into()))?;
     let working_dir = req
         .working_dir
         .as_deref()
-        .map(|path| protocol_working_dir(&state.repos_root, &primary.repo, path))
+        .map(|path| protocol_working_dir(&state.repos_root, &scope.repo, path))
         .transpose()?;
     let node_id = node_proxy::default_node(state).await?;
-    if scope.collection
-        && !state
-            .node_control
-            .supports_capability(node_id, crate::node_protocol::MULTI_REPO_SESSION_CAPABILITY)
-            .await
-    {
-        return Err(ApiError::Unavailable(
-            "the development node must finish updating before it can launch a meta-repository session"
-                .into(),
-        ));
-    }
     let session_id = Uuid::new_v4();
     let request = SessionCreateRequest {
         session_id,
-        allocated_workspace_id: primary.allocated_workspace_id,
-        existing_workspace_id: primary.existing_workspace_id,
-        repo: primary.repo.clone(),
+        allocated_workspace_id: Uuid::new_v4(),
+        existing_workspace_id: req.workspace_id,
+        repo: scope.repo,
         working_dir,
         workspace_mode: scope.workspace_mode,
         cols: req.cols.unwrap_or(120),
         rows: req.rows.unwrap_or(32),
         launch,
         meta_repo: scope.meta_repo,
-        additional_repos: scope.members.into_iter().skip(1).collect(),
+        additional_repos: scope.additional_repos,
     };
     let result = node_proxy::request(
         state,
@@ -296,17 +251,11 @@ async fn resolve_session_scope(
     state: &AppState,
     req: &CreateSessionReq,
 ) -> ApiResult<ResolvedSessionScope> {
-    let selector_count = usize::from(req.repo.is_some())
-        + usize::from(req.meta_repo_id.is_some())
-        + usize::from(req.scope_source_session_id.is_some());
+    let selector_count = usize::from(req.repo.is_some()) + usize::from(req.meta_repo_id.is_some());
     if selector_count != 1 {
         return Err(ApiError::BadRequest(
-            "supply exactly one of repo, meta_repo_id, or scope_source_session_id".into(),
+            "supply exactly one of repo or meta_repo_id".into(),
         ));
-    }
-
-    if let Some(source_id) = req.scope_source_session_id {
-        return resolve_source_session_scope(state, req, source_id).await;
     }
 
     let workspace_mode = requested_workspace_mode(req).to_string();
@@ -323,95 +272,9 @@ async fn resolve_session_scope(
         .ok_or_else(|| ApiError::BadRequest("repo must not be empty".into()))?;
     Ok(ResolvedSessionScope {
         meta_repo: None,
-        members: vec![SessionRepoRequest {
-            repo: repo.to_string(),
-            allocated_workspace_id: Uuid::new_v4(),
-            existing_workspace_id: req.workspace_id,
-            position: 0,
-        }],
+        repo: repo.to_string(),
+        additional_repos: Vec::new(),
         workspace_mode,
-        collection: false,
-    })
-}
-
-async fn resolve_source_session_scope(
-    state: &AppState,
-    req: &CreateSessionReq,
-    source_id: Uuid,
-) -> ApiResult<ResolvedSessionScope> {
-    if req.workspace_id.is_some() {
-        return Err(ApiError::BadRequest(
-            "workspace_id cannot be combined with scope_source_session_id".into(),
-        ));
-    }
-    let source: Option<(Option<Uuid>, Option<String>)> = sqlx::query_as(
-        "SELECT meta_repo_id, meta_repo_name FROM pty_sessions \
-          WHERE id = $1 AND state <> 'deleted'",
-    )
-    .bind(source_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some((meta_repo_id, meta_repo_name)) = source else {
-        return Err(ApiError::NotFound);
-    };
-    let rows = sqlx::query_as::<_, SourceSessionRepoRow>(
-        "SELECT psr.repo_name, psr.workspace_id, psr.role, psr.position, \
-                ws.kind AS workspace_kind \
-           FROM pty_session_repos psr \
-           LEFT JOIN workspaces ws ON ws.id = psr.workspace_id \
-          WHERE psr.pty_session_id = $1 \
-          ORDER BY psr.position",
-    )
-    .bind(source_id)
-    .fetch_all(&state.pool)
-    .await?;
-    if rows.is_empty() || rows.first().is_none_or(|row| row.role != "primary") {
-        return Err(ApiError::BadRequest(
-            "source session has no reusable repository scope".into(),
-        ));
-    }
-    let workspace_mode = source_workspace_mode(&rows)?;
-    if req
-        .workspace_mode
-        .as_deref()
-        .is_some_and(|requested| requested != workspace_mode)
-    {
-        return Err(ApiError::BadRequest(
-            "workspace_mode must match the source session".into(),
-        ));
-    }
-    if req.working_dir.is_some() && workspace_mode != "main" {
-        return Err(ApiError::BadRequest(
-            "working_dir is only supported with workspace_mode=main".into(),
-        ));
-    }
-    let members = rows
-        .into_iter()
-        .map(|row| {
-            let workspace_id = row.workspace_id.ok_or_else(|| {
-                ApiError::BadRequest(format!(
-                    "source session repository {} has no workspace",
-                    row.repo_name
-                ))
-            })?;
-            Ok(SessionRepoRequest {
-                repo: row.repo_name,
-                allocated_workspace_id: Uuid::new_v4(),
-                existing_workspace_id: Some(workspace_id),
-                position: row.position,
-            })
-        })
-        .collect::<ApiResult<Vec<_>>>()?;
-    let meta_repo = meta_repo_id.map(|id| SessionMetaRepoRequest {
-        id,
-        name: meta_repo_name.unwrap_or_else(|| "Deleted meta-repository".into()),
-    });
-    let collection = meta_repo.is_some() || members.len() > 1;
-    Ok(ResolvedSessionScope {
-        meta_repo,
-        members,
-        workspace_mode: workspace_mode.into(),
-        collection,
     })
 }
 
@@ -424,6 +287,12 @@ async fn resolve_meta_repo_scope(
     if req.workspace_id.is_some() {
         return Err(ApiError::BadRequest(
             "workspace_id cannot be combined with meta_repo_id".into(),
+        ));
+    }
+    if workspace_mode != "main" {
+        return Err(ApiError::BadRequest(
+            "meta-repository sessions use canonical repositories and require workspace_mode=main"
+                .into(),
         ));
     }
     let group = crate::meta_repos::get(&state.pool, meta_repo_id).await?;
@@ -444,54 +313,22 @@ async fn resolve_meta_repo_scope(
             missing.join(", ")
         )));
     }
-    let primary = group
-        .primary_repo_name
-        .as_deref()
-        .ok_or_else(|| ApiError::BadRequest("meta-repository has no primary repository".into()))?;
-    let mut ordered = group.members;
-    ordered.sort_by_key(|member| (member.repo_name != primary, member.position));
-    let members = ordered
+    let primary = group.primary_repo_name;
+    let additional_repos = group
+        .members
         .into_iter()
-        .enumerate()
-        .map(|(position, member)| SessionRepoRequest {
-            repo: member.repo_name,
-            allocated_workspace_id: Uuid::new_v4(),
-            existing_workspace_id: None,
-            position: position as i32,
-        })
+        .map(|member| member.repo_name)
+        .filter(|repo| repo != &primary)
         .collect();
     Ok(ResolvedSessionScope {
         meta_repo: Some(SessionMetaRepoRequest {
             id: group.id,
             name: group.name,
         }),
-        members,
+        repo: primary,
+        additional_repos,
         workspace_mode,
-        collection: true,
     })
-}
-
-fn source_workspace_mode(rows: &[SourceSessionRepoRow]) -> ApiResult<&'static str> {
-    let mut mode = None;
-    for row in rows {
-        let current = match row.workspace_kind.as_deref() {
-            Some("main") => "main",
-            Some("worktree") => "isolated",
-            _ => {
-                return Err(ApiError::BadRequest(format!(
-                    "source session repository {} has no active workspace",
-                    row.repo_name
-                )))
-            }
-        };
-        if mode.is_some_and(|mode| mode != current) {
-            return Err(ApiError::BadRequest(
-                "source session mixes workspace modes".into(),
-            ));
-        }
-        mode = Some(current);
-    }
-    mode.ok_or_else(|| ApiError::BadRequest("source session has no workspaces".into()))
 }
 
 #[derive(Deserialize)]

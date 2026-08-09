@@ -73,8 +73,6 @@ export interface SessionView {
   workspace?: SessionWorkspaceView | null;
   /** Collection identity when this PTY was launched for a meta-repository. */
   meta_repo?: SessionMetaRepoView | null;
-  /** Immutable repository/workspace scope captured when the PTY launched. */
-  repositories?: SessionRepositoryView[];
   state: SessionState;
   created_at: string;
   ended_at: string | null;
@@ -115,13 +113,6 @@ export interface SessionView {
 export interface SessionMetaRepoView {
   id: string;
   name: string;
-}
-
-export interface SessionRepositoryView {
-  repo_name: string;
-  workspace_id: string | null;
-  role: "primary" | "additional";
-  position: number;
 }
 
 export interface SessionWorkspaceView {
@@ -165,7 +156,6 @@ export interface UpdateSessionRequest {
 export interface CreateSessionRequest {
   repo?: string;
   meta_repo_id?: string;
-  scope_source_session_id?: string;
   working_dir?: string;
   workspace_id?: string;
   workspace_mode?: "main" | "isolated";
@@ -189,37 +179,22 @@ export interface RepoView {
 
 export interface MetaRepoMemberView {
   repo_name: string;
-  position: number;
   exists: boolean;
 }
 
 export interface MetaRepoView {
   id: string;
   name: string;
-  primary_repo_name: string | null;
-  position: number;
-  revision: number;
+  primary_repo_name: string;
   members: MetaRepoMemberView[];
   created_at: string;
   updated_at: string;
 }
 
-export interface CreateMetaRepoRequest {
+export interface SaveMetaRepoRequest {
   name: string;
   members: string[];
-  primary_repo_name?: string;
-}
-
-export interface PatchMetaRepoRequest {
-  expected_revision: number;
-  name?: string;
-  position?: number;
-}
-
-export interface ReplaceMetaRepoMembersRequest {
-  expected_revision: number;
-  members: string[];
-  primary_repo_name?: string;
+  primary_repo_name: string;
 }
 
 export type NodeConnectionState =

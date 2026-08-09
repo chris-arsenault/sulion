@@ -11,7 +11,7 @@ mod store;
 pub mod tls;
 mod transport;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use base64::Engine;
@@ -35,8 +35,6 @@ pub use model::{
 };
 pub use pin::{ControlPin, PinOutcome};
 pub use transport::{admin_router, public_router};
-
-pub const MULTI_REPO_SESSION_CAPABILITY: &str = "multi_repo_session_v1";
 
 use model::HelloAck;
 use store::NodeStore;
@@ -77,9 +75,6 @@ pub struct NodeControl {
     /// Latest devenv link report from each connected node, same lifecycle as
     /// `host_stats`: current only, dropped on disconnect.
     devenv_status: Arc<RwLock<HashMap<Uuid, NodeDevenvStatus>>>,
-    /// Features reported by the currently connected node. An absent heartbeat
-    /// field means an older node with no additive capabilities.
-    capabilities: Arc<RwLock<HashMap<Uuid, HashSet<String>>>>,
     heartbeat_interval_seconds: u64,
     heartbeat_timeout_seconds: u64,
     /// Runtime configuration handed to a node once it authenticates. Unset
@@ -187,8 +182,6 @@ struct HeartbeatPayload {
     host: Option<NodeHostStats>,
     #[serde(default)]
     devenv: Option<NodeDevenvStatus>,
-    #[serde(default)]
-    capabilities: Vec<String>,
 }
 
 impl NodeControl {
@@ -212,7 +205,6 @@ impl NodeControl {
             terminal_streams: Arc::new(RwLock::new(HashMap::new())),
             host_stats: Arc::new(RwLock::new(HashMap::new())),
             devenv_status: Arc::new(RwLock::new(HashMap::new())),
-            capabilities: Arc::new(RwLock::new(HashMap::new())),
             heartbeat_interval_seconds,
             heartbeat_timeout_seconds,
             delivered_config: std::sync::OnceLock::new(),
@@ -306,14 +298,6 @@ impl NodeControl {
         self.active.read().await.contains_key(&node_id)
     }
 
-    pub async fn supports_capability(&self, node_id: Uuid, capability: &str) -> bool {
-        self.capabilities
-            .read()
-            .await
-            .get(&node_id)
-            .is_some_and(|reported| reported.contains(capability))
-    }
-
     pub(crate) fn challenge(&self) -> Result<model::ControlChallenge, NodeProtocolError> {
         Ok(model::ControlChallenge {
             challenge_id: Uuid::new_v4(),
@@ -380,9 +364,7 @@ impl NodeControl {
         });
         self.register(hello, proof).await
     }
-}
 
-impl NodeControl {
     pub(crate) async fn register_internal(
         &self,
         hello: NodeHello,
@@ -469,10 +451,6 @@ impl NodeControl {
                         .await
                         .insert(envelope.node_id, devenv);
                 }
-                self.capabilities
-                    .write()
-                    .await
-                    .insert(envelope.node_id, payload.capabilities.into_iter().collect());
             }
             "request.result" => {
                 let request_id = envelope.request_id.ok_or_else(|| {
@@ -524,7 +502,6 @@ impl NodeControl {
             active.remove(&node_id);
             self.host_stats.write().await.remove(&node_id);
             self.devenv_status.write().await.remove(&node_id);
-            self.capabilities.write().await.remove(&node_id);
         }
         drop(active);
         let streams = self
@@ -548,7 +525,6 @@ impl NodeControl {
         if let Some(connection) = self.active.write().await.remove(&node_id) {
             self.host_stats.write().await.remove(&node_id);
             self.devenv_status.write().await.remove(&node_id);
-            self.capabilities.write().await.remove(&node_id);
             let _ = connection.cancel.send(true);
         }
     }
@@ -621,7 +597,6 @@ impl NodeControl {
                 .is_some_and(|connection| connection.connection_id == *connection_id)
             {
                 if let Some(connection) = active.remove(node_id) {
-                    self.capabilities.write().await.remove(node_id);
                     let _ = connection.cancel.send(true);
                 }
             }
@@ -822,31 +797,6 @@ pub fn heartbeat_envelope(
     envelope
 }
 
-pub fn runtime_heartbeat_envelope(
-    node_id: Uuid,
-    boot_id: Uuid,
-    live_session_ids: Vec<Uuid>,
-    inventory_complete: bool,
-    host: Option<NodeHostStats>,
-    devenv: Option<NodeDevenvStatus>,
-) -> WireEnvelope {
-    let mut envelope = heartbeat_envelope(
-        node_id,
-        boot_id,
-        live_session_ids,
-        inventory_complete,
-        host,
-        devenv,
-    );
-    if let Some(payload) = envelope.payload.as_object_mut() {
-        payload.insert(
-            "capabilities".into(),
-            json!([MULTI_REPO_SESSION_CAPABILITY]),
-        );
-    }
-    envelope
-}
-
 #[cfg(test)]
 mod tests {
     use super::{random_url_token, HeartbeatPayload};
@@ -872,7 +822,6 @@ mod tests {
         .expect("a heartbeat without the newer field still parses");
         assert!(older.host.is_none());
         assert!(older.devenv.is_none());
-        assert!(older.capabilities.is_empty());
 
         let newer: HeartbeatPayload = serde_json::from_value(serde_json::json!({
             "live_session_ids": [],

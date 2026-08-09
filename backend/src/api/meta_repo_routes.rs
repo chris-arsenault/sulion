@@ -6,9 +6,7 @@ use axum::Json;
 use uuid::Uuid;
 
 use super::routes::{ApiError, ApiResult};
-use crate::meta_repos::{
-    CreateMetaRepoInput, MetaRepoError, MetaRepoView, PatchMetaRepoInput, ReplaceMembersInput,
-};
+use crate::meta_repos::{MetaRepoError, MetaRepoView, SaveMetaRepoInput};
 use crate::AppState;
 
 impl From<MetaRepoError> for ApiError {
@@ -23,29 +21,19 @@ impl From<MetaRepoError> for ApiError {
 
 pub(super) async fn create_meta_repo(
     State(state): State<Arc<AppState>>,
-    Json(input): Json<CreateMetaRepoInput>,
+    Json(input): Json<SaveMetaRepoInput>,
 ) -> ApiResult<(StatusCode, Json<MetaRepoView>)> {
     let created = crate::meta_repos::create(&state.pool, input).await?;
     Ok((StatusCode::CREATED, Json(created)))
 }
 
-pub(super) async fn patch_meta_repo(
+pub(super) async fn update_meta_repo(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
-    Json(input): Json<PatchMetaRepoInput>,
+    Json(input): Json<SaveMetaRepoInput>,
 ) -> ApiResult<Json<MetaRepoView>> {
     Ok(Json(
-        crate::meta_repos::patch(&state.pool, id, input).await?,
-    ))
-}
-
-pub(super) async fn replace_meta_repo_members(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<Uuid>,
-    Json(input): Json<ReplaceMembersInput>,
-) -> ApiResult<Json<MetaRepoView>> {
-    Ok(Json(
-        crate::meta_repos::replace_members(&state.pool, id, input).await?,
+        crate::meta_repos::update(&state.pool, id, input).await?,
     ))
 }
 

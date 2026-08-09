@@ -103,7 +103,7 @@ test("supports text and image paste-as-file across a websocket reconnect", async
 });
 
 test("uploads a file larger than nginx's default body limit", async ({ request }) => {
-  const payload = Buffer.alloc(1536 * 1024, 0x20);
+  const payload = Buffer.alloc(2 * 1024 * 1024, 0x20);
   payload.write("%PDF-1.7\n", 0, "ascii");
 
   const upload = await request.post("/api/repos/atlas/upload?path=.upload-test", {

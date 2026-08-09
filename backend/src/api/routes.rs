@@ -76,11 +76,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/meta-repos", post(meta_repo_routes::create_meta_repo))
         .route(
             "/api/meta-repos/:id",
-            patch(meta_repo_routes::patch_meta_repo).delete(meta_repo_routes::delete_meta_repo),
-        )
-        .route(
-            "/api/meta-repos/:id/members",
-            axum::routing::put(meta_repo_routes::replace_meta_repo_members),
+            axum::routing::put(meta_repo_routes::update_meta_repo)
+                .delete(meta_repo_routes::delete_meta_repo),
         )
         .route(
             "/api/repos/:name",

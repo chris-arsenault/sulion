@@ -42,20 +42,24 @@ node-only NixOS runtime. `deploy/compose.truenas-standalone.yaml` is the
 single-file Komodo entry point for combined TrueNAS host operation; selecting
 it requires changing only `truenas_compose_path` in `platform.yml`.
 
-## PTY Postgres
+## Database access in a Sulion PTY
 
-In a Sulion PTY, use one managed workspace Postgres for repo tests:
+Do not wrap repository tests in `sulion postgres`. Use the repository's test
+harness:
 
 ```bash
-sulion postgres -- cargo test
+make test-rust-integration
 ```
 
-`sulion postgres -- <command>` creates or reuses a workspace-scoped Postgres 16
-container, injects `DATABASE_URL`, `TEST_DATABASE_URL`, and `PG*` variables into
-the command, and leaves the container running for the next test run. Use
-`sulion postgres --restart -- <command>` for a clean database, or
-`sulion postgres --temp -- <command>` for a one-off database removed after the
-command exits.
+When `SULION_DOCKER_MODE=direct`, the PTY has direct Docker access and the
+runner is absent by design. `sulion postgres` is unavailable in that mode. The
+integration harness starts its own isolated Postgres container through the
+direct Docker CLI when `SULION_TEST_DB` is unset.
+
+Direct access to the deployed database is a separate operational path. Run an
+authorized `psql` command through `with-cred --` and consume the injected
+`SULION_DB_USER` and `SULION_DB_PASSWORD` values against the documented LAN
+endpoint. Never point integration tests at the deployed database.
 
 ## Backend integration test contract
 

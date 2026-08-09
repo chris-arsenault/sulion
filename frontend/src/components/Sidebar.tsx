@@ -62,7 +62,7 @@ type NewSessionFormValue = {
 type MetaRepoFormValue = {
   name: string;
   members: string[];
-  primary_repo_name?: string;
+  primary_repo_name: string;
 };
 
 export function Sidebar() {
@@ -658,7 +658,7 @@ export function Sidebar() {
               <ul className="sidebar__tree sidebar__tree--nested">
                 {metaRepo.members
                   .slice()
-                  .sort((a, b) => a.position - b.position)
+                  .sort((a, b) => a.repo_name.localeCompare(b.repo_name))
                   .map((member) => {
                     const group = groupedByName.get(member.repo_name);
                     return group ? (
@@ -1037,6 +1037,7 @@ function MetaRepoGroup({
               {newSessionOpen && (
                 <NewSessionForm
                   repoName={metaRepo.primary_repo_name ?? metaRepo.name}
+                  mainOnly
                   onSubmit={submitNewSession}
                   onCancel={cancelNewSession}
                 />
@@ -2650,7 +2651,7 @@ function MetaRepoForm({
     () =>
       metaRepo?.members
         .slice()
-        .sort((a, b) => a.position - b.position)
+        .sort((a, b) => a.repo_name.localeCompare(b.repo_name))
         .map((member) => member.repo_name) ?? [],
     [metaRepo],
   );
@@ -2660,18 +2661,8 @@ function MetaRepoForm({
     metaRepo?.primary_repo_name ?? initialMembers[0] ?? "",
   );
   const availableRepos = useMemo(() => {
-    const byName = new Map(repos.map((repo) => [repo.name, repo]));
-    const selected = members
-      .map((member) => byName.get(member))
-      .filter((repo): repo is RepoView => Boolean(repo));
-    const selectedNames = new Set(members);
-    return [
-      ...selected,
-      ...repos
-        .filter((repo) => !selectedNames.has(repo.name))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    ];
-  }, [members, repos]);
+    return repos.slice().sort((a, b) => a.name.localeCompare(b.name));
+  }, [repos]);
   const submit = useCallback(
     (event: FormEvent) => {
       event.preventDefault();
@@ -2695,7 +2686,7 @@ function MetaRepoForm({
         if (selected) {
           if (current.includes(repoName)) return current;
           if (current.length === 0) setPrimary(repoName);
-          return [...current, repoName];
+          return [...current, repoName].sort((a, b) => a.localeCompare(b));
         }
         const next = current.filter((member) => member !== repoName);
         setPrimary((currentPrimary) =>
@@ -2706,16 +2697,6 @@ function MetaRepoForm({
     },
     [],
   );
-  const moveMember = useCallback((repoName: string, delta: number) => {
-    setMembers((current) => {
-      const from = current.indexOf(repoName);
-      const to = from + delta;
-      if (from < 0 || to < 0 || to >= current.length) return current;
-      const next = [...current];
-      [next[from], next[to]] = [next[to], next[from]];
-      return next;
-    });
-  }, []);
   const selectPrimary = useCallback((repoName: string) => setPrimary(repoName), []);
   const cancelOnEscape = useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -2739,20 +2720,17 @@ function MetaRepoForm({
         autoFocus
       />
       <fieldset className="sidebar__meta-members">
-        <legend>Repositories, in launch order</legend>
+        <legend>Repositories</legend>
         {availableRepos.map((repo) => {
-          const position = members.indexOf(repo.name);
+          const selected = members.includes(repo.name);
           return (
             <MetaRepoMemberRow
               key={repo.name}
               repoName={repo.name}
-              selected={position >= 0}
+              selected={selected}
               primary={primary === repo.name}
-              canMoveUp={position > 0}
-              canMoveDown={position >= 0 && position < members.length - 1}
               onToggle={toggleMember}
               onPrimary={selectPrimary}
-              onMove={moveMember}
             />
           );
         })}
@@ -2773,20 +2751,14 @@ function MetaRepoMemberRow({
   repoName,
   selected,
   primary,
-  canMoveUp,
-  canMoveDown,
   onToggle,
   onPrimary,
-  onMove,
 }: {
   repoName: string;
   selected: boolean;
   primary: boolean;
-  canMoveUp: boolean;
-  canMoveDown: boolean;
   onToggle: (repoName: string, selected: boolean) => void;
   onPrimary: (repoName: string) => void;
-  onMove: (repoName: string, delta: number) => void;
 }) {
   const toggle = useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) =>
@@ -2797,8 +2769,6 @@ function MetaRepoMemberRow({
     () => onPrimary(repoName),
     [onPrimary, repoName],
   );
-  const moveUp = useCallback(() => onMove(repoName, -1), [onMove, repoName]);
-  const moveDown = useCallback(() => onMove(repoName, 1), [onMove, repoName]);
   return (
     <div className="sidebar__meta-member">
       <label>
@@ -2817,22 +2787,6 @@ function MetaRepoMemberRow({
             />
             primary
           </label>
-          <button
-            type="button"
-            onClick={moveUp}
-            disabled={!canMoveUp}
-            aria-label={`Move ${repoName} up`}
-          >
-            ↑
-          </button>
-          <button
-            type="button"
-            onClick={moveDown}
-            disabled={!canMoveDown}
-            aria-label={`Move ${repoName} down`}
-          >
-            ↓
-          </button>
         </div>
       )}
     </div>
@@ -2901,17 +2855,19 @@ function NewRepoForm({
 
 function NewSessionForm({
   repoName,
+  mainOnly = false,
   onSubmit,
   onCancel,
 }: {
   repoName: string;
+  mainOnly?: boolean;
   onSubmit: (form: NewSessionFormValue) => void;
   onCancel: () => void;
 }) {
   const [workingDir, setWorkingDir] = useState("");
   const [launchAgent, setLaunchAgent] = useState<AgentLaunchType | "">("");
   const [workspaceMode, setWorkspaceMode] =
-    useState<NewSessionFormValue["workspace_mode"]>("isolated");
+    useState<NewSessionFormValue["workspace_mode"]>(mainOnly ? "main" : "isolated");
   const submit = useCallback(
     (e: FormEvent) => {
       e.preventDefault();
@@ -2959,14 +2915,16 @@ function NewSessionForm({
         autoFocus
         aria-label="working directory"
       />
-      <select
-        value={workspaceMode}
-        onChange={onWorkspaceModeChange}
-        aria-label="workspace mode"
-      >
-        <option value="isolated">Isolated worktree</option>
-        <option value="main">Main working tree</option>
-      </select>
+      {!mainOnly && (
+        <select
+          value={workspaceMode}
+          onChange={onWorkspaceModeChange}
+          aria-label="workspace mode"
+        >
+          <option value="isolated">Isolated worktree</option>
+          <option value="main">Main working tree</option>
+        </select>
+      )}
       <select
         value={launchAgent}
         onChange={onAgentChange}

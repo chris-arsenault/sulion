@@ -49,7 +49,7 @@ test("creates single-line and multiline secret values, redeems them, and revokes
   await page.getByPlaceholder("ANTHROPIC_API_KEY").fill("E2E_SECRET_VALUE");
   await page.getByPlaceholder("value").fill(secretValue);
   await page.getByRole("button", { name: "Add pair" }).click();
-  await page.locator('input[value="NEW_KEY_1"]').fill("SSH_PRIVATE_KEY");
+  await page.getByDisplayValue("NEW_KEY_1").fill("SSH_PRIVATE_KEY");
   await page.getByPlaceholder("value").last().fill(sshPrivateKey);
   await page.getByRole("button", { name: "Save" }).click();
 

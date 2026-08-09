@@ -19,7 +19,7 @@ use super::model::{
 };
 use super::pin::{ControlPin, PinOutcome};
 use super::{
-    runtime_heartbeat_envelope, NodeHello, NodeProtocolError, WireEnvelope, NODE_PROTOCOL_VERSION,
+    heartbeat_envelope, NodeHello, NodeProtocolError, WireEnvelope, NODE_PROTOCOL_VERSION,
 };
 use crate::node_runtime::NodeRuntime;
 
@@ -387,22 +387,10 @@ async fn connect_once(
         acknowledgment.heartbeat_interval_secs.max(1),
     ));
     heartbeat.tick().await;
-    send_node_envelope(
-        &mut sink,
-        runtime_heartbeat_envelope(
-            runtime.node_id(),
-            runtime.boot_id(),
-            runtime.live_session_ids().await,
-            true,
-            Some(runtime.host_stats().await),
-            runtime.devenv_status().await,
-        ),
-    )
-    .await?;
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
-                let heartbeat = runtime_heartbeat_envelope(
+                let heartbeat = heartbeat_envelope(
                     runtime.node_id(),
                     runtime.boot_id(),
                     runtime.live_session_ids().await,

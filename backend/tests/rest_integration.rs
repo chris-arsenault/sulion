@@ -30,7 +30,7 @@ async fn fresh_pool() -> db::Pool {
     let pool = db::connect(&url).await.expect("connect");
     db::run_migrations(&pool).await.expect("migrate");
     sqlx::query(
-        "TRUNCATE meta_repo_members, meta_repos, pty_session_repos, \
+        "TRUNCATE meta_repo_members, meta_repos, \
          retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, \
          plan_events, plan_attachments, plan_phases, plans, session_activity_state, \
          events, ingester_state, claude_sessions, pty_sessions, repos, \
@@ -52,16 +52,6 @@ async fn insert_test_pty(pool: &db::Pool, repo: &str, working_dir: &Path) -> Uui
     .bind(id)
     .bind(repo)
     .bind(working_dir.to_string_lossy().as_ref())
-    .execute(pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO pty_session_repos \
-            (pty_session_id, repo_name, workspace_id, role, position) \
-         VALUES ($1, $2, NULL, 'primary', 0)",
-    )
-    .bind(id)
-    .bind(repo)
     .execute(pool)
     .await
     .unwrap();
@@ -300,26 +290,21 @@ async fn meta_repo_crud_and_repo_lifecycle_stay_consistent() {
     let duplicate = h
         .client
         .post(format!("{}/api/meta-repos", h.base))
-        .json(&json!({ "name": "Other", "members": ["beta"] }))
+        .json(&json!({
+            "name": "Other",
+            "members": ["beta"],
+            "primary_repo_name": "beta"
+        }))
         .send()
         .await
         .unwrap();
     assert_eq!(duplicate.status(), 400);
 
-    let stale = h
-        .client
-        .patch(format!("{}/api/meta-repos/{id}", h.base))
-        .json(&json!({ "expected_revision": 0, "name": "Stale" }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(stale.status(), 400);
-
     let response = h
         .client
-        .put(format!("{}/api/meta-repos/{id}/members", h.base))
+        .put(format!("{}/api/meta-repos/{id}", h.base))
         .json(&json!({
-            "expected_revision": created["revision"],
+            "name": "Platform tools",
             "members": ["alpha", "gamma"],
             "primary_repo_name": "alpha"
         }))
@@ -328,7 +313,7 @@ async fn meta_repo_crud_and_repo_lifecycle_stay_consistent() {
         .unwrap();
     assert_eq!(response.status(), 200);
     let changed: serde_json::Value = response.json().await.unwrap();
-    assert_eq!(changed["revision"], 2);
+    assert_eq!(changed["name"], "Platform tools");
 
     let response = h
         .client
@@ -371,7 +356,6 @@ async fn meta_repo_crud_and_repo_lifecycle_stay_consistent() {
     let group = &state["meta_repos"][0];
     assert_eq!(group["primary_repo_name"], "gamma");
     assert_eq!(group["members"].as_array().unwrap().len(), 1);
-    assert_eq!(group["members"][0]["position"], 0);
 
     let response = h
         .client
@@ -916,22 +900,7 @@ async fn timeline_returns_projected_turns() {
     let h = Harness::new().await;
 
     std::fs::create_dir_all(h.repos_root().join("r")).unwrap();
-    std::fs::create_dir_all(h.repos_root().join("secondary")).unwrap();
     let pty_id = insert_test_pty(&h.state.pool, "r", &h.repos_root().join("r")).await;
-    sqlx::query("INSERT INTO repos (name, path) VALUES ('secondary', $1)")
-        .bind(h.repos_root().join("secondary").to_string_lossy().as_ref())
-        .execute(&h.state.pool)
-        .await
-        .unwrap();
-    sqlx::query(
-        "INSERT INTO pty_session_repos \
-            (pty_session_id, repo_name, workspace_id, role, position) \
-         VALUES ($1, 'secondary', NULL, 'additional', 1)",
-    )
-    .bind(pty_id)
-    .execute(&h.state.pool)
-    .await
-    .unwrap();
 
     let session_uuid = Uuid::new_v4();
     sulion::correlate::apply(
@@ -1002,20 +971,6 @@ async fn timeline_returns_projected_turns() {
     .execute(&h.state.pool)
     .await
     .unwrap();
-    let secondary_file = h.repos_root().join("secondary/src/service.rs");
-    sqlx::query(
-        "UPDATE event_blocks SET tool_input = $2 \
-          WHERE session_uuid = $1 AND byte_offset = 120 AND ord = 1",
-    )
-    .bind(session_uuid)
-    .bind(json!({
-        "path": "src/lib.rs",
-        "paths": [secondary_file.to_string_lossy()],
-    }))
-    .execute(&h.state.pool)
-    .await
-    .unwrap();
-
     sulion::ingest::rebuild_session_projection(&h.state.pool, session_uuid)
         .await
         .unwrap();
@@ -1095,14 +1050,6 @@ async fn timeline_returns_projected_turns() {
     assert_eq!(
         turn["tool_pairs"][0]["file_touches"][0]["path"],
         "src/lib.rs"
-    );
-    assert_eq!(
-        turn["tool_pairs"][0]["file_touches"][1]["repo"],
-        "secondary"
-    );
-    assert_eq!(
-        turn["tool_pairs"][0]["file_touches"][1]["path"],
-        "src/service.rs"
     );
     assert_eq!(turn["chunks"][0]["kind"], "assistant");
     assert_eq!(turn["chunks"][1]["kind"], "tool");

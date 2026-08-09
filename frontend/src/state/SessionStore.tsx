@@ -12,7 +12,6 @@ import {
   deleteWorkspace as apiDeleteWorkspace,
   getAppState,
   renameRepo as apiRenameRepo,
-  replaceMetaRepoMembers as apiReplaceMetaRepoMembers,
   updateMetaRepo as apiUpdateMetaRepo,
   updateSession as apiUpdateSession,
   upgradeSession as apiUpgradeSession,
@@ -46,7 +45,7 @@ type RepoExpansionMap = Record<string, boolean>;
 export interface SaveMetaRepoInput {
   name: string;
   members: string[];
-  primary_repo_name?: string;
+  primary_repo_name: string;
 }
 
 export interface SessionStore {
@@ -277,28 +276,11 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
   async saveMetaRepo(id, req) {
     const current = get().metaRepos.find((metaRepo) => metaRepo.id === id);
     if (!current) throw new Error("meta-repository no longer exists");
-
-    let saved = current;
-    if (req.name !== current.name) {
-      saved = await apiUpdateMetaRepo(id, {
-        expected_revision: saved.revision,
-        name: req.name,
-      });
-    }
-
-    const currentMembers = current.members
-      .slice()
-      .sort((a, b) => a.position - b.position)
-      .map((member) => member.repo_name);
-    const membersChanged = !sameJson(currentMembers, req.members);
-    const primaryChanged = current.primary_repo_name !== req.primary_repo_name;
-    if (membersChanged || primaryChanged) {
-      saved = await apiReplaceMetaRepoMembers(id, {
-        expected_revision: saved.revision,
-        members: req.members,
-        primary_repo_name: req.primary_repo_name,
-      });
-    }
+    const saved = await apiUpdateMetaRepo(id, {
+      name: req.name,
+      members: req.members,
+      primary_repo_name: req.primary_repo_name,
+    });
 
     set((state) => ({
       metaRepos: state.metaRepos
@@ -359,16 +341,7 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
                       }
                     : session.workspace,
               }
-            : session.repositories?.some((repo) => repo.repo_name === name)
-              ? {
-                  ...session,
-                  repositories: session.repositories.map((repo) =>
-                    repo.repo_name === name
-                      ? { ...repo, repo_name: renamed.name }
-                      : repo,
-                  ),
-                }
-              : session,
+            : session,
         ),
         metaRepos: state.metaRepos.map((metaRepo) => ({
           ...metaRepo,
@@ -567,7 +540,7 @@ function saveExpansionMap(storageKey: string, map: RepoExpansionMap) {
 }
 
 function metaRepoCompare(a: MetaRepoView, b: MetaRepoView): number {
-  return a.position - b.position || a.name.localeCompare(b.name);
+  return a.name.localeCompare(b.name);
 }
 
 function migrateRepoExpansion(

@@ -412,7 +412,7 @@ describe("MonitorPane", () => {
 
     await waitFor(() => expect(posts.length).toBe(1));
     expect(JSON.parse(posts[0]!)).toMatchObject({
-      scope_source_session_id: "sess-gone",
+      repo: "alpha",
       resume_session_uuid: AGENT_SESSION_UUID,
       resume_agent: "claude-code",
     });

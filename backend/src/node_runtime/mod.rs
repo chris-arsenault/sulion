@@ -19,12 +19,12 @@ use crate::node_protocol::{
     NodeRequestKind, RequestResultPayload, RequestResultStatus, TerminalBytesPayload, WireEnvelope,
 };
 use crate::pty::{
-    PtyManager, PtyMetaRepoMetadata, PtyMetadata, PtySessionRepoMetadata, PtyWorkspaceMetadata,
+    PtyManager, PtyMetaRepoMetadata, PtyMetadata, PtyRepoRootMetadata, PtyWorkspaceMetadata,
     SpawnParams,
 };
 use crate::repo_lifecycle::RepoLifecycleGate;
 use crate::repo_state::RepoStateManager;
-use crate::worktree::{DeleteWorkspaceOptions, WorkspaceManager, WorkspaceRecord};
+use crate::worktree::{WorkspaceManager, WorkspaceRecord};
 
 mod host;
 mod messages;
@@ -319,158 +319,32 @@ impl NodeRuntime {
                 "workspace_mode must be main or isolated".into(),
             ));
         }
-        let mut member_requests = vec![SessionRepoRequest {
-            repo: request.repo.clone(),
-            allocated_workspace_id: request.allocated_workspace_id,
-            existing_workspace_id: request.existing_workspace_id,
-            position: 0,
-        }];
-        member_requests.extend(request.additional_repos.clone());
-        member_requests.sort_by_key(|member| member.position);
-        let mut names = HashSet::new();
-        for (index, member) in member_requests.iter().enumerate() {
-            if member.position != index as i32 || !names.insert(member.repo.as_str()) {
+        if request.meta_repo.is_some() && request.workspace_mode != "main" {
+            return Err(RuntimeError::BadRequest(
+                "meta-repository sessions require workspace_mode=main".into(),
+            ));
+        }
+
+        let repo_root = self.repo_root(&request.repo)?;
+        let mut names = HashSet::from([request.repo.as_str()]);
+        let mut additional_repo_roots = Vec::with_capacity(request.additional_repos.len());
+        for repo in &request.additional_repos {
+            if !names.insert(repo) {
                 return Err(RuntimeError::BadRequest(
-                    "session repositories must have distinct names and contiguous positions".into(),
+                    "session repositories must have distinct names".into(),
                 ));
             }
-            self.repo_root(&member.repo)?;
+            additional_repo_roots.push(PtyRepoRootMetadata {
+                repo_name: repo.clone(),
+                path: self.repo_root(repo)?,
+            });
         }
-        let (shell, args, initial_agent) = self.resolve_launch(&request.launch)?;
 
-        let mut workspaces = Vec::with_capacity(member_requests.len());
-        let mut created_worktrees = Vec::new();
-        for member in &member_requests {
-            match self
-                .resolve_session_workspace(member, &request.workspace_mode)
-                .await
-            {
-                Ok((workspace, created)) => {
-                    if created {
-                        created_worktrees.push(workspace.id);
-                    }
-                    workspaces.push(workspace);
-                }
-                Err(error) => {
-                    self.cleanup_created_worktrees(&created_worktrees).await;
-                    return Err(session_member_error(&member.repo, error));
-                }
-            }
-        }
-        let workspace = workspaces
-            .first()
-            .cloned()
-            .ok_or_else(|| RuntimeError::BadRequest("session requires a repository".into()))?;
-        let working_dir = match request.working_dir {
-            Some(relative) if request.workspace_mode == "main" => {
-                match crate::workspace::resolve_in_repo(&workspace.path, &relative) {
-                    Ok((path, _)) if path.is_dir() => Ok(path),
-                    Ok(_) => Err(RuntimeError::BadRequest(
-                        "working directory does not exist".into(),
-                    )),
-                    Err(error) => Err(RuntimeError::BadRequest(error.to_string())),
-                }
-            }
-            Some(_) => Err(RuntimeError::BadRequest(
-                "working_dir is supported only for the main workspace".into(),
-            )),
-            None => Ok(workspace.path.clone()),
-        };
-        let working_dir = match working_dir {
-            Ok(working_dir) => working_dir,
-            Err(error) => {
-                self.cleanup_created_worktrees(&created_worktrees).await;
-                return Err(error);
-            }
-        };
-        let repositories = member_requests
-            .iter()
-            .zip(&workspaces)
-            .map(|(member, workspace)| PtySessionRepoMetadata {
-                repo_name: member.repo.clone(),
-                workspace: Some(pty_workspace_metadata(workspace)),
-                role: if member.position == 0 {
-                    "primary".into()
-                } else {
-                    "additional".into()
-                },
-                position: member.position,
-            })
-            .collect();
-        let meta_repo = request.meta_repo.map(|group| PtyMetaRepoMetadata {
-            id: group.id,
-            name: group.name,
-        });
-        let metadata = match self
-            .pty
-            .spawn(SpawnParams {
-                id: Some(request.session_id),
-                node_id: Some(self.node_id),
-                node_boot_id: Some(self.boot_id),
-                repo: request.repo,
-                working_dir,
-                workspace: Some(pty_workspace_metadata(&workspace)),
-                meta_repo,
-                repositories,
-                shell,
-                args,
-                cols: request.cols,
-                rows: request.rows,
-                initial_agent_runtime_agent: initial_agent,
-            })
-            .await
-        {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                self.cleanup_created_worktrees(&created_worktrees).await;
-                return Err(error.into());
-            }
-        };
-        for workspace in &workspaces {
-            if let Err(error) = self
-                .workspace_state
-                .bind_created_session(workspace.id, metadata.id)
-                .await
-            {
-                let _ = self.pty.delete(metadata.id).await;
-                self.cleanup_created_worktrees(&created_worktrees).await;
-                return Err(error.into());
-            }
-        }
-        Ok(metadata)
-    }
-
-    async fn resolve_session_workspace(
-        &self,
-        member: &SessionRepoRequest,
-        workspace_mode: &str,
-    ) -> Result<(WorkspaceRecord, bool), RuntimeError> {
-        if let Some(id) = member.existing_workspace_id {
+        let workspace = if let Some(id) = request.existing_workspace_id {
             let workspace = self.load_workspace(id).await?;
-            let expected_kind = if workspace_mode == "main" {
-                "main"
-            } else {
-                "worktree"
-            };
-            if workspace.repo_name != member.repo
-                || workspace.state != "active"
-                || workspace.kind != expected_kind
-            {
+            if workspace.repo_name != request.repo || workspace.state != "active" {
                 return Err(RuntimeError::BadRequest(
-                    "workspace does not match the requested repository and mode or is inactive"
-                        .into(),
-                ));
-            }
-            let owner: Option<Uuid> = sqlx::query_scalar(
-                "SELECT node_id FROM workspaces WHERE id = $1 AND state = 'active'",
-            )
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await?
-            .flatten();
-            if owner.is_some_and(|owner| owner != self.node_id) {
-                return Err(RuntimeError::BadRequest(
-                    "workspace belongs to a different development node".into(),
+                    "workspace does not belong to the requested repo or is inactive".into(),
                 ));
             }
             sqlx::query(
@@ -481,52 +355,76 @@ impl NodeRuntime {
             .bind(self.node_id)
             .execute(&self.pool)
             .await?;
-            return Ok((workspace, false));
-        }
-
-        let repo_root = self.repo_root(&member.repo)?;
-        match workspace_mode {
-            "main" => Ok((
-                self.workspace_state
-                    .ensure_main_workspace_owned(
-                        &member.repo,
-                        &repo_root,
-                        Some(member.allocated_workspace_id),
-                        Some(self.node_id),
-                    )
-                    .await?,
-                false,
-            )),
-            "isolated" => Ok((
-                self.workspace_state
-                    .create_worktree_workspace_owned(
-                        &member.repo,
-                        member.allocated_workspace_id,
-                        Some(self.node_id),
-                    )
-                    .await?,
-                true,
-            )),
-            _ => unreachable!("workspace mode was validated"),
-        }
-    }
-
-    async fn cleanup_created_worktrees(&self, workspace_ids: &[Uuid]) {
-        for id in workspace_ids.iter().rev() {
-            if let Err(error) = self
-                .workspace_state
-                .delete_workspace(
-                    *id,
-                    DeleteWorkspaceOptions {
-                        force: true,
-                        delete_branch: true,
-                    },
-                )
-                .await
-            {
-                tracing::warn!(workspace_id = %id, %error, "failed to roll back collection workspace");
+            workspace
+        } else {
+            match request.workspace_mode.as_str() {
+                "main" => {
+                    self.workspace_state
+                        .ensure_main_workspace_owned(
+                            &request.repo,
+                            &repo_root,
+                            Some(request.allocated_workspace_id),
+                            Some(self.node_id),
+                        )
+                        .await?
+                }
+                "isolated" => {
+                    self.workspace_state
+                        .create_worktree_workspace_owned(
+                            &request.repo,
+                            request.allocated_workspace_id,
+                            Some(self.node_id),
+                        )
+                        .await?
+                }
+                _ => unreachable!("workspace mode was validated"),
             }
-        }
+        };
+        let working_dir = match request.working_dir {
+            Some(relative) if request.workspace_mode == "main" => {
+                let (path, _) = crate::workspace::resolve_in_repo(&workspace.path, &relative)
+                    .map_err(|error| RuntimeError::BadRequest(error.to_string()))?;
+                if !path.is_dir() {
+                    return Err(RuntimeError::BadRequest(
+                        "working directory does not exist".into(),
+                    ));
+                }
+                path
+            }
+            Some(_) => {
+                return Err(RuntimeError::BadRequest(
+                    "working_dir is supported only for the main workspace".into(),
+                ))
+            }
+            None => workspace.path.clone(),
+        };
+        let (shell, args, initial_agent) = self.resolve_launch(&request.launch)?;
+        let meta_repo = request.meta_repo.map(|group| PtyMetaRepoMetadata {
+            id: group.id,
+            name: group.name,
+        });
+        let metadata = self
+            .pty
+            .spawn(SpawnParams {
+                id: Some(request.session_id),
+                node_id: Some(self.node_id),
+                node_boot_id: Some(self.boot_id),
+                repo: request.repo,
+                working_dir,
+                workspace: Some(pty_workspace_metadata(&workspace)),
+                meta_repo,
+                additional_repo_roots,
+                shell,
+                args,
+                cols: request.cols,
+                rows: request.rows,
+                initial_agent_runtime_agent: initial_agent,
+            })
+            .await?;
+        self.workspace_state
+            .bind_created_session(workspace.id, metadata.id)
+            .await?;
+        Ok(metadata)
     }
 
     fn resolve_launch(
@@ -623,20 +521,6 @@ fn validate_repo_name(name: &str) -> Result<(), RuntimeError> {
 fn parse_agent(value: &str) -> Result<AgentType, RuntimeError> {
     AgentType::parse(value)
         .map_err(|_| RuntimeError::BadRequest("agent must be claude or codex".into()))
-}
-
-fn session_member_error(repo: &str, error: RuntimeError) -> RuntimeError {
-    match error {
-        RuntimeError::BadRequest(message) => {
-            RuntimeError::BadRequest(format!("repository {repo}: {message}"))
-        }
-        RuntimeError::NotFound(message) => {
-            RuntimeError::NotFound(format!("repository {repo}: {message}"))
-        }
-        RuntimeError::Internal(error) => RuntimeError::Internal(
-            error.context(format!("prepare workspace for repository {repo}")),
-        ),
-    }
 }
 
 fn agent_launch_command(

@@ -45,7 +45,6 @@ test("launches and restores a session for a meta-repository", async ({
   await expect(page.getByRole("button", { name: "Jump to E2E collection" })).toBeVisible();
 
   await page.getByLabel("New session in E2E collection").click();
-  await page.getByLabel("workspace mode").selectOption("main");
   const createSessionResponse = page.waitForResponse(
     (response) =>
       response.url().endsWith("/api/sessions") &&

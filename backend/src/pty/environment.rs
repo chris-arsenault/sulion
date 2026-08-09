@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-use super::{PtyMetaRepoMetadata, PtySessionRepoMetadata, PtyWorkspaceMetadata};
+use super::{PtyMetaRepoMetadata, PtyRepoRootMetadata, PtyWorkspaceMetadata};
 
 /// The complete environment for a PTY shell. The caller starts from an empty
 /// environment (`env_clear`) and applies exactly these pairs.
@@ -23,7 +23,7 @@ pub(crate) fn pty_environment(
     secret_broker_key_path: Option<&PathBuf>,
     workspace: Option<&PtyWorkspaceMetadata>,
     meta_repo: Option<&PtyMetaRepoMetadata>,
-    repositories: &[PtySessionRepoMetadata],
+    repo_roots: &[PtyRepoRootMetadata],
 ) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = Vec::new();
     let mut set = |key: &str, value: String| env.push((key.to_string(), value));
@@ -88,14 +88,13 @@ pub(crate) fn pty_environment(
         env.push(("SULION_META_REPO_ID".to_string(), meta_repo.id.to_string()));
         env.push(("SULION_META_REPO_NAME".to_string(), meta_repo.name.clone()));
     }
-    let repo_names = repositories
+    let repo_names = repo_roots
         .iter()
         .map(|repository| repository.repo_name.as_str())
         .collect::<Vec<_>>();
-    let repo_paths = repositories
+    let repo_paths = repo_roots
         .iter()
-        .filter_map(|repository| repository.workspace.as_ref())
-        .map(|workspace| workspace.path.to_string_lossy().into_owned())
+        .map(|repository| repository.path.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     env.push((
         "SULION_REPO_NAMES_JSON".to_string(),
@@ -209,17 +208,13 @@ mod tests {
             name: "Platform".into(),
         };
         let repositories = vec![
-            PtySessionRepoMetadata {
+            PtyRepoRootMetadata {
                 repo_name: "alpha".into(),
-                workspace: Some(primary.clone()),
-                role: "primary".into(),
-                position: 0,
+                path: primary.path.clone(),
             },
-            PtySessionRepoMetadata {
+            PtyRepoRootMetadata {
                 repo_name: "beta".into(),
-                workspace: Some(secondary),
-                role: "additional".into(),
-                position: 1,
+                path: secondary.path,
             },
         ];
         let env = pty_environment(

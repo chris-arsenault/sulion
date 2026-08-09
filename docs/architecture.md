@@ -59,24 +59,22 @@ recorded as successful before binding their service loops.
 
 Two runtime layers plus one organizational layer.
 
-**Meta-repository** — a named, ordered set of existing repositories with one
+**Meta-repository** — a named set of existing repositories with one
 primary repository. It changes navigation and new-session scope without moving
-checkouts. A repository belongs to at most one active meta-repository.
+checkouts. A repository belongs to at most one meta-repository.
 
-**PTY session** — a long-lived shell process on the server. It targets either
-one repository or a stored snapshot of a meta-repository's members, survives
-client disconnect, and dies only on explicit delete, shell exit, or server
-reboot. It has a backend-generated UUID.
+**PTY session** — a long-lived shell process on the server. It targets one
+primary repository and may retain a meta-repository identity for navigation.
+It survives client disconnect and dies only on explicit delete, shell exit, or
+server reboot. It has a backend-generated UUID.
 
 **Agent session** — a single `claude` or `codex` invocation inside a PTY session, identified by the agent's own session UUID, backing exactly one JSONL file. A PTY session may hold zero, one, or many agent sessions sequentially.
 
-**Workspace** — a filesystem checkout bound to a PTY session. A workspace is
+**Workspace** — the filesystem checkout bound to a PTY session. A workspace is
 either the canonical repo checkout (`main`) or a Sulion-created Git worktree on
-an isolated branch. A collection session stores one workspace per member and
-runs from the primary workspace; Claude and Codex receive every secondary path
-as an additional directory. PTYs receive `SULION_WORKSPACE_*` for the primary
-workspace and `SULION_REPO_NAMES_JSON` / `SULION_REPO_PATHS_JSON` for the full
-snapshot.
+an isolated branch. Collection sessions always use the primary repository's
+canonical checkout; Claude and Codex receive the other current member roots as
+additional directories. No workspace or member snapshot is stored per session.
 
 **Published plan** — a durable, repo-scoped user-facing phase summary. A plan
 can be attached to multiple live PTYs, while each PTY has at most one current
@@ -174,11 +172,10 @@ Deleting an isolated workspace removes the Git worktree registration, optionally
 deletes its Sulion branch, and marks the workspace row deleted; main workspaces
 are not deletable.
 
-Meta-repository membership lives only in Postgres. `pty_session_repos` captures
-the exact ordered repo/workspace scope at launch, so later membership edits do
-not change a running or resumed session. The node creates all isolated member
-worktrees as one operation and removes only worktrees created by a failed
-attempt.
+Meta-repository membership lives only in Postgres. Creating a collection
+session loads the current members, records the group id and primary repository
+on `pty_sessions`, and passes secondary canonical repo roots to the node. Group
+edits affect later launches and resumes; they do not trigger filesystem work.
 
 WebSocket attach asks the owning node for a snapshot rendered from its
 continuously fed shadow `vt100` emulator, then bridges live bytes through
@@ -263,8 +260,7 @@ backfills manually. The background worker advances backfills and drains pending
 sources continuously while work exists.
 
 PTYs use `sulion-retrieve`, which adds static bearer auth and Sulion context
-headers from the PTY environment. Default repo scope includes every repository
-in a collection session's stored snapshot. See [`retrieval.md`](retrieval.md).
+headers from the PTY environment. See [`retrieval.md`](retrieval.md).
 
 ## Code Intelligence Service
 
@@ -306,7 +302,9 @@ On the dedicated host, the runner is absent. `SULION_DOCKER_MODE=direct` makes
 the wrapper exec the real Docker CLI against the system daemon on that
 single-user machine. The node passes the mounted socket and its numeric host GID
 to each devenv container, so non-root PTY processes inherit direct access
-without hard-coding the host's Docker group.
+without hard-coding the host's Docker group. Because no runner exists in this
+mode, `sulion postgres` is unavailable; repository integration tests use their
+own harness through the direct Docker CLI.
 The control plane never receives that socket and cannot manage either Docker
 daemon. On the dedicated host, the node and its launched devenv can manage the
 system daemon; the other services cannot.

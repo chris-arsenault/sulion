@@ -23,7 +23,7 @@ mod metadata;
 mod spawn;
 
 use host::HostSpawnSpec;
-use metadata::{read_session_scope, PtyRowWithActivity};
+use metadata::PtyRowWithActivity;
 use spawn::persist_spawn;
 
 pub use metadata::read_meta;
@@ -69,8 +69,6 @@ pub struct PtyMetadata {
     pub workspace: Option<PtyWorkspaceMetadata>,
     #[serde(default)]
     pub meta_repo: Option<PtyMetaRepoMetadata>,
-    #[serde(default)]
-    pub repositories: Vec<PtySessionRepoMetadata>,
     pub state: PtyState,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -111,11 +109,9 @@ pub struct PtyMetaRepoMetadata {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PtySessionRepoMetadata {
+pub struct PtyRepoRootMetadata {
     pub repo_name: String,
-    pub workspace: Option<PtyWorkspaceMetadata>,
-    pub role: String,
-    pub position: i32,
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,7 +186,7 @@ pub struct SpawnParams {
     pub working_dir: PathBuf,
     pub workspace: Option<PtyWorkspaceMetadata>,
     pub meta_repo: Option<PtyMetaRepoMetadata>,
-    pub repositories: Vec<PtySessionRepoMetadata>,
+    pub additional_repo_roots: Vec<PtyRepoRootMetadata>,
     pub shell: PathBuf,
     pub args: Vec<String>,
     pub cols: u16,
@@ -208,7 +204,7 @@ impl Default for SpawnParams {
             working_dir: PathBuf::from("."),
             workspace: None,
             meta_repo: None,
-            repositories: Vec::new(),
+            additional_repo_roots: Vec::new(),
             shell: PathBuf::from("/bin/bash"),
             args: Vec::new(),
             cols: 120,
@@ -218,23 +214,50 @@ impl Default for SpawnParams {
     }
 }
 
-fn normalized_session_repositories(params: &SpawnParams) -> Vec<PtySessionRepoMetadata> {
-    if !params.repositories.is_empty() {
-        return params.repositories.clone();
-    }
-    fallback_session_repositories(&params.repo, params.workspace.as_ref())
+fn session_repo_roots(params: &SpawnParams) -> Vec<PtyRepoRootMetadata> {
+    let mut roots = params
+        .workspace
+        .as_ref()
+        .map(|workspace| {
+            vec![PtyRepoRootMetadata {
+                repo_name: params.repo.clone(),
+                path: workspace.path.clone(),
+            }]
+        })
+        .unwrap_or_default();
+    roots.extend(params.additional_repo_roots.clone());
+    roots
 }
 
-fn fallback_session_repositories(
-    repo: &str,
-    workspace: Option<&PtyWorkspaceMetadata>,
-) -> Vec<PtySessionRepoMetadata> {
-    vec![PtySessionRepoMetadata {
-        repo_name: repo.to_string(),
-        workspace: workspace.cloned(),
-        role: "primary".into(),
-        position: 0,
-    }]
+async fn load_meta_repo_roots(
+    pool: &Pool,
+    metadata: &PtyMetadata,
+) -> anyhow::Result<Vec<PtyRepoRootMetadata>> {
+    let (Some(group), Some(workspace)) = (&metadata.meta_repo, &metadata.workspace) else {
+        return Ok(Vec::new());
+    };
+    if workspace.kind != "main" {
+        return Ok(Vec::new());
+    }
+    let Some(repos_root) = workspace.path.parent() else {
+        return Ok(Vec::new());
+    };
+    let members: Vec<String> = sqlx::query_scalar(
+        "SELECT repo_name FROM meta_repo_members \
+          WHERE meta_repo_id = $1 AND repo_name <> $2 \
+          ORDER BY LOWER(repo_name), repo_name",
+    )
+    .bind(group.id)
+    .bind(&metadata.repo)
+    .fetch_all(pool)
+    .await?;
+    Ok(members
+        .into_iter()
+        .map(|repo_name| PtyRepoRootMetadata {
+            path: repos_root.join(&repo_name),
+            repo_name,
+        })
+        .collect())
 }
 
 mod environment;
@@ -397,14 +420,14 @@ impl PtyManager {
         }
         let link = self.link()?.clone();
         let secret_broker_key_path = crate::secret_pty::prepare_pty_credential(id).await?;
-        let repositories = normalized_session_repositories(&params);
+        let repo_roots = session_repo_roots(&params);
         let env = pty_environment(
             id,
             &params.shell,
             secret_broker_key_path.as_ref(),
             params.workspace.as_ref(),
             params.meta_repo.as_ref(),
-            &repositories,
+            &repo_roots,
         );
 
         let now = chrono::Utc::now();
@@ -424,7 +447,6 @@ impl PtyManager {
             working_dir: params.working_dir.clone(),
             workspace: params.workspace.clone(),
             meta_repo: params.meta_repo.clone(),
-            repositories: repositories.clone(),
             state: PtyState::Live,
             created_at: now,
             ended_at: None,
@@ -438,7 +460,7 @@ impl PtyManager {
             agent_runtime: initial_agent_runtime,
         };
 
-        persist_spawn(&self.pool, &meta, &params, &repositories).await?;
+        persist_spawn(&self.pool, &meta, &params).await?;
 
         let devenv_ident = match link
             .spawn(HostSpawnSpec {
@@ -537,6 +559,7 @@ impl PtyManager {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
 
+        let additional_repo_roots = load_meta_repo_roots(&self.pool, &persisted).await?;
         self.spawn(SpawnParams {
             id: Some(id),
             node_id,
@@ -545,7 +568,7 @@ impl PtyManager {
             working_dir,
             workspace,
             meta_repo: persisted.meta_repo,
-            repositories: persisted.repositories,
+            additional_repo_roots,
             shell: default_shell(),
             args: Vec::new(),
             ..Default::default()
@@ -589,26 +612,21 @@ impl PtyManager {
              ws.kind AS workspace_kind, ws.path AS workspace_path, \
              ws.branch_name AS workspace_branch_name, ws.base_ref AS workspace_base_ref, \
              ws.base_sha AS workspace_base_sha, ws.merge_target AS workspace_merge_target, \
+             ps.meta_repo_id, mr.name AS meta_repo_name, \
              (SELECT MAX(e.timestamp) FROM events e \
               WHERE e.session_uuid = ps.current_session_uuid) AS last_event_at \
              FROM pty_sessions ps \
              LEFT JOIN workspaces ws ON ws.id = ps.workspace_id \
+             LEFT JOIN meta_repos mr ON mr.id = ps.meta_repo_id \
              WHERE ps.state <> 'deleted' \
              ORDER BY ps.pinned DESC, ps.created_at DESC",
         )
         .fetch_all(&self.pool)
         .await?;
-        let mut metadata = rows
+        let metadata = rows
             .into_iter()
             .map(PtyRowWithActivity::into_meta)
             .collect::<Vec<_>>();
-        for item in &mut metadata {
-            let (meta_repo, repositories) = read_session_scope(&self.pool, item.id).await?;
-            item.meta_repo = meta_repo;
-            if !repositories.is_empty() {
-                item.repositories = repositories;
-            }
-        }
         Ok(metadata)
     }
 

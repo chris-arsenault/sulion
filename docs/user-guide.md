@@ -34,9 +34,9 @@ Saved prompts can include `$name` placeholders; `$$` sends a literal
 Right-click a session for rename / pin / colour / open-timeline /
 delete actions, including the shortcut to manage secrets for that PTY.
 New agent sessions can target one repo or every member of a meta-repository.
-Collection sessions create one isolated worktree per member by default, or bind
-all members to their canonical checkouts in main mode. The primary repo supplies
-the cwd; Claude and Codex receive the other roots as additional directories.
+Collection sessions use canonical checkouts only. The primary repo supplies the
+cwd; Claude and Codex receive the other current member roots as additional
+directories. No member worktrees are created.
 Right-click a repo for repo-level actions (open plans, open
 repo timeline, repo diff). Double-click a session name to rename in place.
 

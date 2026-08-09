@@ -142,11 +142,9 @@ async fn ensure_no_live_repo_sessions(
     action: &str,
 ) -> ApiResult<()> {
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(DISTINCT ps.id)::BIGINT \
-           FROM pty_sessions ps \
-           LEFT JOIN pty_session_repos psr ON psr.pty_session_id = ps.id \
-          WHERE (ps.repo = $1 OR psr.repo_name = $1) \
-            AND ps.state IN ('live', 'orphaned')",
+        "SELECT COUNT(*)::BIGINT \
+           FROM pty_sessions \
+          WHERE repo = $1 AND state IN ('live', 'orphaned')",
     )
     .bind(name)
     .fetch_one(pool)

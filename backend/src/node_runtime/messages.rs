@@ -34,21 +34,13 @@ pub struct SessionCreateRequest {
     #[serde(default)]
     pub meta_repo: Option<SessionMetaRepoRequest>,
     #[serde(default)]
-    pub additional_repos: Vec<SessionRepoRequest>,
+    pub additional_repos: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMetaRepoRequest {
     pub id: Uuid,
     pub name: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionRepoRequest {
-    pub repo: String,
-    pub allocated_workspace_id: Uuid,
-    pub existing_workspace_id: Option<Uuid>,
-    pub position: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -35,7 +35,6 @@ struct AppSessionView {
     working_dir: String,
     workspace: Option<AppSessionWorkspaceView>,
     meta_repo: Option<AppSessionMetaRepoView>,
-    repositories: Vec<AppSessionRepoView>,
     state: String,
     created_at: DateTime<Utc>,
     ended_at: Option<DateTime<Utc>>,
@@ -62,14 +61,6 @@ struct AppSessionView {
 struct AppSessionMetaRepoView {
     id: Uuid,
     name: String,
-}
-
-#[derive(Serialize, serde::Deserialize)]
-struct AppSessionRepoView {
-    repo_name: String,
-    workspace_id: Option<Uuid>,
-    role: String,
-    position: i32,
 }
 
 #[derive(Serialize)]
@@ -156,7 +147,6 @@ struct AppSessionRow {
     workspace_merge_target: Option<String>,
     meta_repo_id: Option<Uuid>,
     meta_repo_name: Option<String>,
-    repositories_json: Value,
     state: String,
     created_at: DateTime<Utc>,
     ended_at: Option<DateTime<Utc>>,
@@ -215,17 +205,6 @@ impl From<AppSessionRow> for AppSessionView {
         let workspace = row.workspace_view();
         let activity = row.activity_view();
         let current_plan = row.current_plan_view();
-        let mut repositories =
-            serde_json::from_value::<Vec<AppSessionRepoView>>(row.repositories_json.clone())
-                .unwrap_or_default();
-        if repositories.is_empty() {
-            repositories.push(AppSessionRepoView {
-                repo_name: row.repo.clone(),
-                workspace_id: row.workspace_id,
-                role: "primary".into(),
-                position: 0,
-            });
-        }
         Self {
             id: row.id,
             repo: row.repo,
@@ -233,12 +212,8 @@ impl From<AppSessionRow> for AppSessionView {
             workspace,
             meta_repo: row.meta_repo_id.map(|id| AppSessionMetaRepoView {
                 id,
-                name: row
-                    .meta_repo_name
-                    .clone()
-                    .unwrap_or_else(|| "Deleted meta-repository".into()),
+                name: row.meta_repo_name.clone().unwrap_or_default(),
             }),
-            repositories,
             state: row.state,
             created_at: row.created_at,
             ended_at: row.ended_at,
@@ -435,16 +410,7 @@ async fn load_sessions(pool: &crate::db::Pool) -> ApiResult<Vec<AppSessionView>>
                 ws.kind AS workspace_kind, ws.path AS workspace_path, \
                 ws.branch_name AS workspace_branch_name, ws.base_ref AS workspace_base_ref, \
                 ws.base_sha AS workspace_base_sha, ws.merge_target AS workspace_merge_target, \
-                ps.meta_repo_id, ps.meta_repo_name, \
-                COALESCE(( \
-                    SELECT jsonb_agg(jsonb_build_object( \
-                        'repo_name', psr.repo_name, \
-                        'workspace_id', psr.workspace_id, \
-                        'role', psr.role, \
-                        'position', psr.position \
-                    ) ORDER BY psr.position) \
-                      FROM pty_session_repos psr WHERE psr.pty_session_id = ps.id \
-                ), '[]'::jsonb) AS repositories_json, \
+                ps.meta_repo_id, mr.name AS meta_repo_name, \
                 tss.latest_event_at AS last_event_at, \
                 COALESCE(tss.revision, 0)::BIGINT AS timeline_revision, \
                 ps.label, ps.agent_label, ps.pinned, ps.color, \
@@ -477,6 +443,7 @@ async fn load_sessions(pool: &crate::db::Pool) -> ApiResult<Vec<AppSessionView>>
                 COALESCE(fps.pending_count, 0)::INT AS future_prompts_pending_count \
            FROM pty_sessions ps \
            LEFT JOIN workspaces ws ON ws.id = ps.workspace_id \
+           LEFT JOIN meta_repos mr ON mr.id = ps.meta_repo_id \
            LEFT JOIN timeline_session_state tss ON tss.session_uuid = ps.current_session_uuid \
            LEFT JOIN future_prompt_session_state fps ON fps.session_uuid = ps.current_session_uuid \
            LEFT JOIN agent_session_metadata asm ON asm.session_uuid = ps.current_session_uuid \

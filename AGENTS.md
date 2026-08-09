@@ -47,6 +47,7 @@ Full list in [docs/architecture.md](docs/architecture.md#invariants--do-not-brea
 ## Working rules
 
 - Backend integration tests run through `make test-rust-integration` / `scripts/run-backend-integration-tests.sh`. Never `#[ignore]`; register new targets in the script.
+- When `SULION_DOCKER_MODE=direct`, never invoke `sulion postgres`: the runner is absent and the command cannot work. The integration harness uses direct Docker. For authorized deployed-database access, run `psql` through `with-cred --` with the injected `SULION_DB_USER` and `SULION_DB_PASSWORD`; never use the deployed database for integration tests.
 - E2E is the single Playwright suite in `frontend/e2e/`, backed by `scripts/run-e2e-stack.mjs`. No in-browser MSW mock mode.
 - Git staleness, invariants, and the dataset layout live in docs/; don't re-explain them in comments or commit messages.
 - Codex and Claude share the same canonical event schema. When editing ingest code, assume both agents flow through it.
