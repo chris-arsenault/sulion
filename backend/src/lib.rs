@@ -26,6 +26,7 @@ pub mod future_prompts;
 pub mod git;
 pub mod ingest;
 pub mod library;
+pub mod meta_repos;
 pub mod metrics;
 pub mod node_protocol;
 pub mod node_runtime;

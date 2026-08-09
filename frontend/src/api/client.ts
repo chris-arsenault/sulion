@@ -3,6 +3,7 @@ import { getAccessToken } from "../auth/cognito";
 
 import type {
   AppStateResponse,
+  CreateMetaRepoRequest,
   CreateRepoRequest,
   CreateSessionRequest,
   CreateFuturePromptInput,
@@ -19,11 +20,13 @@ import type {
   MonitorTimelineRequest,
   MetricsResponse,
   MonitorTimelineResponse,
+  MetaRepoView,
   CreatePlanInput,
   NewPlanPhaseInput,
   PlanEventView,
   PlanView,
   RenameRepoRequest,
+  PatchMetaRepoRequest,
   RepoDirtyPathsResponse,
   RepoView,
   SaveLibraryInput,
@@ -31,6 +34,7 @@ import type {
   SecretEnvelope,
   SecretGrantMetadata,
   SecretMetadata,
+  ReplaceMetaRepoMembersRequest,
   TimelineQuery,
   TimelineSummaryResponse,
   TimelineTurnDetailResponse,
@@ -118,6 +122,39 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 export function getAppState(): Promise<AppStateResponse> {
   return request<AppStateResponse>("/api/app-state");
+}
+
+export function createMetaRepo(body: CreateMetaRepoRequest): Promise<MetaRepoView> {
+  return request<MetaRepoView>("/api/meta-repos", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateMetaRepo(
+  id: string,
+  body: PatchMetaRepoRequest,
+): Promise<MetaRepoView> {
+  return request<MetaRepoView>(`/api/meta-repos/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function replaceMetaRepoMembers(
+  id: string,
+  body: ReplaceMetaRepoMembersRequest,
+): Promise<MetaRepoView> {
+  return request<MetaRepoView>(
+    `/api/meta-repos/${encodeURIComponent(id)}/members`,
+    { method: "PUT", body: JSON.stringify(body) },
+  );
+}
+
+export function deleteMetaRepo(id: string): Promise<void> {
+  return request<void>(`/api/meta-repos/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }
 
 export function approveNodePairing(id: string): Promise<void> {

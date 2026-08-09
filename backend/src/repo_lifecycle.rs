@@ -142,9 +142,11 @@ async fn ensure_no_live_repo_sessions(
     action: &str,
 ) -> ApiResult<()> {
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)::BIGINT \
-           FROM pty_sessions \
-          WHERE repo = $1 AND state IN ('live', 'orphaned')",
+        "SELECT COUNT(DISTINCT ps.id)::BIGINT \
+           FROM pty_sessions ps \
+           LEFT JOIN pty_session_repos psr ON psr.pty_session_id = ps.id \
+          WHERE (ps.repo = $1 OR psr.repo_name = $1) \
+            AND ps.state IN ('live', 'orphaned')",
     )
     .bind(name)
     .fetch_one(pool)
@@ -190,6 +192,8 @@ async fn ensure_repo_name_available(pool: &crate::db::Pool, name: &str) -> ApiRe
              SELECT 1 FROM workspaces WHERE repo_name = $1 AND state <> 'deleted' \
              UNION ALL \
              SELECT 1 FROM repo_runtime_state WHERE repo_name = $1 AND exists = TRUE \
+             UNION ALL \
+             SELECT 1 FROM meta_repo_members WHERE repo_name = $1 \
          )",
     )
     .bind(name)
@@ -354,6 +358,7 @@ async fn rename_repo_session_workspace_records(
     .bind(new_name)
     .execute(&mut **tx)
     .await?;
+    crate::meta_repos::rename_repo_references(tx, old_name, new_name).await?;
     Ok(())
 }
 
@@ -439,6 +444,7 @@ async fn mark_repo_deleted_records(
     .bind(&path)
     .execute(&mut *tx)
     .await?;
+    crate::meta_repos::remove_repo_membership(&mut tx, name).await?;
 
     tx.commit().await?;
     Ok(())
