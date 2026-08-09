@@ -17,6 +17,7 @@ import type {
   AgentLaunchType,
   DirEntryView,
   GitCommit,
+  MetaRepoView,
   PlanSummaryView,
   RepoGitSummary,
   RepoView,
@@ -50,6 +51,7 @@ import "./Sidebar.css";
 import "./LibrarySection.css";
 
 const EMPTY_SECRET_GRANTS: SecretGrantMetadata[] = [];
+const EMPTY_SESSIONS: SessionView[] = [];
 
 type NewSessionFormValue = {
   working_dir: string;
@@ -57,10 +59,17 @@ type NewSessionFormValue = {
   workspace_mode: "isolated" | "main";
 };
 
+type MetaRepoFormValue = {
+  name: string;
+  members: string[];
+  primary_repo_name?: string;
+};
+
 export function Sidebar() {
   const {
     sessions,
     repos,
+    metaRepos,
     plans,
     selectedSessionId,
     workspaces,
@@ -71,15 +80,21 @@ export function Sidebar() {
     deleteWorkspace,
     updateSession,
     createRepo,
+    createMetaRepo,
+    saveMetaRepo,
+    deleteMetaRepo,
     renameRepo,
     isUnread,
     repoExpansion,
+    metaRepoExpansion,
     setRepoExpanded,
+    setMetaRepoExpanded,
     collapseRepos,
   } = useSessions(
     useShallow((store) => ({
       sessions: store.sessions,
       repos: store.repos,
+      metaRepos: store.metaRepos,
       plans: store.plans,
       selectedSessionId: store.selectedSessionId,
       workspaces: store.workspaces,
@@ -90,10 +105,15 @@ export function Sidebar() {
       deleteWorkspace: store.deleteWorkspace,
       updateSession: store.updateSession,
       createRepo: store.createRepo,
+      createMetaRepo: store.createMetaRepo,
+      saveMetaRepo: store.saveMetaRepo,
+      deleteMetaRepo: store.deleteMetaRepo,
       renameRepo: store.renameRepo,
       isUnread: store.isUnread,
       repoExpansion: store.repoExpansion,
+      metaRepoExpansion: store.metaRepoExpansion,
       setRepoExpanded: store.setRepoExpanded,
+      setMetaRepoExpanded: store.setMetaRepoExpanded,
       collapseRepos: store.collapseRepos,
     })),
   );
@@ -104,6 +124,35 @@ export function Sidebar() {
     () => groupByRepo(sessions, repos, workspaces, plans),
     [sessions, repos, workspaces, plans],
   );
+  const groupedByName = useMemo(
+    () => new Map(grouped.map((group) => [group.name, group])),
+    [grouped],
+  );
+  const repoParentByName = useMemo(() => {
+    const parents = new Map<string, string>();
+    for (const metaRepo of metaRepos) {
+      for (const member of metaRepo.members) {
+        parents.set(member.repo_name, metaRepo.id);
+      }
+    }
+    return parents;
+  }, [metaRepos]);
+  const ungrouped = useMemo(
+    () => grouped.filter((group) => !repoParentByName.has(group.name)),
+    [grouped, repoParentByName],
+  );
+  const collectionSessionsByMetaRepo = useMemo(() => {
+    const result = new Map<string, SessionView[]>();
+    for (const session of sessions) {
+      const id = session.meta_repo?.id;
+      if (!id) continue;
+      const group = result.get(id) ?? [];
+      group.push(session);
+      result.set(id, group);
+    }
+    for (const group of result.values()) group.sort(sessionCompare);
+    return result;
+  }, [sessions]);
 
   // Opening a session's work area: terminal top + timeline bottom.
   // Called directly from the click handler (no useEffect on selected
@@ -146,13 +195,21 @@ export function Sidebar() {
       : "Collapse all repos";
   }, [expandedByRepo, grouped]);
   const [newRepoOpen, setNewRepoOpen] = useState(false);
+  const [metaRepoEditorId, setMetaRepoEditorId] = useState<
+    "new" | string | null
+  >(null);
   const [newSessionFor, setNewSessionFor] = useState<string | null>(null);
+  const [newSessionForMetaRepo, setNewSessionForMetaRepo] = useState<
+    string | null
+  >(null);
   const [renamingRepoName, setRenamingRepoName] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [pendingRepoDelete, setPendingRepoDelete] = useState<{
     group: RepoGroupData;
     force: boolean;
   } | null>(null);
+  const [pendingMetaRepoDelete, setPendingMetaRepoDelete] =
+    useState<MetaRepoView | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [pendingWorkspaceDelete, setPendingWorkspaceDelete] = useState<{
     workspace: WorkspaceView;
@@ -169,6 +226,7 @@ export function Sidebar() {
   });
 
   const repoAnchorsRef = useRef<Map<string, HTMLLIElement>>(new Map());
+  const metaRepoAnchorsRef = useRef<Map<string, HTMLLIElement>>(new Map());
   const registerRepoAnchor = useCallback(
     (name: string, el: HTMLLIElement | null) => {
       if (el) repoAnchorsRef.current.set(name, el);
@@ -177,13 +235,45 @@ export function Sidebar() {
     [],
   );
 
-  useAppCommand("reveal-repo", ({ repo }) => {
-    const el = repoAnchorsRef.current.get(repo);
-    if (el) {
+  const registerMetaRepoAnchor = useCallback(
+    (id: string, el: HTMLLIElement | null) => {
+      if (el) metaRepoAnchorsRef.current.set(id, el);
+      else metaRepoAnchorsRef.current.delete(id);
+    },
+    [],
+  );
+
+  const scrollAnchorIntoView = useCallback(
+    (lookup: () => HTMLElement | null) => {
       requestAnimationFrame(() =>
-        el.scrollIntoView({ block: "start", behavior: "smooth" }),
+        requestAnimationFrame(() =>
+          lookup()?.scrollIntoView({ block: "start", behavior: "smooth" }),
+        ),
       );
-    }
+    },
+    [],
+  );
+
+  useAppCommand("reveal-repo", ({ repo }) => {
+    const parentId = repoParentByName.get(repo);
+    if (parentId) setMetaRepoExpanded(parentId, true);
+    scrollAnchorIntoView(() => repoAnchorsRef.current.get(repo) ?? null);
+  });
+
+  useAppCommand("reveal-meta-repo", ({ metaRepoId }) => {
+    setMetaRepoExpanded(metaRepoId, true);
+    scrollAnchorIntoView(
+      () => metaRepoAnchorsRef.current.get(metaRepoId) ?? null,
+    );
+  });
+
+  useAppCommand("new-meta-repo-session", ({ metaRepoId }) => {
+    setMetaRepoExpanded(metaRepoId, true);
+    setNewSessionFor(null);
+    setNewSessionForMetaRepo(metaRepoId);
+    scrollAnchorIntoView(
+      () => metaRepoAnchorsRef.current.get(metaRepoId) ?? null,
+    );
   });
 
   const toggleRepo = useCallback(
@@ -210,6 +300,39 @@ export function Sidebar() {
       }
     },
     [createRepo],
+  );
+
+  const onSaveMetaRepo = useCallback(
+    async (form: MetaRepoFormValue) => {
+      setFormError(null);
+      try {
+        if (metaRepoEditorId === "new") {
+          await createMetaRepo(form);
+        } else if (metaRepoEditorId) {
+          await saveMetaRepo(metaRepoEditorId, form);
+        }
+        setMetaRepoEditorId(null);
+      } catch (err) {
+        setFormError(messageOf(err));
+      }
+    },
+    [createMetaRepo, metaRepoEditorId, saveMetaRepo],
+  );
+
+  const confirmMetaRepoDelete = useCallback(async () => {
+    const pending = pendingMetaRepoDelete;
+    if (!pending) return;
+    setPendingMetaRepoDelete(null);
+    setFormError(null);
+    try {
+      await deleteMetaRepo(pending.id);
+    } catch (err) {
+      setFormError(messageOf(err));
+    }
+  }, [deleteMetaRepo, pendingMetaRepoDelete]);
+  const cancelMetaRepoDelete = useCallback(
+    () => setPendingMetaRepoDelete(null),
+    [],
   );
 
   const requestRepoRename = useCallback((name: string) => {
@@ -280,6 +403,24 @@ export function Sidebar() {
           launch_agent: form.launch_agent || undefined,
         });
         setNewSessionFor(null);
+      } catch (err) {
+        setFormError(messageOf(err));
+      }
+    },
+    [createSession],
+  );
+
+  const onCreateMetaRepoSession = useCallback(
+    async (metaRepoId: string, form: NewSessionFormValue) => {
+      setFormError(null);
+      try {
+        await createSession({
+          meta_repo_id: metaRepoId,
+          working_dir: form.working_dir.trim() || undefined,
+          workspace_mode: form.workspace_mode,
+          launch_agent: form.launch_agent || undefined,
+        });
+        setNewSessionForMetaRepo(null);
       } catch (err) {
         setFormError(messageOf(err));
       }
@@ -370,10 +511,20 @@ export function Sidebar() {
 
   const toggleNewRepoOpen = useCallback(() => {
     setNewRepoOpen((v) => !v);
+    setMetaRepoEditorId(null);
     setNewSessionFor(null);
+    setNewSessionForMetaRepo(null);
     setRenamingRepoName(null);
   }, []);
   const closeNewRepo = useCallback(() => setNewRepoOpen(false), []);
+  const openNewMetaRepo = useCallback(() => {
+    setMetaRepoEditorId("new");
+    setNewRepoOpen(false);
+    setNewSessionFor(null);
+    setNewSessionForMetaRepo(null);
+    setRenamingRepoName(null);
+  }, []);
+  const closeMetaRepoEditor = useCallback(() => setMetaRepoEditorId(null), []);
 
   const setNewSessionForFn = useCallback(
     (next: (prev: string | null) => string | null) => setNewSessionFor(next),
@@ -445,42 +596,148 @@ export function Sidebar() {
               <Icon name="plus" size={14} />
             </button>
           </Tooltip>
+          <Tooltip label="New meta-repository">
+            <button
+              type="button"
+              className="sidebar__icon-button"
+              onClick={openNewMetaRepo}
+              aria-label="New meta-repository"
+            >
+              <Icon name="layers" size={14} />
+            </button>
+          </Tooltip>
         </div>
       </div>
 
       {newRepoOpen && (
         <NewRepoForm onSubmit={onCreateRepo} onCancel={closeNewRepo} />
       )}
+      {metaRepoEditorId && (
+        <MetaRepoForm
+          key={metaRepoEditorId}
+          repos={repos}
+          metaRepo={
+            metaRepoEditorId === "new"
+              ? null
+              : (metaRepos.find(
+                  (metaRepo) => metaRepo.id === metaRepoEditorId,
+                ) ?? null)
+          }
+          onSubmit={onSaveMetaRepo}
+          onCancel={closeMetaRepoEditor}
+        />
+      )}
 
       {formError && <div className="sidebar__error">{formError}</div>}
 
       <div className="sidebar__scroll">
-        {grouped.length === 0 && (
+        {grouped.length === 0 && metaRepos.length === 0 && (
           <div className="sidebar__muted">No repos yet.</div>
         )}
 
         <ul className="sidebar__tree">
-          {grouped.map((group) => (
-            <RepoGroup
-              key={group.name}
-              group={group}
-              expanded={expandedByRepo[group.name] ?? defaultRepoExpanded(group)}
-              newSessionRepoName={newSessionFor}
-              renamingRepoName={renamingRepoName}
-              handlers={repoGroupHandlers}
-              selection={repoGroupSelection}
-              repoOps={repoGroupRepoOps}
-              sessionOps={repoGroupSessionOps}
-              workspaceOps={repoGroupWorkspaceOps}
-              isUnread={isUnread}
-              onError={setFormError}
-              revealRequest={
-                revealRequest?.repo === group.name ? revealRequest : null
+          {metaRepos.map((metaRepo) => (
+            <MetaRepoGroup
+              key={metaRepo.id}
+              metaRepo={metaRepo}
+              sessions={
+                collectionSessionsByMetaRepo.get(metaRepo.id) ?? EMPTY_SESSIONS
               }
-            />
+              expanded={metaRepoExpansion[metaRepo.id] ?? true}
+              newSessionOpen={newSessionForMetaRepo === metaRepo.id}
+              onToggle={setMetaRepoExpanded}
+              onSetNewSession={setNewSessionForMetaRepo}
+              onCreateSession={onCreateMetaRepoSession}
+              onEdit={setMetaRepoEditorId}
+              onDelete={setPendingMetaRepoDelete}
+              registerAnchor={registerMetaRepoAnchor}
+              selection={repoGroupSelection}
+              sessionOps={repoGroupSessionOps}
+              isUnread={isUnread}
+            >
+              <ul className="sidebar__tree sidebar__tree--nested">
+                {metaRepo.members
+                  .slice()
+                  .sort((a, b) => a.position - b.position)
+                  .map((member) => {
+                    const group = groupedByName.get(member.repo_name);
+                    return group ? (
+                      <RepoGroup
+                        key={group.name}
+                        group={group}
+                        expanded={
+                          expandedByRepo[group.name] ?? defaultRepoExpanded(group)
+                        }
+                        newSessionRepoName={newSessionFor}
+                        renamingRepoName={renamingRepoName}
+                        handlers={repoGroupHandlers}
+                        selection={repoGroupSelection}
+                        repoOps={repoGroupRepoOps}
+                        sessionOps={repoGroupSessionOps}
+                        workspaceOps={repoGroupWorkspaceOps}
+                        isUnread={isUnread}
+                        onError={setFormError}
+                        revealRequest={
+                          revealRequest?.repo === group.name
+                            ? revealRequest
+                            : null
+                        }
+                      />
+                    ) : (
+                      <li
+                        key={member.repo_name}
+                        className="sidebar__missing-repo"
+                      >
+                        {member.repo_name} (missing)
+                      </li>
+                    );
+                  })}
+              </ul>
+            </MetaRepoGroup>
           ))}
+          {ungrouped.length > 0 && (
+            <li className="sidebar__ungrouped">
+              {metaRepos.length > 0 && (
+                <div className="sidebar__ungrouped-label">Ungrouped</div>
+              )}
+              <ul className="sidebar__tree sidebar__tree--nested">
+                {ungrouped.map((group) => (
+                  <RepoGroup
+                    key={group.name}
+                    group={group}
+                    expanded={
+                      expandedByRepo[group.name] ?? defaultRepoExpanded(group)
+                    }
+                    newSessionRepoName={newSessionFor}
+                    renamingRepoName={renamingRepoName}
+                    handlers={repoGroupHandlers}
+                    selection={repoGroupSelection}
+                    repoOps={repoGroupRepoOps}
+                    sessionOps={repoGroupSessionOps}
+                    workspaceOps={repoGroupWorkspaceOps}
+                    isUnread={isUnread}
+                    onError={setFormError}
+                    revealRequest={
+                      revealRequest?.repo === group.name ? revealRequest : null
+                    }
+                  />
+                ))}
+              </ul>
+            </li>
+          )}
         </ul>
       </div>
+      {pendingMetaRepoDelete && (
+        <ConfirmDialog
+          title="Delete meta-repository?"
+          message="This removes only the saved grouping. Repositories and session history remain unchanged."
+          confirmLabel="Delete"
+          destructive
+          requireText={pendingMetaRepoDelete.name}
+          onConfirm={confirmMetaRepoDelete}
+          onCancel={cancelMetaRepoDelete}
+        />
+      )}
       {pendingRepoDelete && (
         <ConfirmDialog
           title={
@@ -580,6 +837,7 @@ function groupByRepo(
     });
   }
   for (const s of sessions) {
+    if (s.meta_repo) continue;
     if (!byName.has(s.repo)) {
       byName.set(s.repo, {
         name: s.repo,
@@ -649,6 +907,158 @@ function workspaceCompare(a: WorkspaceView, b: WorkspaceView): number {
   const dirtyB = b.git.uncommitted_count > 0 ? 1 : 0;
   if (dirtyA !== dirtyB) return dirtyB - dirtyA;
   return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+}
+
+interface MetaRepoGroupProps {
+  metaRepo: MetaRepoView;
+  sessions: SessionView[];
+  expanded: boolean;
+  newSessionOpen: boolean;
+  onToggle: (id: string, expanded: boolean) => void;
+  onSetNewSession: (id: string | null) => void;
+  onCreateSession: (
+    id: string,
+    form: NewSessionFormValue,
+  ) => void | Promise<void>;
+  onEdit: (id: string) => void;
+  onDelete: (metaRepo: MetaRepoView) => void;
+  registerAnchor: (id: string, el: HTMLLIElement | null) => void;
+  selection: RepoGroupSelection;
+  sessionOps: RepoGroupSessionOps;
+  isUnread: (sessionId: string, lastEventAt: string | null) => boolean;
+  children: React.ReactNode;
+}
+
+function MetaRepoGroup({
+  metaRepo,
+  sessions,
+  expanded,
+  newSessionOpen,
+  onToggle,
+  onSetNewSession,
+  onCreateSession,
+  onEdit,
+  onDelete,
+  registerAnchor,
+  selection,
+  sessionOps,
+  isUnread,
+  children,
+}: MetaRepoGroupProps) {
+  const anchorRef = useCallback(
+    (el: HTMLLIElement | null) => registerAnchor(metaRepo.id, el),
+    [metaRepo.id, registerAnchor],
+  );
+  const toggle = useCallback(
+    () => onToggle(metaRepo.id, !expanded),
+    [expanded, metaRepo.id, onToggle],
+  );
+  const toggleNewSession = useCallback(
+    () => onSetNewSession(newSessionOpen ? null : metaRepo.id),
+    [metaRepo.id, newSessionOpen, onSetNewSession],
+  );
+  const cancelNewSession = useCallback(
+    () => onSetNewSession(null),
+    [onSetNewSession],
+  );
+  const submitNewSession = useCallback(
+    (form: NewSessionFormValue) => onCreateSession(metaRepo.id, form),
+    [metaRepo.id, onCreateSession],
+  );
+  const edit = useCallback(() => onEdit(metaRepo.id), [metaRepo.id, onEdit]);
+  const requestDelete = useCallback(
+    () => onDelete(metaRepo),
+    [metaRepo, onDelete],
+  );
+
+  return (
+    <li
+      className="sidebar__meta-group"
+      ref={anchorRef}
+      data-meta-repo-id={metaRepo.id}
+    >
+      <div className="sidebar__meta-header">
+        <button
+          type="button"
+          className="sidebar__meta-toggle"
+          onClick={toggle}
+          aria-expanded={expanded}
+        >
+          <span
+            className={
+              expanded
+                ? "sidebar__chevron sidebar__chevron--open"
+                : "sidebar__chevron"
+            }
+          >
+            <Icon name="chevron-right" size={12} />
+          </span>
+          <Icon name="layers" size={12} />
+          <span className="sidebar__meta-name">{metaRepo.name}</span>
+          <span className="sidebar__group-count">{metaRepo.members.length}</span>
+        </button>
+        <Tooltip label={`New session in ${metaRepo.name}`}>
+          <button
+            type="button"
+            className="sidebar__icon-button sidebar__meta-action"
+            aria-label={`New session in ${metaRepo.name}`}
+            onClick={toggleNewSession}
+            disabled={metaRepo.members.length === 0}
+          >
+            <Icon name="plus" size={12} />
+          </button>
+        </Tooltip>
+        <Tooltip label={`Edit ${metaRepo.name}`}>
+          <button
+            type="button"
+            className="sidebar__icon-button sidebar__meta-action"
+            aria-label={`Edit ${metaRepo.name}`}
+            onClick={edit}
+          >
+            <Icon name="settings" size={12} />
+          </button>
+        </Tooltip>
+        <Tooltip label={`Delete ${metaRepo.name}`}>
+          <button
+            type="button"
+            className="sidebar__icon-button sidebar__icon-button--danger sidebar__meta-action"
+            aria-label={`Delete ${metaRepo.name}`}
+            onClick={requestDelete}
+          >
+            <Icon name="trash-2" size={12} />
+          </button>
+        </Tooltip>
+      </div>
+      {expanded && (
+        <div className="sidebar__meta-body">
+          {(newSessionOpen || sessions.length > 0) && (
+            <div className="sidebar__meta-sessions">
+              <div className="sidebar__ungrouped-label">Collection sessions</div>
+              {newSessionOpen && (
+                <NewSessionForm
+                  repoName={metaRepo.primary_repo_name ?? metaRepo.name}
+                  onSubmit={submitNewSession}
+                  onCancel={cancelNewSession}
+                />
+              )}
+              {sessions.map((session) => (
+                <SessionRow
+                  key={session.id}
+                  session={session}
+                  selected={session.id === selection.selectedSessionId}
+                  unread={isUnread(session.id, session.last_event_at)}
+                  onSelect={selection.onSelectSession}
+                  onDelete={sessionOps.onRequestDelete}
+                  onUpdate={sessionOps.onUpdateSession}
+                />
+              ))}
+            </div>
+          )}
+          {children}
+        </div>
+      )}
+    </li>
+  );
 }
 
 // ─── Repo group ─────────────────────────────────────────────────────
@@ -2222,6 +2632,210 @@ function RenameInput({
         onBlur={onInputBlur}
       />
     </form>
+  );
+}
+
+function MetaRepoForm({
+  repos,
+  metaRepo,
+  onSubmit,
+  onCancel,
+}: {
+  repos: RepoView[];
+  metaRepo: MetaRepoView | null;
+  onSubmit: (form: MetaRepoFormValue) => void;
+  onCancel: () => void;
+}) {
+  const initialMembers = useMemo(
+    () =>
+      metaRepo?.members
+        .slice()
+        .sort((a, b) => a.position - b.position)
+        .map((member) => member.repo_name) ?? [],
+    [metaRepo],
+  );
+  const [name, setName] = useState(metaRepo?.name ?? "");
+  const [members, setMembers] = useState(initialMembers);
+  const [primary, setPrimary] = useState(
+    metaRepo?.primary_repo_name ?? initialMembers[0] ?? "",
+  );
+  const availableRepos = useMemo(() => {
+    const byName = new Map(repos.map((repo) => [repo.name, repo]));
+    const selected = members
+      .map((member) => byName.get(member))
+      .filter((repo): repo is RepoView => Boolean(repo));
+    const selectedNames = new Set(members);
+    return [
+      ...selected,
+      ...repos
+        .filter((repo) => !selectedNames.has(repo.name))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    ];
+  }, [members, repos]);
+  const submit = useCallback(
+    (event: FormEvent) => {
+      event.preventDefault();
+      const trimmed = name.trim();
+      if (!trimmed || members.length === 0) return;
+      onSubmit({
+        name: trimmed,
+        members,
+        primary_repo_name: members.includes(primary) ? primary : members[0],
+      });
+    },
+    [members, name, onSubmit, primary],
+  );
+  const changeName = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => setName(event.target.value),
+    [],
+  );
+  const toggleMember = useCallback(
+    (repoName: string, selected: boolean) => {
+      setMembers((current) => {
+        if (selected) {
+          if (current.includes(repoName)) return current;
+          if (current.length === 0) setPrimary(repoName);
+          return [...current, repoName];
+        }
+        const next = current.filter((member) => member !== repoName);
+        setPrimary((currentPrimary) =>
+          currentPrimary === repoName ? (next[0] ?? "") : currentPrimary,
+        );
+        return next;
+      });
+    },
+    [],
+  );
+  const moveMember = useCallback((repoName: string, delta: number) => {
+    setMembers((current) => {
+      const from = current.indexOf(repoName);
+      const to = from + delta;
+      if (from < 0 || to < 0 || to >= current.length) return current;
+      const next = [...current];
+      [next[from], next[to]] = [next[to], next[from]];
+      return next;
+    });
+  }, []);
+  const selectPrimary = useCallback((repoName: string) => setPrimary(repoName), []);
+  const cancelOnEscape = useCallback(
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "Escape") onCancel();
+    },
+    [onCancel],
+  );
+
+  return (
+    <form className="sidebar__form sidebar__meta-form" onSubmit={submit}>
+      <div className="sidebar__form-title">
+        {metaRepo ? "Edit meta-repository" : "New meta-repository"}
+      </div>
+      <input
+        type="text"
+        value={name}
+        onChange={changeName}
+        onKeyDown={cancelOnEscape}
+        placeholder="meta-repository name"
+        aria-label="meta-repository name"
+        autoFocus
+      />
+      <fieldset className="sidebar__meta-members">
+        <legend>Repositories, in launch order</legend>
+        {availableRepos.map((repo) => {
+          const position = members.indexOf(repo.name);
+          return (
+            <MetaRepoMemberRow
+              key={repo.name}
+              repoName={repo.name}
+              selected={position >= 0}
+              primary={primary === repo.name}
+              canMoveUp={position > 0}
+              canMoveDown={position >= 0 && position < members.length - 1}
+              onToggle={toggleMember}
+              onPrimary={selectPrimary}
+              onMove={moveMember}
+            />
+          );
+        })}
+      </fieldset>
+      <div className="sidebar__form-actions">
+        <button type="button" onClick={onCancel}>
+          Cancel
+        </button>
+        <button type="submit" disabled={!name.trim() || members.length === 0}>
+          {metaRepo ? "Save" : "Create"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function MetaRepoMemberRow({
+  repoName,
+  selected,
+  primary,
+  canMoveUp,
+  canMoveDown,
+  onToggle,
+  onPrimary,
+  onMove,
+}: {
+  repoName: string;
+  selected: boolean;
+  primary: boolean;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onToggle: (repoName: string, selected: boolean) => void;
+  onPrimary: (repoName: string) => void;
+  onMove: (repoName: string, delta: number) => void;
+}) {
+  const toggle = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) =>
+      onToggle(repoName, event.target.checked),
+    [onToggle, repoName],
+  );
+  const makePrimary = useCallback(
+    () => onPrimary(repoName),
+    [onPrimary, repoName],
+  );
+  const moveUp = useCallback(() => onMove(repoName, -1), [onMove, repoName]);
+  const moveDown = useCallback(() => onMove(repoName, 1), [onMove, repoName]);
+  return (
+    <div className="sidebar__meta-member">
+      <label>
+        <input type="checkbox" checked={selected} onChange={toggle} />
+        <span>{repoName}</span>
+      </label>
+      {selected && (
+        <div className="sidebar__meta-member-actions">
+          <label title="Primary repository">
+            <input
+              type="radio"
+              name="meta-repo-primary"
+              checked={primary}
+              onChange={makePrimary}
+              aria-label={`Use ${repoName} as primary repository`}
+            />
+            primary
+          </label>
+          <button
+            type="button"
+            onClick={moveUp}
+            disabled={!canMoveUp}
+            aria-label={`Move ${repoName} up`}
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            onClick={moveDown}
+            disabled={!canMoveDown}
+            aria-label={`Move ${repoName} down`}
+          >
+            ↓
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
