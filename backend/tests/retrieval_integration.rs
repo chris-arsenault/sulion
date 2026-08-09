@@ -149,6 +149,7 @@ async fn context_defaults_to_repo_scope_from_header() {
         .unwrap();
     assert_eq!(body["scope"], "repo");
     assert_eq!(body["repo"], "sulion");
+    assert_eq!(body["repos"], json!(["sulion"]));
 }
 
 #[tokio::test]
@@ -201,6 +202,63 @@ async fn lexical_search_returns_assistant_evidence_in_current_repo() {
         0,
         "{body:#}"
     );
+}
+
+#[tokio::test]
+async fn repo_scope_uses_every_repository_in_the_pty_snapshot() {
+    let Some(_) = test_db_url() else {
+        eprintln!("skipping: SULION_TEST_DB not set");
+        return;
+    };
+    let pool = fresh_pool().await;
+    let alpha_session = seed_retrieval_fixture_for_repo(&pool, "alpha").await;
+    let beta_session = seed_retrieval_fixture_for_repo(&pool, "beta").await;
+    let collection_pty_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pty_sessions (id, repo, working_dir, state) \
+         VALUES ($1, 'alpha', '/repo', 'dead')",
+    )
+    .bind(collection_pty_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO pty_session_repos \
+            (pty_session_id, repo_name, workspace_id, role, position) \
+         VALUES ($1, 'alpha', NULL, 'primary', 0), \
+                ($1, 'beta', NULL, 'additional', 1)",
+    )
+    .bind(collection_pty_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let h = Harness::new(pool).await;
+
+    let body: serde_json::Value = h
+        .auth(
+            h.client
+                .get(format!("{}/v1/search", h.base))
+                .query(&[("q", "retrieval api"), ("search_mode", "lexical")])
+                .header("x-sulion-pty-id", collection_pty_id.to_string()),
+        )
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(body["context"]["repos"], json!(["alpha", "beta"]));
+    let session_ids = body["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|result| result["agent_session_uuid"].as_str().unwrap().to_string())
+        .collect::<std::collections::HashSet<_>>();
+    assert!(session_ids.contains(&alpha_session.to_string()));
+    assert!(session_ids.contains(&beta_session.to_string()));
 }
 
 #[tokio::test]
@@ -823,14 +881,20 @@ async fn file_history_uses_existing_timeline_file_touches() {
 }
 
 async fn seed_retrieval_fixture(pool: &db::Pool) -> Uuid {
+    seed_retrieval_fixture_for_repo(pool, "sulion").await
+}
+
+async fn seed_retrieval_fixture_for_repo(pool: &db::Pool, repo: &str) -> Uuid {
     let pty_id = Uuid::new_v4();
     let session_uuid = Uuid::new_v4();
     let now = Utc::now();
 
     sqlx::query(
-        "INSERT INTO pty_sessions (id, repo, working_dir, state) VALUES ($1, 'sulion', '/repo', 'dead')",
+        "INSERT INTO pty_sessions (id, repo, working_dir, state) \
+         VALUES ($1, $2, '/repo', 'dead')",
     )
     .bind(pty_id)
+    .bind(repo)
     .execute(pool)
     .await
     .unwrap();
@@ -846,9 +910,10 @@ async fn seed_retrieval_fixture(pool: &db::Pool) -> Uuid {
     .unwrap();
     sqlx::query(
         "INSERT INTO agent_session_metadata (session_uuid, agent, model, cwd) \
-         VALUES ($1, 'codex', 'test-model', '/home/sulion/repos/sulion')",
+         VALUES ($1, 'codex', 'test-model', $2)",
     )
     .bind(session_uuid)
+    .bind(format!("/home/sulion/repos/{repo}"))
     .execute(pool)
     .await
     .unwrap();
@@ -900,9 +965,10 @@ async fn seed_retrieval_fixture(pool: &db::Pool) -> Uuid {
     sqlx::query(
         "INSERT INTO timeline_file_touches \
             (session_uuid, turn_id, touch_ord, operation_ord, repo_name, repo_rel_path, touch_kind, is_write) \
-         VALUES ($1, 10, 0, 0, 'sulion', 'backend/src/retrieval.rs', 'write', true)",
+         VALUES ($1, 10, 0, 0, $2, 'backend/src/retrieval.rs', 'write', true)",
     )
     .bind(session_uuid)
+    .bind(repo)
     .execute(pool)
     .await
     .unwrap();

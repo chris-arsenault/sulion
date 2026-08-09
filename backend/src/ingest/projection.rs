@@ -11,9 +11,10 @@ use crate::db::Pool;
 use crate::ingest::canonical::OperationCategory;
 
 use super::timeline::{
-    load_all_session_events, FileTouchContext, ProjectionFilters, StoredEvent, TimelineFileTouch,
-    TimelineOperationBadge, TimelineResponse, TimelineSubagent, TimelineSummaryResponse,
-    TimelineToolPair, TimelineToolResult, TimelineTurn, TimelineTurnSummary,
+    load_all_session_events, FileTouchContext, FileTouchRoot, ProjectionFilters, StoredEvent,
+    TimelineFileTouch, TimelineOperationBadge, TimelineResponse, TimelineSubagent,
+    TimelineSummaryResponse, TimelineToolPair, TimelineToolResult, TimelineTurn,
+    TimelineTurnSummary,
 };
 
 mod file_trace;
@@ -96,15 +97,18 @@ async fn load_file_touch_context(
 ) -> anyhow::Result<Option<FileTouchContext>> {
     #[derive(FromRow)]
     struct ContextRow {
+        pty_session_id: Option<Uuid>,
         repo: Option<String>,
         working_dir: Option<String>,
         repo_path: Option<String>,
     }
 
     let row: Option<ContextRow> = sqlx::query_as(
-        "SELECT ps.repo, ps.working_dir, r.path AS repo_path \
+        "SELECT ps.id AS pty_session_id, ps.repo, ps.working_dir, \
+                COALESCE(ws.path, r.path) AS repo_path \
            FROM claude_sessions cs \
            LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
+           LEFT JOIN workspaces ws ON ws.id = ps.workspace_id \
            LEFT JOIN repos r ON r.name = ps.repo \
           WHERE cs.session_uuid = $1",
     )
@@ -119,10 +123,48 @@ async fn load_file_touch_context(
     let (Some(repo_name), Some(working_dir)) = (row.repo, row.working_dir) else {
         return Ok(None);
     };
-    let repo_root = row.repo_path.unwrap_or_else(|| working_dir.clone());
+    let primary_root = row.repo_path.unwrap_or_else(|| working_dir.clone());
+    #[derive(FromRow)]
+    struct RootRow {
+        repo_name: String,
+        root_path: Option<String>,
+    }
+    let mut roots = if let Some(pty_session_id) = row.pty_session_id {
+        sqlx::query_as::<_, RootRow>(
+            "SELECT psr.repo_name, COALESCE(ws.path, r.path) AS root_path \
+               FROM pty_session_repos psr \
+               LEFT JOIN workspaces ws ON ws.id = psr.workspace_id \
+               LEFT JOIN repos r ON r.name = psr.repo_name \
+              WHERE psr.pty_session_id = $1 \
+              ORDER BY psr.position ASC",
+        )
+        .bind(pty_session_id)
+        .fetch_all(pool)
+        .await
+        .context("load projection file-touch roots")?
+        .into_iter()
+        .filter_map(|root| {
+            Some(FileTouchRoot {
+                repo_name: root.repo_name,
+                path: PathBuf::from(root.root_path?),
+            })
+        })
+        .collect()
+    } else {
+        Vec::new()
+    };
+    if !roots.iter().any(|root| root.repo_name == repo_name) {
+        roots.insert(
+            0,
+            FileTouchRoot {
+                repo_name: repo_name.clone(),
+                path: PathBuf::from(primary_root),
+            },
+        );
+    }
     Ok(Some(FileTouchContext {
-        repo_name,
-        repo_root: PathBuf::from(repo_root),
+        roots,
+        primary_repo_name: repo_name,
         working_dir: PathBuf::from(working_dir),
     }))
 }

@@ -38,7 +38,7 @@ async fn semantic_search_pgvector(
                 AND re.embedding_vector IS NOT NULL \
                 AND re.source_kind = ANY($4) \
                 AND ($5::UUID IS NULL OR re.session_uuid = $5) \
-                AND ($6::TEXT IS NULL OR re.repo_name = $6) \
+                AND ($6::TEXT[] IS NULL OR re.repo_name = ANY($6)) \
                 AND (1.0 - (re.embedding_vector <=> $1::vector)) >= $17 \
                 AND ($18::BOOLEAN OR NOT ( \
                      re.source_kind IN ('tool_call', 'tool_result', 'tool_error') \
@@ -180,7 +180,7 @@ async fn semantic_search_exact(
            LEFT JOIN timeline_operations o ON o.session_uuid = re.session_uuid AND o.turn_id = re.turn_id AND o.operation_ord = re.operation_ord \
           WHERE re.source_kind = ANY($1) \
             AND ($2::UUID IS NULL OR re.session_uuid = $2) \
-            AND ($3::TEXT IS NULL OR re.repo_name = $3) \
+            AND ($3::TEXT[] IS NULL OR re.repo_name = ANY($3)) \
             AND ($4::TEXT IS NULL OR cs.agent = $4) \
             AND ($5::TEXT IS NULL OR asm.model = $5) \
             AND ($6::TIMESTAMPTZ IS NULL OR COALESCE(e.timestamp, tt.end_timestamp) >= $6) \
@@ -300,10 +300,8 @@ fn scoped_session(filters: &SearchFilters) -> Option<Uuid> {
         .flatten()
 }
 
-fn scoped_repo(filters: &SearchFilters) -> Option<&str> {
-    (filters.context.scope == "repo")
-        .then_some(filters.context.repo.as_deref())
-        .flatten()
+fn scoped_repo(filters: &SearchFilters) -> Option<&Vec<String>> {
+    (filters.context.scope == "repo").then_some(&filters.context.repos)
 }
 
 fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {

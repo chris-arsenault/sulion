@@ -916,7 +916,22 @@ async fn timeline_returns_projected_turns() {
     let h = Harness::new().await;
 
     std::fs::create_dir_all(h.repos_root().join("r")).unwrap();
+    std::fs::create_dir_all(h.repos_root().join("secondary")).unwrap();
     let pty_id = insert_test_pty(&h.state.pool, "r", &h.repos_root().join("r")).await;
+    sqlx::query("INSERT INTO repos (name, path) VALUES ('secondary', $1)")
+        .bind(h.repos_root().join("secondary").to_string_lossy().as_ref())
+        .execute(&h.state.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO pty_session_repos \
+            (pty_session_id, repo_name, workspace_id, role, position) \
+         VALUES ($1, 'secondary', NULL, 'additional', 1)",
+    )
+    .bind(pty_id)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
 
     let session_uuid = Uuid::new_v4();
     sulion::correlate::apply(
@@ -984,6 +999,19 @@ async fn timeline_returns_projected_turns() {
          ($1, 240, 0, 'tool_result', 'fn main() {}', 'toolu_1', NULL, NULL, NULL, '{\"path\":\"src/lib.rs\",\"old_text\":\"fn old() {}\",\"new_text\":\"fn main() {}\"}'::jsonb, false, NULL)",
     )
     .bind(session_uuid)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+    let secondary_file = h.repos_root().join("secondary/src/service.rs");
+    sqlx::query(
+        "UPDATE event_blocks SET tool_input = $2 \
+          WHERE session_uuid = $1 AND byte_offset = 120 AND ord = 1",
+    )
+    .bind(session_uuid)
+    .bind(json!({
+        "path": "src/lib.rs",
+        "paths": [secondary_file.to_string_lossy()],
+    }))
     .execute(&h.state.pool)
     .await
     .unwrap();
@@ -1067,6 +1095,14 @@ async fn timeline_returns_projected_turns() {
     assert_eq!(
         turn["tool_pairs"][0]["file_touches"][0]["path"],
         "src/lib.rs"
+    );
+    assert_eq!(
+        turn["tool_pairs"][0]["file_touches"][1]["repo"],
+        "secondary"
+    );
+    assert_eq!(
+        turn["tool_pairs"][0]["file_touches"][1]["path"],
+        "src/service.rs"
     );
     assert_eq!(turn["chunks"][0]["kind"], "assistant");
     assert_eq!(turn["chunks"][1]["kind"], "tool");

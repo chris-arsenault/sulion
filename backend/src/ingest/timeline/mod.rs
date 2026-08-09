@@ -18,7 +18,7 @@ pub use derived::{
     build_session_projection, StoredActivitySignal, StoredFileTouchProjection,
     StoredOperationProjection, StoredTurnProjection,
 };
-pub use file_touches::{extract_file_touches, FileTouchContext};
+pub use file_touches::{extract_file_touches, FileTouchContext, FileTouchRoot};
 pub use load::{
     count_session_events, load_all_session_events, load_session_events, resolve_session_target,
 };
