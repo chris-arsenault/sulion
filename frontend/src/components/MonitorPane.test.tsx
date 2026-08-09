@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { MonitorPane } from "./MonitorPane";
 import { ContextMenuHost } from "./common/ContextMenu";
 import { resetContextMenuStore } from "./common/contextMenuStore";
-import type { SessionView } from "../api/types";
+import type { MetaRepoView, SessionView } from "../api/types";
 import { useSessionStore } from "../state/SessionStore";
 import { useTabStore } from "../state/TabStore";
 import { appCommands } from "../state/AppCommands";
@@ -16,6 +16,20 @@ const ENDED_AT = "2026-05-02T00:00:02Z";
 const AGENT_SESSION_UUID = "00000000-0000-0000-0000-000000000001";
 const ALPHA_TASK = "Alpha task";
 const APP_STATE_URL = "/api/app-state";
+const META_REPO_ID = "00000000-0000-0000-0000-000000000099";
+const META_REPO_NAME = "Platform collection";
+
+const META_REPO: MetaRepoView = {
+  id: META_REPO_ID,
+  name: META_REPO_NAME,
+  primary_repo_name: "alpha",
+  members: [
+    { repo_name: "alpha", exists: true },
+    { repo_name: "beta", exists: true },
+  ],
+  created_at: STARTED_AT,
+  updated_at: STARTED_AT,
+};
 
 function session(id: string, revision: number): SessionView {
   return {
@@ -39,6 +53,7 @@ function session(id: string, revision: number): SessionView {
 
 describe("MonitorPane", () => {
   afterEach(() => {
+    useSessionStore.setState({ metaRepos: [] });
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     resetContextMenuStore();
@@ -200,6 +215,83 @@ describe("MonitorPane", () => {
         screen.getByText(/80K of 100K used · 20% left/),
       ).toBeDefined(),
     );
+  });
+
+  it("groups current members and collection sessions under their meta-repository", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo) => {
+        const url = typeof input === "string" ? input : input.url;
+        if (url === APP_STATE_URL) {
+          return jsonResponse(
+            appStatePayload({
+              sessions: useSessionStore.getState().sessions,
+              metaRepos: useSessionStore.getState().metaRepos,
+            }),
+          );
+        }
+        return jsonResponse({ generated_at: STARTED_AT, sessions: [] });
+      }),
+    );
+    useSessionStore.setState({
+      sessions: [
+        { ...session("sess-alpha", 1), label: "Alpha member" },
+        {
+          ...session("sess-beta", 1),
+          label: "Beta member",
+          repo: "beta",
+          working_dir: "/tmp/beta",
+        },
+        {
+          ...session("sess-collection", 1),
+          label: "Collection work",
+          meta_repo: { id: META_REPO_ID, name: META_REPO_NAME },
+        },
+        {
+          ...session("sess-gamma", 1),
+          repo: "gamma",
+          working_dir: "/tmp/gamma",
+        },
+      ],
+      metaRepos: [META_REPO],
+      sessionsLoaded: true,
+    });
+
+    const newMetaRepoSession = vi.spyOn(
+      appCommands,
+      "newMetaRepoSession",
+    );
+    render(
+      <>
+        <MonitorPane />
+        <ContextMenuHost />
+      </>,
+    );
+
+    const metaTeam = await screen.findByRole("region", {
+      name: `${META_REPO_NAME} meta-repository team`,
+    });
+    expect(within(metaTeam).getByText("Alpha member")).toBeDefined();
+    expect(within(metaTeam).getByText("Beta member")).toBeDefined();
+    expect(within(metaTeam).getByText("Collection work")).toBeDefined();
+    expect(within(metaTeam).getByText("alpha")).toBeDefined();
+    expect(within(metaTeam).getByText("beta")).toBeDefined();
+    expect(within(metaTeam).getByText("collection")).toBeDefined();
+    expect(screen.queryByRole("region", { name: "alpha team" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "beta team" })).toBeNull();
+    expect(screen.getByRole("region", { name: "gamma team" })).toBeDefined();
+
+    const user = userEvent.setup();
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: within(metaTeam).getByRole("heading", { name: META_REPO_NAME }),
+    });
+    await user.click(
+      await screen.findByRole("menuitem", { name: "New collection session" }),
+    );
+    expect(newMetaRepoSession).toHaveBeenCalledWith({
+      metaRepoId: META_REPO_ID,
+    });
   });
 
   it("shows attention state and opens a terminal's published plan", async () => {

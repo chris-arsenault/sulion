@@ -6,6 +6,7 @@ import type {
   MonitorSessionTurn,
   MonitorTimelineRequest,
   MonitorTimelineResponse,
+  MetaRepoView,
   PlanSummaryView,
   RepoGitSummary,
   SessionActivityState,
@@ -16,7 +17,7 @@ import type { IconName } from "../icons";
 import { isResumableSession, useResumeSession } from "../hooks/useResumeSession";
 import { appCommands } from "../state/AppCommands";
 import { useSessions } from "../state/SessionStore";
-import { useTabs } from "../state/TabStore";
+import { type TabStore, useTabs } from "../state/TabStore";
 import {
   contextMenuTriggerProps,
   type MenuItem,
@@ -43,11 +44,12 @@ export function MonitorPane({
   const [data, setData] = useState<MonitorTimelineResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const { sessions, plans, repos } = useSessions(
+  const { sessions, plans, repos, metaRepos } = useSessions(
     useShallow((store) => ({
       sessions: store.sessions,
       plans: store.plans,
       repos: store.repos,
+      metaRepos: store.metaRepos,
     })),
   );
   const openTab = useTabs((store) => store.openTab);
@@ -151,8 +153,8 @@ export function MonitorPane({
   );
   const counts = useMemo(() => activityCounts(liveSessions), [liveSessions]);
   const teams = useMemo(
-    () => buildTeams(liveSessions, abandonedSessions, plans),
-    [abandonedSessions, liveSessions, plans],
+    () => buildTeams(liveSessions, abandonedSessions, plans, metaRepos),
+    [abandonedSessions, liveSessions, metaRepos, plans],
   );
   const contextWatchCount = useMemo(
     () =>
@@ -252,10 +254,14 @@ export function MonitorPane({
         <div className="monitor-pane__teams">
           {teams.map((team) => (
             <TeamSection
-              key={team.repo}
+              key={team.key}
               team={team}
               turnBySession={turnBySession}
-              git={gitByRepo.get(team.repo) ?? null}
+              git={
+                team.kind === "repo"
+                  ? gitByRepo.get(team.repo) ?? null
+                  : null
+              }
               onNavigate={onNavigate}
             />
           ))}
@@ -281,12 +287,101 @@ function BarStat({
   );
 }
 
-interface MonitorTeam {
-  repo: string;
+interface MonitorTeamBase {
+  key: string;
+  name: string;
+  repoNames: string[];
   sessions: SessionView[];
   /** Orphaned-but-resumable sessions, newest activity first. */
   abandoned: SessionView[];
   plans: PlanSummaryView[];
+}
+
+type MonitorTeam = MonitorTeamBase &
+  (
+    | { kind: "repo"; repo: string }
+    | { kind: "meta"; metaRepo: MetaRepoView }
+  );
+
+function teamHeaderMenuItems(
+  team: MonitorTeam,
+  openTab: TabStore["openTab"],
+  onNavigate?: () => void,
+): MenuItem[] {
+  if (team.kind === "meta") {
+    return [
+      {
+        kind: "item",
+        id: "new-meta-repo-session",
+        label: "New collection session",
+        onSelect: () => {
+          appCommands.newMetaRepoSession({ metaRepoId: team.metaRepo.id });
+          onNavigate?.();
+        },
+      },
+      { kind: "separator" },
+      {
+        kind: "item",
+        id: "reveal-meta-repo",
+        label: "Reveal in sidebar",
+        onSelect: () => {
+          appCommands.revealMetaRepo({ metaRepoId: team.metaRepo.id });
+          onNavigate?.();
+        },
+      },
+    ];
+  }
+  return [
+    {
+      kind: "item",
+      id: "open-repo-plans",
+      label: "Open published plans",
+      onSelect: () => {
+        appCommands.openPlan({ repo: team.repo });
+        onNavigate?.();
+      },
+    },
+    {
+      kind: "item",
+      id: "open-repo-timeline",
+      label: "Open repo timeline",
+      onSelect: () => {
+        openTab({ kind: "timeline", repo: team.repo }, "bottom");
+        onNavigate?.();
+      },
+    },
+    {
+      kind: "item",
+      id: "open-repo-diff",
+      label: "Open repo diff",
+      onSelect: () => {
+        openTab({ kind: "diff", repo: team.repo });
+        onNavigate?.();
+      },
+    },
+    { kind: "separator" },
+    {
+      kind: "item",
+      id: "reveal-repo",
+      label: "Reveal in sidebar",
+      onSelect: () => {
+        appCommands.revealRepo({ repo: team.repo });
+        onNavigate?.();
+      },
+    },
+  ];
+}
+
+function teamRegionAriaLabel(team: MonitorTeam): string {
+  return team.kind === "meta"
+    ? `${team.name} meta-repository team`
+    : `${team.name} team`;
+}
+
+function teamActionAriaLabel(team: MonitorTeam): string {
+  return team.kind === "meta"
+    ? `${team.name} meta-repository actions`
+    : `${team.name} repo actions`;
 }
 
 function TeamSection({
@@ -304,46 +399,10 @@ function TeamSection({
   const openCtx = useContextMenu((store) => store.open);
   const headerMenuTrigger = useMemo(
     () =>
-      contextMenuTriggerProps(openCtx, () => [
-        {
-          kind: "item" as const,
-          id: "open-repo-plans",
-          label: "Open published plans",
-          onSelect: () => {
-            appCommands.openPlan({ repo: team.repo });
-            onNavigate?.();
-          },
-        },
-        {
-          kind: "item" as const,
-          id: "open-repo-timeline",
-          label: "Open repo timeline",
-          onSelect: () => {
-            openTab({ kind: "timeline", repo: team.repo }, "bottom");
-            onNavigate?.();
-          },
-        },
-        {
-          kind: "item" as const,
-          id: "open-repo-diff",
-          label: "Open repo diff",
-          onSelect: () => {
-            openTab({ kind: "diff", repo: team.repo });
-            onNavigate?.();
-          },
-        },
-        { kind: "separator" as const },
-        {
-          kind: "item" as const,
-          id: "reveal-repo",
-          label: "Reveal in sidebar",
-          onSelect: () => {
-            appCommands.revealRepo({ repo: team.repo });
-            onNavigate?.();
-          },
-        },
-      ]),
-    [onNavigate, openCtx, openTab, team.repo],
+      contextMenuTriggerProps(openCtx, () =>
+        teamHeaderMenuItems(team, openTab, onNavigate),
+      ),
+    [onNavigate, openCtx, openTab, team],
   );
   const counts = activityCounts(team.sessions);
   // Plans already visible on a staffed row stay off the header to keep it
@@ -355,7 +414,7 @@ function TeamSection({
   );
   const headerPlans = team.plans.filter((plan) => !staffedPlanIds.has(plan.id));
   return (
-    <section className="monitor-team" aria-label={`${team.repo} team`}>
+    <section className="monitor-team" aria-label={teamRegionAriaLabel(team)}>
       {/* The mark carries the a11y-complete menu trigger (keyboard +
         * right-click); the header-wide listener is a pointer-only
         * convenience so right-click works anywhere on the row. */}
@@ -366,12 +425,23 @@ function TeamSection({
       >
         <span
           className="monitor-team__mark"
-          aria-label={`${team.repo} repo actions`}
+          aria-label={teamActionAriaLabel(team)}
           {...headerMenuTrigger}
         >
-          {team.repo.slice(0, 2).toUpperCase()}
+          {team.name.slice(0, 2).toUpperCase()}
         </span>
-        <h3>{team.repo}</h3>
+        <h3>{team.name}</h3>
+        {team.kind === "meta" ? (
+          <Tooltip
+            label={`Meta-repository members\n${team.repoNames.join("\n")}`}
+          >
+            <span className="monitor-team__scope">
+              <Sigil icon="layers" size={12} tone="mute" />
+              <span className="tabular">{team.repoNames.length}</span> repo
+              {team.repoNames.length === 1 ? "" : "s"}
+            </span>
+          </Tooltip>
+        ) : null}
         {git ? (
           <Tooltip
             label={[
@@ -420,6 +490,7 @@ function TeamSection({
               key={session.id}
               session={session}
               item={turnBySession.get(session.id) ?? null}
+              scopeLabel={sessionScopeLabel(team, session)}
               onNavigate={onNavigate}
             />
           ))}
@@ -427,6 +498,7 @@ function TeamSection({
             <AbandonedCard
               key={session.id}
               session={session}
+              scopeLabel={sessionScopeLabel(team, session)}
               onNavigate={onNavigate}
             />
           ))}
@@ -452,9 +524,11 @@ function TeamSection({
  * SessionEndedPane resume flow exactly. */
 function AbandonedCard({
   session,
+  scopeLabel,
   onNavigate,
 }: {
   session: SessionView;
+  scopeLabel: string | null;
   onNavigate?: () => void;
 }) {
   const openTab = useTabs((store) => store.openTab);
@@ -541,6 +615,9 @@ function AbandonedCard({
         </span>
       </div>
       <p className="monitor-card__summary monitor-card__summary--shell">
+        {scopeLabel ? (
+          <span className="monitor-card__scope">{scopeLabel}</span>
+        ) : null}
         {error ?? `orphaned ${agent} session · resumable`}
       </p>
       <div className="monitor-card__stats">
@@ -562,10 +639,12 @@ function AbandonedCard({
 function TerminalCard({
   session,
   item,
+  scopeLabel,
   onNavigate,
 }: {
   session: SessionView;
   item: MonitorSessionTurn | null;
+  scopeLabel: string | null;
   onNavigate?: () => void;
 }) {
   const openTab = useTabs((store) => store.openTab);
@@ -773,8 +852,11 @@ function TerminalCard({
           </span>
         </Tooltip>
       </div>
-      <Tooltip label={activitySummary}>
+      <Tooltip label={scopedSummary(scopeLabel, activitySummary)}>
         <p className={`monitor-card__summary monitor-card__summary--${state}`}>
+          {scopeLabel ? (
+            <span className="monitor-card__scope">{scopeLabel}</span>
+          ) : null}
           {activitySummary}
         </p>
       </Tooltip>
@@ -902,6 +984,7 @@ function PlanChip({
   return (
     <Tooltip
       label={[
+        `Repository: ${plan.repo_name}`,
         plan.title,
         [
           `${plan.current_phase_title ?? "No current phase"} · ${plan.completed_phases}/${plan.total_phases} phases`,
@@ -909,7 +992,9 @@ function PlanChip({
         ]
           .filter(Boolean)
           .join(" · "),
-      ].join("\n")}
+      ]
+        .filter(Boolean)
+        .join("\n")}
     >
       <button
         type="button"
@@ -1012,32 +1097,89 @@ function buildTeams(
   sessions: SessionView[],
   abandoned: SessionView[],
   plans: PlanSummaryView[],
+  metaRepos: MetaRepoView[],
 ): MonitorTeam[] {
   const teams = new Map<string, MonitorTeam>();
-  const teamFor = (repo: string): MonitorTeam => {
-    const team = teams.get(repo) ?? {
+  const metaRepoById = new Map(
+    metaRepos.map((metaRepo) => [metaRepo.id, metaRepo]),
+  );
+  const metaRepoByMember = new Map<string, MetaRepoView>();
+  for (const metaRepo of metaRepos) {
+    for (const member of metaRepo.members) {
+      metaRepoByMember.set(member.repo_name, metaRepo);
+    }
+  }
+  const metaTeamFor = (metaRepo: MetaRepoView): MonitorTeam => {
+    const key = `meta:${metaRepo.id}`;
+    const team = teams.get(key) ?? {
+      kind: "meta" as const,
+      key,
+      name: metaRepo.name,
+      repoNames: metaRepo.members
+        .map((member) => member.repo_name)
+        .sort((a, b) => a.localeCompare(b)),
+      metaRepo,
+      sessions: [],
+      abandoned: [],
+      plans: [],
+    };
+    teams.set(key, team);
+    return team;
+  };
+  const repoTeamFor = (repo: string): MonitorTeam => {
+    const key = `repo:${repo}`;
+    const team = teams.get(key) ?? {
+      kind: "repo" as const,
+      key,
+      name: repo,
+      repoNames: [repo],
       repo,
       sessions: [],
       abandoned: [],
       plans: [],
     };
-    teams.set(repo, team);
+    teams.set(key, team);
     return team;
   };
+  const teamForSession = (session: SessionView): MonitorTeam => {
+    const explicitMetaRepo = session.meta_repo
+      ? metaRepoById.get(session.meta_repo.id)
+      : null;
+    const metaRepo = explicitMetaRepo ?? metaRepoByMember.get(session.repo);
+    return metaRepo ? metaTeamFor(metaRepo) : repoTeamFor(session.repo);
+  };
+  const teamForRepo = (repo: string): MonitorTeam => {
+    const metaRepo = metaRepoByMember.get(repo);
+    return metaRepo ? metaTeamFor(metaRepo) : repoTeamFor(repo);
+  };
   for (const session of sessions) {
-    teamFor(session.repo).sessions.push(session);
+    teamForSession(session).sessions.push(session);
   }
   for (const session of abandoned) {
-    teamFor(session.repo).abandoned.push(session);
+    teamForSession(session).abandoned.push(session);
   }
   for (const plan of plans) {
-    teamFor(plan.repo_name).plans.push(plan);
+    teamForRepo(plan.repo_name).plans.push(plan);
   }
   return Array.from(teams.values()).sort(
     (a, b) =>
       activityCounts(b.sessions).attention -
-        activityCounts(a.sessions).attention || a.repo.localeCompare(b.repo),
+        activityCounts(a.sessions).attention || a.name.localeCompare(b.name),
   );
+}
+
+function sessionScopeLabel(
+  team: MonitorTeam,
+  session: SessionView,
+): string | null {
+  if (team.kind !== "meta") return null;
+  return session.meta_repo?.id === team.metaRepo.id
+    ? "collection"
+    : session.repo;
+}
+
+function scopedSummary(scopeLabel: string | null, summary: string): string {
+  return scopeLabel ? `${scopeLabel} · ${summary}` : summary;
 }
 
 type HealthLevel = "healthy" | "warning" | "critical" | "unknown";

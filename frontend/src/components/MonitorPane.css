@@ -109,6 +109,17 @@
   white-space: nowrap;
 }
 
+.monitor-team__scope {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent-hi);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  white-space: nowrap;
+}
+
 .monitor-team__dirty {
   color: var(--warn-fg);
 }
@@ -378,6 +389,18 @@
 
 .monitor-card__summary--blocked {
   color: var(--crit-fg);
+}
+
+.monitor-card__scope {
+  display: inline-flex;
+  margin-right: 5px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-1);
+  padding: 0 4px;
+  background: var(--canvas-2);
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-style: normal;
 }
 
 .monitor-card__stats {

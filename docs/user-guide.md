@@ -95,13 +95,16 @@ PTY with `sulion plan`; see [`plans.md`](plans.md).
 ## Overview — engineering teams
 
 The **Overview** tab shows every live terminal, whether or not its terminal tab
-is currently open. Repositories appear as teams and terminals as engineer
-cards, with teams needing attention first. Each card combines the agent's
-operational state and short summary, attached plan/current phase, latest report,
-model, uptime, cumulative token spend, average token rate, and context
-remaining. Context is only shown when the transcript reports both current
-usage and a context window; unavailable signals are labeled honestly. Open
-plans remain visible even when no terminal is attached.
+is currently open. Meta-repositories appear as teams containing the current
+member repositories' terminals and open plans; collection sessions appear once
+in that team and are labeled as collection work. Repositories outside a
+meta-repository remain their own teams. Teams needing attention appear first.
+Each card combines the agent's operational state and short summary, attached
+plan/current phase, latest report, model, uptime, cumulative token spend,
+average token rate, and context remaining. Context is only shown when the
+transcript reports both current usage and a context window; unavailable signals
+are labeled honestly. Open plans remain visible even when no terminal is
+attached.
 
 ## Thinking fly-out
 
