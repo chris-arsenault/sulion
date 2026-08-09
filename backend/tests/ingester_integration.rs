@@ -571,6 +571,140 @@ async fn claude_edit_tool_result_payload_is_persisted_canonically() {
 }
 
 #[tokio::test]
+async fn incremental_projection_preserves_unchanged_operation_embeddings() {
+    let pool = fresh_pool().await;
+    let fx = Fixture::new();
+    fx.append(
+        r#"{"type":"user","timestamp":"2025-01-01T00:00:00Z","message":{"role":"user","content":"edit the file"}}"#,
+    );
+    fx.append("\n");
+    fx.append(
+        r#"{"type":"assistant","timestamp":"2025-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_edit_1","name":"Edit","input":{"file_path":"src/lib.rs"}}]}}"#,
+    );
+    fx.append("\n");
+
+    let ingester = Ingester::new();
+    ingester.tick(&pool, &fx.config()).await.unwrap();
+
+    let (call_key, content_hash, turn_id, operation_ord): (String, String, i64, i32) =
+        sqlx::query_as(
+            "UPDATE retrieval_embedding_sources \
+                SET index_status = 'indexed', indexed_at = NOW() \
+              WHERE session_uuid = $1 AND source_family = 'operation_call' \
+          RETURNING source_key, content_hash, turn_id, operation_ord",
+        )
+        .bind(fx.session_uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO retrieval_embeddings \
+            (source_kind, source_key, session_uuid, turn_id, operation_ord, content_hash, \
+             embedding_model, embedding_dimensions, embedding) \
+         VALUES ('tool_call', $1, $2, $3, $4, $5, 'test-model', 1, ARRAY[0.5]::REAL[])",
+    )
+    .bind(&call_key)
+    .bind(fx.session_uuid)
+    .bind(turn_id)
+    .bind(operation_ord)
+    .bind(&content_hash)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let call_version_before: String = sqlx::query_scalar(
+        "SELECT xmin::TEXT FROM retrieval_embedding_sources WHERE source_key = $1",
+    )
+    .bind(&call_key)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let stale_key = format!("operation:{}:{turn_id}:99:call", fx.session_uuid);
+    sqlx::query(
+        "INSERT INTO retrieval_embedding_sources \
+            (source_family, source_kind, source_key, session_uuid, turn_id, operation_ord, \
+             content_hash, index_status, indexed_at) \
+         VALUES ('operation_call', 'tool_call', $1, $2, $3, 99, 'stale', 'indexed', NOW())",
+    )
+    .bind(&stale_key)
+    .bind(fx.session_uuid)
+    .bind(turn_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO retrieval_embeddings \
+            (source_kind, source_key, session_uuid, turn_id, operation_ord, content_hash, \
+             embedding_model, embedding_dimensions, embedding) \
+         VALUES ('tool_call', $1, $2, $3, 99, 'stale', 'test-model', 1, ARRAY[0.5]::REAL[])",
+    )
+    .bind(&stale_key)
+    .bind(fx.session_uuid)
+    .bind(turn_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    fx.append(
+        r#"{"type":"user","timestamp":"2025-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_edit_1","content":"updated src/lib.rs","is_error":false}]}}"#,
+    );
+    fx.append("\n");
+    ingester.tick(&pool, &fx.config()).await.unwrap();
+
+    let (call_status, call_version_after): (String, String) = sqlx::query_as(
+        "SELECT index_status, xmin::TEXT \
+           FROM retrieval_embedding_sources \
+          WHERE source_key = $1",
+    )
+    .bind(&call_key)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(call_status, "indexed");
+    assert_eq!(call_version_after, call_version_before);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM retrieval_embeddings WHERE source_key = $1",
+        )
+        .bind(&call_key)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1
+    );
+
+    let result_status: String = sqlx::query_scalar(
+        "SELECT index_status \
+           FROM retrieval_embedding_sources \
+          WHERE session_uuid = $1 AND source_family = 'operation_result'",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(result_status, "pending");
+
+    let stale_status: String = sqlx::query_scalar(
+        "SELECT index_status FROM retrieval_embedding_sources WHERE source_key = $1",
+    )
+    .bind(&stale_key)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stale_status, "deleted");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM retrieval_embeddings WHERE source_key = $1",
+        )
+        .bind(&stale_key)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn append_rebuilds_only_the_affected_projection_suffix() {
     let pool = fresh_pool().await;
     let fx = Fixture::new();

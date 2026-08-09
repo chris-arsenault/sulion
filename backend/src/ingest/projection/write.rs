@@ -20,7 +20,9 @@ pub async fn rebuild_session_projection(pool: &Pool, session_uuid: Uuid) -> anyh
 
     let mut tx = pool.begin().await.context("begin projection tx")?;
     clear_session_projection(&mut tx, session_uuid).await?;
-    insert_projection_rows(&mut tx, session_uuid, &projected).await?;
+    let expected_source_keys = insert_projection_rows(&mut tx, session_uuid, &projected).await?;
+    reconcile_operation_embedding_sources(&mut tx, session_uuid, None, &expected_source_keys)
+        .await?;
     refresh_timeline_session_state(&mut tx, session_uuid).await?;
     tx.commit().await.context("commit projection tx")?;
     Ok(projected.len())
@@ -58,7 +60,14 @@ pub async fn rebuild_session_projection_after_insert(
         .await
         .context("begin incremental projection tx")?;
     clear_session_projection_from(&mut tx, session_uuid, anchor.turn_id).await?;
-    insert_projection_rows(&mut tx, session_uuid, &projected).await?;
+    let expected_source_keys = insert_projection_rows(&mut tx, session_uuid, &projected).await?;
+    reconcile_operation_embedding_sources(
+        &mut tx,
+        session_uuid,
+        Some(anchor.turn_id),
+        &expected_source_keys,
+    )
+    .await?;
     refresh_timeline_session_state(&mut tx, session_uuid).await?;
     tx.commit()
         .await
@@ -129,7 +138,6 @@ async fn clear_session_projection(
     tx: &mut Transaction<'_, Postgres>,
     session_uuid: Uuid,
 ) -> anyhow::Result<()> {
-    mark_operation_embedding_sources_deleted(tx, session_uuid, None).await?;
     for table in [
         "timeline_file_touches",
         "timeline_activity_signals",
@@ -151,7 +159,6 @@ async fn clear_session_projection_from(
     session_uuid: Uuid,
     from_turn_id: i64,
 ) -> anyhow::Result<()> {
-    mark_operation_embedding_sources_deleted(tx, session_uuid, Some(from_turn_id)).await?;
     for table in [
         "timeline_file_touches",
         "timeline_activity_signals",
@@ -173,19 +180,21 @@ async fn insert_projection_rows(
     tx: &mut Transaction<'_, Postgres>,
     session_uuid: Uuid,
     projected: &[StoredTurnProjection],
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<String>> {
+    let mut expected_source_keys = Vec::new();
     for turn in projected {
-        insert_projected_turn(tx, session_uuid, turn).await?;
+        insert_projected_turn(tx, session_uuid, turn, &mut expected_source_keys).await?;
     }
-    Ok(())
+    Ok(expected_source_keys)
 }
 
-async fn mark_operation_embedding_sources_deleted(
+async fn reconcile_operation_embedding_sources(
     tx: &mut Transaction<'_, Postgres>,
     session_uuid: Uuid,
     from_turn_id: Option<i64>,
+    expected_source_keys: &[String],
 ) -> anyhow::Result<()> {
-    sqlx::query(
+    sqlx::query_scalar::<_, i64>(
         "WITH stale AS ( \
              SELECT source_key \
                FROM retrieval_embedding_sources \
@@ -193,22 +202,27 @@ async fn mark_operation_embedding_sources_deleted(
                 AND source_family IN ('operation_call', 'operation_result') \
                 AND ($2::BIGINT IS NULL OR turn_id >= $2) \
                 AND deleted_at IS NULL \
+                AND NOT (source_key = ANY($3::TEXT[])) \
         ), removed_embeddings AS ( \
              DELETE FROM retrieval_embeddings re \
               USING stale \
               WHERE re.source_key = stale.source_key \
               RETURNING re.source_key \
+        ), removed_sources AS ( \
+             UPDATE retrieval_embedding_sources s \
+                SET index_status = 'deleted', deleted_at = NOW(), updated_at = NOW() \
+               FROM stale \
+              WHERE s.source_key = stale.source_key \
+              RETURNING s.id \
         ) \
-        UPDATE retrieval_embedding_sources s \
-           SET index_status = 'deleted', deleted_at = NOW(), updated_at = NOW() \
-          FROM stale \
-         WHERE s.source_key = stale.source_key",
+        SELECT COUNT(*)::BIGINT FROM removed_sources",
     )
     .bind(session_uuid)
     .bind(from_turn_id)
-    .execute(&mut **tx)
+    .bind(expected_source_keys)
+    .fetch_one(&mut **tx)
     .await
-    .context("mark operation retrieval sources deleted")?;
+    .context("reconcile operation retrieval sources")?;
     Ok(())
 }
 
@@ -242,6 +256,7 @@ async fn insert_projected_turn(
     tx: &mut Transaction<'_, Postgres>,
     session_uuid: Uuid,
     turn: &StoredTurnProjection,
+    expected_source_keys: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO timeline_turns \
@@ -270,7 +285,7 @@ async fn insert_projected_turn(
     .await
     .context("insert timeline_turns row")?;
 
-    insert_projected_operations(tx, session_uuid, turn).await?;
+    insert_projected_operations(tx, session_uuid, turn, expected_source_keys).await?;
     insert_projected_file_touches(tx, session_uuid, turn).await?;
     insert_projected_activity_signals(tx, session_uuid, turn).await?;
     Ok(())
@@ -280,6 +295,7 @@ async fn insert_projected_operations(
     tx: &mut Transaction<'_, Postgres>,
     session_uuid: Uuid,
     turn: &StoredTurnProjection,
+    expected_source_keys: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     for operation in &turn.operations {
         sqlx::query(
@@ -318,7 +334,14 @@ async fn insert_projected_operations(
         .execute(&mut **tx)
         .await
         .context("insert timeline_operations row")?;
-        enqueue_operation_embedding_sources(tx, session_uuid, turn.turn.id, operation).await?;
+        enqueue_operation_embedding_sources(
+            tx,
+            session_uuid,
+            turn.turn.id,
+            operation,
+            expected_source_keys,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -328,6 +351,7 @@ async fn enqueue_operation_embedding_sources(
     session_uuid: Uuid,
     turn_id: i64,
     operation: &StoredOperationProjection,
+    expected_source_keys: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     let call_key = format!(
         "operation:{session_uuid}:{turn_id}:{}:call",
@@ -345,8 +369,7 @@ async fn enqueue_operation_embedding_sources(
             &text,
         )
         .await?;
-    } else {
-        mark_embedding_source_deleted(tx, &call_key).await?;
+        expected_source_keys.push(call_key);
     }
 
     let result_key = format!(
@@ -367,8 +390,7 @@ async fn enqueue_operation_embedding_sources(
             &text,
         )
         .await?;
-    } else {
-        mark_embedding_source_deleted(tx, &result_key).await?;
+        expected_source_keys.push(result_key);
     }
     Ok(())
 }
@@ -385,24 +407,41 @@ async fn upsert_operation_embedding_source(
     text: &str,
 ) -> anyhow::Result<()> {
     sqlx::query(
-        "INSERT INTO retrieval_embedding_sources \
+        "WITH changed_source AS ( \
+             INSERT INTO retrieval_embedding_sources \
             (source_family, source_kind, source_key, session_uuid, turn_id, operation_ord, \
              content_hash, index_status, index_error, last_seen_at, dirty_at, deleted_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', NULL, NOW(), NOW(), NULL, NOW()) \
-         ON CONFLICT (source_key) DO UPDATE SET \
-             source_family = EXCLUDED.source_family, \
-             source_kind = EXCLUDED.source_kind, \
-             session_uuid = EXCLUDED.session_uuid, \
-             byte_offset = NULL, \
-             block_ord = NULL, \
-             turn_id = EXCLUDED.turn_id, \
-             operation_ord = EXCLUDED.operation_ord, \
-             content_hash = EXCLUDED.content_hash, \
-             index_status = 'pending', \
-             index_error = NULL, \
-             dirty_at = NOW(), \
-             deleted_at = NULL, \
-             updated_at = NOW()",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', NULL, NOW(), NOW(), NULL, NOW()) \
+             ON CONFLICT (source_key) DO UPDATE SET \
+                 source_family = EXCLUDED.source_family, \
+                 source_kind = EXCLUDED.source_kind, \
+                 session_uuid = EXCLUDED.session_uuid, \
+                 byte_offset = NULL, \
+                 block_ord = NULL, \
+                 turn_id = EXCLUDED.turn_id, \
+                 operation_ord = EXCLUDED.operation_ord, \
+                 content_hash = EXCLUDED.content_hash, \
+                 index_status = 'pending', \
+                 index_error = NULL, \
+                 last_seen_at = NOW(), \
+                 dirty_at = NOW(), \
+                 deleted_at = NULL, \
+                 updated_at = NOW() \
+             WHERE retrieval_embedding_sources.source_family IS DISTINCT FROM EXCLUDED.source_family \
+                OR retrieval_embedding_sources.source_kind IS DISTINCT FROM EXCLUDED.source_kind \
+                OR retrieval_embedding_sources.session_uuid IS DISTINCT FROM EXCLUDED.session_uuid \
+                OR retrieval_embedding_sources.byte_offset IS NOT NULL \
+                OR retrieval_embedding_sources.block_ord IS NOT NULL \
+                OR retrieval_embedding_sources.turn_id IS DISTINCT FROM EXCLUDED.turn_id \
+                OR retrieval_embedding_sources.operation_ord IS DISTINCT FROM EXCLUDED.operation_ord \
+                OR retrieval_embedding_sources.content_hash IS DISTINCT FROM EXCLUDED.content_hash \
+                OR retrieval_embedding_sources.index_status = 'deleted' \
+                OR retrieval_embedding_sources.deleted_at IS NOT NULL \
+             RETURNING source_key \
+         ) \
+         DELETE FROM retrieval_embeddings re \
+          USING changed_source changed \
+          WHERE re.source_key = changed.source_key",
     )
     .bind(source_family)
     .bind(source_kind)
@@ -414,27 +453,6 @@ async fn upsert_operation_embedding_source(
     .execute(&mut **tx)
     .await
     .context("upsert operation retrieval source")?;
-    Ok(())
-}
-
-async fn mark_embedding_source_deleted(
-    tx: &mut Transaction<'_, Postgres>,
-    source_key: &str,
-) -> anyhow::Result<()> {
-    sqlx::query("DELETE FROM retrieval_embeddings WHERE source_key = $1")
-        .bind(source_key)
-        .execute(&mut **tx)
-        .await
-        .context("delete retrieval embedding")?;
-    sqlx::query(
-        "UPDATE retrieval_embedding_sources \
-            SET index_status = 'deleted', deleted_at = NOW(), updated_at = NOW() \
-          WHERE source_key = $1",
-    )
-    .bind(source_key)
-    .execute(&mut **tx)
-    .await
-    .context("mark retrieval source deleted")?;
     Ok(())
 }
 
