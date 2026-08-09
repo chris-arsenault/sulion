@@ -473,11 +473,11 @@ fn operation_call_text(operation: &StoredOperationProjection) -> Option<String> 
 }
 
 fn operation_result_text(operation: &StoredOperationProjection) -> Option<(&'static str, String)> {
-    if operation.result_content.is_none()
-        && operation.result_payload.is_none()
-        && !operation.result_is_error
-        && !operation.is_error
-    {
+    let is_error = operation.result_is_error || operation.is_error;
+    if !is_error && operation.name != "agent" {
+        return None;
+    }
+    if operation.result_content.is_none() && operation.result_payload.is_none() && !is_error {
         return None;
     }
     let payload = operation.result_payload.as_ref().map(ToString::to_string);
@@ -490,7 +490,7 @@ fn operation_result_text(operation: &StoredOperationProjection) -> Option<(&'sta
     .flatten()
     .collect::<Vec<_>>()
     .join(" ");
-    let source_kind = if operation.result_is_error || operation.is_error {
+    let source_kind = if is_error {
         "tool_error"
     } else {
         "tool_result"

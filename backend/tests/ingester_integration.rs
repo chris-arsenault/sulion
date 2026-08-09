@@ -555,18 +555,11 @@ async fn claude_edit_tool_result_payload_is_persisted_canonically() {
     .unwrap();
     assert_eq!(
         sources,
-        vec![
-            (
-                "operation_call".to_string(),
-                "tool_call".to_string(),
-                "pending".to_string(),
-            ),
-            (
-                "operation_result".to_string(),
-                "tool_result".to_string(),
-                "pending".to_string(),
-            ),
-        ]
+        vec![(
+            "operation_call".to_string(),
+            "tool_call".to_string(),
+            "pending".to_string(),
+        )]
     );
 }
 
@@ -673,8 +666,8 @@ async fn incremental_projection_preserves_unchanged_operation_embeddings() {
         1
     );
 
-    let result_status: String = sqlx::query_scalar(
-        "SELECT index_status \
+    let result_source_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) \
            FROM retrieval_embedding_sources \
           WHERE session_uuid = $1 AND source_family = 'operation_result'",
     )
@@ -682,7 +675,7 @@ async fn incremental_projection_preserves_unchanged_operation_embeddings() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(result_status, "pending");
+    assert_eq!(result_source_count, 0);
 
     let stale_status: String = sqlx::query_scalar(
         "SELECT index_status FROM retrieval_embedding_sources WHERE source_key = $1",
