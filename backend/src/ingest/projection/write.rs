@@ -298,12 +298,30 @@ async fn insert_projected_operations(
     expected_source_keys: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     for operation in &turn.operations {
-        sqlx::query(
+        let (call_text, result_text): (Option<String>, Option<String>) = sqlx::query_as(
             "INSERT INTO timeline_operations \
                  (session_uuid, turn_id, operation_ord, pair_id, name, raw_name, operation_type, \
                   operation_category, input, result_content, result_payload, result_is_error, \
                   is_error, is_pending, subagent_json) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+             RETURNING \
+                 CASE \
+                   WHEN input IS NOT NULL \
+                    AND length(trim(concat_ws(' ', name, raw_name, operation_type, operation_category, input::TEXT))) > 0 \
+                   THEN concat_ws(' ', name, raw_name, operation_type, operation_category, left(input::TEXT, 300)) \
+                   ELSE NULL \
+                 END AS call_text, \
+                 CASE \
+                   WHEN (result_content IS NOT NULL OR result_payload IS NOT NULL OR result_is_error OR is_error) \
+                    AND length(trim(concat_ws(' ', name, result_content, result_payload::TEXT))) > 0 \
+                    AND (result_is_error OR is_error OR name = 'agent') \
+                   THEN CASE \
+                          WHEN result_is_error OR is_error \
+                          THEN left(concat_ws(' ', name, result_content, result_payload::TEXT), 1000) \
+                          ELSE concat_ws(' ', name, result_content, result_payload::TEXT) \
+                        END \
+                   ELSE NULL \
+                 END AS result_text",
         )
         .bind(session_uuid)
         .bind(turn.turn.id)
@@ -331,7 +349,7 @@ async fn insert_projected_operations(
                 .transpose()
                 .context("serialize projected subagent")?,
         )
-        .execute(&mut **tx)
+        .fetch_one(&mut **tx)
         .await
         .context("insert timeline_operations row")?;
         enqueue_operation_embedding_sources(
@@ -339,6 +357,8 @@ async fn insert_projected_operations(
             session_uuid,
             turn.turn.id,
             operation,
+            call_text.as_deref(),
+            result_text.as_deref(),
             expected_source_keys,
         )
         .await?;
@@ -351,13 +371,15 @@ async fn enqueue_operation_embedding_sources(
     session_uuid: Uuid,
     turn_id: i64,
     operation: &StoredOperationProjection,
+    call_text: Option<&str>,
+    result_text: Option<&str>,
     expected_source_keys: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     let call_key = format!(
         "operation:{session_uuid}:{turn_id}:{}:call",
         operation.operation_ord
     );
-    if let Some(text) = operation_call_text(operation).filter(|text| !text.trim().is_empty()) {
+    if let Some(text) = call_text {
         upsert_operation_embedding_source(
             tx,
             "operation_call",
@@ -366,7 +388,7 @@ async fn enqueue_operation_embedding_sources(
             session_uuid,
             turn_id,
             operation.operation_ord,
-            &text,
+            text,
         )
         .await?;
         expected_source_keys.push(call_key);
@@ -376,9 +398,12 @@ async fn enqueue_operation_embedding_sources(
         "operation:{session_uuid}:{turn_id}:{}:result",
         operation.operation_ord
     );
-    if let Some((source_kind, text)) =
-        operation_result_text(operation).filter(|(_, text)| !text.trim().is_empty())
-    {
+    if let Some(text) = result_text {
+        let source_kind = if operation.result_is_error || operation.is_error {
+            "tool_error"
+        } else {
+            "tool_result"
+        };
         upsert_operation_embedding_source(
             tx,
             "operation_result",
@@ -387,7 +412,7 @@ async fn enqueue_operation_embedding_sources(
             session_uuid,
             turn_id,
             operation.operation_ord,
-            &text,
+            text,
         )
         .await?;
         expected_source_keys.push(result_key);
@@ -449,53 +474,11 @@ async fn upsert_operation_embedding_source(
     .bind(session_uuid)
     .bind(turn_id)
     .bind(operation_ord)
-    .bind(hash_text(text.trim()))
+    .bind(hash_text(text))
     .execute(&mut **tx)
     .await
     .context("upsert operation retrieval source")?;
     Ok(())
-}
-
-fn operation_call_text(operation: &StoredOperationProjection) -> Option<String> {
-    let input = operation.input.as_ref()?;
-    let mut parts = vec![operation.name.clone()];
-    if let Some(raw_name) = &operation.raw_name {
-        parts.push(raw_name.clone());
-    }
-    if let Some(operation_type) = &operation.operation_type {
-        parts.push(operation_type.clone());
-    }
-    if let Some(category) = operation.operation_category {
-        parts.push(category.as_str().to_string());
-    }
-    parts.push(input.to_string());
-    Some(parts.join(" "))
-}
-
-fn operation_result_text(operation: &StoredOperationProjection) -> Option<(&'static str, String)> {
-    let is_error = operation.result_is_error || operation.is_error;
-    if !is_error && operation.name != "agent" {
-        return None;
-    }
-    if operation.result_content.is_none() && operation.result_payload.is_none() && !is_error {
-        return None;
-    }
-    let payload = operation.result_payload.as_ref().map(ToString::to_string);
-    let text = [
-        Some(operation.name.as_str()),
-        operation.result_content.as_deref(),
-        payload.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(" ");
-    let source_kind = if is_error {
-        "tool_error"
-    } else {
-        "tool_result"
-    };
-    Some((source_kind, text))
 }
 
 fn hash_text(text: &str) -> String {

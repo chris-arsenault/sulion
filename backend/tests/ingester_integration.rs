@@ -6,6 +6,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
+use ring::digest;
 use sulion::db;
 use sulion::ingest::{
     backfill_timeline_projection, rebuild_ingest_derivatives, Ingester, IngesterConfig,
@@ -17,6 +18,14 @@ const CODEX_RICH_LINEAGE_CHILD: &str = include_str!("fixtures/codex-rich-lineage
 
 fn test_db_url() -> Option<String> {
     std::env::var("SULION_TEST_DB").ok()
+}
+
+fn hash_text(text: &str) -> String {
+    let hash = digest::digest(&digest::SHA256, text.as_bytes());
+    hash.as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 async fn fresh_pool() -> db::Pool {
@@ -579,17 +588,37 @@ async fn incremental_projection_preserves_unchanged_operation_embeddings() {
     let ingester = Ingester::new();
     ingester.tick(&pool, &fx.config()).await.unwrap();
 
-    let (call_key, content_hash, turn_id, operation_ord): (String, String, i64, i32) =
-        sqlx::query_as(
-            "UPDATE retrieval_embedding_sources \
-                SET index_status = 'indexed', indexed_at = NOW() \
-              WHERE session_uuid = $1 AND source_family = 'operation_call' \
-          RETURNING source_key, content_hash, turn_id, operation_ord",
-        )
-        .bind(fx.session_uuid)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let (call_key, content_hash, turn_id, operation_ord, canonical_text): (
+        String,
+        String,
+        i64,
+        i32,
+        String,
+    ) = sqlx::query_as(
+        "SELECT s.source_key, s.content_hash, s.turn_id, s.operation_ord, \
+                concat_ws(' ', o.name, o.raw_name, o.operation_type, o.operation_category, \
+                          left(o.input::TEXT, 300)) AS canonical_text \
+           FROM retrieval_embedding_sources s \
+           JOIN timeline_operations o \
+             ON o.session_uuid = s.session_uuid \
+            AND o.turn_id = s.turn_id \
+            AND o.operation_ord = s.operation_ord \
+          WHERE s.session_uuid = $1 AND s.source_family = 'operation_call'",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(content_hash, hash_text(&canonical_text));
+    sqlx::query(
+        "UPDATE retrieval_embedding_sources \
+            SET index_status = 'indexed', indexed_at = NOW() \
+          WHERE source_key = $1",
+    )
+    .bind(&call_key)
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query(
         "INSERT INTO retrieval_embeddings \
             (source_kind, source_key, session_uuid, turn_id, operation_ord, content_hash, \
