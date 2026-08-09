@@ -19,7 +19,8 @@ async fn fresh_pool() -> db::Pool {
     let pool = db::connect(&url).await.expect("connect");
     db::run_migrations(&pool).await.expect("migrate");
     sqlx::query(
-        "TRUNCATE retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, \
+        "TRUNCATE meta_repo_members, meta_repos, pty_session_repos, \
+         retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, \
          plan_events, plan_attachments, plan_phases, plans, session_activity_state, \
          events, ingester_state, claude_sessions, pty_sessions, repos, \
          repo_runtime_state, repo_dirty_paths, timeline_session_state, \
@@ -70,6 +71,25 @@ impl Harness {
     async fn shutdown_sessions(&self) {
         common::shutdown_node_sessions(&self.state).await;
     }
+}
+
+async fn create_meta_repo(h: &Harness, name: &str, members: &[&str]) -> serde_json::Value {
+    h.state.repo_state.sync_repos_once().await.unwrap();
+    let response = h
+        .client
+        .post(format!("{}/api/meta-repos", h.base))
+        .json(&json!({
+            "name": name,
+            "members": members,
+            "primary_repo_name": members.first()
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(status, reqwest::StatusCode::CREATED, "{body}");
+    body
 }
 
 #[tokio::test]
@@ -429,6 +449,150 @@ async fn isolated_session_rejects_working_dir_before_worktree_creation() {
     assert_eq!(
         body["error"],
         "working_dir is only supported with workspace_mode=main"
+    );
+}
+
+#[tokio::test]
+async fn main_collection_session_records_every_workspace() {
+    let h = Harness::new().await;
+    let alpha_path = h.state.repos_root.join("alpha");
+    let beta_path = h.state.repos_root.join("beta");
+    init_git_repo(&alpha_path);
+    init_git_repo(&beta_path);
+    let group = create_meta_repo(&h, "Platform", &["alpha", "beta"]).await;
+
+    let created = common::create_session(
+        &h.client,
+        &h.base,
+        json!({
+            "meta_repo_id": group["id"],
+            "workspace_mode": "main"
+        }),
+    )
+    .await;
+
+    assert_eq!(created["repo"], "alpha");
+    assert_eq!(created["meta_repo"]["name"], "Platform");
+    let repositories = created["repositories"].as_array().unwrap();
+    assert_eq!(repositories.len(), 2);
+    assert_eq!(repositories[0]["repo_name"], "alpha");
+    assert_eq!(repositories[0]["role"], "primary");
+    assert_eq!(repositories[1]["repo_name"], "beta");
+    assert_eq!(repositories[1]["role"], "additional");
+
+    let rows: Vec<(String, String, i32)> = sqlx::query_as(
+        "SELECT repo_name, role, position FROM pty_session_repos \
+          WHERE pty_session_id = $1 ORDER BY position",
+    )
+    .bind(created["id"].as_str().unwrap().parse::<Uuid>().unwrap())
+    .fetch_all(&h.state.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("alpha".into(), "primary".into(), 0),
+            ("beta".into(), "additional".into(), 1),
+        ]
+    );
+
+    h.shutdown_sessions().await;
+}
+
+#[tokio::test]
+async fn collection_resume_reuses_the_stored_scope_after_membership_changes() {
+    let h = Harness::new().await;
+    for repo in ["alpha", "beta", "gamma"] {
+        init_git_repo(&h.state.repos_root.join(repo));
+    }
+    let group = create_meta_repo(&h, "Platform", &["alpha", "beta"]).await;
+    let original = common::create_session(
+        &h.client,
+        &h.base,
+        json!({
+            "meta_repo_id": group["id"],
+            "workspace_mode": "isolated"
+        }),
+    )
+    .await;
+
+    let changed = h
+        .client
+        .put(format!(
+            "{}/api/meta-repos/{}/members",
+            h.base,
+            group["id"].as_str().unwrap()
+        ))
+        .json(&json!({
+            "expected_revision": group["revision"],
+            "members": ["alpha", "gamma"],
+            "primary_repo_name": "alpha"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(changed.status(), reqwest::StatusCode::OK);
+
+    let resumed = common::create_session(
+        &h.client,
+        &h.base,
+        json!({"scope_source_session_id": original["id"]}),
+    )
+    .await;
+    let original_repositories = original["repositories"].as_array().unwrap();
+    let resumed_repositories = resumed["repositories"].as_array().unwrap();
+    assert_eq!(
+        resumed_repositories
+            .iter()
+            .map(|repository| repository["repo_name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["alpha", "beta"],
+    );
+    assert_eq!(
+        resumed_repositories
+            .iter()
+            .map(|repository| repository["workspace_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        original_repositories
+            .iter()
+            .map(|repository| repository["workspace_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+    );
+
+    h.shutdown_sessions().await;
+}
+
+#[tokio::test]
+async fn failed_isolated_collection_removes_worktrees_created_by_the_attempt() {
+    let h = Harness::new().await;
+    let alpha_path = h.state.repos_root.join("alpha");
+    init_git_repo(&alpha_path);
+    std::fs::create_dir_all(h.state.repos_root.join("beta")).unwrap();
+    let group = create_meta_repo(&h, "Platform", &["alpha", "beta"]).await;
+
+    let response = h
+        .client
+        .post(format!("{}/api/sessions", h.base))
+        .json(&json!({
+            "meta_repo_id": group["id"],
+            "workspace_mode": "isolated"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert!(body["error"].as_str().unwrap().contains("beta"), "{body}");
+
+    let active_worktrees: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM workspaces WHERE kind = 'worktree' AND state <> 'deleted'",
+    )
+    .fetch_one(&h.state.pool)
+    .await
+    .unwrap();
+    assert_eq!(active_worktrees, 0);
+    assert!(
+        !git_stdout(&alpha_path, &["branch", "--list", "sulion/alpha/*"]).contains("sulion/alpha")
     );
 }
 

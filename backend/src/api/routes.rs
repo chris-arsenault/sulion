@@ -17,8 +17,8 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 
 use super::{
-    admin_routes, future_prompt_routes, library_routes, plan_routes, repo_lifecycle_routes,
-    repo_routes, session_routes, timeline_routes, workspace_routes,
+    admin_routes, future_prompt_routes, library_routes, meta_repo_routes, plan_routes,
+    repo_lifecycle_routes, repo_routes, session_routes, timeline_routes, workspace_routes,
 };
 use crate::AppState;
 
@@ -73,6 +73,15 @@ pub fn router() -> Router<Arc<AppState>> {
                 .patch(future_prompt_routes::update_future_prompt),
         )
         .route("/api/repos", post(repo_routes::create_repo))
+        .route("/api/meta-repos", post(meta_repo_routes::create_meta_repo))
+        .route(
+            "/api/meta-repos/:id",
+            patch(meta_repo_routes::patch_meta_repo).delete(meta_repo_routes::delete_meta_repo),
+        )
+        .route(
+            "/api/meta-repos/:id/members",
+            axum::routing::put(meta_repo_routes::replace_meta_repo_members),
+        )
         .route(
             "/api/repos/:name",
             patch(repo_lifecycle_routes::patch_repo).delete(repo_lifecycle_routes::delete_repo),

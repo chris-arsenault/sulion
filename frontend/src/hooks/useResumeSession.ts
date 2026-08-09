@@ -36,15 +36,11 @@ export function useResumeSession() {
         throw new Error("session has no agent transcript to resume");
       }
       const resumeRequest: CreateSessionRequest = {
-        repo: session.repo,
+        scope_source_session_id: session.id,
         resume_session_uuid: session.current_session_uuid,
         resume_agent: session.current_session_agent ?? "claude-code",
       };
-      const workspaceId = session.workspace?.id;
-      if (workspaceId && session.workspace?.kind !== "main") {
-        resumeRequest.workspace_id = workspaceId;
-      } else {
-        resumeRequest.workspace_mode = "main";
+      if (session.workspace?.kind === "main") {
         resumeRequest.working_dir = session.working_dir;
       }
       const created = await createSession(resumeRequest);

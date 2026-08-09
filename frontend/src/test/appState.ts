@@ -1,5 +1,6 @@
 import type {
   AppStateResponse,
+  MetaRepoView,
   NodeView,
   PlanSummaryView,
   RepoView,
@@ -61,6 +62,7 @@ export function appStatePayload({
   nodes = [],
   sessions = [],
   repos = [],
+  metaRepos = [],
   workspaces = [],
   stats = statsPayload(),
   plans = [],
@@ -68,6 +70,7 @@ export function appStatePayload({
   nodes?: NodeView[];
   sessions?: SessionView[] | Array<Record<string, unknown>>;
   repos?: RepoView[] | Array<Record<string, unknown>>;
+  metaRepos?: MetaRepoView[] | Array<Record<string, unknown>>;
   workspaces?: WorkspaceView[] | Array<Record<string, unknown>>;
   stats?: StatsResponse;
   plans?: PlanSummaryView[];
@@ -77,6 +80,7 @@ export function appStatePayload({
     nodes,
     sessions: sessions as SessionView[],
     repos: repos as RepoView[],
+    meta_repos: metaRepos as MetaRepoView[],
     workspaces: workspaces as WorkspaceView[],
     plans,
     stats,

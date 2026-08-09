@@ -3,19 +3,24 @@ import { create } from "zustand";
 
 import {
   ApiError,
+  createMetaRepo as apiCreateMetaRepo,
   createRepo as apiCreateRepo,
   createSession as apiCreateSession,
+  deleteMetaRepo as apiDeleteMetaRepo,
   deleteRepo as apiDeleteRepo,
   deleteSession as apiDeleteSession,
   deleteWorkspace as apiDeleteWorkspace,
   getAppState,
   renameRepo as apiRenameRepo,
+  replaceMetaRepoMembers as apiReplaceMetaRepoMembers,
+  updateMetaRepo as apiUpdateMetaRepo,
   updateSession as apiUpdateSession,
   upgradeSession as apiUpgradeSession,
 } from "../api/client";
 import type {
   CreateRepoRequest,
   CreateSessionRequest,
+  MetaRepoView,
   NodeView,
   PlanSummaryView,
   RepoView,
@@ -34,13 +39,21 @@ import {
 
 const POLL_APP_STATE_MS = 3_000;
 const REPO_EXPANSION_STORAGE_KEY = "sulion.sidebar.repoExpansion.v1";
+const META_REPO_EXPANSION_STORAGE_KEY = "sulion.sidebar.metaRepoExpansion.v1";
 
 type RepoExpansionMap = Record<string, boolean>;
+
+export interface SaveMetaRepoInput {
+  name: string;
+  members: string[];
+  primary_repo_name?: string;
+}
 
 export interface SessionStore {
   nodes: NodeView[];
   sessions: SessionView[];
   repos: RepoView[];
+  metaRepos: MetaRepoView[];
   workspaces: WorkspaceView[];
   stats: StatsResponse | null;
   plans: PlanSummaryView[];
@@ -49,6 +62,7 @@ export interface SessionStore {
   sessionsLoaded: boolean;
   lastViewed: LastViewedMap;
   repoExpansion: RepoExpansionMap;
+  metaRepoExpansion: RepoExpansionMap;
   selectSession: (id: string | null) => void;
   createSession: (req: CreateSessionRequest) => Promise<SessionView>;
   deleteSession: (id: string) => Promise<void>;
@@ -59,12 +73,16 @@ export interface SessionStore {
   updateSession: (id: string, patch: UpdateSessionRequest) => Promise<void>;
   upgradeSession: (id: string) => Promise<void>;
   createRepo: (req: CreateRepoRequest) => Promise<RepoView>;
+  createMetaRepo: (req: SaveMetaRepoInput) => Promise<MetaRepoView>;
+  saveMetaRepo: (id: string, req: SaveMetaRepoInput) => Promise<MetaRepoView>;
+  deleteMetaRepo: (id: string) => Promise<void>;
   renameRepo: (name: string, nextName: string) => Promise<RepoView>;
   deleteRepo: (name: string, opts?: { force?: boolean }) => Promise<void>;
   refresh: () => Promise<void>;
   isUnread: (sessionId: string, lastEventAt: string | null) => boolean;
   loadAppState: () => Promise<void>;
   setRepoExpanded: (repo: string, expanded: boolean) => void;
+  setMetaRepoExpanded: (id: string, expanded: boolean) => void;
   collapseRepos: (repos: string[]) => void;
 }
 
@@ -73,6 +91,7 @@ function initialState(): Pick<
   | "sessions"
   | "nodes"
   | "repos"
+  | "metaRepos"
   | "workspaces"
   | "stats"
   | "plans"
@@ -81,11 +100,13 @@ function initialState(): Pick<
   | "sessionsLoaded"
   | "lastViewed"
   | "repoExpansion"
+  | "metaRepoExpansion"
 > {
   return {
     nodes: [],
     sessions: [],
     repos: [],
+    metaRepos: [],
     workspaces: [],
     stats: null,
     plans: [],
@@ -94,6 +115,7 @@ function initialState(): Pick<
     sessionsLoaded: false,
     lastViewed: loadLastViewedMap(),
     repoExpansion: loadRepoExpansionMap(),
+    metaRepoExpansion: loadExpansionMap(META_REPO_EXPANSION_STORAGE_KEY),
   };
 }
 
@@ -106,6 +128,7 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
       const nodes = Array.isArray(data.nodes) ? data.nodes : [];
       const sessions = Array.isArray(data.sessions) ? data.sessions : [];
       const repos = Array.isArray(data.repos) ? data.repos : [];
+      const metaRepos = Array.isArray(data.meta_repos) ? data.meta_repos : [];
       const workspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
       const stats = data.stats ?? null;
       const plans = Array.isArray(data.plans) ? data.plans : [];
@@ -113,6 +136,7 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
         const sameNodes = sameJson(state.nodes, nodes);
         const sameSessions = sameJson(state.sessions, sessions);
         const sameRepos = sameJson(state.repos, repos);
+        const sameMetaRepos = sameJson(state.metaRepos, metaRepos);
         const sameWorkspaces = sameJson(state.workspaces, workspaces);
         const sameStats = sameJson(state.stats, stats);
         const samePlans = sameJson(state.plans, plans);
@@ -120,6 +144,7 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
           sameNodes &&
           sameSessions &&
           sameRepos &&
+          sameMetaRepos &&
           sameWorkspaces &&
           sameStats &&
           samePlans &&
@@ -132,6 +157,7 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
           nodes: sameNodes ? state.nodes : nodes,
           sessions: sameSessions ? state.sessions : sessions,
           repos: sameRepos ? state.repos : repos,
+          metaRepos: sameMetaRepos ? state.metaRepos : metaRepos,
           workspaces: sameWorkspaces ? state.workspaces : workspaces,
           stats: sameStats ? state.stats : stats,
           plans: samePlans ? state.plans : plans,
@@ -232,6 +258,74 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
     return created;
   },
 
+  async createMetaRepo(req) {
+    const created = await apiCreateMetaRepo(req);
+    set((state) => {
+      const metaRepoExpansion = {
+        ...state.metaRepoExpansion,
+        [created.id]: true,
+      };
+      saveExpansionMap(META_REPO_EXPANSION_STORAGE_KEY, metaRepoExpansion);
+      return {
+        metaRepos: [...state.metaRepos, created].sort(metaRepoCompare),
+        metaRepoExpansion,
+      };
+    });
+    return created;
+  },
+
+  async saveMetaRepo(id, req) {
+    const current = get().metaRepos.find((metaRepo) => metaRepo.id === id);
+    if (!current) throw new Error("meta-repository no longer exists");
+
+    let saved = current;
+    if (req.name !== current.name) {
+      saved = await apiUpdateMetaRepo(id, {
+        expected_revision: saved.revision,
+        name: req.name,
+      });
+    }
+
+    const currentMembers = current.members
+      .slice()
+      .sort((a, b) => a.position - b.position)
+      .map((member) => member.repo_name);
+    const membersChanged = !sameJson(currentMembers, req.members);
+    const primaryChanged = current.primary_repo_name !== req.primary_repo_name;
+    if (membersChanged || primaryChanged) {
+      saved = await apiReplaceMetaRepoMembers(id, {
+        expected_revision: saved.revision,
+        members: req.members,
+        primary_repo_name: req.primary_repo_name,
+      });
+    }
+
+    set((state) => ({
+      metaRepos: state.metaRepos
+        .map((metaRepo) => (metaRepo.id === id ? saved : metaRepo))
+        .sort(metaRepoCompare),
+      sessions: state.sessions.map((session) =>
+        session.meta_repo?.id === id
+          ? { ...session, meta_repo: { id, name: saved.name } }
+          : session,
+      ),
+    }));
+    return saved;
+  },
+
+  async deleteMetaRepo(id) {
+    await apiDeleteMetaRepo(id);
+    set((state) => {
+      const metaRepoExpansion = { ...state.metaRepoExpansion };
+      delete metaRepoExpansion[id];
+      saveExpansionMap(META_REPO_EXPANSION_STORAGE_KEY, metaRepoExpansion);
+      return {
+        metaRepos: state.metaRepos.filter((metaRepo) => metaRepo.id !== id),
+        metaRepoExpansion,
+      };
+    });
+  },
+
   async renameRepo(name, nextName) {
     const existing = get().repos.find((repo) => repo.name === name);
     const renamed = await apiRenameRepo(name, { name: nextName });
@@ -265,8 +359,29 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
                       }
                     : session.workspace,
               }
-            : session,
+            : session.repositories?.some((repo) => repo.repo_name === name)
+              ? {
+                  ...session,
+                  repositories: session.repositories.map((repo) =>
+                    repo.repo_name === name
+                      ? { ...repo, repo_name: renamed.name }
+                      : repo,
+                  ),
+                }
+              : session,
         ),
+        metaRepos: state.metaRepos.map((metaRepo) => ({
+          ...metaRepo,
+          primary_repo_name:
+            metaRepo.primary_repo_name === name
+              ? renamed.name
+              : metaRepo.primary_repo_name,
+          members: metaRepo.members.map((member) =>
+            member.repo_name === name
+              ? { ...member, repo_name: renamed.name }
+              : member,
+          ),
+        })),
         workspaces: state.workspaces.map((workspace) =>
           workspace.repo_name === name
             ? {
@@ -286,6 +401,19 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
     await apiDeleteRepo(name, opts);
     set((state) => ({
       repos: state.repos.filter((repo) => repo.name !== name),
+      metaRepos: state.metaRepos.map((metaRepo) => {
+        const members = metaRepo.members.filter(
+          (member) => member.repo_name !== name,
+        );
+        return {
+          ...metaRepo,
+          members,
+          primary_repo_name:
+            metaRepo.primary_repo_name === name
+              ? (members[0]?.repo_name ?? null)
+              : metaRepo.primary_repo_name,
+        };
+      }),
     }));
   },
 
@@ -302,6 +430,14 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
       const repoExpansion = { ...state.repoExpansion, [repo]: expanded };
       saveRepoExpansionMap(repoExpansion);
       return { repoExpansion };
+    });
+  },
+
+  setMetaRepoExpanded(id, expanded) {
+    set((state) => {
+      const metaRepoExpansion = { ...state.metaRepoExpansion, [id]: expanded };
+      saveExpansionMap(META_REPO_EXPANSION_STORAGE_KEY, metaRepoExpansion);
+      return { metaRepoExpansion };
     });
   },
 
@@ -395,9 +531,13 @@ function sameJson(a: unknown, b: unknown): boolean {
 }
 
 function loadRepoExpansionMap(): RepoExpansionMap {
+  return loadExpansionMap(REPO_EXPANSION_STORAGE_KEY);
+}
+
+function loadExpansionMap(storageKey: string): RepoExpansionMap {
   if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(REPO_EXPANSION_STORAGE_KEY);
+    const raw = window.localStorage.getItem(storageKey);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
@@ -414,12 +554,20 @@ function loadRepoExpansionMap(): RepoExpansionMap {
 }
 
 function saveRepoExpansionMap(map: RepoExpansionMap) {
+  saveExpansionMap(REPO_EXPANSION_STORAGE_KEY, map);
+}
+
+function saveExpansionMap(storageKey: string, map: RepoExpansionMap) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(REPO_EXPANSION_STORAGE_KEY, JSON.stringify(map));
+    window.localStorage.setItem(storageKey, JSON.stringify(map));
   } catch {
     /* ignore */
   }
+}
+
+function metaRepoCompare(a: MetaRepoView, b: MetaRepoView): number {
+  return a.position - b.position || a.name.localeCompare(b.name);
 }
 
 function migrateRepoExpansion(
@@ -443,4 +591,3 @@ function replacePathPrefix(value: string, fromPrefix: string, toPrefix: string):
   }
   return value;
 }
-

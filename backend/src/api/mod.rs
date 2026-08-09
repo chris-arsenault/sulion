@@ -17,6 +17,7 @@ mod device_routes;
 mod file_content;
 mod future_prompt_routes;
 mod library_routes;
+mod meta_repo_routes;
 mod node_proxy;
 mod plan_routes;
 mod repo_lifecycle_routes;

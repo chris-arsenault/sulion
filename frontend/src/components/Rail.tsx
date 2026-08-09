@@ -16,8 +16,8 @@ interface RailProps {
   onOpenPalette: () => void;
 }
 
-/** Left rail — functional. Lists each repo as a sigil with staleness ring
- * + unread dot. Click scrolls the sidebar to that repo and expands it.
+/** Left rail — functional. Lists top-level repository scopes with a staleness ring
+ * + unread dot. Click scrolls the sidebar to that scope and expands it.
  * Also carries pin toggle and command palette trigger. */
 export function Rail({
   pinned,
@@ -26,9 +26,10 @@ export function Rail({
   onOpenSecrets,
   onOpenPalette,
 }: RailProps) {
-  const { repos, sessions, isUnread } = useSessions(
+  const { repos, metaRepos, sessions, isUnread } = useSessions(
     useShallow((store) => ({
       repos: store.repos,
+      metaRepos: store.metaRepos,
       sessions: store.sessions,
       isUnread: store.isUnread,
     })),
@@ -38,6 +39,7 @@ export function Rail({
   const items = useMemo(() => {
     const byRepo = new Map<string, { unread: boolean; latest: number | null }>();
     for (const s of sessions) {
+      if (s.meta_repo) continue;
       const entry = byRepo.get(s.repo) ?? { unread: false, latest: null };
       if (isUnread(s.id, s.last_event_at)) entry.unread = true;
       if (s.last_event_at) {
@@ -46,7 +48,47 @@ export function Rail({
       }
       byRepo.set(s.repo, entry);
     }
-    return repos
+    const assigned = new Set(
+      metaRepos.flatMap((metaRepo) =>
+        metaRepo.members.map((member) => member.repo_name),
+      ),
+    );
+    const metaItems: RailRepoItem[] = metaRepos.map((metaRepo) => {
+      const memberNames = metaRepo.members.map((member) => member.repo_name);
+      const memberSet = new Set(memberNames);
+      const collectionSessions = sessions.filter(
+        (session) => session.meta_repo?.id === metaRepo.id,
+      );
+      const collectionUnread = collectionSessions.some((session) =>
+        isUnread(session.id, session.last_event_at),
+      );
+      const collectionLatest = latestSessionEvent(collectionSessions);
+      let staleness: RailRepoItem["staleness"] = "green";
+      let uncommitted = 0;
+      let unread = collectionUnread;
+      for (const repoName of memberSet) {
+        const state = byRepo.get(repoName);
+        unread ||= state?.unread ?? false;
+        const git = repoStates[repoName]?.git ?? null;
+        uncommitted += git?.uncommitted_count ?? 0;
+        staleness = worstStaleness(
+          staleness,
+          stalenessFor(git, maxTimestamp(state?.latest ?? null, collectionLatest)),
+        );
+      }
+      return {
+        id: metaRepo.id,
+        kind: "meta" as const,
+        name: metaRepo.name,
+        unread,
+        staleness,
+        branch: null,
+        uncommitted,
+        memberCount: memberNames.length,
+      };
+    });
+    const repoItems: RailRepoItem[] = repos
+      .filter((repo) => !assigned.has(repo.name))
       .slice()
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((r) => {
@@ -54,17 +96,21 @@ export function Rail({
         const git = repoStates[r.name]?.git ?? null;
         const staleness = stalenessFor(git, st.latest);
         return {
+          id: r.name,
+          kind: "repo" as const,
           name: r.name,
           unread: st.unread,
           staleness,
           branch: git?.branch ?? null,
           uncommitted: git?.uncommitted_count ?? 0,
+          memberCount: 1,
         };
       });
-  }, [repos, sessions, repoStates, isUnread]);
+    return [...metaItems, ...repoItems];
+  }, [metaRepos, repos, sessions, repoStates, isUnread]);
 
   return (
-    <nav className="rail" aria-label="Repos">
+    <nav className="rail" aria-label="Repositories">
       <Tooltip label={pinned ? "Unpin sidebar" : "Pin sidebar open"} placement="right">
         <button
           type="button"
@@ -79,7 +125,7 @@ export function Rail({
 
       <div className="rail__repos">
         {items.length === 0 ? null : (
-          items.map((it) => <RailRepo key={it.name} item={it} />)
+          items.map((it) => <RailRepo key={`${it.kind}:${it.id}`} item={it} />)
         )}
       </div>
 
@@ -122,11 +168,14 @@ export function Rail({
 }
 
 interface RailRepoItem {
+  id: string;
+  kind: "repo" | "meta";
   name: string;
   unread: boolean;
   staleness: "green" | "amber" | "red";
   branch: string | null;
   uncommitted: number;
+  memberCount: number;
 }
 
 function RailRepo({ item }: { item: RailRepoItem }) {
@@ -142,7 +191,12 @@ function RailRepo({ item }: { item: RailRepoItem }) {
   const tooltip = (
     <span className="rail__tip">
       <span className="rail__tip-name">{item.name}</span>
-      {item.branch ? (
+      {item.kind === "meta" ? (
+        <span className="rail__tip-meta">
+          {item.memberCount} {item.memberCount === 1 ? "repository" : "repositories"}
+          {item.uncommitted > 0 ? ` · ${item.uncommitted} uncommitted` : ""}
+        </span>
+      ) : item.branch ? (
         <span className="rail__tip-meta">
           {item.branch}
           {item.uncommitted > 0 ? ` · ${item.uncommitted} uncommitted` : ""}
@@ -152,8 +206,14 @@ function RailRepo({ item }: { item: RailRepoItem }) {
   );
 
   const onClick = useCallback(
-    () => appCommands.revealRepo({ repo: item.name }),
-    [item.name],
+    () => {
+      if (item.kind === "meta") {
+        appCommands.revealMetaRepo({ metaRepoId: item.id });
+      } else {
+        appCommands.revealRepo({ repo: item.name });
+      }
+    },
+    [item.id, item.kind, item.name],
   );
 
   return (
@@ -169,4 +229,28 @@ function RailRepo({ item }: { item: RailRepoItem }) {
       </button>
     </Tooltip>
   );
+}
+
+function latestSessionEvent(sessions: Array<{ last_event_at: string | null }>) {
+  let latest: number | null = null;
+  for (const session of sessions) {
+    if (!session.last_event_at) continue;
+    const timestamp = new Date(session.last_event_at).getTime();
+    if (latest === null || timestamp > latest) latest = timestamp;
+  }
+  return latest;
+}
+
+function maxTimestamp(a: number | null, b: number | null): number | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return Math.max(a, b);
+}
+
+function worstStaleness(
+  a: RailRepoItem["staleness"],
+  b: RailRepoItem["staleness"],
+): RailRepoItem["staleness"] {
+  const rank = { green: 0, amber: 1, red: 2 } as const;
+  return rank[a] >= rank[b] ? a : b;
 }

@@ -57,16 +57,26 @@ recorded as successful before binding their service loops.
 
 ## Session model
 
-Two layers.
+Two runtime layers plus one organizational layer.
 
-**PTY session** — a long-lived shell process on the server. Created per repo, survives client disconnect, dies only on explicit delete, shell exit, or server reboot. Has a backend-generated UUID.
+**Meta-repository** — a named, ordered set of existing repositories with one
+primary repository. It changes navigation and new-session scope without moving
+checkouts. A repository belongs to at most one active meta-repository.
+
+**PTY session** — a long-lived shell process on the server. It targets either
+one repository or a stored snapshot of a meta-repository's members, survives
+client disconnect, and dies only on explicit delete, shell exit, or server
+reboot. It has a backend-generated UUID.
 
 **Agent session** — a single `claude` or `codex` invocation inside a PTY session, identified by the agent's own session UUID, backing exactly one JSONL file. A PTY session may hold zero, one, or many agent sessions sequentially.
 
-**Workspace** — the filesystem checkout bound to a PTY session. A workspace is
+**Workspace** — a filesystem checkout bound to a PTY session. A workspace is
 either the canonical repo checkout (`main`) or a Sulion-created Git worktree on
-an isolated branch. PTYs run with their cwd inside the workspace and receive
-`SULION_WORKSPACE_*` metadata so agents can tell where they are.
+an isolated branch. A collection session stores one workspace per member and
+runs from the primary workspace; Claude and Codex receive every secondary path
+as an additional directory. PTYs receive `SULION_WORKSPACE_*` for the primary
+workspace and `SULION_REPO_NAMES_JSON` / `SULION_REPO_PATHS_JSON` for the full
+snapshot.
 
 **Published plan** — a durable, repo-scoped user-facing phase summary. A plan
 can be attached to multiple live PTYs, while each PTY has at most one current
@@ -125,7 +135,11 @@ Code boundary:
 
 Three surfaces, one work area.
 
-- **Rail + sidebar** — repos, published plans, PTY sessions, and isolated workspaces with resume/diff/delete actions. See `frontend/src/components/Sidebar.tsx`.
+- **Rail + sidebar** — one optional meta-repository level above repos, plus
+  published plans, PTY sessions, and isolated workspaces with
+  resume/diff/delete actions. Collection sessions appear once at their
+  meta-repository; repo sessions remain under the repo. See
+  `frontend/src/components/Sidebar.tsx`.
 - **Work area** — tab-strip over two horizontal panes. Each tab is its own subtree keyed by its stable handle and view kind. Terminal, timeline, overview, plan, file, diff, reference, and secrets-management tabs all live here.
 - **Mobile** — single-pane with drawer below 768px.
 
@@ -148,7 +162,7 @@ The **secrets tab** is the env-bundle setup surface. PTY-scoped grants with TTL 
 ## Backend surface
 
 The control process owns REST management (`GET/POST/PATCH/DELETE` on sessions,
-repos, plans, timeline, library, git, stats), durable operations, and browser
+repos, meta-repos, plans, timeline, library, git, stats), durable operations, and browser
 WebSockets. Session, terminal, repo, file, Git, upload, and workspace handlers
 resolve the durable node owner and use closed protocol request types; they do
 not open local repository paths in remote-node mode. See
@@ -159,6 +173,12 @@ routes under `/api/workspaces/:id/*` target the session-bound checkout/worktree.
 Deleting an isolated workspace removes the Git worktree registration, optionally
 deletes its Sulion branch, and marks the workspace row deleted; main workspaces
 are not deletable.
+
+Meta-repository membership lives only in Postgres. `pty_session_repos` captures
+the exact ordered repo/workspace scope at launch, so later membership edits do
+not change a running or resumed session. The node creates all isolated member
+worktrees as one operation and removes only worktrees created by a failed
+attempt.
 
 WebSocket attach asks the owning node for a snapshot rendered from its
 continuously fed shadow `vt100` emulator, then bridges live bytes through
@@ -243,7 +263,8 @@ backfills manually. The background worker advances backfills and drains pending
 sources continuously while work exists.
 
 PTYs use `sulion-retrieve`, which adds static bearer auth and Sulion context
-headers from the PTY environment. See [`retrieval.md`](retrieval.md).
+headers from the PTY environment. Default repo scope includes every repository
+in a collection session's stored snapshot. See [`retrieval.md`](retrieval.md).
 
 ## Code Intelligence Service
 

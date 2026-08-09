@@ -19,8 +19,14 @@ use crate::db::Pool;
 use crate::devenv::link::{DevenvLink, LinkEvent};
 
 pub mod host;
+mod metadata;
+mod spawn;
 
 use host::HostSpawnSpec;
+use metadata::{read_session_scope, PtyRowWithActivity};
+use spawn::persist_spawn;
+
+pub use metadata::read_meta;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PtyState {
@@ -61,6 +67,10 @@ pub struct PtyMetadata {
     pub repo: String,
     pub working_dir: PathBuf,
     pub workspace: Option<PtyWorkspaceMetadata>,
+    #[serde(default)]
+    pub meta_repo: Option<PtyMetaRepoMetadata>,
+    #[serde(default)]
+    pub repositories: Vec<PtySessionRepoMetadata>,
     pub state: PtyState,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub ended_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -92,6 +102,20 @@ pub struct PtyWorkspaceMetadata {
     pub base_ref: Option<String>,
     pub base_sha: Option<String>,
     pub merge_target: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PtyMetaRepoMetadata {
+    pub id: Uuid,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PtySessionRepoMetadata {
+    pub repo_name: String,
+    pub workspace: Option<PtyWorkspaceMetadata>,
+    pub role: String,
+    pub position: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,6 +189,8 @@ pub struct SpawnParams {
     pub repo: String,
     pub working_dir: PathBuf,
     pub workspace: Option<PtyWorkspaceMetadata>,
+    pub meta_repo: Option<PtyMetaRepoMetadata>,
+    pub repositories: Vec<PtySessionRepoMetadata>,
     pub shell: PathBuf,
     pub args: Vec<String>,
     pub cols: u16,
@@ -181,6 +207,8 @@ impl Default for SpawnParams {
             repo: String::new(),
             working_dir: PathBuf::from("."),
             workspace: None,
+            meta_repo: None,
+            repositories: Vec::new(),
             shell: PathBuf::from("/bin/bash"),
             args: Vec::new(),
             cols: 120,
@@ -188,6 +216,25 @@ impl Default for SpawnParams {
             initial_agent_runtime_agent: None,
         }
     }
+}
+
+fn normalized_session_repositories(params: &SpawnParams) -> Vec<PtySessionRepoMetadata> {
+    if !params.repositories.is_empty() {
+        return params.repositories.clone();
+    }
+    fallback_session_repositories(&params.repo, params.workspace.as_ref())
+}
+
+fn fallback_session_repositories(
+    repo: &str,
+    workspace: Option<&PtyWorkspaceMetadata>,
+) -> Vec<PtySessionRepoMetadata> {
+    vec![PtySessionRepoMetadata {
+        repo_name: repo.to_string(),
+        workspace: workspace.cloned(),
+        role: "primary".into(),
+        position: 0,
+    }]
 }
 
 mod environment;
@@ -350,11 +397,14 @@ impl PtyManager {
         }
         let link = self.link()?.clone();
         let secret_broker_key_path = crate::secret_pty::prepare_pty_credential(id).await?;
+        let repositories = normalized_session_repositories(&params);
         let env = pty_environment(
             id,
             &params.shell,
             secret_broker_key_path.as_ref(),
             params.workspace.as_ref(),
+            params.meta_repo.as_ref(),
+            &repositories,
         );
 
         let now = chrono::Utc::now();
@@ -373,6 +423,8 @@ impl PtyManager {
             repo: params.repo.clone(),
             working_dir: params.working_dir.clone(),
             workspace: params.workspace.clone(),
+            meta_repo: params.meta_repo.clone(),
+            repositories: repositories.clone(),
             state: PtyState::Live,
             created_at: now,
             ended_at: None,
@@ -386,37 +438,7 @@ impl PtyManager {
             agent_runtime: initial_agent_runtime,
         };
 
-        sqlx::query(
-            "INSERT INTO pty_sessions \
-                (id, repo, working_dir, state, created_at, \
-                 agent_runtime_agent, agent_runtime_state, agent_runtime_started_at, workspace_id, \
-                 node_id, node_boot_id, node_disconnected_at, runtime_end_reason, ended_at, exit_code) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, NULL, NULL, NULL) \
-             ON CONFLICT (id) DO UPDATE SET \
-                 repo = EXCLUDED.repo, working_dir = EXCLUDED.working_dir, \
-                 state = EXCLUDED.state, created_at = EXCLUDED.created_at, \
-                 agent_runtime_agent = EXCLUDED.agent_runtime_agent, \
-                 agent_runtime_state = EXCLUDED.agent_runtime_state, \
-                 agent_runtime_started_at = EXCLUDED.agent_runtime_started_at, \
-                 agent_runtime_ended_at = NULL, agent_runtime_exit_code = NULL, \
-                 workspace_id = EXCLUDED.workspace_id, node_id = EXCLUDED.node_id, \
-                 node_boot_id = EXCLUDED.node_boot_id, node_disconnected_at = NULL, \
-                 runtime_end_reason = NULL, ended_at = NULL, exit_code = NULL \
-             WHERE pty_sessions.state <> 'live'",
-        )
-        .bind(meta.id)
-        .bind(&meta.repo)
-        .bind(meta.working_dir.to_string_lossy().as_ref())
-        .bind(meta.state.as_str())
-        .bind(meta.created_at)
-        .bind(meta.agent_runtime.agent.as_deref())
-        .bind(&meta.agent_runtime.state)
-        .bind(meta.agent_runtime.started_at)
-        .bind(meta.workspace.as_ref().map(|workspace| workspace.id))
-        .bind(params.node_id)
-        .bind(params.node_boot_id)
-        .execute(&self.pool)
-        .await?;
+        persist_spawn(&self.pool, &meta, &params, &repositories).await?;
 
         let devenv_ident = match link
             .spawn(HostSpawnSpec {
@@ -487,6 +509,9 @@ impl PtyManager {
         if session.devenv_ident == current {
             anyhow::bail!("session is already on the current toolset");
         }
+        let persisted = read_meta(&self.pool, id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no PTY session record {id}"))?;
         let repo = session.repo.clone();
         let working_dir = session.working_dir.clone();
         let workspace = session.workspace.clone();
@@ -519,6 +544,8 @@ impl PtyManager {
             repo,
             working_dir,
             workspace,
+            meta_repo: persisted.meta_repo,
+            repositories: persisted.repositories,
             shell: default_shell(),
             args: Vec::new(),
             ..Default::default()
@@ -540,7 +567,9 @@ impl PtyManager {
         .ok();
         crate::secret_pty::revoke_pty_credential(id).await;
     }
+}
 
+impl PtyManager {
     pub async fn get(&self, id: Uuid) -> Option<Arc<PtySession>> {
         self.sessions.read().await.get(&id).cloned()
     }
@@ -569,10 +598,18 @@ impl PtyManager {
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows
+        let mut metadata = rows
             .into_iter()
             .map(PtyRowWithActivity::into_meta)
-            .collect())
+            .collect::<Vec<_>>();
+        for item in &mut metadata {
+            let (meta_repo, repositories) = read_session_scope(&self.pool, item.id).await?;
+            item.meta_repo = meta_repo;
+            if !repositories.is_empty() {
+                item.repositories = repositories;
+            }
+        }
+        Ok(metadata)
     }
 
     /// Update user-facing metadata. Each field is optional; null means
@@ -742,170 +779,6 @@ impl PtyManager {
         }
         crate::secret_pty::revoke_pty_credential(id).await;
     }
-}
-
-#[derive(sqlx::FromRow)]
-struct PtyRow {
-    id: Uuid,
-    repo: String,
-    working_dir: String,
-    workspace_id: Option<Uuid>,
-    workspace_repo_name: Option<String>,
-    workspace_kind: Option<String>,
-    workspace_path: Option<String>,
-    workspace_branch_name: Option<String>,
-    workspace_base_ref: Option<String>,
-    workspace_base_sha: Option<String>,
-    workspace_merge_target: Option<String>,
-    state: String,
-    created_at: chrono::DateTime<chrono::Utc>,
-    ended_at: Option<chrono::DateTime<chrono::Utc>>,
-    exit_code: Option<i32>,
-    current_session_uuid: Option<Uuid>,
-    current_session_agent: Option<String>,
-    agent_runtime_agent: Option<String>,
-    agent_runtime_state: String,
-    agent_runtime_started_at: Option<chrono::DateTime<chrono::Utc>>,
-    agent_runtime_ended_at: Option<chrono::DateTime<chrono::Utc>>,
-    agent_runtime_exit_code: Option<i32>,
-}
-
-impl PtyRow {
-    fn into_meta(self) -> PtyMetadata {
-        let workspace = self.workspace_meta();
-        PtyMetadata {
-            id: self.id,
-            repo: self.repo,
-            working_dir: PathBuf::from(self.working_dir),
-            workspace,
-            state: PtyState::parse(&self.state).unwrap_or(PtyState::Dead),
-            created_at: self.created_at,
-            ended_at: self.ended_at,
-            exit_code: self.exit_code,
-            current_session_uuid: self.current_session_uuid,
-            current_session_agent: self.current_session_agent,
-            last_event_at: None,
-            label: None,
-            pinned: false,
-            color: None,
-            agent_runtime: AgentRuntimeMetadata {
-                agent: self.agent_runtime_agent,
-                state: self.agent_runtime_state,
-                started_at: self.agent_runtime_started_at,
-                ended_at: self.agent_runtime_ended_at,
-                exit_code: self.agent_runtime_exit_code,
-            },
-        }
-    }
-
-    fn workspace_meta(&self) -> Option<PtyWorkspaceMetadata> {
-        Some(PtyWorkspaceMetadata {
-            id: self.workspace_id?,
-            repo_name: self.workspace_repo_name.clone()?,
-            kind: self.workspace_kind.clone()?,
-            path: PathBuf::from(self.workspace_path.clone()?),
-            branch_name: self.workspace_branch_name.clone(),
-            base_ref: self.workspace_base_ref.clone(),
-            base_sha: self.workspace_base_sha.clone(),
-            merge_target: self.workspace_merge_target.clone(),
-        })
-    }
-}
-
-/// Extended row used by `list()` — includes activity timestamp plus
-/// user metadata (label/pinned/color).
-#[derive(sqlx::FromRow)]
-struct PtyRowWithActivity {
-    id: Uuid,
-    repo: String,
-    working_dir: String,
-    workspace_id: Option<Uuid>,
-    workspace_repo_name: Option<String>,
-    workspace_kind: Option<String>,
-    workspace_path: Option<String>,
-    workspace_branch_name: Option<String>,
-    workspace_base_ref: Option<String>,
-    workspace_base_sha: Option<String>,
-    workspace_merge_target: Option<String>,
-    state: String,
-    created_at: chrono::DateTime<chrono::Utc>,
-    ended_at: Option<chrono::DateTime<chrono::Utc>>,
-    exit_code: Option<i32>,
-    current_session_uuid: Option<Uuid>,
-    current_session_agent: Option<String>,
-    label: Option<String>,
-    pinned: bool,
-    color: Option<String>,
-    agent_runtime_agent: Option<String>,
-    agent_runtime_state: String,
-    agent_runtime_started_at: Option<chrono::DateTime<chrono::Utc>>,
-    agent_runtime_ended_at: Option<chrono::DateTime<chrono::Utc>>,
-    agent_runtime_exit_code: Option<i32>,
-    last_event_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-impl PtyRowWithActivity {
-    fn into_meta(self) -> PtyMetadata {
-        let workspace = self.workspace_meta();
-        PtyMetadata {
-            id: self.id,
-            repo: self.repo,
-            working_dir: PathBuf::from(self.working_dir),
-            workspace,
-            state: PtyState::parse(&self.state).unwrap_or(PtyState::Dead),
-            created_at: self.created_at,
-            ended_at: self.ended_at,
-            exit_code: self.exit_code,
-            current_session_uuid: self.current_session_uuid,
-            current_session_agent: self.current_session_agent,
-            last_event_at: self.last_event_at,
-            label: self.label,
-            pinned: self.pinned,
-            color: self.color,
-            agent_runtime: AgentRuntimeMetadata {
-                agent: self.agent_runtime_agent,
-                state: self.agent_runtime_state,
-                started_at: self.agent_runtime_started_at,
-                ended_at: self.agent_runtime_ended_at,
-                exit_code: self.agent_runtime_exit_code,
-            },
-        }
-    }
-
-    fn workspace_meta(&self) -> Option<PtyWorkspaceMetadata> {
-        Some(PtyWorkspaceMetadata {
-            id: self.workspace_id?,
-            repo_name: self.workspace_repo_name.clone()?,
-            kind: self.workspace_kind.clone()?,
-            path: PathBuf::from(self.workspace_path.clone()?),
-            branch_name: self.workspace_branch_name.clone(),
-            base_ref: self.workspace_base_ref.clone(),
-            base_sha: self.workspace_base_sha.clone(),
-            merge_target: self.workspace_merge_target.clone(),
-        })
-    }
-}
-
-/// Helper: read the most recent PtyMetadata for an id directly from DB.
-/// Used by tests to assert final state.
-pub async fn read_meta(pool: &Pool, id: Uuid) -> anyhow::Result<Option<PtyMetadata>> {
-    let row = sqlx::query_as::<_, PtyRow>(
-        "SELECT ps.id, ps.repo, ps.working_dir, ps.state, ps.created_at, ps.ended_at, ps.exit_code, \
-         ps.current_session_uuid, ps.current_session_agent, \
-         ps.agent_runtime_agent, ps.agent_runtime_state, ps.agent_runtime_started_at, \
-         ps.agent_runtime_ended_at, ps.agent_runtime_exit_code, \
-         ws.id AS workspace_id, ws.repo_name AS workspace_repo_name, \
-         ws.kind AS workspace_kind, ws.path AS workspace_path, \
-         ws.branch_name AS workspace_branch_name, ws.base_ref AS workspace_base_ref, \
-         ws.base_sha AS workspace_base_sha, ws.merge_target AS workspace_merge_target \
-         FROM pty_sessions ps \
-         LEFT JOIN workspaces ws ON ws.id = ps.workspace_id \
-         WHERE ps.id = $1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.map(PtyRow::into_meta))
 }
 
 /// Path-agnostic shell probe used by tests/docs.

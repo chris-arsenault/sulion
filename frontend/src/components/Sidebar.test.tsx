@@ -26,15 +26,18 @@ import { appStatePayload, jsonResponse } from "../test/appState";
 
 const REPO_ALPHA = "alpha";
 const REPO_ALPHA_PATH = "/tmp/alpha";
+const META_REPO_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 
 interface MockState {
   sessions: Array<Record<string, unknown>>;
   repos: Array<Record<string, unknown>>;
+  metaRepos: Array<Record<string, unknown>>;
   workspaces: Array<Record<string, unknown>>;
   secrets: Array<Record<string, unknown>>;
   grantsBySession: Record<string, Array<Record<string, unknown>>>;
   createSessionCalls: Array<unknown>;
   createRepoCalls: Array<unknown>;
+  metaRepoCalls: Array<{ method: string; id?: string; body?: unknown }>;
   renameRepoCalls: Array<{ name: string; body: unknown }>;
   deletedRepoRequests: Array<{ name: string; query: string }>;
   deletedIds: string[];
@@ -48,11 +51,13 @@ function installFetchMock(): MockState {
   const state: MockState = {
     sessions: [],
     repos: [],
+    metaRepos: [],
     workspaces: [],
     secrets: [],
     grantsBySession: {},
     createSessionCalls: [],
     createRepoCalls: [],
+    metaRepoCalls: [],
     renameRepoCalls: [],
     deletedRepoRequests: [],
     deletedIds: [],
@@ -74,29 +79,15 @@ function installFetchMock(): MockState {
           appStatePayload({
             sessions: state.sessions,
             repos: state.repos,
+            metaRepos: state.metaRepos,
             workspaces: state.workspaces,
           }),
         );
       }
-      if (url === "/api/sessions" && method === "POST") {
-        const body = JSON.parse(init!.body as string);
-        state.createSessionCalls.push(body);
-        const s = {
-          id: `00000000-0000-0000-0000-${String(
-            state.sessions.length,
-          ).padStart(12, "0")}`,
-          repo: body.repo,
-          working_dir: body.working_dir ?? `/tmp/${body.repo}`,
-          state: "live",
-          created_at: new Date().toISOString(),
-          ended_at: null,
-          exit_code: null,
-          current_session_uuid: null,
-          current_session_agent: null,
-        };
-        state.sessions.push(s);
-        return jsonResp(s, 201);
-      }
+      const sessionResponse = handleSessionCreate(state, url, method, init);
+      if (sessionResponse) return sessionResponse;
+      const metaRepoResponse = handleMetaRepoRequest(state, url, method, init);
+      if (metaRepoResponse) return metaRepoResponse;
       if (url.startsWith("/api/workspaces/") && method === "DELETE") {
         const [path, query = ""] = url.split("?");
         const id = path.split("/").pop()!;
@@ -166,6 +157,98 @@ function installFetchMock(): MockState {
   return state;
 }
 
+function handleSessionCreate(
+  state: MockState,
+  url: string,
+  method: string,
+  init?: RequestInit,
+): Response | null {
+  if (url !== "/api/sessions" || method !== "POST") return null;
+  const body = JSON.parse(init!.body as string);
+  state.createSessionCalls.push(body);
+  const metaRepo = state.metaRepos.find(
+    (candidate) => candidate.id === body.meta_repo_id,
+  );
+  const primaryRepoName = metaRepo?.primary_repo_name;
+  const repo =
+    typeof primaryRepoName === "string" ? primaryRepoName : body.repo;
+  const session = {
+    id: `00000000-0000-0000-0000-${String(state.sessions.length).padStart(12, "0")}`,
+    repo,
+    working_dir: body.working_dir ?? `/tmp/${repo}`,
+    meta_repo: metaRepo ? { id: metaRepo.id, name: metaRepo.name } : null,
+    state: "live",
+    created_at: new Date().toISOString(),
+    ended_at: null,
+    exit_code: null,
+    current_session_uuid: null,
+    current_session_agent: null,
+  };
+  state.sessions.push(session);
+  return jsonResponse(session, 201);
+}
+
+function handleMetaRepoRequest(
+  state: MockState,
+  url: string,
+  method: string,
+  init?: RequestInit,
+): Response | null {
+  if (url === "/api/meta-repos" && method === "POST") {
+    const body = JSON.parse(init!.body as string);
+    state.metaRepoCalls.push({ method, body });
+    const now = new Date().toISOString();
+    const metaRepo = {
+      id: `aaaaaaaa-aaaa-aaaa-aaaa-${String(state.metaRepos.length).padStart(12, "0")}`,
+      name: body.name,
+      primary_repo_name: body.primary_repo_name ?? body.members[0] ?? null,
+      position: state.metaRepos.length,
+      revision: 1,
+      members: body.members.map((repoName: string, position: number) => ({
+        repo_name: repoName,
+        position,
+        exists: true,
+      })),
+      created_at: now,
+      updated_at: now,
+    };
+    state.metaRepos.push(metaRepo);
+    return jsonResponse(metaRepo, 201);
+  }
+  const match = url.match(/^\/api\/meta-repos\/([^/]+)(\/members)?$/);
+  if (match && (method === "PATCH" || method === "PUT")) {
+    const id = decodeURIComponent(match[1]);
+    const body = JSON.parse(init!.body as string);
+    state.metaRepoCalls.push({ method, id, body });
+    const current = state.metaRepos.find((metaRepo) => metaRepo.id === id)!;
+    if (method === "PATCH") {
+      Object.assign(current, {
+        name: body.name ?? current.name,
+        position: body.position ?? current.position,
+        revision: (current.revision as number) + 1,
+      });
+    } else {
+      Object.assign(current, {
+        primary_repo_name: body.primary_repo_name ?? body.members[0] ?? null,
+        members: body.members.map((repoName: string, position: number) => ({
+          repo_name: repoName,
+          position,
+          exists: true,
+        })),
+        revision: (current.revision as number) + 1,
+      });
+    }
+    return jsonResponse(current);
+  }
+  if (match && method === "DELETE") {
+    const id = decodeURIComponent(match[1]);
+    state.metaRepoCalls.push({ method, id });
+    state.metaRepos = state.metaRepos.filter((metaRepo) => metaRepo.id !== id);
+    return new Response(null, { status: 204 });
+  }
+  return null;
+}
+
 function handleBrokerRequest(
   state: MockState,
   url: string,
@@ -225,6 +308,23 @@ function workspaceFixture(overrides: Record<string, unknown> = {}) {
       refreshing: false,
       status_error: null,
     },
+    ...overrides,
+  };
+}
+
+function metaRepoFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: META_REPO_ID,
+    name: "Ahara platform",
+    primary_repo_name: REPO_ALPHA,
+    position: 0,
+    revision: 1,
+    members: [
+      { repo_name: REPO_ALPHA, position: 0, exists: true },
+      { repo_name: "beta", position: 1, exists: true },
+    ],
+    created_at: "2026-08-09T00:00:00Z",
+    updated_at: "2026-08-09T00:00:00Z",
     ...overrides,
   };
 }
@@ -289,6 +389,85 @@ describe("Sidebar", () => {
     });
     await waitFor(() => {
       expect(screen.getByText(/11111111/)).toBeDefined();
+    });
+  });
+
+  it("renders meta-repositories above their member repos and keeps collection sessions at the parent", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.repos.push({ name: "beta", path: "/tmp/beta" });
+    state.repos.push({ name: "gamma", path: "/tmp/gamma" });
+    state.metaRepos.push(metaRepoFixture());
+    state.sessions.push({
+      id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
+      meta_repo: { id: META_REPO_ID, name: "Ahara platform" },
+      state: "live",
+      created_at: new Date().toISOString(),
+      ended_at: null,
+      exit_code: null,
+      current_session_uuid: null,
+      current_session_agent: null,
+    });
+
+    setup();
+
+    const metaName = await screen.findByText("Ahara platform");
+    const metaGroup = metaName.closest("[data-meta-repo-id]");
+    expect(metaGroup).not.toBeNull();
+    expect(metaGroup?.querySelector('[data-repo-name="alpha"]')).not.toBeNull();
+    expect(metaGroup?.querySelector('[data-repo-name="beta"]')).not.toBeNull();
+    expect(screen.getByText("Ungrouped")).toBeDefined();
+    expect(screen.getByText("gamma")).toBeDefined();
+    expect(screen.getAllByText(/cccccccc/)).toHaveLength(1);
+    expect(metaGroup?.textContent).toContain("cccccccc");
+  });
+
+  it("creates a meta-repository with ordered members and an explicit primary", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.repos.push({ name: "beta", path: "/tmp/beta" });
+    setup();
+    const user = userEvent.setup();
+
+    await screen.findByText(REPO_ALPHA);
+    await user.click(screen.getByLabelText("New meta-repository"));
+    await user.type(screen.getByLabelText("meta-repository name"), "platform");
+    await user.click(screen.getByRole("checkbox", { name: REPO_ALPHA }));
+    await user.click(screen.getByRole("checkbox", { name: "beta" }));
+    await user.click(
+      screen.getByLabelText("Use beta as primary repository"),
+    );
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(state.metaRepoCalls).toHaveLength(1));
+    expect(state.metaRepoCalls[0]).toEqual({
+      method: "POST",
+      body: {
+        name: "platform",
+        members: [REPO_ALPHA, "beta"],
+        primary_repo_name: "beta",
+      },
+    });
+  });
+
+  it("creates a collection session from a meta-repository", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.repos.push({ name: "beta", path: "/tmp/beta" });
+    state.metaRepos.push(metaRepoFixture());
+    setup();
+    const user = userEvent.setup();
+
+    await screen.findByText("Ahara platform");
+    await user.click(screen.getByLabelText("New session in Ahara platform"));
+    await user.click(screen.getByRole("button", { name: "Spawn" }));
+
+    await waitFor(() => expect(state.createSessionCalls).toHaveLength(1));
+    expect(state.createSessionCalls[0]).toEqual({
+      meta_repo_id: META_REPO_ID,
+      workspace_mode: "isolated",
     });
   });
 

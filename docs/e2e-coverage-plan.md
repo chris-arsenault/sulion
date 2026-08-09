@@ -22,12 +22,15 @@ Current specs:
 - `05` = `frontend/e2e/05-mobile.spec.ts`
 - `06` = `frontend/e2e/06-mock-terminal.spec.ts`
 - `07` = `frontend/e2e/07-agent-roundtrip.spec.ts`
+- `08` = `frontend/e2e/08-secrets.spec.ts`
+- `09` = `frontend/e2e/09-meta-repositories.spec.ts`
 
 | Feature Area | Status | Priority | Current Coverage | Next Test To Add |
 |---|---|---|---|---|
 | Stack boot: backend + frontend + Postgres + seeded ingest | Covered | High | All specs run on the real stack, with Postgres and the backend now isolated in Docker. Claude/Codex JSONL is written, correlated, ingested, and then exercised through the UI. | Add one explicit seed-health smoke assertion so stack failures fail earlier and more readably. |
 | Session discovery and navigation | Covered | High | `01`, `03`, `04`, `05` cover command-palette open, sidebar selection, and mobile drawer selection. | Add direct repo-jump and session unread-state assertions once that behavior is stable enough to test. |
 | Session metadata management | Covered | Medium | `01` covers rename, pin/unpin, and color assign/clear from the sidebar. | Add reload persistence for renamed/pinned/colored session state. |
+| Meta-repository organization and collection sessions | Covered | High | `09` creates a real metadata grouping from seeded repos, verifies the nested sidebar and rail, launches a main-worktree collection PTY through the UI, checks its repository-set environment, runs the deterministic Codex mock launcher, and verifies hierarchy/session persistence after reload. | Add isolated-mode browser coverage if per-member worktree state needs UI-level regression coverage beyond backend integration tests. |
 | Workspace tabs and pane movement | Partial | High | `01` covers file/diff tab open, moving a file tab across panes, and reload persistence of restored workspace tabs. | Add tab close/reopen, context-menu move-to-pane, and active-tab restoration assertions. |
 | Workspace isolation | Partial | High | Backend integration tests cover isolated worktree creation, main-worktree binding, workspace dirty-path queries, and session workspace metadata. Browser e2e does not yet create isolated sessions. | Add a create-session e2e path that selects isolated vs main workspace mode and verifies file/diff tabs stay workspace-scoped. |
 | Timeline inspection: Claude path | Covered | High | `02`, `04`, and `07` cover turn selection, prompt detail, thinking flyout, save actions, and a live mock roundtrip that emits Claude-shaped assistant/edit/websearch/subagent JSONL into ingest. | Add multi-turn behavior once seed data includes more than one meaningful Claude turn. |
@@ -44,7 +47,7 @@ Current specs:
 | Stats / observability strip | Partial | Medium | `03` covers stats-strip visibility and expanded detail fields. | Add refresh/update behavior and thresholds or warning-state assertions once those semantics are stable. |
 | Mobile shell | Covered | Medium | `05` covers drawer open/close and switching to a timeline tab on mobile Chromium. | Add mobile file/ref navigation and drawer interactions with multiple open sessions/tabs. |
 | Repo creation flow | Missing | High | Not covered by Playwright today. | Add a create-repo scenario against a temporary seeded git target or a local bare repo fixture. |
-| Session creation flow | Missing | High | Not covered by Playwright today. | Add create-session from sidebar and verify new terminal/timeline tabs appear. |
+| Session creation flow | Covered | High | `09` creates a collection session from the sidebar, opens its terminal/timeline tabs, and drives a mock agent roundtrip. Single-repo creation uses the same form and remains component-tested. | Add a single-repo isolated-mode browser case together with workspace-scoped file/diff assertions. |
 | Failure and recovery paths | Partial | High | `06` now covers websocket reconnect and terminal exit/ended-session recovery. | Add API failure rendering and empty-state regressions. |
 | Search surfaces beyond command palette | Missing | Medium | Only command-palette session open is covered today. | Add timeline search when implemented; until then, keep this explicitly unowned. |
 | Actual live agent integration | Out of scope | High | Intentionally excluded by requirement. The suite drives mock Claude/Codex launchers that emit deterministic JSONL into isolated transcript roots, not the real token-using agents. | None. Keep excluded unless requirements change. |
@@ -53,17 +56,16 @@ Current specs:
 
 - The suite is strong on the core read/review workflow: ingest seeded transcripts, inspect them in the UI, move around the workspace, and save useful artifacts.
 - The new launcher-backed roundtrip path gives direct browser coverage for Claude/Codex ingest parity without calling the real agents.
-- The next highest-value additions are the write-heavy operational paths: repo/session creation, git staging, and failure handling.
+- The next highest-value additions are the remaining write-heavy operational paths: repo creation, git staging, and failure handling.
 - File viewing is only partially covered; JSON works, but viewer-format breadth is still a clear gap.
 
 ## Suggested Next Additions In Order
 
 1. Add a `DiffTab` stage/unstage test. It covers a real workflow and would exercise a path that currently has no browser coverage.
-2. Add a session-creation test. That validates the UI path most likely to break when backend/session and workspace-mode wiring changes.
-3. Add a repo-creation test. That closes the last obvious top-level sidebar action gap.
-4. Add published-plan/overview and timeline prompt-bar e2e coverage for the new review/input workflow.
-5. Expand timeline filter coverage beyond file-path filtering to speaker/category/error combinations.
-6. Add file-viewer format coverage for markdown, ndjson, binary/truncated files, and image/svg behavior.
+2. Add a repo-creation test. That closes the last obvious top-level sidebar action gap.
+3. Add published-plan/overview and timeline prompt-bar e2e coverage for the new review/input workflow.
+4. Expand timeline filter coverage beyond file-path filtering to speaker/category/error combinations.
+5. Add file-viewer format coverage for markdown, ndjson, binary/truncated files, and image/svg behavior.
 
 ## Explicitly Excluded From This Plan
 

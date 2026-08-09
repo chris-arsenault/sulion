@@ -9,9 +9,15 @@ use super::{TimelineFileTouch, TimelineToolPair};
 
 #[derive(Debug, Clone)]
 pub struct FileTouchContext {
-    pub repo_name: String,
-    pub repo_root: PathBuf,
+    pub roots: Vec<FileTouchRoot>,
+    pub primary_repo_name: String,
     pub working_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileTouchRoot {
+    pub repo_name: String,
+    pub path: PathBuf,
 }
 
 pub fn extract_file_touches(
@@ -109,22 +115,22 @@ fn push_touch(
     touch_kind: &str,
     is_write: bool,
 ) {
-    let Some(path) = normalize_candidate(context, raw) else {
+    let Some((repo, path)) = normalize_candidate(context, raw) else {
         return;
     };
-    let key = (path.clone(), touch_kind.to_string());
+    let key = (format!("{repo}/{path}"), touch_kind.to_string());
     if !seen.insert(key) {
         return;
     }
     out.push(TimelineFileTouch {
-        repo: context.repo_name.clone(),
+        repo,
         path,
         touch_kind: touch_kind.to_string(),
         is_write,
     });
 }
 
-fn normalize_candidate(context: &FileTouchContext, raw: &str) -> Option<String> {
+fn normalize_candidate(context: &FileTouchContext, raw: &str) -> Option<(String, String)> {
     let candidate = raw.trim();
     if candidate.is_empty()
         || candidate.starts_with('-')
@@ -137,28 +143,36 @@ fn normalize_candidate(context: &FileTouchContext, raw: &str) -> Option<String> 
         return None;
     }
 
-    let rel = if Path::new(candidate).is_absolute() {
+    let (root, rel) = if Path::new(candidate).is_absolute() {
         let absolute = PathBuf::from(candidate);
-        let stripped = absolute.strip_prefix(&context.repo_root).ok()?;
-        stripped.to_string_lossy().into_owned()
+        let root = context
+            .roots
+            .iter()
+            .filter(|root| absolute.starts_with(&root.path))
+            .max_by_key(|root| root.path.components().count())?;
+        let stripped = absolute.strip_prefix(&root.path).ok()?;
+        (root, stripped.to_string_lossy().into_owned())
     } else {
         if candidate.ends_with('/') {
             return None;
         }
-        normalize_relative_candidate(&context.repo_root, &context.repo_root, candidate).or_else(
-            || normalize_relative_candidate(&context.repo_root, &context.working_dir, candidate),
-        )?
+        let root = context
+            .roots
+            .iter()
+            .find(|root| root.repo_name == context.primary_repo_name)?;
+        let rel = normalize_relative_candidate(&root.path, &context.working_dir, candidate)?;
+        (root, rel)
     };
 
     if rel.is_empty() {
         return None;
     }
 
-    let absolute = context.repo_root.join(&rel);
+    let absolute = root.path.join(&rel);
     if absolute.is_dir() {
         return None;
     }
-    Some(rel)
+    Some((root.repo_name.clone(), rel))
 }
 
 fn normalize_relative_candidate(repo_root: &Path, base: &Path, candidate: &str) -> Option<String> {
@@ -263,8 +277,17 @@ mod tests {
 
     fn context() -> FileTouchContext {
         FileTouchContext {
-            repo_name: "alpha".to_string(),
-            repo_root: PathBuf::from("/tmp/alpha"),
+            roots: vec![
+                FileTouchRoot {
+                    repo_name: "alpha".to_string(),
+                    path: PathBuf::from("/tmp/alpha"),
+                },
+                FileTouchRoot {
+                    repo_name: "beta".to_string(),
+                    path: PathBuf::from("/tmp/beta"),
+                },
+            ],
+            primary_repo_name: "alpha".to_string(),
             working_dir: PathBuf::from("/tmp/alpha/src"),
         }
     }
@@ -311,6 +334,31 @@ mod tests {
         let touches = extract_file_touches(&pair, Some(&context()));
         assert_eq!(touches.len(), 2);
         assert_eq!(touches[0].path, "src/lib.rs");
-        assert_eq!(touches[1].path, "src/main.rs");
+        assert_eq!(touches[1].path, "src/src/main.rs");
+    }
+
+    #[test]
+    fn assigns_absolute_paths_to_the_matching_collection_member() {
+        let pair = pair("edit", json!({ "path": "/tmp/beta/src/service.rs" }));
+        let touches = extract_file_touches(&pair, Some(&context()));
+        assert_eq!(touches.len(), 1);
+        assert_eq!(touches[0].repo, "beta");
+        assert_eq!(touches[0].path, "src/service.rs");
+    }
+
+    #[test]
+    fn uses_the_longest_matching_root_for_absolute_paths() {
+        let mut context = context();
+        context.roots.push(FileTouchRoot {
+            repo_name: "nested".to_string(),
+            path: PathBuf::from("/tmp/beta/vendor/nested"),
+        });
+        let pair = pair(
+            "read",
+            json!({ "path": "/tmp/beta/vendor/nested/src/lib.rs" }),
+        );
+        let touches = extract_file_touches(&pair, Some(&context));
+        assert_eq!(touches[0].repo, "nested");
+        assert_eq!(touches[0].path, "src/lib.rs");
     }
 }

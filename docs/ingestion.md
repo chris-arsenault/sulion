@@ -34,6 +34,12 @@ The ingester restarts independently. A control or network outage leaves local
 append-only transcripts intact; after Postgres recovers, the worker resumes
 from the last committed byte offset.
 
+File-touch derivation uses the correlated PTY's stored `pty_session_repos`
+snapshot. Absolute tool paths are assigned to the longest matching member
+workspace root; relative paths resolve from the primary PTY cwd. Each projected
+touch still stores a real `repo_name` and repo-relative path, so file history
+and repo trace routes remain repo-specific.
+
 ## Binary and deployment
 
 `backend/src/bin/sulion_ingester.rs` is mapped into the shared workbench image.

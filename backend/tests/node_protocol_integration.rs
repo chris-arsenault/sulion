@@ -330,6 +330,65 @@ async fn fixed_node_pairing_is_approved_in_the_control_plane() {
     assert_eq!(node.pending_key_fingerprint, None);
 }
 
+#[tokio::test]
+async fn an_old_connected_node_refuses_collection_launch_before_dispatch() {
+    let pool = fresh_pool().await;
+    let (base, state) = start_server(pool.clone()).await;
+    for repo in ["alpha", "beta"] {
+        sqlx::query(
+            "INSERT INTO repo_runtime_state (repo_name, path, exists, next_status_at) \
+             VALUES ($1, $2, TRUE, NOW())",
+        )
+        .bind(repo)
+        .bind(format!("/tmp/{repo}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let group_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO meta_repos (id, name, primary_repo_name) VALUES ($1, 'Platform', 'alpha')",
+    )
+    .bind(group_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    for (position, repo) in ["alpha", "beta"].into_iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO meta_repo_members (meta_repo_id, repo_name, position) \
+             VALUES ($1, $2, $3)",
+        )
+        .bind(group_id)
+        .bind(repo)
+        .bind(position as i32)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let keypair = generate_keypair();
+    pair_and_approve(&base, &state.node_control, &keypair).await;
+    let boot_id = Uuid::new_v4();
+    let mut socket = connect_node(&base, &keypair, DEDICATED_NODE_ID, boot_id).await;
+    send_heartbeat(&mut socket, DEDICATED_NODE_ID, boot_id, Vec::new()).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{base}/api/sessions"))
+        .json(&json!({"meta_repo_id": group_id, "workspace_mode": "main"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value = response.json().await.unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("must finish updating"),
+        "{body}",
+    );
+}
+
 /// The strip's memory/CPU must describe the machine that runs PTYs and
 /// builds. Control samples nothing of its own, so a deployment with no node
 /// reports no machine rather than quietly measuring the control plane.
@@ -593,6 +652,8 @@ async fn extracted_runtime_preserves_a_pty_across_control_replacement() {
                 cols: 100,
                 rows: 30,
                 launch: SessionLaunch::Shell,
+                meta_repo: None,
+                additional_repos: Vec::new(),
             })
             .unwrap(),
         )

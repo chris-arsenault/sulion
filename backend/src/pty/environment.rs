@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-use super::PtyWorkspaceMetadata;
+use super::{PtyMetaRepoMetadata, PtySessionRepoMetadata, PtyWorkspaceMetadata};
 
 /// The complete environment for a PTY shell. The caller starts from an empty
 /// environment (`env_clear`) and applies exactly these pairs.
@@ -22,6 +22,8 @@ pub(crate) fn pty_environment(
     shell: &Path,
     secret_broker_key_path: Option<&PathBuf>,
     workspace: Option<&PtyWorkspaceMetadata>,
+    meta_repo: Option<&PtyMetaRepoMetadata>,
+    repositories: &[PtySessionRepoMetadata],
 ) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = Vec::new();
     let mut set = |key: &str, value: String| env.push((key.to_string(), value));
@@ -82,6 +84,27 @@ pub(crate) fn pty_environment(
             env.push(("SULION_MERGE_TARGET".to_string(), merge_target.clone()));
         }
     }
+    if let Some(meta_repo) = meta_repo {
+        env.push(("SULION_META_REPO_ID".to_string(), meta_repo.id.to_string()));
+        env.push(("SULION_META_REPO_NAME".to_string(), meta_repo.name.clone()));
+    }
+    let repo_names = repositories
+        .iter()
+        .map(|repository| repository.repo_name.as_str())
+        .collect::<Vec<_>>();
+    let repo_paths = repositories
+        .iter()
+        .filter_map(|repository| repository.workspace.as_ref())
+        .map(|workspace| workspace.path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    env.push((
+        "SULION_REPO_NAMES_JSON".to_string(),
+        serde_json::to_string(&repo_names).expect("repository names serialize"),
+    ));
+    env.push((
+        "SULION_REPO_PATHS_JSON".to_string(),
+        serde_json::to_string(&repo_paths).expect("repository paths serialize"),
+    ));
     env.push((
         "SULION_CORRELATE_SOCK".to_string(),
         std::env::var("SULION_CORRELATE_SOCK")
@@ -139,7 +162,7 @@ mod tests {
     fn environment_pairs_carry_the_session_identity_and_broker_wiring() {
         let id = Uuid::new_v4();
         let key_path = PathBuf::from("/run/sulion/pty-keys/test.pk8");
-        let env = pty_environment(id, Path::new("/bin/bash"), Some(&key_path), None);
+        let env = pty_environment(id, Path::new("/bin/bash"), Some(&key_path), None, None, &[]);
         let get = |key: &str| {
             env.iter()
                 .find(|(k, _)| k == key)
@@ -155,5 +178,71 @@ mod tests {
         assert!(get("PATH").contains("/opt/sulion/bin"));
         assert!(!get("TERM").is_empty());
         assert!(env.iter().any(|(k, _)| k == "SULION_CORRELATE_SOCK"));
+        assert_eq!(get("SULION_REPO_NAMES_JSON"), "[]");
+        assert_eq!(get("SULION_REPO_PATHS_JSON"), "[]");
+    }
+
+    #[test]
+    fn collection_environment_preserves_ordered_names_and_paths() {
+        let primary = PtyWorkspaceMetadata {
+            id: Uuid::new_v4(),
+            repo_name: "alpha".into(),
+            kind: "main".into(),
+            path: PathBuf::from("/repos/alpha"),
+            branch_name: None,
+            base_ref: None,
+            base_sha: None,
+            merge_target: None,
+        };
+        let secondary = PtyWorkspaceMetadata {
+            id: Uuid::new_v4(),
+            repo_name: "beta".into(),
+            kind: "main".into(),
+            path: PathBuf::from("/repos/beta with space"),
+            branch_name: None,
+            base_ref: None,
+            base_sha: None,
+            merge_target: None,
+        };
+        let group = PtyMetaRepoMetadata {
+            id: Uuid::new_v4(),
+            name: "Platform".into(),
+        };
+        let repositories = vec![
+            PtySessionRepoMetadata {
+                repo_name: "alpha".into(),
+                workspace: Some(primary.clone()),
+                role: "primary".into(),
+                position: 0,
+            },
+            PtySessionRepoMetadata {
+                repo_name: "beta".into(),
+                workspace: Some(secondary),
+                role: "additional".into(),
+                position: 1,
+            },
+        ];
+        let env = pty_environment(
+            Uuid::new_v4(),
+            Path::new("/bin/bash"),
+            None,
+            Some(&primary),
+            Some(&group),
+            &repositories,
+        );
+        let get = |key: &str| {
+            env.iter()
+                .find(|(candidate, _)| candidate == key)
+                .map(|(_, value)| value.as_str())
+                .unwrap()
+        };
+
+        assert_eq!(get("SULION_META_REPO_ID"), group.id.to_string());
+        assert_eq!(get("SULION_META_REPO_NAME"), "Platform");
+        assert_eq!(get("SULION_REPO_NAMES_JSON"), r#"["alpha","beta"]"#);
+        assert_eq!(
+            get("SULION_REPO_PATHS_JSON"),
+            r#"["/repos/alpha","/repos/beta with space"]"#,
+        );
     }
 }

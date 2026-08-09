@@ -9,7 +9,7 @@ No React context stores.
 
 | Store | Purpose |
 |---|---|
-| `SessionStore` | PTY sessions, repos, workspaces, open-plan summaries, selected-session URL sync, repo group expansion, unread tracking, polling. |
+| `SessionStore` | PTY sessions, repos, meta-repos, workspaces, open-plan summaries, selected-session URL sync, both hierarchy expansion maps, unread tracking, polling. |
 | `RepoStore` | Per-repo git status, file tree state, expansion state, polling. |
 | `TabStore` | Thin tab registry only. |
 | `ContextMenuStore` | Ephemeral open/close state for the global context-menu layer. |
@@ -25,6 +25,7 @@ imperative one-shots:
 
 - open a file tab from the sidebar tree
 - open a diff tab from a context menu
+- reveal a meta-repository or open its collection-session form from the rail/palette
 - close the mobile drawer after a selection
 - inject prompt text into the active terminal
 - refresh global library lists after a prompt/reference mutation

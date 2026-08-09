@@ -366,6 +366,7 @@ function usePaletteCommands({
   onOpenPalette: () => void;
 }): PaletteCommand[] {
   const repos = useSessions((s) => s.repos);
+  const metaRepos = useSessions((s) => s.metaRepos);
   const sessions = useSessions((s) => s.sessions);
   const plans = useSessions((s) => s.plans);
   const selectSession = useSessions((s) => s.selectSession);
@@ -416,6 +417,28 @@ function usePaletteCommands({
       group: "view",
       run: () => setPinned((v) => !v),
     });
+    for (const metaRepo of metaRepos) {
+      out.push({
+        id: `meta-repo.${metaRepo.id}`,
+        label: `Jump to meta-repository · ${metaRepo.name}`,
+        icon: "layers",
+        group: "repo",
+        searchOnly: true,
+        rank: 25,
+        run: () =>
+          appCommands.revealMetaRepo({ metaRepoId: metaRepo.id }),
+      });
+      out.push({
+        id: `meta-repo.${metaRepo.id}.new-session`,
+        label: `New collection session · ${metaRepo.name}`,
+        icon: "terminal",
+        group: "repo",
+        searchOnly: true,
+        rank: 20,
+        run: () =>
+          appCommands.newMetaRepoSession({ metaRepoId: metaRepo.id }),
+      });
+    }
     for (const r of repos) {
       out.push({
         id: `repo.${r.name}`,
@@ -460,7 +483,7 @@ function usePaletteCommands({
       const label = labeled && s.label ? s.label : s.id.slice(0, 8);
       out.push({
         id: `session.${s.id}`,
-        label: `Open session · ${s.repo} / ${label}`,
+        label: `Open session · ${s.meta_repo?.name ?? s.repo} / ${label}`,
         icon: "terminal",
         group: "session",
         searchOnly: true,
@@ -469,5 +492,5 @@ function usePaletteCommands({
       });
     }
     return out;
-  }, [openTab, plans, repos, sessions, setPinned, openTerminalFor]);
+  }, [metaRepos, openTab, plans, repos, sessions, setPinned, openTerminalFor]);
 }

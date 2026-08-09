@@ -16,6 +16,8 @@ export type AppCommand =
   | { type: "open-plan"; repo: string; planId?: string }
   | { type: "reveal-file"; repo: string; path: string }
   | { type: "reveal-repo"; repo: string }
+  | { type: "reveal-meta-repo"; metaRepoId: string }
+  | { type: "new-meta-repo-session"; metaRepoId: string }
   | { type: "close-drawer" }
   | { type: "inject-terminal"; sessionId: string; text: string }
   | { type: "library-changed"; kind: LibraryKind };
@@ -55,6 +57,16 @@ export const appCommands = {
 
   revealRepo(detail: Omit<AppCommandOf<"reveal-repo">, "type">) {
     dispatchAppCommand({ type: "reveal-repo", ...detail });
+  },
+
+  revealMetaRepo(detail: Omit<AppCommandOf<"reveal-meta-repo">, "type">) {
+    dispatchAppCommand({ type: "reveal-meta-repo", ...detail });
+  },
+
+  newMetaRepoSession(
+    detail: Omit<AppCommandOf<"new-meta-repo-session">, "type">,
+  ) {
+    dispatchAppCommand({ type: "new-meta-repo-session", ...detail });
   },
 
   closeDrawer() {

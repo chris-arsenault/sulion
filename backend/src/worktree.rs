@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +17,10 @@ const WORKSPACE_SCAN_INTERVAL: Duration = Duration::from_secs(30);
 const WORKSPACE_STATUS_CADENCE_SECS: i32 = 30;
 const WORKSPACE_STATUS_ERROR_CADENCE_SECS: i32 = 90;
 
+mod cli;
 mod git_ops;
+
+pub use cli::run_cli;
 
 use git_ops::{
     branch_component, current_branch, git_branch_exists, git_worktree_registered, rev_parse,
@@ -348,9 +350,11 @@ impl WorkspaceManager {
         }
 
         let active_sessions: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) \
-               FROM pty_sessions \
-              WHERE workspace_id = $1 AND state IN ('live', 'orphaned')",
+            "SELECT COUNT(DISTINCT ps.id) \
+               FROM pty_sessions ps \
+               LEFT JOIN pty_session_repos psr ON psr.pty_session_id = ps.id \
+              WHERE (ps.workspace_id = $1 OR psr.workspace_id = $1) \
+                AND ps.state IN ('live', 'orphaned')",
         )
         .bind(id)
         .fetch_one(&self.pool)
@@ -443,6 +447,11 @@ impl WorkspaceManager {
             .execute(&mut *tx)
             .await
             .with_context(|| format!("unbind sessions from workspace {id}"))?;
+        sqlx::query("UPDATE pty_session_repos SET workspace_id = NULL WHERE workspace_id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("unbind session scopes from workspace {id}"))?;
         sqlx::query(
             "UPDATE workspaces \
                 SET state = 'deleted', status_error = NULL, updated_at = NOW() \
@@ -699,42 +708,6 @@ pub async fn load_workspace_dirty_paths(
         dirty_by_path,
         diff_stats_by_path,
     })
-}
-
-pub async fn run_cli(args: &[OsString]) -> anyhow::Result<i32> {
-    match args.first().and_then(|arg| arg.to_str()) {
-        Some("status") => {
-            print_workspace_status();
-            Ok(0)
-        }
-        _ => {
-            eprintln!("usage: sulion workspace status");
-            Ok(2)
-        }
-    }
-}
-
-fn print_workspace_status() {
-    let keys = [
-        "SULION_REPO_NAME",
-        "SULION_WORKSPACE_ID",
-        "SULION_WORKSPACE_KIND",
-        "SULION_WORKSPACE_PATH",
-        "SULION_CANONICAL_REPO",
-        "SULION_BRANCH",
-        "SULION_BASE_REF",
-        "SULION_BASE_SHA",
-        "SULION_MERGE_TARGET",
-    ];
-    if std::env::var("SULION_WORKSPACE_ID").is_err() {
-        println!("No Sulion workspace metadata is present in this shell.");
-        return;
-    }
-    println!("Sulion workspace");
-    for key in keys {
-        let value = std::env::var(key).unwrap_or_else(|_| String::new());
-        println!("{}={}", key, value);
-    }
 }
 
 #[derive(sqlx::FromRow)]
