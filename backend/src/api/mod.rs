@@ -30,6 +30,8 @@ mod workspace_routes;
 mod ws;
 
 pub use routes::ApiError;
+#[cfg(feature = "integration-tests")]
+pub use stats::sample_runtime_stats_once_for_tests;
 pub use stats::{run_stats_sampler, sample_stats_once, StatsCache};
 pub use ws::WsTicketStore;
 

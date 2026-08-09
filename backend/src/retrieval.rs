@@ -174,7 +174,7 @@ impl RetrievalState {
             vector_capabilities: Arc::new(RwLock::new(VectorCapabilities::default())),
             index_lock: Arc::new(Mutex::new(())),
         });
-        state.refresh_vector_capabilities().await?;
+        state.initialize_vector_capabilities().await?;
         bootstrap_index_if_empty(&state)
             .await
             .map_err(|err| anyhow!(err.to_string()))?;
@@ -213,7 +213,7 @@ impl RetrievalState {
         })
     }
 
-    async fn refresh_vector_capabilities(&self) -> anyhow::Result<VectorCapabilities> {
+    async fn initialize_vector_capabilities(&self) -> anyhow::Result<VectorCapabilities> {
         let extension_installed: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')",
         )
@@ -226,16 +226,7 @@ impl RetrievalState {
         if extension_installed {
             let dimensions = self.config.embedding_dimensions;
             let expected_type = format!("vector({dimensions})");
-            let add_column_sql = format!(
-                "ALTER TABLE retrieval_embeddings \
-                 ADD COLUMN IF NOT EXISTS embedding_vector vector({dimensions})"
-            );
-            sqlx::query(&add_column_sql)
-                .execute(&self.pool)
-                .await
-                .context("ensure retrieval embedding_vector column")?;
-
-            let column_type: Option<String> = sqlx::query_scalar(
+            let mut column_type: Option<String> = sqlx::query_scalar(
                 "SELECT format_type(a.atttypid, a.atttypmod) \
                    FROM pg_attribute a \
                    JOIN pg_class c ON c.oid = a.attrelid \
@@ -248,6 +239,19 @@ impl RetrievalState {
             .fetch_optional(&self.pool)
             .await
             .context("check embedding_vector column")?;
+
+            if column_type.is_none() {
+                let add_column_sql = format!(
+                    "ALTER TABLE retrieval_embeddings \
+                     ADD COLUMN IF NOT EXISTS embedding_vector vector({dimensions})"
+                );
+                sqlx::query(&add_column_sql)
+                    .execute(&self.pool)
+                    .await
+                    .context("add retrieval embedding_vector column")?;
+                column_type = Some(expected_type.clone());
+            }
+
             column_exists = column_type.as_deref() == Some(expected_type.as_str());
             if let Some(column_type) = column_type {
                 if column_type != expected_type {
@@ -260,20 +264,30 @@ impl RetrievalState {
             }
 
             if column_exists {
-                // CONCURRENTLY must run outside a transaction. This statement
-                // is safe to repeat and keeps the optional pgvector path
-                // non-blocking after a DBA installs the extension.
-                let index_sql = format!(
-                    "CREATE INDEX CONCURRENTLY IF NOT EXISTS \
-                     retrieval_embeddings_embedding_hnsw_{dimensions}_idx \
-                     ON retrieval_embeddings USING hnsw (embedding_vector vector_cosine_ops) \
-                     WHERE embedding_dimensions = {dimensions}",
-                );
-                sqlx::query(&index_sql)
-                    .execute(&self.pool)
-                    .await
-                    .context("ensure retrieval pgvector HNSW index")?;
-                ann_index_exists = true;
+                let index_name = format!("retrieval_embeddings_embedding_hnsw_{dimensions}_idx");
+                ann_index_exists = self.pgvector_index_ready(&index_name).await?;
+
+                if !ann_index_exists {
+                    // CONCURRENTLY must run outside a transaction. This path is
+                    // startup-only and reached only when the catalog says the
+                    // configured ANN index is absent or unusable.
+                    let index_sql = format!(
+                        "CREATE INDEX CONCURRENTLY IF NOT EXISTS {index_name} \
+                         ON retrieval_embeddings USING hnsw (embedding_vector vector_cosine_ops) \
+                         WHERE embedding_dimensions = {dimensions}",
+                    );
+                    sqlx::query(&index_sql)
+                        .execute(&self.pool)
+                        .await
+                        .context("create retrieval pgvector HNSW index")?;
+                    ann_index_exists = self.pgvector_index_ready(&index_name).await?;
+                    if !ann_index_exists {
+                        tracing::warn!(
+                            index = %index_name,
+                            "retrieval pgvector HNSW index is not ready; semantic search will use exact REAL[] scan"
+                        );
+                    }
+                }
             }
         }
 
@@ -284,6 +298,25 @@ impl RetrievalState {
         };
         *self.vector_capabilities.write().await = capabilities;
         Ok(capabilities)
+    }
+
+    async fn pgvector_index_ready(&self, index_name: &str) -> anyhow::Result<bool> {
+        sqlx::query_scalar(
+            "SELECT EXISTS ( \
+                 SELECT 1 \
+                   FROM pg_class idx \
+                   JOIN pg_namespace n ON n.oid = idx.relnamespace \
+                   JOIN pg_index i ON i.indexrelid = idx.oid \
+                  WHERE n.nspname = 'public' \
+                    AND idx.relname = $1 \
+                    AND i.indisvalid \
+                    AND i.indisready \
+             )",
+        )
+        .bind(index_name)
+        .fetch_one(&self.pool)
+        .await
+        .context("check retrieval pgvector HNSW index")
     }
 
     fn embedding_client(&self) -> EmbeddingClient {

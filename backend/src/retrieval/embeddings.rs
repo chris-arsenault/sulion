@@ -86,7 +86,7 @@ pub(super) async fn reindex_inner(
     state: &RetrievalState,
     request: ReindexRequest,
 ) -> Result<ReindexResponse, RetrievalError> {
-    let vector = state.refresh_vector_capabilities().await?;
+    let vector = *state.vector_capabilities.read().await;
     let _guard = state.index_lock.lock().await;
     let generation = next_backfill_generation(state).await?;
     let backfills_started = start_backfill_runs(
@@ -131,7 +131,7 @@ pub(super) async fn reset_inner(
             "index reset requires {\"confirm\": true}",
         ));
     }
-    let vector = state.refresh_vector_capabilities().await?;
+    let vector = *state.vector_capabilities.read().await;
     // Serialize against the crawler: the background indexer holds this same lock
     // while advancing backfills, so the wipe waits for an in-flight pass to finish
     // and blocks the next one until the rebuild is scheduled.
@@ -252,7 +252,6 @@ pub(super) async fn run_retrieval_indexer_once(
     limit: i64,
 ) -> Result<EmbeddingIndexStats, RetrievalError> {
     let _guard = state.index_lock.lock().await;
-    state.refresh_vector_capabilities().await?;
     advance_backfill_runs(state, DEFAULT_REINDEX_LIMIT).await?;
     index_pending_embeddings(state, limit).await
 }
@@ -269,10 +268,12 @@ pub(super) async fn index_pending_embeddings(
         sources_seen: sources.len(),
         ..EmbeddingIndexStats::default()
     };
+    if sources.is_empty() {
+        return Ok(stats);
+    }
 
-    // Split every source into chunks and flatten to a single (source, chunk_ord)
-    // list so the embedding HTTP batches stay full regardless of how chunks are
-    // distributed across sources.
+    // Split every source into chunks and flatten the text so the embedding HTTP
+    // batches stay full regardless of how chunks are distributed across sources.
     let chunked: Vec<Vec<String>> = sources
         .iter()
         .map(|source| {
@@ -283,14 +284,9 @@ pub(super) async fn index_pending_embeddings(
             )
         })
         .collect();
-    let refs: Vec<(usize, i32)> = chunked
+    let texts: Vec<&str> = chunked
         .iter()
-        .enumerate()
-        .flat_map(|(source_idx, chunks)| (0..chunks.len()).map(move |ord| (source_idx, ord as i32)))
-        .collect();
-    let texts: Vec<&str> = refs
-        .iter()
-        .map(|&(source_idx, ord)| chunked[source_idx][ord as usize].as_str())
+        .flat_map(|chunks| chunks.iter().map(String::as_str))
         .collect();
 
     // Embed the flattened chunks; `embed_batch` re-splits to the server's HTTP
@@ -300,45 +296,59 @@ pub(super) async fn index_pending_embeddings(
         let owned: Vec<String> = batch.iter().map(|t| t.to_string()).collect();
         vectors.extend(embedder.embed_batch(&owned).await?);
     }
+    if vectors.len() != texts.len() {
+        return Err(RetrievalError::internal(anyhow!(
+            "embedding service returned {} vectors for {} chunks",
+            vectors.len(),
+            texts.len()
+        )));
+    }
 
-    // Write each chunk, tracking per-source failures so a bad chunk fails its
-    // whole source rather than leaving a half-indexed source marked done.
-    let mut failed = vec![false; sources.len()];
-    for (&(source_idx, chunk_ord), embedding) in refs.iter().zip(vectors.iter()) {
-        if failed[source_idx] {
-            continue;
-        }
-        let source = &sources[source_idx];
-        if embedding.len() != state.config.embedding_dimensions as usize {
+    // Persist the bounded source batch atomically. Each source may require
+    // several chunk upserts, a stale-chunk delete, and a status update; keeping
+    // them in one transaction removes the per-statement commit/WAL flushes and
+    // prevents a partially refreshed source from becoming visible.
+    let mut tx = state.pool.begin().await?;
+    let mut vector_offset = 0;
+    for (source, chunks) in sources.iter().zip(&chunked) {
+        let source_vectors = &vectors[vector_offset..vector_offset + chunks.len()];
+        vector_offset += chunks.len();
+        if let Some(embedding) = source_vectors
+            .iter()
+            .find(|embedding| embedding.len() != state.config.embedding_dimensions as usize)
+        {
             let err = format!(
                 "embedding dimensions mismatch: expected {}, got {}",
                 state.config.embedding_dimensions,
                 embedding.len()
             );
-            mark_source_failed(state, &source.source_key, &err).await?;
-            failed[source_idx] = true;
+            mark_source_failed(&mut tx, &source.source_key, &err).await?;
             stats.failed += 1;
             continue;
         }
-        upsert_embedding(state, source, chunk_ord, embedding, vector.column_exists).await?;
-        stats.embedded += 1;
-    }
 
-    // Finalize each source: drop any stale chunks left over from a longer prior
-    // version, then mark it indexed.
-    for (source_idx, source) in sources.iter().enumerate() {
-        if failed[source_idx] {
-            continue;
+        for (chunk_ord, embedding) in source_vectors.iter().enumerate() {
+            upsert_embedding(
+                &mut tx,
+                state,
+                source,
+                chunk_ord as i32,
+                embedding,
+                vector.column_exists,
+            )
+            .await?;
+            stats.embedded += 1;
         }
-        let chunk_count = chunked[source_idx].len();
+        let chunk_count = chunks.len();
         if chunk_count == 0 {
             // No embeddable text (blank after normalization): clear any chunks
             // and mark indexed so it does not stay pending forever.
             stats.skipped += 1;
         }
-        delete_chunks_at_or_above(state, &source.source_key, chunk_count as i32).await?;
-        mark_source_indexed(state, source).await?;
+        delete_chunks_at_or_above(&mut tx, state, &source.source_key, chunk_count as i32).await?;
+        mark_source_indexed(&mut tx, source).await?;
     }
+    tx.commit().await?;
     Ok(stats)
 }
 
@@ -407,11 +417,15 @@ async fn load_pending_embedding_sources(
 ) -> Result<Vec<EmbeddingSource>, RetrievalError> {
     let pending = load_pending_source_rows(state, limit).await?;
     let mut sources = Vec::new();
+    let mut deleted_source_keys = Vec::new();
     for pending_source in pending {
         match load_current_source(state, &pending_source).await? {
             Some(source) => sources.push(source),
-            None => mark_source_deleted(state, &pending_source.source_key).await?,
+            None => deleted_source_keys.push(pending_source.source_key),
         }
+    }
+    if !deleted_source_keys.is_empty() {
+        mark_sources_deleted(state, &deleted_source_keys).await?;
     }
     Ok(sources)
 }
@@ -578,26 +592,29 @@ async fn load_current_operation_source(
         .map(Option::flatten)
 }
 
-async fn mark_source_deleted(
+async fn mark_sources_deleted(
     state: &RetrievalState,
-    source_key: &str,
+    source_keys: &[String],
 ) -> Result<(), RetrievalError> {
-    sqlx::query("DELETE FROM retrieval_embeddings WHERE source_key = $1")
-        .bind(source_key)
-        .execute(&state.pool)
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("DELETE FROM retrieval_embeddings WHERE source_key = ANY($1)")
+        .bind(source_keys)
+        .execute(&mut *tx)
         .await?;
     sqlx::query(
         "UPDATE retrieval_embedding_sources \
             SET index_status = 'deleted', deleted_at = NOW(), updated_at = NOW() \
-          WHERE source_key = $1",
+          WHERE source_key = ANY($1)",
     )
-    .bind(source_key)
-    .execute(&state.pool)
+    .bind(source_keys)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
 async fn upsert_embedding(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     state: &RetrievalState,
     source: &EmbeddingSource,
     chunk_ord: i32,
@@ -632,7 +649,7 @@ async fn upsert_embedding(
         .bind(embedding)
         .bind(vector_literal(embedding))
         .bind(chunk_ord)
-        .execute(&state.pool)
+        .execute(&mut **tx)
         .await?;
     } else {
         sqlx::query(
@@ -660,7 +677,7 @@ async fn upsert_embedding(
         .bind(state.config.embedding_dimensions)
         .bind(embedding)
         .bind(chunk_ord)
-        .execute(&state.pool)
+        .execute(&mut **tx)
         .await?;
     }
     Ok(())
@@ -670,6 +687,7 @@ async fn upsert_embedding(
 /// re-index to drop chunks left over when a source's text got shorter (fewer
 /// chunks than before).
 async fn delete_chunks_at_or_above(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     state: &RetrievalState,
     source_key: &str,
     keep_below: i32,
@@ -681,13 +699,13 @@ async fn delete_chunks_at_or_above(
     .bind(&state.config.embedding_model)
     .bind(source_key)
     .bind(keep_below)
-    .execute(&state.pool)
+    .execute(&mut **tx)
     .await?;
     Ok(())
 }
 
 async fn mark_source_indexed(
-    state: &RetrievalState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     source: &EmbeddingSource,
 ) -> Result<(), RetrievalError> {
     sqlx::query(
@@ -717,13 +735,13 @@ async fn mark_source_indexed(
     .bind(source.operation_ord)
     .bind(source.repo_name.as_deref())
     .bind(&source.content_hash)
-    .execute(&state.pool)
+    .execute(&mut **tx)
     .await?;
     Ok(())
 }
 
 async fn mark_source_failed(
-    state: &RetrievalState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     source_key: &str,
     error: &str,
 ) -> Result<(), RetrievalError> {
@@ -736,7 +754,7 @@ async fn mark_source_failed(
     )
     .bind(source_key)
     .bind(error)
-    .execute(&state.pool)
+    .execute(&mut **tx)
     .await?;
     Ok(())
 }

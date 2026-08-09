@@ -649,6 +649,73 @@ async fn reindex_marks_pending_and_worker_refreshes_stale_hashes() {
 }
 
 #[tokio::test]
+async fn indexing_batch_rolls_back_embeddings_when_source_finalization_fails() {
+    let Some(_) = test_db_url() else {
+        eprintln!("skipping: SULION_TEST_DB not set");
+        return;
+    };
+    let embedding_url = start_embedding_server().await;
+    let pool = fresh_pool().await;
+    seed_retrieval_fixture(&pool).await;
+    let h = Harness::new_with_config(
+        pool.clone(),
+        retrieval::RetrievalConfig {
+            listen: "127.0.0.1:0".parse().unwrap(),
+            db_url: String::new(),
+            token: "test-token".to_string(),
+            embedding_service_url: embedding_url,
+            embedding_model: "test-embed".to_string(),
+            embedding_dimensions: 3,
+            embedding_batch_size: 8,
+            embedding_max_chars: 6000,
+            embedding_chunk_max: 10,
+            semantic_min_score: 0.0,
+            background_index_seconds: None,
+        },
+    )
+    .await;
+
+    h.auth(
+        h.client
+            .post(format!("{}/v1/reindex", h.base))
+            .json(&json!({ "repo": "sulion" })),
+    )
+    .send()
+    .await
+    .unwrap()
+    .error_for_status()
+    .unwrap();
+
+    // Force the final source-state update to fail after its embedding upsert.
+    // The whole indexing batch must roll back, leaving no partial embeddings.
+    sqlx::query(
+        "ALTER TABLE retrieval_embedding_sources \
+         ADD CONSTRAINT retrieval_embedding_sources_test_reject_indexed \
+         CHECK (index_status <> 'indexed')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let result = retrieval::run_indexer_once_for_tests(&h.state, 10).await;
+    sqlx::query(
+        "ALTER TABLE retrieval_embedding_sources \
+         DROP CONSTRAINT retrieval_embedding_sources_test_reject_indexed",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert!(result.is_err());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM retrieval_embeddings")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn reset_endpoint_wipes_index_and_reschedules_backfill() {
     let Some(_) = test_db_url() else {
         eprintln!("skipping: SULION_TEST_DB not set");

@@ -405,6 +405,58 @@ async fn app_state_reports_the_nodes_machine_and_forgets_it_on_disconnect() {
 }
 
 #[tokio::test]
+async fn runtime_stats_sample_reuses_the_cached_exact_database_inventory() {
+    let pool = fresh_pool().await;
+    let (_base, state) = start_server(pool.clone()).await;
+    sulion::api::sample_stats_once(&state)
+        .await
+        .expect("initial full sample");
+    let before = state.stats_cache.get().await.expect("initial cached stats");
+
+    let session_uuid = Uuid::new_v4();
+    sqlx::query("INSERT INTO claude_sessions (session_uuid) VALUES ($1)")
+        .bind(session_uuid)
+        .execute(&pool)
+        .await
+        .expect("insert agent session");
+    sqlx::query(
+        "INSERT INTO events (session_uuid, byte_offset, timestamp, kind, payload) \
+         VALUES ($1, 0, NOW(), 'message', '{}'::jsonb)",
+    )
+    .bind(session_uuid)
+    .execute(&pool)
+    .await
+    .expect("insert event");
+
+    sulion::api::sample_runtime_stats_once_for_tests(&state)
+        .await
+        .expect("runtime-only sample");
+    let runtime = state.stats_cache.get().await.expect("runtime cached stats");
+    assert_eq!(runtime.inventory.event_rows, before.inventory.event_rows);
+    assert_eq!(
+        runtime.inventory.agent_sessions,
+        before.inventory.agent_sessions
+    );
+
+    sulion::api::sample_stats_once(&state)
+        .await
+        .expect("refreshed full sample");
+    let refreshed = state
+        .stats_cache
+        .get()
+        .await
+        .expect("refreshed cached stats");
+    assert_eq!(
+        refreshed.inventory.event_rows,
+        before.inventory.event_rows + 1
+    );
+    assert_eq!(
+        refreshed.inventory.agent_sessions,
+        before.inventory.agent_sessions + 1
+    );
+}
+
+#[tokio::test]
 async fn same_boot_reconnect_preserves_sessions_and_a_new_boot_defers_to_inventory() {
     let pool = fresh_pool().await;
     let (base, state) = start_server(pool.clone()).await;

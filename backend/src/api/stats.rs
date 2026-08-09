@@ -11,11 +11,16 @@
 //! background sampler owns the cadence; app-state only reads the cached
 //! sample.
 
+use std::time::{Duration, Instant};
+
 use serde::Serialize;
 use tokio::sync::RwLock;
 
 use crate::node_protocol::{NodeDevenvStatus, NodeHostStats};
 use crate::AppState;
+
+const RUNTIME_STATS_INTERVAL: Duration = Duration::from_secs(10);
+const DATABASE_INVENTORY_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Serialize)]
 pub struct StatsResponse {
@@ -64,20 +69,25 @@ pub struct InventoryStats {
     pub parse_errors_since_boot: u64,
 }
 
-#[derive(sqlx::FromRow)]
-struct StatsSnapshot {
-    database_size_bytes: i64,
+#[derive(Clone, Copy, sqlx::FromRow)]
+struct RuntimeStatsSnapshot {
     live_pty_sessions: i64,
     live_agent_sessions: i64,
-    event_rows: i64,
-    agent_sessions: i64,
     pty_sessions: i64,
     tracked_files: i64,
+}
+
+#[derive(Clone, Copy, sqlx::FromRow)]
+struct DatabaseInventorySnapshot {
+    database_size_bytes: i64,
+    event_rows: i64,
+    agent_sessions: i64,
 }
 
 #[derive(Default)]
 pub struct StatsCache {
     inner: RwLock<Option<StatsResponse>>,
+    database_inventory: RwLock<Option<DatabaseInventorySnapshot>>,
 }
 
 impl StatsCache {
@@ -92,19 +102,41 @@ impl StatsCache {
     async fn store(&self, stats: StatsResponse) {
         *self.inner.write().await = Some(stats);
     }
+
+    async fn database_inventory(&self) -> Option<DatabaseInventorySnapshot> {
+        *self.database_inventory.read().await
+    }
+
+    async fn store_database_inventory(&self, inventory: DatabaseInventorySnapshot) {
+        *self.database_inventory.write().await = Some(inventory);
+    }
 }
 
-pub async fn collect_stats(state: &AppState) -> anyhow::Result<StatsResponse> {
+async fn collect_stats_with_database_refresh(
+    state: &AppState,
+    refresh_database_inventory: bool,
+) -> anyhow::Result<StatsResponse> {
     let uptime_seconds = state.start_time.elapsed().as_secs();
     let node = state.node_control.host_stats().await;
     let devenv = state.node_control.devenv_status().await;
-    let snapshot = stats_snapshot(&state.pool).await?;
+    let runtime = runtime_stats_snapshot(&state.pool).await?;
+    let database = if refresh_database_inventory {
+        let snapshot = database_inventory_snapshot(&state.pool).await?;
+        state.stats_cache.store_database_inventory(snapshot).await;
+        snapshot
+    } else if let Some(snapshot) = state.stats_cache.database_inventory().await {
+        snapshot
+    } else {
+        let snapshot = database_inventory_snapshot(&state.pool).await?;
+        state.stats_cache.store_database_inventory(snapshot).await;
+        snapshot
+    };
     let pty = PtyStats {
-        live_sessions: snapshot.live_pty_sessions.max(0) as usize,
-        live_agent_sessions: snapshot.live_agent_sessions,
+        live_sessions: runtime.live_pty_sessions.max(0) as usize,
+        live_agent_sessions: runtime.live_agent_sessions,
     };
     let db = DbStats {
-        database_size_bytes: snapshot.database_size_bytes,
+        database_size_bytes: database.database_size_bytes,
     };
     let now_unix = chrono::Utc::now().timestamp();
     let ingest = IngestStats {
@@ -116,10 +148,10 @@ pub async fn collect_stats(state: &AppState) -> anyhow::Result<StatsResponse> {
             .map(|ts| now_unix.saturating_sub(ts)),
     };
     let inventory = InventoryStats {
-        event_rows: snapshot.event_rows,
-        agent_sessions: snapshot.agent_sessions,
-        pty_sessions: snapshot.pty_sessions,
-        tracked_files: snapshot.tracked_files,
+        event_rows: database.event_rows,
+        agent_sessions: database.agent_sessions,
+        pty_sessions: runtime.pty_sessions,
+        tracked_files: runtime.tracked_files,
         events_inserted_since_boot: state.ingester.events_inserted_total(),
         parse_errors_since_boot: state.ingester.parse_errors_total(),
     };
@@ -135,34 +167,59 @@ pub async fn collect_stats(state: &AppState) -> anyhow::Result<StatsResponse> {
 }
 
 pub async fn sample_stats_once(state: &AppState) -> anyhow::Result<()> {
-    let stats = collect_stats(state).await?;
+    sample_stats(state, true).await
+}
+
+async fn sample_stats(state: &AppState, refresh_database_inventory: bool) -> anyhow::Result<()> {
+    let stats = collect_stats_with_database_refresh(state, refresh_database_inventory).await?;
     state.stats_cache.store(stats).await;
     Ok(())
 }
 
+#[cfg(feature = "integration-tests")]
+pub async fn sample_runtime_stats_once_for_tests(state: &AppState) -> anyhow::Result<()> {
+    sample_stats(state, false).await
+}
+
 pub async fn run_stats_sampler(state: std::sync::Arc<AppState>) {
+    let mut last_database_sample = None;
     loop {
-        if let Err(err) = sample_stats_once(&state).await {
+        let refresh_database_inventory = last_database_sample
+            .map(|sampled_at: Instant| sampled_at.elapsed() >= DATABASE_INVENTORY_INTERVAL)
+            .unwrap_or(true);
+        if let Err(err) = sample_stats(&state, refresh_database_inventory).await {
             tracing::warn!(%err, "stats sample failed");
+        } else if refresh_database_inventory {
+            last_database_sample = Some(Instant::now());
         }
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        tokio::time::sleep(RUNTIME_STATS_INTERVAL).await;
     }
 }
 
-async fn stats_snapshot(pool: &crate::db::Pool) -> sqlx::Result<StatsSnapshot> {
+async fn runtime_stats_snapshot(pool: &crate::db::Pool) -> sqlx::Result<RuntimeStatsSnapshot> {
     sqlx::query_as(
         "SELECT
-            pg_database_size(current_database())::BIGINT AS database_size_bytes,
             (SELECT COUNT(*)::BIGINT
                FROM pty_sessions
               WHERE state = 'live') AS live_pty_sessions,
             (SELECT COUNT(*)::BIGINT
                FROM pty_sessions
               WHERE state = 'live' AND current_session_uuid IS NOT NULL) AS live_agent_sessions,
-            (SELECT COUNT(*)::BIGINT FROM events) AS event_rows,
-            (SELECT COUNT(*)::BIGINT FROM claude_sessions) AS agent_sessions,
             (SELECT COUNT(*)::BIGINT FROM pty_sessions) AS pty_sessions,
             (SELECT COUNT(*)::BIGINT FROM ingester_state) AS tracked_files",
+    )
+    .fetch_one(pool)
+    .await
+}
+
+async fn database_inventory_snapshot(
+    pool: &crate::db::Pool,
+) -> sqlx::Result<DatabaseInventorySnapshot> {
+    sqlx::query_as(
+        "SELECT
+            pg_database_size(current_database())::BIGINT AS database_size_bytes,
+            (SELECT COUNT(*)::BIGINT FROM events) AS event_rows,
+            (SELECT COUNT(*)::BIGINT FROM claude_sessions) AS agent_sessions",
     )
     .fetch_one(pool)
     .await
