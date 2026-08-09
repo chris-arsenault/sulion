@@ -71,6 +71,7 @@ struct LauncherEnv {
     correlate_sock: Option<PathBuf>,
     claude_projects_dir: Option<PathBuf>,
     codex_sessions_dir: Option<PathBuf>,
+    repo_paths: Vec<PathBuf>,
     cwd: PathBuf,
 }
 
@@ -176,6 +177,13 @@ fn launcher_env() -> anyhow::Result<LauncherEnv> {
         codex_sessions_dir: std::env::var_os("SULION_CODEX_SESSIONS")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from),
+        repo_paths: std::env::var("SULION_REPO_PATHS_JSON")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| serde_json::from_str(&value))
+            .transpose()
+            .context("parse SULION_REPO_PATHS_JSON")?
+            .unwrap_or_default(),
         cwd: std::env::current_dir().context("resolve current directory")?,
     })
 }
@@ -204,6 +212,7 @@ async fn report_runtime(
 }
 
 async fn run_real(cfg: LauncherConfig, env: LauncherEnv) -> anyhow::Result<i32> {
+    let args = agent_args_with_additional_dirs(cfg.agent_type, &cfg.args, &env.repo_paths);
     match (cfg.agent_type, env.pty_id) {
         (AgentType::Codex, Some(pty_id)) => {
             let sessions_dir = env.codex_sessions_dir.ok_or_else(|| {
@@ -217,12 +226,26 @@ async fn run_real(cfg: LauncherConfig, env: LauncherEnv) -> anyhow::Result<i32> 
                 pty_id,
                 sessions_dir,
                 correlate_sock,
-                args: cfg.args,
+                args,
             })
             .await
         }
-        _ => run_raw_agent(cfg.agent_type, &cfg.args).await,
+        _ => run_raw_agent(cfg.agent_type, &args).await,
     }
+}
+
+fn agent_args_with_additional_dirs(
+    _agent_type: AgentType,
+    args: &[OsString],
+    repo_paths: &[PathBuf],
+) -> Vec<OsString> {
+    let mut scoped = Vec::with_capacity(args.len() + repo_paths.len().saturating_sub(1) * 2);
+    for path in repo_paths.iter().skip(1) {
+        scoped.push(OsString::from("--add-dir"));
+        scoped.push(path.as_os_str().to_owned());
+    }
+    scoped.extend(args.iter().cloned());
+    scoped
 }
 
 async fn run_raw_agent(agent_type: AgentType, args: &[OsString]) -> anyhow::Result<i32> {
@@ -396,6 +419,33 @@ mod tests {
             parsed.args,
             vec![OsString::from("--dangerously-skip-permissions")]
         );
+    }
+
+    #[test]
+    fn collection_paths_prefix_agent_arguments_without_splitting_spaces() {
+        let paths = vec![
+            PathBuf::from("/work/primary"),
+            PathBuf::from("/work/secondary repo"),
+            PathBuf::from("/work/third"),
+        ];
+        let expected = vec![
+            OsString::from("--add-dir"),
+            OsString::from("/work/secondary repo"),
+            OsString::from("--add-dir"),
+            OsString::from("/work/third"),
+            OsString::from("--resume"),
+            OsString::from("session"),
+        ];
+        for agent in [AgentType::Claude, AgentType::Codex] {
+            assert_eq!(
+                agent_args_with_additional_dirs(
+                    agent,
+                    &[OsString::from("--resume"), OsString::from("session")],
+                    &paths,
+                ),
+                expected,
+            );
+        }
     }
 
     #[test]

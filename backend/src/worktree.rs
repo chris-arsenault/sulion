@@ -348,9 +348,11 @@ impl WorkspaceManager {
         }
 
         let active_sessions: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) \
-               FROM pty_sessions \
-              WHERE workspace_id = $1 AND state IN ('live', 'orphaned')",
+            "SELECT COUNT(DISTINCT ps.id) \
+               FROM pty_sessions ps \
+               LEFT JOIN pty_session_repos psr ON psr.pty_session_id = ps.id \
+              WHERE (ps.workspace_id = $1 OR psr.workspace_id = $1) \
+                AND ps.state IN ('live', 'orphaned')",
         )
         .bind(id)
         .fetch_one(&self.pool)
@@ -443,6 +445,11 @@ impl WorkspaceManager {
             .execute(&mut *tx)
             .await
             .with_context(|| format!("unbind sessions from workspace {id}"))?;
+        sqlx::query("UPDATE pty_session_repos SET workspace_id = NULL WHERE workspace_id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("unbind session scopes from workspace {id}"))?;
         sqlx::query(
             "UPDATE workspaces \
                 SET state = 'deleted', status_error = NULL, updated_at = NOW() \

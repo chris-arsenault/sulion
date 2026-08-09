@@ -145,6 +145,21 @@ pub async fn attach_loopback_node(
         .start_runtime_loopback(runtime.clone(), "integration-test-node")
         .await
         .expect("start loopback node");
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    while !state
+        .node_control
+        .supports_capability(
+            TEST_NODE_ID,
+            sulion::node_protocol::MULTI_REPO_SESSION_CAPABILITY,
+        )
+        .await
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "loopback node did not report runtime capabilities"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
     runtime.clone().run_background_managers().await;
     runtime
 }

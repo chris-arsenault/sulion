@@ -31,6 +31,24 @@ pub struct SessionCreateRequest {
     pub cols: u16,
     pub rows: u16,
     pub launch: SessionLaunch,
+    #[serde(default)]
+    pub meta_repo: Option<SessionMetaRepoRequest>,
+    #[serde(default)]
+    pub additional_repos: Vec<SessionRepoRequest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionMetaRepoRequest {
+    pub id: Uuid,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRepoRequest {
+    pub repo: String,
+    pub allocated_workspace_id: Uuid,
+    pub existing_workspace_id: Option<Uuid>,
+    pub position: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,4 +188,28 @@ pub struct SessionResizeRequest {
     pub session_id: Uuid,
     pub cols: u16,
     pub rows: u16,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_old_single_repo_session_request_keeps_parsing() {
+        let request: SessionCreateRequest = serde_json::from_value(serde_json::json!({
+            "session_id": Uuid::new_v4(),
+            "allocated_workspace_id": Uuid::new_v4(),
+            "existing_workspace_id": null,
+            "repo": "app",
+            "working_dir": null,
+            "workspace_mode": "main",
+            "cols": 120,
+            "rows": 32,
+            "launch": {"kind": "shell"}
+        }))
+        .expect("old request parses");
+
+        assert!(request.meta_repo.is_none());
+        assert!(request.additional_repos.is_empty());
+    }
 }

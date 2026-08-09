@@ -140,9 +140,7 @@ describe("SessionEndedPane", () => {
       expect(state.deletedIds).toEqual([orphanedSession.id]);
     });
     expect(state.createSessionCalls[0]).toMatchObject({
-      repo: "ahara",
-      working_dir: "/home/dev/repos/ahara",
-      workspace_mode: "main",
+      scope_source_session_id: orphanedSession.id,
       resume_session_uuid: resumeSessionUuid,
       resume_agent: "claude-code",
     });
@@ -241,8 +239,7 @@ describe("SessionEndedPane", () => {
       expect(state.createSessionCalls.length).toBe(1);
     });
     expect(state.createSessionCalls[0]).toMatchObject({
-      repo: "ahara",
-      workspace_id: workspaceSessionId,
+      scope_source_session_id: orphanedSession.id,
       resume_session_uuid: resumeSessionUuid,
       resume_agent: "claude-code",
     });
@@ -271,9 +268,8 @@ describe("SessionEndedPane", () => {
       expect(state.createSessionCalls.length).toBe(1);
     });
     expect(state.createSessionCalls[0]).toMatchObject({
-      repo: "ahara",
+      scope_source_session_id: orphanedSession.id,
       working_dir: "/home/dev/repos/ahara/packages/api",
-      workspace_mode: "main",
       resume_session_uuid: resumeSessionUuid,
       resume_agent: "claude-code",
     });

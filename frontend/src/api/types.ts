@@ -163,7 +163,9 @@ export interface UpdateSessionRequest {
 }
 
 export interface CreateSessionRequest {
-  repo: string;
+  repo?: string;
+  meta_repo_id?: string;
+  scope_source_session_id?: string;
   working_dir?: string;
   workspace_id?: string;
   workspace_mode?: "main" | "isolated";

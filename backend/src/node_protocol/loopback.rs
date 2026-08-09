@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use super::commands::{handle_command, CommandSink};
 use super::model::{NodeHello, WireEnvelope, NODE_PROTOCOL_VERSION};
-use super::{heartbeat_envelope, NodeControl, NodeHostStats, NodeProtocolError};
+use super::{runtime_heartbeat_envelope, NodeControl, NodeHostStats, NodeProtocolError};
 use crate::node_runtime::NodeRuntime;
 
 pub(super) async fn start(
@@ -58,7 +58,7 @@ async fn run(
     mut connection: super::RegisteredConnection,
     runtime: Option<Arc<NodeRuntime>>,
 ) {
-    let initial = heartbeat_envelope(
+    let initial = runtime_heartbeat_envelope(
         connection.node_id,
         connection.boot_id,
         live_sessions(&runtime).await,
@@ -94,7 +94,7 @@ async fn run(
                 }
             }
             _ = heartbeat.tick() => {
-                let envelope = heartbeat_envelope(
+                let envelope = runtime_heartbeat_envelope(
                     connection.node_id,
                     connection.boot_id,
                     live_sessions(&runtime).await,
