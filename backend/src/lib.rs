@@ -24,6 +24,7 @@ pub mod emulator;
 pub mod file_preview;
 pub mod future_prompts;
 pub mod git;
+pub mod git_activity;
 pub mod ingest;
 pub mod library;
 pub mod meta_repos;

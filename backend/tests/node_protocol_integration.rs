@@ -478,6 +478,20 @@ async fn same_boot_reconnect_preserves_sessions_and_a_new_boot_defers_to_invento
     .await
     .unwrap();
     send_heartbeat(&mut socket, node_id, first_boot, vec![session_id]).await;
+    let session_version_before: String =
+        sqlx::query_scalar("SELECT xmin::TEXT FROM pty_sessions WHERE id = $1")
+            .bind(session_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    send_heartbeat(&mut socket, node_id, first_boot, vec![session_id]).await;
+    let session_version_after: String =
+        sqlx::query_scalar("SELECT xmin::TEXT FROM pty_sessions WHERE id = $1")
+            .bind(session_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(session_version_after, session_version_before);
 
     socket.close(None).await.expect("close first connection");
     let _same_boot = connect_node(&base, &keypair, node_id, first_boot).await;

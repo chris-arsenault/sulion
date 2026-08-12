@@ -4,25 +4,22 @@
 //! agent-side telemetry:
 //! - token rollups and daily series from `agent_session_usage` +
 //!   `agent_usage_daily` (fresh = total - cached reads),
-//! - git activity from `git log` per registered repo (cached in-process),
-//!   with agent/human attribution via `Co-Authored-By` trailers,
+//! - node-materialized git activity with agent/human attribution via
+//!   `Co-Authored-By` trailers,
 //! - churn hotspots from `timeline_file_touches` write re-touches,
 //! - agile flow (CFD, burndown, throughput, cycle time) replayed from the
 //!   append-only `plan_events` history, weighted by optional phase size.
 
 use std::collections::HashMap;
-use std::path::Path;
-use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Utc};
 use serde::Serialize;
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::db::Pool;
+use crate::git_activity::{empty_activity, RepoGitActivity};
 
 const DAILY_WINDOW_DAYS: i64 = 14;
-const GIT_CACHE_TTL: Duration = Duration::from_secs(120);
 const CHURN_MIN_TURNS: i64 = 3;
 
 // ─── Response shape ─────────────────────────────────────────────────
@@ -66,29 +63,6 @@ pub struct UsageDay {
     pub fresh_tokens: i64,
     pub cached_tokens: i64,
     pub total_tokens: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RepoGitActivity {
-    pub repo: String,
-    pub commits_24h: i64,
-    pub commits_7d: i64,
-    pub insertions_24h: i64,
-    pub deletions_24h: i64,
-    pub insertions_7d: i64,
-    pub deletions_7d: i64,
-    pub agent_commits_7d: i64,
-    pub human_commits_7d: i64,
-    pub last_commit_at: Option<DateTime<Utc>>,
-    pub daily: Vec<GitDay>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct GitDay {
-    pub day: NaiveDate,
-    pub commits: i64,
-    pub insertions: i64,
-    pub deletions: i64,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -319,191 +293,31 @@ async fn usage_metrics(pool: &Pool) -> anyhow::Result<UsageMetrics> {
 
 // ─── Git activity ───────────────────────────────────────────────────
 
-struct GitCache {
-    at: Instant,
-    data: Vec<RepoGitActivity>,
-}
-
-static GIT_CACHE: Mutex<Option<GitCache>> = Mutex::const_new(None);
-
 async fn git_activity(pool: &Pool) -> anyhow::Result<Vec<RepoGitActivity>> {
-    let mut cache = GIT_CACHE.lock().await;
-    if let Some(cached) = cache.as_ref() {
-        if cached.at.elapsed() < GIT_CACHE_TTL {
-            return Ok(cached.data.clone());
-        }
-    }
-    let repos: Vec<(String, String)> = sqlx::query_as(
-        "SELECT repo_name, path FROM repo_runtime_state \
+    let repos: Vec<(String, Option<serde_json::Value>)> = sqlx::query_as(
+        "SELECT repo_name, git_activity_json FROM repo_runtime_state \
           WHERE \"exists\" ORDER BY repo_name",
     )
     .fetch_all(pool)
     .await?;
     let mut out = Vec::with_capacity(repos.len());
-    for (name, path) in repos {
-        match scan_repo_git(&name, Path::new(&path)).await {
-            Ok(activity) => out.push(activity),
+    for (name, stored) in repos {
+        let Some(stored) = stored else {
+            out.push(empty_activity(&name));
+            continue;
+        };
+        match serde_json::from_value::<RepoGitActivity>(stored) {
+            Ok(mut activity) => {
+                activity.repo = name;
+                out.push(activity);
+            }
             Err(err) => {
-                // Keep the repo visible with zeros and say why — a silent
-                // skip reads as "no activity anywhere".
-                tracing::warn!(repo = %name, %err, "git activity scan failed");
+                tracing::warn!(repo = %name, %err, "stored git activity is invalid");
                 out.push(empty_activity(&name));
             }
         }
     }
-    *cache = Some(GitCache {
-        at: Instant::now(),
-        data: out.clone(),
-    });
     Ok(out)
-}
-
-struct CommitStat {
-    epoch: i64,
-    insertions: i64,
-    deletions: i64,
-    agent: bool,
-}
-
-fn empty_activity(name: &str) -> RepoGitActivity {
-    RepoGitActivity {
-        repo: name.to_string(),
-        commits_24h: 0,
-        commits_7d: 0,
-        insertions_24h: 0,
-        deletions_24h: 0,
-        insertions_7d: 0,
-        deletions_7d: 0,
-        agent_commits_7d: 0,
-        human_commits_7d: 0,
-        last_commit_at: None,
-        daily: Vec::new(),
-    }
-}
-
-async fn scan_repo_git(name: &str, path: &Path) -> anyhow::Result<RepoGitActivity> {
-    // Pass 1: hash, epoch, Co-Authored-By trailers (one line per commit).
-    let meta = git_stdout(
-        path,
-        &[
-            "log",
-            "--since=14.days",
-            "--pretty=%H%x1f%ct%x1f%(trailers:key=Co-authored-by,valueonly,separator=;)",
-        ],
-    )
-    .await?;
-    let mut commits: HashMap<String, CommitStat> = HashMap::new();
-    for line in meta.lines() {
-        let mut parts = line.split('\u{1f}');
-        let (Some(hash), Some(epoch)) = (parts.next(), parts.next()) else {
-            continue;
-        };
-        let Ok(epoch) = epoch.trim().parse::<i64>() else {
-            continue;
-        };
-        let trailers = parts.next().unwrap_or("").to_ascii_lowercase();
-        let agent = trailers.contains("claude") || trailers.contains("codex");
-        commits.insert(
-            hash.to_string(),
-            CommitStat {
-                epoch,
-                insertions: 0,
-                deletions: 0,
-                agent,
-            },
-        );
-    }
-
-    // Pass 2: numstat per commit.
-    let numstat = git_stdout(
-        path,
-        &["log", "--since=14.days", "--pretty=%x01%H", "--numstat"],
-    )
-    .await?;
-    let mut current: Option<&mut CommitStat> = None;
-    for line in numstat.lines() {
-        if let Some(hash) = line.strip_prefix('\u{01}') {
-            current = commits.get_mut(hash.trim());
-            continue;
-        }
-        let Some(stat) = current.as_deref_mut() else {
-            continue;
-        };
-        let mut cols = line.split('\t');
-        let (Some(adds), Some(dels)) = (cols.next(), cols.next()) else {
-            continue;
-        };
-        // Binary files report "-"; skip them.
-        if let (Ok(adds), Ok(dels)) = (adds.trim().parse::<i64>(), dels.trim().parse::<i64>()) {
-            stat.insertions += adds;
-            stat.deletions += dels;
-        }
-    }
-
-    let now = Utc::now().timestamp();
-    let day_ago = now - 24 * 3600;
-    let week_ago = now - 7 * 24 * 3600;
-    let mut activity = empty_activity(name);
-    let mut daily: HashMap<NaiveDate, GitDay> = HashMap::new();
-    for stat in commits.values() {
-        let at = Utc
-            .timestamp_opt(stat.epoch, 0)
-            .single()
-            .unwrap_or_else(Utc::now);
-        if activity.last_commit_at.is_none_or(|prev| at > prev) {
-            activity.last_commit_at = Some(at);
-        }
-        if stat.epoch >= week_ago {
-            activity.commits_7d += 1;
-            activity.insertions_7d += stat.insertions;
-            activity.deletions_7d += stat.deletions;
-            if stat.agent {
-                activity.agent_commits_7d += 1;
-            } else {
-                activity.human_commits_7d += 1;
-            }
-        }
-        if stat.epoch >= day_ago {
-            activity.commits_24h += 1;
-            activity.insertions_24h += stat.insertions;
-            activity.deletions_24h += stat.deletions;
-        }
-        let day = at.date_naive();
-        let entry = daily.entry(day).or_insert(GitDay {
-            day,
-            commits: 0,
-            insertions: 0,
-            deletions: 0,
-        });
-        entry.commits += 1;
-        entry.insertions += stat.insertions;
-        entry.deletions += stat.deletions;
-    }
-    let mut days: Vec<GitDay> = daily.into_values().collect();
-    days.sort_by_key(|d| d.day);
-    activity.daily = days;
-    Ok(activity)
-}
-
-async fn git_stdout(path: &Path, args: &[&str]) -> anyhow::Result<String> {
-    let output = tokio::process::Command::new("git")
-        // Command-line config counts as protected, so this authorizes the
-        // read even when the mount's uid differs from the service uid.
-        .arg("-c")
-        .arg(format!("safe.directory={}", path.display()))
-        .arg("-C")
-        .arg(path)
-        .args(args)
-        .output()
-        .await?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "git {:?} failed: {}",
-            args.first().unwrap_or(&""),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 // ─── Churn hotspots ─────────────────────────────────────────────────

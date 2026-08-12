@@ -581,7 +581,7 @@ async fn incremental_projection_preserves_unchanged_operation_embeddings() {
     );
     fx.append("\n");
     fx.append(
-        r#"{"type":"assistant","timestamp":"2025-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_edit_1","name":"Edit","input":{"file_path":"src/lib.rs"}}]}}"#,
+        r#"{"type":"assistant","timestamp":"2025-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_edit_1","name":"Edit","input":{"file_path":"src/lib.rs"}},{"type":"tool_use","id":"toolu_edit_2","name":"Edit","input":{"file_path":"src/unchanged.rs"}}]}}"#,
     );
     fx.append("\n");
 
@@ -603,9 +603,19 @@ async fn incremental_projection_preserves_unchanged_operation_embeddings() {
              ON o.session_uuid = s.session_uuid \
             AND o.turn_id = s.turn_id \
             AND o.operation_ord = s.operation_ord \
-          WHERE s.session_uuid = $1 AND s.source_family = 'operation_call'",
+          WHERE s.session_uuid = $1 AND s.source_family = 'operation_call' \
+            AND s.operation_ord = 0",
     )
     .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let unchanged_operation_version_before: String = sqlx::query_scalar(
+        "SELECT xmin::TEXT FROM timeline_operations \
+          WHERE session_uuid = $1 AND turn_id = $2 AND operation_ord = 1",
+    )
+    .bind(fx.session_uuid)
+    .bind(turn_id)
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -641,6 +651,16 @@ async fn incremental_projection_preserves_unchanged_operation_embeddings() {
     .await
     .unwrap();
 
+    sqlx::query(
+        "INSERT INTO timeline_operations \
+            (session_uuid, turn_id, operation_ord, pair_id, name) \
+         VALUES ($1, $2, 99, 'stale-operation', 'Edit')",
+    )
+    .bind(fx.session_uuid)
+    .bind(turn_id)
+    .execute(&pool)
+    .await
+    .unwrap();
     let stale_key = format!("operation:{}:{turn_id}:99:call", fx.session_uuid);
     sqlx::query(
         "INSERT INTO retrieval_embedding_sources \
@@ -684,6 +704,31 @@ async fn incremental_projection_preserves_unchanged_operation_embeddings() {
     .unwrap();
     assert_eq!(call_status, "indexed");
     assert_eq!(call_version_after, call_version_before);
+    let unchanged_operation_version_after: String = sqlx::query_scalar(
+        "SELECT xmin::TEXT FROM timeline_operations \
+          WHERE session_uuid = $1 AND turn_id = $2 AND operation_ord = 1",
+    )
+    .bind(fx.session_uuid)
+    .bind(turn_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        unchanged_operation_version_after,
+        unchanged_operation_version_before
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM timeline_operations \
+              WHERE session_uuid = $1 AND turn_id = $2 AND operation_ord = 99",
+        )
+        .bind(fx.session_uuid)
+        .bind(turn_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM retrieval_embeddings WHERE source_key = $1",

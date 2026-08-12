@@ -9,11 +9,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::Pool;
 use crate::git::{self, DiffStat, GitStatus};
+use crate::git_activity::scan_repo_git;
 use crate::repo_lifecycle::RepoLifecycleGate;
 
 const REPO_SCAN_INTERVAL: Duration = Duration::from_secs(30);
 const REPO_STATUS_CADENCE_SECS: i32 = 30;
 const REPO_STATUS_ERROR_CADENCE_SECS: i32 = 90;
+const REPO_GIT_ACTIVITY_CADENCE_SECS: i32 = 300;
+const REPO_GIT_ACTIVITY_ERROR_CADENCE_SECS: i32 = 90;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoGitSummary {
@@ -83,6 +86,10 @@ impl RepoStateManager {
                    path = EXCLUDED.path, \
                    exists = TRUE, \
                    next_status_at = LEAST(repo_runtime_state.next_status_at, NOW()), \
+                   next_git_activity_at = CASE \
+                     WHEN repo_runtime_state.path IS DISTINCT FROM EXCLUDED.path THEN NOW() \
+                     ELSE repo_runtime_state.next_git_activity_at \
+                   END, \
                    updated_at = NOW()",
             )
             .bind(&name)
@@ -103,6 +110,7 @@ impl RepoStateManager {
                path = EXCLUDED.path, \
                exists = TRUE, \
                next_status_at = NOW(), \
+               next_git_activity_at = NOW(), \
                updated_at = NOW()",
         )
         .bind(name)
@@ -128,11 +136,12 @@ impl RepoStateManager {
 
     pub async fn reconcile_due_once(&self, limit: i64) -> anyhow::Result<usize> {
         let _lifecycle_guard = self.lifecycle_gate.read().await;
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT repo_name, path \
+        let rows: Vec<(String, String, bool)> = sqlx::query_as(
+            "SELECT repo_name, path, next_git_activity_at <= NOW() AS git_activity_due \
                FROM repo_runtime_state \
-              WHERE exists = TRUE AND next_status_at <= NOW() \
-              ORDER BY next_status_at ASC, repo_name ASC \
+              WHERE exists = TRUE \
+                AND (next_status_at <= NOW() OR next_git_activity_at <= NOW()) \
+              ORDER BY LEAST(next_status_at, next_git_activity_at) ASC, repo_name ASC \
               LIMIT $1",
         )
         .bind(limit)
@@ -141,14 +150,32 @@ impl RepoStateManager {
         .context("load due repo state rows")?;
 
         let mut count = 0;
-        for (name, path) in rows {
-            self.reconcile_repo(name, PathBuf::from(path)).await;
+        for (name, path, git_activity_due) in rows {
+            self.reconcile_repo(name, PathBuf::from(path), git_activity_due)
+                .await;
             count += 1;
         }
         Ok(count)
     }
 
-    async fn reconcile_repo(&self, name: String, path: PathBuf) {
+    async fn reconcile_repo(&self, name: String, path: PathBuf, git_activity_due: bool) {
+        if git_activity_due {
+            if let Err(err) = self.reconcile_git_activity(&name, &path).await {
+                tracing::warn!(repo = %name, path = %path.display(), %err, "repo git activity reconcile failed");
+                let _ = sqlx::query(
+                    "UPDATE repo_runtime_state \
+                        SET git_activity_error = $2, \
+                            next_git_activity_at = NOW() + make_interval(secs => $3), \
+                            updated_at = NOW() \
+                      WHERE repo_name = $1",
+                )
+                .bind(&name)
+                .bind(err.to_string())
+                .bind(REPO_GIT_ACTIVITY_ERROR_CADENCE_SECS)
+                .execute(&self.pool)
+                .await;
+            }
+        }
         if let Err(err) = self.reconcile_repo_inner(&name, &path).await {
             tracing::warn!(repo = %name, path = %path.display(), %err, "repo status reconcile failed");
             let _ = sqlx::query(
@@ -165,6 +192,28 @@ impl RepoStateManager {
             .execute(&self.pool)
             .await;
         }
+    }
+
+    async fn reconcile_git_activity(&self, name: &str, path: &Path) -> anyhow::Result<()> {
+        let activity = scan_repo_git(name, path).await?;
+        let activity_json =
+            serde_json::to_value(activity).context("serialize repository git activity")?;
+        sqlx::query(
+            "UPDATE repo_runtime_state \
+                SET git_activity_json = $2, \
+                    git_activity_collected_at = NOW(), \
+                    next_git_activity_at = NOW() + make_interval(secs => $3), \
+                    git_activity_error = NULL, \
+                    updated_at = NOW() \
+              WHERE repo_name = $1",
+        )
+        .bind(name)
+        .bind(activity_json)
+        .bind(REPO_GIT_ACTIVITY_CADENCE_SECS)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("store git activity for {name}"))?;
+        Ok(())
     }
 
     async fn reconcile_repo_inner(&self, name: &str, path: &Path) -> anyhow::Result<()> {

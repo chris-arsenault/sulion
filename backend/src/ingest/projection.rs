@@ -22,7 +22,10 @@ mod write;
 
 pub use file_trace::{load_repo_file_trace, RepoFileTraceTouch};
 use filters::apply_projection_filters;
-pub use write::{rebuild_session_projection, rebuild_session_projection_after_insert};
+pub use write::{
+    rebuild_session_projection, rebuild_session_projection_after_insert,
+    reconcile_session_projection,
+};
 
 #[derive(FromRow)]
 struct ProjectedTurnRow {

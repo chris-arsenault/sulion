@@ -28,25 +28,50 @@ pub async fn rebuild_session_projection(pool: &Pool, session_uuid: Uuid) -> anyh
     Ok(projected.len())
 }
 
+pub async fn reconcile_session_projection(
+    pool: &Pool,
+    session_uuid: Uuid,
+) -> anyhow::Result<usize> {
+    let events = load_projection_source_events(pool, session_uuid)
+        .await
+        .context("load canonical projection events")?;
+    let file_context = load_file_touch_context(pool, session_uuid).await?;
+    let projected = build_session_projection(&events, file_context.as_ref());
+
+    let mut tx = pool
+        .begin()
+        .await
+        .context("begin projection reconcile tx")?;
+    let expected_source_keys =
+        reconcile_projection_rows(&mut tx, session_uuid, &projected, None).await?;
+    reconcile_operation_embedding_sources(&mut tx, session_uuid, None, &expected_source_keys)
+        .await?;
+    refresh_timeline_session_state(&mut tx, session_uuid).await?;
+    tx.commit()
+        .await
+        .context("commit projection reconcile tx")?;
+    Ok(projected.len())
+}
+
 pub async fn rebuild_session_projection_after_insert(
     pool: &Pool,
     session_uuid: Uuid,
     first_inserted_offset: i64,
 ) -> anyhow::Result<usize> {
     if session_has_descendants(pool, session_uuid).await? {
-        return rebuild_session_projection(pool, session_uuid).await;
+        return reconcile_session_projection(pool, session_uuid).await;
     }
 
     let Some(anchor) = projection_rebuild_anchor(pool, session_uuid, first_inserted_offset).await?
     else {
-        return rebuild_session_projection(pool, session_uuid).await;
+        return reconcile_session_projection(pool, session_uuid).await;
     };
 
     let events = load_direct_session_events_from(pool, session_uuid, anchor.turn_id)
         .await
         .context("load canonical projection suffix events")?;
     if events.is_empty() {
-        return rebuild_session_projection(pool, session_uuid).await;
+        return reconcile_session_projection(pool, session_uuid).await;
     }
 
     let file_context = load_file_touch_context(pool, session_uuid).await?;
@@ -59,8 +84,8 @@ pub async fn rebuild_session_projection_after_insert(
         .begin()
         .await
         .context("begin incremental projection tx")?;
-    clear_session_projection_from(&mut tx, session_uuid, anchor.turn_id).await?;
-    let expected_source_keys = insert_projection_rows(&mut tx, session_uuid, &projected).await?;
+    let expected_source_keys =
+        reconcile_projection_rows(&mut tx, session_uuid, &projected, Some(anchor.turn_id)).await?;
     reconcile_operation_embedding_sources(
         &mut tx,
         session_uuid,
@@ -154,28 +179,6 @@ async fn clear_session_projection(
     Ok(())
 }
 
-async fn clear_session_projection_from(
-    tx: &mut Transaction<'_, Postgres>,
-    session_uuid: Uuid,
-    from_turn_id: i64,
-) -> anyhow::Result<()> {
-    for table in [
-        "timeline_file_touches",
-        "timeline_activity_signals",
-        "timeline_operations",
-        "timeline_turns",
-    ] {
-        let sql = format!("DELETE FROM {table} WHERE session_uuid = $1 AND turn_id >= $2");
-        sqlx::query(&sql)
-            .bind(session_uuid)
-            .bind(from_turn_id)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("clear {table} projection suffix"))?;
-    }
-    Ok(())
-}
-
 async fn insert_projection_rows(
     tx: &mut Transaction<'_, Postgres>,
     session_uuid: Uuid,
@@ -186,6 +189,91 @@ async fn insert_projection_rows(
         insert_projected_turn(tx, session_uuid, turn, &mut expected_source_keys).await?;
     }
     Ok(expected_source_keys)
+}
+
+async fn reconcile_projection_rows(
+    tx: &mut Transaction<'_, Postgres>,
+    session_uuid: Uuid,
+    projected: &[StoredTurnProjection],
+    from_turn_id: Option<i64>,
+) -> anyhow::Result<Vec<String>> {
+    let expected_turn_ids: Vec<i64> = projected.iter().map(|turn| turn.turn.id).collect();
+    let mut expected_source_keys = Vec::new();
+    for turn in projected {
+        insert_projected_turn(tx, session_uuid, turn, &mut expected_source_keys).await?;
+        delete_stale_turn_children(tx, session_uuid, turn).await?;
+    }
+    sqlx::query(
+        "DELETE FROM timeline_turns \
+          WHERE session_uuid = $1 \
+            AND ($2::BIGINT IS NULL OR turn_id >= $2) \
+            AND NOT (turn_id = ANY($3::BIGINT[]))",
+    )
+    .bind(session_uuid)
+    .bind(from_turn_id)
+    .bind(expected_turn_ids)
+    .execute(&mut **tx)
+    .await
+    .context("delete stale projected turns")?;
+    Ok(expected_source_keys)
+}
+
+async fn delete_stale_turn_children(
+    tx: &mut Transaction<'_, Postgres>,
+    session_uuid: Uuid,
+    turn: &StoredTurnProjection,
+) -> anyhow::Result<()> {
+    let operation_ords: Vec<i32> = turn
+        .operations
+        .iter()
+        .map(|operation| operation.operation_ord)
+        .collect();
+    sqlx::query(
+        "DELETE FROM timeline_operations \
+          WHERE session_uuid = $1 AND turn_id = $2 \
+            AND NOT (operation_ord = ANY($3::INT[]))",
+    )
+    .bind(session_uuid)
+    .bind(turn.turn.id)
+    .bind(operation_ords)
+    .execute(&mut **tx)
+    .await
+    .context("delete stale projected operations")?;
+
+    let touch_ords: Vec<i32> = turn
+        .file_touches
+        .iter()
+        .map(|touch| touch.touch_ord)
+        .collect();
+    sqlx::query(
+        "DELETE FROM timeline_file_touches \
+          WHERE session_uuid = $1 AND turn_id = $2 \
+            AND NOT (touch_ord = ANY($3::INT[]))",
+    )
+    .bind(session_uuid)
+    .bind(turn.turn.id)
+    .bind(touch_ords)
+    .execute(&mut **tx)
+    .await
+    .context("delete stale projected file touches")?;
+
+    let signal_ords: Vec<i32> = turn
+        .activity_signals
+        .iter()
+        .map(|signal| signal.signal_ord)
+        .collect();
+    sqlx::query(
+        "DELETE FROM timeline_activity_signals \
+          WHERE session_uuid = $1 AND turn_id = $2 \
+            AND NOT (signal_ord = ANY($3::INT[]))",
+    )
+    .bind(session_uuid)
+    .bind(turn.turn.id)
+    .bind(signal_ords)
+    .execute(&mut **tx)
+    .await
+    .context("delete stale projected activity signals")?;
+    Ok(())
 }
 
 async fn reconcile_operation_embedding_sources(
@@ -258,12 +346,43 @@ async fn insert_projected_turn(
     turn: &StoredTurnProjection,
     expected_source_keys: &mut Vec<String>,
 ) -> anyhow::Result<()> {
+    let turn_json = serde_json::to_value(&turn.turn).context("serialize projected turn")?;
+    let chunks_json =
+        serde_json::to_value(&turn.turn.chunks).context("serialize projected chunks")?;
     sqlx::query(
         "INSERT INTO timeline_turns \
              (session_uuid, turn_id, turn_ord, is_sidechain_turn, preview, user_prompt_text, \
               start_timestamp, end_timestamp, duration_ms, event_count, operation_count, \
               thinking_count, has_errors, markdown, turn_json, chunks_json) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
+         ON CONFLICT (session_uuid, turn_id) DO UPDATE SET \
+             turn_ord = EXCLUDED.turn_ord, \
+             is_sidechain_turn = EXCLUDED.is_sidechain_turn, \
+             preview = EXCLUDED.preview, \
+             user_prompt_text = EXCLUDED.user_prompt_text, \
+             start_timestamp = EXCLUDED.start_timestamp, \
+             end_timestamp = EXCLUDED.end_timestamp, \
+             duration_ms = EXCLUDED.duration_ms, \
+             event_count = EXCLUDED.event_count, \
+             operation_count = EXCLUDED.operation_count, \
+             thinking_count = EXCLUDED.thinking_count, \
+             has_errors = EXCLUDED.has_errors, \
+             markdown = EXCLUDED.markdown, \
+             turn_json = EXCLUDED.turn_json, \
+             chunks_json = EXCLUDED.chunks_json \
+         WHERE ROW(timeline_turns.turn_ord, timeline_turns.is_sidechain_turn, \
+                   timeline_turns.preview, timeline_turns.user_prompt_text, \
+                   timeline_turns.start_timestamp, timeline_turns.end_timestamp, \
+                   timeline_turns.duration_ms, timeline_turns.event_count, \
+                   timeline_turns.operation_count, timeline_turns.thinking_count, \
+                   timeline_turns.has_errors, timeline_turns.markdown, \
+                   timeline_turns.turn_json, timeline_turns.chunks_json) \
+               IS DISTINCT FROM \
+               ROW(EXCLUDED.turn_ord, EXCLUDED.is_sidechain_turn, EXCLUDED.preview, \
+                   EXCLUDED.user_prompt_text, EXCLUDED.start_timestamp, EXCLUDED.end_timestamp, \
+                   EXCLUDED.duration_ms, EXCLUDED.event_count, EXCLUDED.operation_count, \
+                   EXCLUDED.thinking_count, EXCLUDED.has_errors, EXCLUDED.markdown, \
+                   EXCLUDED.turn_json, EXCLUDED.chunks_json)",
     )
     .bind(session_uuid)
     .bind(turn.turn.id)
@@ -279,8 +398,8 @@ async fn insert_projected_turn(
     .bind(turn.turn.thinking_count as i32)
     .bind(turn.turn.has_errors)
     .bind(&turn.turn.markdown)
-    .bind(serde_json::to_value(&turn.turn).context("serialize projected turn")?)
-    .bind(serde_json::to_value(&turn.turn.chunks).context("serialize projected chunks")?)
+    .bind(turn_json)
+    .bind(chunks_json)
     .execute(&mut **tx)
     .await
     .context("insert timeline_turns row")?;
@@ -298,27 +417,61 @@ async fn insert_projected_operations(
     expected_source_keys: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     for operation in &turn.operations {
+        let subagent_json = operation
+            .subagent
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .context("serialize projected subagent")?;
         let (call_text, result_text): (Option<String>, Option<String>) = sqlx::query_as(
-            "INSERT INTO timeline_operations \
+            "WITH changed AS ( \
+             INSERT INTO timeline_operations \
                  (session_uuid, turn_id, operation_ord, pair_id, name, raw_name, operation_type, \
                   operation_category, input, result_content, result_payload, result_is_error, \
                   is_error, is_pending, subagent_json) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
-             RETURNING \
+             ON CONFLICT (session_uuid, turn_id, operation_ord) DO UPDATE SET \
+                 pair_id = EXCLUDED.pair_id, \
+                 name = EXCLUDED.name, \
+                 raw_name = EXCLUDED.raw_name, \
+                 operation_type = EXCLUDED.operation_type, \
+                 operation_category = EXCLUDED.operation_category, \
+                 input = EXCLUDED.input, \
+                 result_content = EXCLUDED.result_content, \
+                 result_payload = EXCLUDED.result_payload, \
+                 result_is_error = EXCLUDED.result_is_error, \
+                 is_error = EXCLUDED.is_error, \
+                 is_pending = EXCLUDED.is_pending, \
+                 subagent_json = EXCLUDED.subagent_json \
+             WHERE ROW(timeline_operations.pair_id, timeline_operations.name, \
+                       timeline_operations.raw_name, timeline_operations.operation_type, \
+                       timeline_operations.operation_category, timeline_operations.input, \
+                       timeline_operations.result_content, timeline_operations.result_payload, \
+                       timeline_operations.result_is_error, timeline_operations.is_error, \
+                       timeline_operations.is_pending, timeline_operations.subagent_json) \
+                   IS DISTINCT FROM \
+                   ROW(EXCLUDED.pair_id, EXCLUDED.name, EXCLUDED.raw_name, \
+                       EXCLUDED.operation_type, EXCLUDED.operation_category, EXCLUDED.input, \
+                       EXCLUDED.result_content, EXCLUDED.result_payload, \
+                       EXCLUDED.result_is_error, EXCLUDED.is_error, EXCLUDED.is_pending, \
+                       EXCLUDED.subagent_json) \
+             RETURNING 1 \
+             ) \
+             SELECT \
                  CASE \
-                   WHEN input IS NOT NULL \
-                    AND length(trim(concat_ws(' ', name, raw_name, operation_type, operation_category, input::TEXT))) > 0 \
-                   THEN concat_ws(' ', name, raw_name, operation_type, operation_category, left(input::TEXT, 300)) \
+                   WHEN $9::JSONB IS NOT NULL \
+                    AND length(trim(concat_ws(' ', $5::TEXT, $6::TEXT, $7::TEXT, $8::TEXT, $9::JSONB::TEXT))) > 0 \
+                   THEN concat_ws(' ', $5::TEXT, $6::TEXT, $7::TEXT, $8::TEXT, left($9::JSONB::TEXT, 300)) \
                    ELSE NULL \
                  END AS call_text, \
                  CASE \
-                   WHEN (result_content IS NOT NULL OR result_payload IS NOT NULL OR result_is_error OR is_error) \
-                    AND length(trim(concat_ws(' ', name, result_content, result_payload::TEXT))) > 0 \
-                    AND (result_is_error OR is_error OR name = 'agent') \
+                   WHEN ($10::TEXT IS NOT NULL OR $11::JSONB IS NOT NULL OR $12::BOOLEAN OR $13::BOOLEAN) \
+                    AND length(trim(concat_ws(' ', $5::TEXT, $10::TEXT, $11::JSONB::TEXT))) > 0 \
+                    AND ($12::BOOLEAN OR $13::BOOLEAN OR $5::TEXT = 'agent') \
                    THEN CASE \
-                          WHEN result_is_error OR is_error \
-                          THEN left(concat_ws(' ', name, result_content, result_payload::TEXT), 1000) \
-                          ELSE concat_ws(' ', name, result_content, result_payload::TEXT) \
+                          WHEN $12::BOOLEAN OR $13::BOOLEAN \
+                          THEN left(concat_ws(' ', $5::TEXT, $10::TEXT, $11::JSONB::TEXT), 1000) \
+                          ELSE concat_ws(' ', $5::TEXT, $10::TEXT, $11::JSONB::TEXT) \
                         END \
                    ELSE NULL \
                  END AS result_text",
@@ -341,14 +494,7 @@ async fn insert_projected_operations(
         .bind(operation.result_is_error)
         .bind(operation.is_error)
         .bind(operation.is_pending)
-        .bind(
-            operation
-                .subagent
-                .as_ref()
-                .map(serde_json::to_value)
-                .transpose()
-                .context("serialize projected subagent")?,
-        )
+        .bind(subagent_json)
         .fetch_one(&mut **tx)
         .await
         .context("insert timeline_operations row")?;
@@ -498,7 +644,19 @@ async fn insert_projected_file_touches(
         sqlx::query(
             "INSERT INTO timeline_file_touches \
                  (session_uuid, turn_id, touch_ord, operation_ord, repo_name, repo_rel_path, touch_kind, is_write) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (session_uuid, turn_id, touch_ord) DO UPDATE SET \
+                 operation_ord = EXCLUDED.operation_ord, \
+                 repo_name = EXCLUDED.repo_name, \
+                 repo_rel_path = EXCLUDED.repo_rel_path, \
+                 touch_kind = EXCLUDED.touch_kind, \
+                 is_write = EXCLUDED.is_write \
+             WHERE ROW(timeline_file_touches.operation_ord, timeline_file_touches.repo_name, \
+                       timeline_file_touches.repo_rel_path, timeline_file_touches.touch_kind, \
+                       timeline_file_touches.is_write) \
+                   IS DISTINCT FROM \
+                   ROW(EXCLUDED.operation_ord, EXCLUDED.repo_name, EXCLUDED.repo_rel_path, \
+                       EXCLUDED.touch_kind, EXCLUDED.is_write)",
         )
         .bind(session_uuid)
         .bind(turn.turn.id)
@@ -524,7 +682,16 @@ async fn insert_projected_activity_signals(
         sqlx::query(
             "INSERT INTO timeline_activity_signals \
                  (session_uuid, turn_id, signal_ord, signal_type, signal_value, signal_count) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (session_uuid, turn_id, signal_ord) DO UPDATE SET \
+                 signal_type = EXCLUDED.signal_type, \
+                 signal_value = EXCLUDED.signal_value, \
+                 signal_count = EXCLUDED.signal_count \
+             WHERE ROW(timeline_activity_signals.signal_type, \
+                       timeline_activity_signals.signal_value, \
+                       timeline_activity_signals.signal_count) \
+                   IS DISTINCT FROM \
+                   ROW(EXCLUDED.signal_type, EXCLUDED.signal_value, EXCLUDED.signal_count)",
         )
         .bind(session_uuid)
         .bind(turn.turn.id)

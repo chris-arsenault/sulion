@@ -160,7 +160,8 @@ impl NodeStore {
             sqlx::query(
                 "UPDATE pty_sessions SET node_disconnected_at = NULL \
                   WHERE node_id = $1 AND node_boot_id = $2 AND state = 'live' \
-                    AND id = ANY($3)",
+                    AND id = ANY($3) \
+                    AND node_disconnected_at IS NOT NULL",
             )
             .bind(node_id)
             .bind(boot_id)

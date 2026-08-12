@@ -442,7 +442,8 @@ async fn metrics_endpoint_rolls_up_usage_and_plan_flow() {
     .await
     .unwrap();
 
-    // Git activity reads the live repo registry; give the repo a commit.
+    // The node owns Git filesystem reads; give the repo a commit and ask the
+    // node-side state manager to materialize its activity.
     for git_args in [
         vec!["init", "-q"],
         vec!["config", "user.email", "test@example.com"],
@@ -457,14 +458,35 @@ async fn metrics_endpoint_rolls_up_usage_and_plan_flow() {
             .unwrap();
         assert!(status.success(), "git {git_args:?} failed");
     }
-    sqlx::query(
-        "INSERT INTO repo_runtime_state (repo_name, path, \"exists\", next_status_at, updated_at) \
-         VALUES ('metrics-repo', $1, TRUE, NOW(), NOW()) \
-         ON CONFLICT (repo_name) DO UPDATE SET path = EXCLUDED.path, \"exists\" = TRUE",
+    h.runtime.repo_state().sync_repos_once().await.unwrap();
+    h.runtime
+        .repo_state()
+        .upsert_repo("metrics-repo", &repo_path)
+        .await
+        .unwrap();
+    h.runtime.repo_state().reconcile_due_once(1).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let (materialized, error): (bool, Option<String>) = sqlx::query_as(
+            "SELECT git_activity_json IS NOT NULL, git_activity_error \
+               FROM repo_runtime_state WHERE repo_name = 'metrics-repo'",
+        )
+        .fetch_one(&h.state.pool)
+        .await
+        .unwrap();
+        if materialized {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "node Git activity scan failed: {error:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    std::fs::rename(
+        &repo_path,
+        h.repos_root().join(".metrics-repo-control-cannot-read"),
     )
-    .bind(repo_path.to_string_lossy().as_ref())
-    .execute(&h.state.pool)
-    .await
     .unwrap();
 
     let plan = sulion::plans::create(
@@ -532,14 +554,14 @@ async fn metrics_endpoint_rolls_up_usage_and_plan_flow() {
         "project-hash fallback should attribute the uncorrelated session",
     );
 
-    // Git activity comes from repo_runtime_state, not the legacy repos
-    // table, and sees the probe commit.
+    // Control-plane metrics still see the probe commit after the repository
+    // path becomes unavailable because they read node-materialized state.
     let git_repo = metrics["git"]
         .as_array()
         .unwrap()
         .iter()
         .find(|row| row["repo"] == "metrics-repo")
-        .expect("repo_runtime_state entry should be scanned");
+        .expect("repo_runtime_state entry should be materialized");
     assert_eq!(git_repo["commits_24h"], 1);
     assert_eq!(git_repo["human_commits_7d"], 1);
 

@@ -465,7 +465,7 @@ async fn rebuild_codex_ancestor_projections(pool: &Pool, session_uuid: Uuid) {
         Ok(ancestors) => {
             for ancestor in ancestors {
                 if let Err(err) =
-                    super::projection::rebuild_session_projection(pool, ancestor).await
+                    super::projection::reconcile_session_projection(pool, ancestor).await
                 {
                     tracing::warn!(
                         %err,
