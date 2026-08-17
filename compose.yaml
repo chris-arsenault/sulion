@@ -1,3 +1,31 @@
+# Every service below reads its own secrets at start with the identity the
+# trust appliance issues it. Nothing here is delivered by a deploy, and the
+# database URL is fetched whole rather than assembled from parts — compose
+# expands its variables before a container runs, so a container fetching its
+# own credentials cannot fill in a connection string built here
+# (ahara-trust ADR-0002).
+x-sulion-aws: &sulion-aws
+  AWS_REGION: "us-east-1"
+  AWS_DEFAULT_REGION: "us-east-1"
+  AWS_SDK_LOAD_CONFIG: "1"
+
+# backend, node and ingester share the backend image and one identity: same
+# stack, same host, same image, so separate identities would distinguish
+# nothing. The certificate directory is under /tmp because these containers run
+# as a non-root user whose home is either read-only or a bind mount.
+x-sulion-backend-identity: &sulion-backend-identity
+  AWS_RA_BACKEND_CERT_DIR: "/tmp/ahara-identity"
+  AWS_RA_BACKEND_WORKLOAD_ID: "${AWS_RA_BACKEND_WORKLOAD_ID}"
+  AWS_RA_BACKEND_ENROLLMENT_URL: "${AWS_RA_BACKEND_ENROLLMENT_URL}"
+  AWS_RA_BACKEND_TRUST_ANCHOR_ARN: "${AWS_RA_BACKEND_TRUST_ANCHOR_ARN}"
+  AWS_RA_BACKEND_PROFILE_ARN: "${AWS_RA_BACKEND_PROFILE_ARN}"
+  AWS_RA_BACKEND_ENTRY_ROLE_ARN: "${AWS_RA_BACKEND_ENTRY_ROLE_ARN}"
+  AWS_RA_BACKEND_ROLE_ARN: "${AWS_RA_BACKEND_ROLE_ARN}"
+  AWS_RA_BACKEND_SECRET_SULION_DB_URL: "/ahara/truenas-db/sulion/app/url"
+  AWS_RA_BACKEND_SECRET_SULION_SECRET_BROKER_REGISTRATION_TOKEN: "/ahara/sulion/secret-broker-registration-token"
+  AWS_RA_BACKEND_SECRET_SULION_RETRIEVAL_TOKEN: "/ahara/sulion/retrieval-token"
+  AWS_RA_BACKEND_SECRET_SULION_CODE_INTEL_TOKEN: "/ahara/sulion/code-intel-token"
+
 services:
   backend:
     image: ${SULION_IMAGE_REGISTRY:-ghcr.io/chris-arsenault/sulion}/backend:${IMAGE_TAG:-latest}
@@ -12,11 +40,7 @@ services:
       # is not reachable from the public reverse proxy.
       - "${SULION_NODE_BIND_ADDRESS:-192.168.66.3}:${SULION_NODE_PORT:-30081}:8085"
     environment:
-      # DB connects to the shared TrueNAS Postgres (192.168.66.3:5432).
-      # DB + role + SSM creds are auto-provisioned by the
-      # ahara-db-migrate-truenas Lambda once sulion is registered
-      # in ahara-infra/infrastructure/terraform/services/db-migrate-truenas.tf.
-      SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@${SULION_POSTGRES_HOST:-192.168.66.3}:${SULION_POSTGRES_PORT:-5432}/${SULION_DB_NAME:-sulion}"
+      <<: [*sulion-aws, *sulion-backend-identity]
       SULION_LISTEN: "0.0.0.0:8080"
       # Public browser-facing origin. Used to build the device-pairing /pair
       # approval link returned by POST /api/devices/pair.
@@ -35,15 +59,9 @@ services:
       SULION_NODE_LISTEN: "0.0.0.0:8085"
       SULION_NODE_TLS_SAN: "${SULION_NODE_TLS_SAN:-192.168.66.3}"
       # Forwarded verbatim to a node once an operator approves its identity
-      # key. This is the whole reason a dedicated node needs no secrets of its
-      # own. Already present in SULION_DB_URL above; named individually here so
-      # the node can rebuild its own connection string.
-      DB_USER: "${DB_USER}"
-      DB_PASSWORD: "${DB_PASSWORD}"
       SULION_POSTGRES_HOST: "${SULION_POSTGRES_HOST:-192.168.66.3}"
       SULION_POSTGRES_PORT: "${SULION_POSTGRES_PORT:-5432}"
       SULION_DB_NAME: "${SULION_DB_NAME:-sulion}"
-      SULION_SECRET_BROKER_REGISTRATION_TOKEN: "${SULION_SECRET_BROKER_REGISTRATION_TOKEN}"
       SULION_DOCKER_MODE: "none"
       SULION_REPOS_ROOT: "/var/empty/sulion/repos"
       SULION_WORKSPACES_ROOT: "/var/empty/sulion/workspaces"
@@ -54,9 +72,7 @@ services:
       SULION_AUTH_CLIENT_ID: "${SULION_AUTH_CLIENT_ID:-}"
       SULION_SECRET_BROKER_URL: "${SULION_SECRET_BROKER_URL:-http://sulion-broker:8081}"
       SULION_RETRIEVAL_URL: "${SULION_RETRIEVAL_URL:-http://sulion-retrieval:8083}"
-      SULION_RETRIEVAL_TOKEN: "${SULION_RETRIEVAL_TOKEN}"
       SULION_CODE_INTEL_URL: ""
-      SULION_CODE_INTEL_TOKEN: "${SULION_CODE_INTEL_TOKEN:-}"
       SULION_RUNNER_URL: ""
       SULION_DEV_PORT_RANGE: "${SULION_DEV_PORT_RANGE:-26000-26010}"
       HOME: "/home/sulion"
@@ -76,12 +92,16 @@ services:
     profiles:
       - split-runtime
     user: root
+    # This entrypoint replaces the image's, so the wrapper is named here too.
     entrypoint:
       - /usr/bin/dumb-init
       - --
+      - /usr/local/bin/truenas-roles-anywhere-bootstrap
+      - AWS_RA_BACKEND
+      - --
       - /opt/sulion/node-entrypoint.sh
     environment:
-      SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@${SULION_POSTGRES_HOST:-192.168.66.3}:${SULION_POSTGRES_PORT:-5432}/${SULION_DB_NAME:-sulion}"
+      <<: [*sulion-aws, *sulion-backend-identity]
       SULION_NODE_ID: "${SULION_NODE_ID:-}"
       SULION_NODE_CONTROL_URL: "${SULION_NODE_CONTROL_URL:-}"
       SULION_NODE_ALLOW_INSECURE_WS: "${SULION_NODE_ALLOW_INSECURE_WS:-0}"
@@ -104,11 +124,8 @@ services:
       SULION_CODEX_SESSIONS: "/home/sulion/.codex/sessions"
       SULION_CORRELATE_SOCK: "/run/sulion/correlate.sock"
       SULION_SECRET_BROKER_URL: "${SULION_SECRET_BROKER_URL:-http://sulion-broker:8081}"
-      SULION_SECRET_BROKER_REGISTRATION_TOKEN: "${SULION_SECRET_BROKER_REGISTRATION_TOKEN}"
       SULION_RETRIEVAL_URL: "${SULION_RETRIEVAL_URL:-http://sulion-retrieval:8083}"
-      SULION_RETRIEVAL_TOKEN: "${SULION_RETRIEVAL_TOKEN}"
       SULION_CODE_INTEL_URL: "${SULION_CODE_INTEL_URL:-http://sulion-code-intel:8084}"
-      SULION_CODE_INTEL_TOKEN: "${SULION_CODE_INTEL_TOKEN}"
       SULION_DOCKER_MODE: "${SULION_DOCKER_MODE:-direct}"
       SULION_DEV_PORT_RANGE: "${SULION_DEV_PORT_RANGE:-26000-26010}"
       HOME: "/home/sulion"
@@ -121,12 +138,16 @@ services:
     restart: unless-stopped
     profiles:
       - split-runtime
+    # This entrypoint replaces the image's, so the wrapper is named here too.
     entrypoint:
       - /usr/bin/dumb-init
       - --
+      - /usr/local/bin/truenas-roles-anywhere-bootstrap
+      - AWS_RA_BACKEND
+      - --
       - /usr/local/bin/sulion-ingester
     environment:
-      SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@${SULION_POSTGRES_HOST:-192.168.66.3}:${SULION_POSTGRES_PORT:-5432}/${SULION_DB_NAME:-sulion}"
+      <<: [*sulion-aws, *sulion-backend-identity]
       SULION_CLAUDE_PROJECTS: "/home/sulion/.claude/projects"
       SULION_CODEX_SESSIONS: "/home/sulion/.codex/sessions"
       HOME: "/home/sulion"
@@ -138,12 +159,21 @@ services:
     container_name: sulion-broker
     restart: unless-stopped
     environment:
+      <<: *sulion-aws
       SULION_SECRET_BROKER_LISTEN: "0.0.0.0:8081"
-      SULION_SECRET_BROKER_DB_URL: "postgres://${BROKER_DB_USER:-unused}:${BROKER_DB_PASSWORD:-unused}@${SULION_POSTGRES_HOST:-192.168.66.3}:${SULION_POSTGRES_PORT:-5432}/${SULION_BROKER_DB_NAME:-sulion_broker}"
       SULION_SECRET_BROKER_MASTER_KEY_PATH: "/var/lib/sulion-broker/master.key"
       SULION_AUTH_ISSUER_URL: "${SULION_AUTH_ISSUER_URL:-}"
       SULION_AUTH_CLIENT_ID: "${SULION_AUTH_CLIENT_ID:-}"
-      SULION_SECRET_BROKER_REGISTRATION_TOKEN: "${SULION_SECRET_BROKER_REGISTRATION_TOKEN}"
+      # Its state directory is mounted read-only, so the identity goes to /tmp.
+      AWS_RA_BROKER_CERT_DIR: "/tmp/ahara-identity"
+      AWS_RA_BROKER_WORKLOAD_ID: "${AWS_RA_BROKER_WORKLOAD_ID}"
+      AWS_RA_BROKER_ENROLLMENT_URL: "${AWS_RA_BROKER_ENROLLMENT_URL}"
+      AWS_RA_BROKER_TRUST_ANCHOR_ARN: "${AWS_RA_BROKER_TRUST_ANCHOR_ARN}"
+      AWS_RA_BROKER_PROFILE_ARN: "${AWS_RA_BROKER_PROFILE_ARN}"
+      AWS_RA_BROKER_ENTRY_ROLE_ARN: "${AWS_RA_BROKER_ENTRY_ROLE_ARN}"
+      AWS_RA_BROKER_ROLE_ARN: "${AWS_RA_BROKER_ROLE_ARN}"
+      AWS_RA_BROKER_SECRET_SULION_SECRET_BROKER_DB_URL: "/ahara/truenas-db/sulion/broker/url"
+      AWS_RA_BROKER_SECRET_SULION_SECRET_BROKER_REGISTRATION_TOKEN: "/ahara/sulion/secret-broker-registration-token"
     networks:
       - sulion
     volumes:
@@ -154,9 +184,17 @@ services:
     container_name: sulion-retrieval
     restart: unless-stopped
     environment:
+      <<: *sulion-aws
       SULION_RETRIEVAL_LISTEN: "0.0.0.0:8083"
-      SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@${SULION_POSTGRES_HOST:-192.168.66.3}:${SULION_POSTGRES_PORT:-5432}/${SULION_DB_NAME:-sulion}"
-      SULION_RETRIEVAL_TOKEN: "${SULION_RETRIEVAL_TOKEN}"
+      AWS_RA_RETRIEVAL_CERT_DIR: "/tmp/ahara-identity"
+      AWS_RA_RETRIEVAL_WORKLOAD_ID: "${AWS_RA_RETRIEVAL_WORKLOAD_ID}"
+      AWS_RA_RETRIEVAL_ENROLLMENT_URL: "${AWS_RA_RETRIEVAL_ENROLLMENT_URL}"
+      AWS_RA_RETRIEVAL_TRUST_ANCHOR_ARN: "${AWS_RA_RETRIEVAL_TRUST_ANCHOR_ARN}"
+      AWS_RA_RETRIEVAL_PROFILE_ARN: "${AWS_RA_RETRIEVAL_PROFILE_ARN}"
+      AWS_RA_RETRIEVAL_ENTRY_ROLE_ARN: "${AWS_RA_RETRIEVAL_ENTRY_ROLE_ARN}"
+      AWS_RA_RETRIEVAL_ROLE_ARN: "${AWS_RA_RETRIEVAL_ROLE_ARN}"
+      AWS_RA_RETRIEVAL_SECRET_SULION_DB_URL: "/ahara/truenas-db/sulion/app/url"
+      AWS_RA_RETRIEVAL_SECRET_SULION_RETRIEVAL_TOKEN: "/ahara/sulion/retrieval-token"
       SULION_RETRIEVAL_EMBEDDING_URL: "${SULION_RETRIEVAL_EMBEDDING_URL:-http://192.168.66.3:5361}"
       SULION_RETRIEVAL_EMBEDDING_MODEL: "nomic-ai/nomic-embed-text-v1.5"
       SULION_RETRIEVAL_EMBEDDING_DIMENSIONS: "768"
@@ -172,9 +210,17 @@ services:
     profiles:
       - node-runtime
     environment:
+      <<: *sulion-aws
       SULION_CODE_INTEL_LISTEN: "0.0.0.0:8084"
-      SULION_DB_URL: "postgres://${DB_USER}:${DB_PASSWORD}@${SULION_POSTGRES_HOST:-192.168.66.3}:${SULION_POSTGRES_PORT:-5432}/${SULION_DB_NAME:-sulion}"
-      SULION_CODE_INTEL_TOKEN: "${SULION_CODE_INTEL_TOKEN}"
+      AWS_RA_CODE_INTEL_CERT_DIR: "/tmp/ahara-identity"
+      AWS_RA_CODE_INTEL_WORKLOAD_ID: "${AWS_RA_CODE_INTEL_WORKLOAD_ID}"
+      AWS_RA_CODE_INTEL_ENROLLMENT_URL: "${AWS_RA_CODE_INTEL_ENROLLMENT_URL}"
+      AWS_RA_CODE_INTEL_TRUST_ANCHOR_ARN: "${AWS_RA_CODE_INTEL_TRUST_ANCHOR_ARN}"
+      AWS_RA_CODE_INTEL_PROFILE_ARN: "${AWS_RA_CODE_INTEL_PROFILE_ARN}"
+      AWS_RA_CODE_INTEL_ENTRY_ROLE_ARN: "${AWS_RA_CODE_INTEL_ENTRY_ROLE_ARN}"
+      AWS_RA_CODE_INTEL_ROLE_ARN: "${AWS_RA_CODE_INTEL_ROLE_ARN}"
+      AWS_RA_CODE_INTEL_SECRET_SULION_DB_URL: "/ahara/truenas-db/sulion/app/url"
+      AWS_RA_CODE_INTEL_SECRET_SULION_CODE_INTEL_TOKEN: "/ahara/sulion/code-intel-token"
       SULION_CODE_INTEL_ALLOWED_ROOTS: "/home/sulion/repos,/home/sulion/workspaces"
       SULION_CODE_INTEL_LSP_MAX_SERVERS: "6"
       SULION_CODE_INTEL_LSP_IDLE_SECONDS: "1200"

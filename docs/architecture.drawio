@@ -1,0 +1,215 @@
+<mxfile host="Electron" agent="Sulion architecture redraw" version="29.6.6">
+  <diagram name="Production split" id="sulion-production-split">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0" background="#0B1017">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="zone-client" parent="1" vertex="1" value="" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#101821;strokeColor=#334155;strokeWidth=2;">
+          <mxGeometry x="40" y="110" width="220" height="790" as="geometry" />
+        </mxCell>
+        <mxCell id="zone-control" parent="1" vertex="1" value="" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#101821;strokeColor=#2563EB;strokeWidth=2;">
+          <mxGeometry x="290" y="110" width="600" height="790" as="geometry" />
+        </mxCell>
+        <mxCell id="zone-dev" parent="1" vertex="1" value="" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#101821;strokeColor=#7C3AED;strokeWidth=2;">
+          <mxGeometry x="930" y="110" width="630" height="790" as="geometry" />
+        </mxCell>
+
+        <mxCell id="edge-browser-frontend" parent="1" edge="1" source="browser" target="frontend" value=":30080" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#38BDF8;strokeWidth=3;startArrow=block;startFill=1;endArrow=block;endFill=1;fontColor=#D8E9F4;fontSize=11;fontStyle=1;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-browser-auth" parent="1" edge="1" source="browser" target="cognito" value="sign in / JWT" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=2;dashed=1;startArrow=none;endArrow=block;endFill=1;fontColor=#B9C5D1;fontSize=10;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-frontend-control" parent="1" edge="1" source="frontend" target="control" value="REST / WS" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#38BDF8;strokeWidth=3;startArrow=block;startFill=1;endArrow=block;endFill=1;fontColor=#D8E9F4;fontSize=11;fontStyle=1;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-frontend-broker" parent="1" edge="1" source="frontend" target="broker" value="/broker&#xa;secret + grant management" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F59E0B;strokeWidth=2;startArrow=block;startFill=1;endArrow=block;endFill=1;fontColor=#FBD38D;fontSize=10;fontStyle=1;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-frontend-retrieval" parent="1" edge="1" source="frontend" target="retrieval" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#A78BFA;strokeWidth=2;dashed=1;startArrow=block;startFill=1;endArrow=block;endFill=1;fontColor=#DDD6FE;fontSize=10;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="565" y="260" />
+              <mxPoint x="565" y="450" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-control-main-db" parent="1" edge="1" source="control" target="main-db" value="migrations + durable state&#xa;Postgres-only reads" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#34D399;strokeWidth=2;startArrow=block;startFill=1;endArrow=block;endFill=1;fontColor=#B7F7DC;fontSize=10;fontStyle=1;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-retrieval-main-db" parent="1" edge="1" source="retrieval" target="main-db" value="canonical text +&#xa;embedding index state" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#34D399;strokeWidth=2;startArrow=block;startFill=1;endArrow=block;endFill=1;fontColor=#B7F7DC;fontSize=10;fontStyle=1;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-retrieval-embedding" parent="1" edge="1" source="retrieval" target="embedding" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#A78BFA;strokeWidth=2;dashed=1;startArrow=none;endArrow=block;endFill=1;fontColor=#DDD6FE;fontSize=10;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="870" y="470" />
+              <mxPoint x="870" y="810" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-broker-db" parent="1" edge="1" source="broker" target="broker-db" value="encrypted bundles + grants" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F59E0B;strokeWidth=2;startArrow=block;startFill=1;endArrow=block;endFill=1;fontColor=#FBD38D;fontSize=10;fontStyle=1;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-broker-key" parent="1" edge="1" source="broker" target="broker-key" value="decrypt only here" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F59E0B;strokeWidth=2;dashed=1;startArrow=none;endArrow=block;endFill=1;fontColor=#FBD38D;fontSize=10;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="305" y="470" />
+              <mxPoint x="305" y="815" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-control-broker" parent="1" edge="1" source="control" target="broker" value="PTY keys" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#F59E0B;strokeWidth=2;dashed=1;startArrow=none;endArrow=block;endFill=1;fontColor=#FBD38D;fontSize=10;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="575" y="305" />
+              <mxPoint x="575" y="450" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-control-retrieval" parent="1" edge="1" source="control" target="retrieval" value="gateway" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#A78BFA;strokeWidth=2;dashed=1;startArrow=none;endArrow=block;endFill=1;fontColor=#DDD6FE;fontSize=10;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-control-node" parent="1" edge="1" source="control" target="node" value=":30081 TLS" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#38BDF8;strokeWidth=4;startArrow=block;startFill=1;endArrow=block;endFill=1;fontColor=#D8E9F4;fontSize=11;fontStyle=1;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-dev-main-db" parent="1" edge="1" source="dev-db-note" target="main-db" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.65;entryDx=0;entryDy=0;strokeColor=#34D399;strokeWidth=3;startArrow=none;endArrow=block;endFill=1;fontColor=#B7F7DC;fontSize=10;fontStyle=1;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-node-devenv" parent="1" edge="1" source="node" target="devenv" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#38BDF8;strokeWidth=3;startArrow=block;startFill=1;endArrow=block;endFill=1;fontColor=#D8E9F4;fontSize=10;fontStyle=1;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-repos-code-intel" parent="1" edge="1" source="repos-store" target="code-intel" value="read-only source&#xa;+ language servers" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#94A3B8;strokeWidth=2;dashed=1;startArrow=none;endArrow=block;endFill=1;fontColor=#CBD5E1;fontSize=10;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-transcripts-ingester" parent="1" edge="1" source="transcript-store" target="ingester" value="read-only tail&#xa;complete lines only" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#34D399;strokeWidth=3;startArrow=none;endArrow=block;endFill=1;fontColor=#B7F7DC;fontSize=10;fontStyle=1;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-node-storage" parent="1" edge="1" source="node" target="host-storage" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.45;entryDx=0;entryDy=0;strokeColor=#94A3B8;strokeWidth=2;startArrow=block;startFill=1;endArrow=block;endFill=1;fontColor=#CBD5E1;fontSize=10;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="945" y="280" />
+              <mxPoint x="945" y="675" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-devenv-storage" parent="1" edge="1" source="devenv" target="host-storage" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=1;entryY=0.45;entryDx=0;entryDy=0;strokeColor=#94A3B8;strokeWidth=2;dashed=1;startArrow=none;endArrow=block;endFill=1;fontColor=#CBD5E1;fontSize=10;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1545" y="290" />
+              <mxPoint x="1545" y="675" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-devenv-docker" parent="1" edge="1" source="devenv" target="docker-daemon" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.9;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;strokeColor=#A78BFA;strokeWidth=3;startArrow=block;startFill=1;endArrow=block;endFill=1;fontColor=#DDD6FE;fontSize=10;fontStyle=1;labelBackgroundColor=#0B1017;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1550" y="320" />
+              <mxPoint x="1550" y="835" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="title" parent="1" vertex="1" value="SULION — PRODUCTION ARCHITECTURE" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontColor=#F8FAFC;fontSize=26;fontStyle=1;fontFamily=Helvetica;">
+          <mxGeometry x="40" y="24" width="1000" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" parent="1" vertex="1" value="Split deployment, LAN path shown  •  solid colour = runtime/data flow  •  dashed = proxy, mount, or dependency" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontColor=#94A3B8;fontSize=13;fontFamily=Helvetica;">
+          <mxGeometry x="40" y="64" width="1450" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="label-client" parent="1" vertex="1" value="CLIENT + IDENTITY" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontColor=#94A3B8;fontSize=12;fontStyle=1;fontFamily=Helvetica;">
+          <mxGeometry x="65" y="130" width="170" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="label-control" parent="1" vertex="1" value="TRUENAS  /  DURABLE CONTROL PLANE" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontColor=#60A5FA;fontSize=12;fontStyle=1;fontFamily=Helvetica;">
+          <mxGeometry x="320" y="130" width="430" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="label-dev" parent="1" vertex="1" value="SULION-ENCLAVE  /  DEDICATED DEVELOPMENT HOST" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontColor=#A78BFA;fontSize=12;fontStyle=1;fontFamily=Helvetica;">
+          <mxGeometry x="960" y="130" width="500" height="25" as="geometry" />
+        </mxCell>
+
+        <mxCell id="browser" parent="1" vertex="1" value="&lt;div style=&quot;font-size:16px&quot;&gt;&lt;b&gt;Browser&lt;/b&gt;&lt;/div&gt;&lt;div style=&quot;margin-top:8px;color:#C8D5E1&quot;&gt;React work area&lt;br&gt;xterm.js live pane&lt;br&gt;timeline + review UI&lt;/div&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#162432;strokeColor=#38BDF8;strokeWidth=2;fontColor=#F1F7FB;fontSize=12;align=left;verticalAlign=top;spacingTop=14;spacingLeft=14;fontFamily=Helvetica;">
+          <mxGeometry x="65" y="180" width="170" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="cognito" parent="1" vertex="1" value="&lt;div style=&quot;font-size:14px&quot;&gt;&lt;b&gt;Cognito&lt;/b&gt;&lt;/div&gt;&lt;div style=&quot;margin-top:7px;color:#C8D5E1&quot;&gt;interactive sign-in&lt;br&gt;JWT issuer&lt;/div&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#17202A;strokeColor=#64748B;strokeWidth=2;fontColor=#F1F7FB;fontSize=12;align=left;verticalAlign=top;spacingTop=12;spacingLeft=14;fontFamily=Helvetica;">
+          <mxGeometry x="65" y="380" width="170" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="client-note" parent="1" vertex="1" value="&lt;b&gt;Browser boundary&lt;/b&gt;&lt;br&gt;&lt;br&gt;Frontend serves static assets and proxies the same-origin application routes.&lt;br&gt;&lt;br&gt;&lt;font color=&quot;#FCA5A5&quot;&gt;/ws/nodes returns 404 here.&lt;/font&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#111A23;strokeColor=#334155;strokeWidth=1;fontColor=#B8C5D1;fontSize=11;align=left;verticalAlign=top;spacingTop=12;spacingLeft=12;spacingRight=10;fontFamily=Helvetica;">
+          <mxGeometry x="65" y="560" width="170" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="client-scope" parent="1" vertex="1" value="LAN operation shown&lt;br&gt;public edge intentionally omitted" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#0E151D;strokeColor=#334155;strokeWidth=1;dashed=1;fontColor=#7F91A3;fontSize=10;align=center;verticalAlign=middle;fontFamily=Helvetica;">
+          <mxGeometry x="65" y="785" width="170" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="frontend" parent="1" vertex="1" value="&lt;div style=&quot;font-size:15px&quot;&gt;&lt;b&gt;Frontend / nginx&lt;/b&gt;&lt;/div&gt;&lt;div style=&quot;margin-top:8px;color:#C8D5E1&quot;&gt;static UI • same origin&lt;br&gt;/api • /ws • /broker • /retrieval&lt;/div&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#142436;strokeColor=#3B82F6;strokeWidth=2;fontColor=#F1F7FB;fontSize=12;align=left;verticalAlign=top;spacingTop=13;spacingLeft=14;fontFamily=Helvetica;">
+          <mxGeometry x="320" y="180" width="220" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="control" parent="1" vertex="1" value="&lt;div style=&quot;font-size:15px&quot;&gt;&lt;b&gt;Backend / control&lt;/b&gt;&lt;/div&gt;&lt;div style=&quot;margin-top:8px;color:#C8D5E1&quot;&gt;REST + browser WS&lt;br&gt;durable coordination + migrations&lt;br&gt;typed node operation proxy&lt;br&gt;&lt;font color=&quot;#7DD3FC&quot;&gt;TLS node gateway :30081&lt;/font&gt;&lt;/div&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#142436;strokeColor=#3B82F6;strokeWidth=2;fontColor=#F1F7FB;fontSize=12;align=left;verticalAlign=top;spacingTop=13;spacingLeft=14;fontFamily=Helvetica;">
+          <mxGeometry x="610" y="165" width="240" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="broker" parent="1" vertex="1" value="&lt;div style=&quot;font-size:15px&quot;&gt;&lt;b&gt;Secret broker&lt;/b&gt;&lt;/div&gt;&lt;div style=&quot;margin-top:8px;color:#C8D5E1&quot;&gt;encrypted env bundles&lt;br&gt;PTY-scoped grants + redemption&lt;br&gt;separate UID and trust boundary&lt;/div&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#2A2114;strokeColor=#F59E0B;strokeWidth=2;fontColor=#FFF7E8;fontSize=12;align=left;verticalAlign=top;spacingTop=13;spacingLeft=14;fontFamily=Helvetica;">
+          <mxGeometry x="320" y="390" width="220" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="retrieval" parent="1" vertex="1" value="&lt;div style=&quot;font-size:15px&quot;&gt;&lt;b&gt;Retrieval service&lt;/b&gt;&lt;/div&gt;&lt;div style=&quot;margin-top:8px;color:#C8D5E1&quot;&gt;agent transcript search&lt;br&gt;lexical + semantic index worker&lt;br&gt;loads text from canonical tables&lt;/div&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#211B32;strokeColor=#A78BFA;strokeWidth=2;fontColor=#F4F0FF;fontSize=12;align=left;verticalAlign=top;spacingTop=13;spacingLeft=14;fontFamily=Helvetica;">
+          <mxGeometry x="610" y="390" width="240" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="broker-db" parent="1" vertex="1" value="&lt;b&gt;sulion_broker&lt;/b&gt;&lt;br&gt;encrypted payloads&lt;br&gt;grants + PTY public keys" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=14;fillColor=#2A2114;strokeColor=#F59E0B;strokeWidth=2;fontColor=#FDECC8;fontSize=11;align=center;verticalAlign=middle;fontFamily=Helvetica;">
+          <mxGeometry x="320" y="620" width="220" height="115" as="geometry" />
+        </mxCell>
+        <mxCell id="main-db" parent="1" vertex="1" value="&lt;div style=&quot;font-size:14px&quot;&gt;&lt;b&gt;sulion PostgreSQL&lt;/b&gt;&lt;/div&gt;&lt;div style=&quot;margin-top:6px&quot;&gt;sessions • workspaces • plans&lt;br&gt;canonical events + timeline&lt;br&gt;retrieval + code-intel indexes&lt;/div&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=14;fillColor=#132A24;strokeColor=#34D399;strokeWidth=2;fontColor=#D9FFF0;fontSize=11;align=center;verticalAlign=middle;fontFamily=Helvetica;">
+          <mxGeometry x="595" y="610" width="255" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="broker-key" parent="1" vertex="1" value="&lt;b&gt;Broker master key&lt;/b&gt;&lt;br&gt;host file, broker mount only" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#211A10;strokeColor=#F59E0B;strokeWidth=2;dashed=1;fontColor=#FDECC8;fontSize=11;align=center;verticalAlign=middle;fontFamily=Helvetica;">
+          <mxGeometry x="320" y="790" width="220" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="embedding" parent="1" vertex="1" value="&lt;b&gt;Embedding service&lt;/b&gt;&lt;br&gt;nomic model endpoint" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#181525;strokeColor=#A78BFA;strokeWidth=1;dashed=1;fontColor=#DDD6FE;fontSize=11;align=center;verticalAlign=middle;fontFamily=Helvetica;">
+          <mxGeometry x="610" y="790" width="240" height="55" as="geometry" />
+        </mxCell>
+
+        <mxCell id="node" parent="1" vertex="1" value="&lt;div style=&quot;font-size:15px&quot;&gt;&lt;b&gt;sulion-node&lt;/b&gt;&lt;/div&gt;&lt;div style=&quot;margin-top:8px;color:#C8D5E1&quot;&gt;outbound authenticated WSS&lt;br&gt;session + repo/worktree ownership&lt;br&gt;typed file/Git/terminal operations&lt;br&gt;correlation + host heartbeat&lt;br&gt;&lt;font color=&quot;#C4B5FD&quot;&gt;owns no PTY masters&lt;/font&gt;&lt;/div&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#211B32;strokeColor=#A78BFA;strokeWidth=2;fontColor=#F4F0FF;fontSize=12;align=left;verticalAlign=top;spacingTop=13;spacingLeft=14;fontFamily=Helvetica;">
+          <mxGeometry x="960" y="165" width="250" height="155" as="geometry" />
+        </mxCell>
+        <mxCell id="devenv" parent="1" vertex="1" value="&lt;div style=&quot;font-size:15px&quot;&gt;&lt;b&gt;sulion-devenv&lt;/b&gt;&lt;/div&gt;&lt;div style=&quot;margin-top:8px;color:#C8D5E1&quot;&gt;&lt;b&gt;owns shells + PTY masters&lt;/b&gt;&lt;br&gt;continuous shadow emulators&lt;br&gt;agent processes + wrapper tools&lt;br&gt;tools use the pinned control gateway&lt;br&gt;label-owned container, not Compose&lt;br&gt;&lt;font color=&quot;#7DD3FC&quot;&gt;survives node replacement&lt;/font&gt;&lt;/div&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#172A31;strokeColor=#38BDF8;strokeWidth=3;fontColor=#F1F7FB;fontSize=12;align=left;verticalAlign=top;spacingTop=13;spacingLeft=14;fontFamily=Helvetica;">
+          <mxGeometry x="1260" y="155" width="270" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="code-intel" parent="1" vertex="1" value="&lt;div style=&quot;font-size:15px&quot;&gt;&lt;b&gt;Code intelligence&lt;/b&gt;&lt;/div&gt;&lt;div style=&quot;margin-top:8px;color:#C8D5E1&quot;&gt;Tree-sitter + ast-grep&lt;br&gt;persistent language servers&lt;br&gt;structural facts, no source blobs&lt;/div&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#211B32;strokeColor=#A78BFA;strokeWidth=2;fontColor=#F4F0FF;fontSize=12;align=left;verticalAlign=top;spacingTop=13;spacingLeft=14;fontFamily=Helvetica;">
+          <mxGeometry x="960" y="400" width="250" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="ingester" parent="1" vertex="1" value="&lt;div style=&quot;font-size:15px&quot;&gt;&lt;b&gt;sulion-ingester&lt;/b&gt;&lt;/div&gt;&lt;div style=&quot;margin-top:8px;color:#C8D5E1&quot;&gt;only JSONL reader&lt;br&gt;Claude + Codex canonicalization&lt;br&gt;timeline projection + byte offsets&lt;/div&gt;" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#132A24;strokeColor=#34D399;strokeWidth=2;fontColor=#D9FFF0;fontSize=12;align=left;verticalAlign=top;spacingTop=13;spacingLeft=14;fontFamily=Helvetica;">
+          <mxGeometry x="1260" y="400" width="270" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="dev-db-note" parent="1" vertex="1" value="&lt;b&gt;Direct DB clients&lt;/b&gt;  node • ingester • code-intel" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#10231E;strokeColor=#34D399;strokeWidth=1;fontColor=#B7F7DC;fontSize=10;align=center;verticalAlign=middle;fontFamily=Helvetica;">
+          <mxGeometry x="960" y="555" width="275" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="survival-note" parent="1" vertex="1" value="&lt;b&gt;Failure boundary&lt;/b&gt;  control or node replacement drops attachments; shells continue" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#10202B;strokeColor=#38BDF8;strokeWidth=1;fontColor=#BFEAFF;fontSize=10;align=center;verticalAlign=middle;fontFamily=Helvetica;">
+          <mxGeometry x="1250" y="555" width="280" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="host-storage" parent="1" vertex="1" value="" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#111A23;strokeColor=#64748B;strokeWidth=2;">
+          <mxGeometry x="960" y="610" width="570" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="storage-label" parent="1" vertex="1" value="/home/sulion  •  local host storage; only repos are exported over SMB" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontColor=#CBD5E1;fontSize=11;fontStyle=1;fontFamily=Helvetica;">
+          <mxGeometry x="980" y="622" width="500" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="repos-store" parent="1" vertex="1" value="&lt;b&gt;repos + workspaces&lt;/b&gt;&lt;br&gt;canonical checkouts&lt;br&gt;isolated Git worktrees" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#17212B;strokeColor=#64748B;strokeWidth=1;fontColor=#DCE6EF;fontSize=10;align=center;verticalAlign=middle;fontFamily=Helvetica;">
+          <mxGeometry x="980" y="655" width="160" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="agent-state-store" parent="1" vertex="1" value="&lt;b&gt;agent + tool state&lt;/b&gt;&lt;br&gt;Claude / Codex config&lt;br&gt;PTY helper runtime" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#17212B;strokeColor=#64748B;strokeWidth=1;fontColor=#DCE6EF;fontSize=10;align=center;verticalAlign=middle;fontFamily=Helvetica;">
+          <mxGeometry x="1165" y="655" width="160" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="transcript-store" parent="1" vertex="1" value="&lt;b&gt;append-only JSONL&lt;/b&gt;&lt;br&gt;.claude/projects&lt;br&gt;.codex/sessions" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fillColor=#132A24;strokeColor=#34D399;strokeWidth=1;fontColor=#D9FFF0;fontSize=10;align=center;verticalAlign=middle;fontFamily=Helvetica;">
+          <mxGeometry x="1350" y="655" width="160" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="docker-daemon" parent="1" vertex="1" value="&lt;div style=&quot;font-size:14px&quot;&gt;&lt;b&gt;Host Docker daemon&lt;/b&gt;&lt;/div&gt;&lt;div style=&quot;margin-top:5px&quot;&gt;direct mode • socket mounted only into node + devenv&lt;br&gt;node adopts devenv • PTYs run development containers&lt;/div&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#211B32;strokeColor=#A78BFA;strokeWidth=2;fontColor=#E9E2FF;fontSize=11;align=center;verticalAlign=middle;fontFamily=Helvetica;">
+          <mxGeometry x="1030" y="805" width="430" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="legend" parent="1" vertex="1" value="&lt;font color=&quot;#38BDF8&quot;&gt;━━&lt;/font&gt; live terminal + control&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&lt;font color=&quot;#34D399&quot;&gt;━━&lt;/font&gt; historical / durable data&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&lt;font color=&quot;#F59E0B&quot;&gt;━━&lt;/font&gt; secret boundary&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&lt;font color=&quot;#A78BFA&quot;&gt;━━&lt;/font&gt; agent tools + Docker&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&lt;font color=&quot;#94A3B8&quot;&gt;┄┄&lt;/font&gt; local mount / dependency" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#101821;strokeColor=#334155;strokeWidth=1;fontColor=#CBD5E1;fontSize=11;align=center;verticalAlign=middle;fontFamily=Helvetica;">
+          <mxGeometry x="40" y="920" width="1070" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="standalone-note" parent="1" vertex="1" value="&lt;b&gt;Portable standalone&lt;/b&gt;&lt;br&gt;same NodeRuntime in-process; brokered runner replaces direct Docker" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#101821;strokeColor=#334155;strokeWidth=1;fontColor=#9EACBA;fontSize=10;align=center;verticalAlign=middle;fontFamily=Helvetica;">
+          <mxGeometry x="1130" y="920" width="430" height="45" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

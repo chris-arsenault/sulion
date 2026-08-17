@@ -20,6 +20,18 @@ images:
   - runner
   - frontend
   - devenv
+# Every container that holds a secret needs an identity to read it with
+# (ahara-trust ADR-0002). backend, node and ingester share the backend image
+# and one identity; runner and frontend hold no secret.
+truenas_roles_anywhere:
+  backend:
+    env_prefix: AWS_RA_BACKEND
+  broker:
+    env_prefix: AWS_RA_BROKER
+  retrieval:
+    env_prefix: AWS_RA_RETRIEVAL
+  code-intel:
+    env_prefix: AWS_RA_CODE_INTEL
 # The devenv image is the PTY toolset with no per-commit binaries: tagged by
 # its directory's git tree hash and skipped entirely when unchanged, so its
 # image ID moves only when toolset content does. The node rolls devenv

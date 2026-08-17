@@ -294,6 +294,21 @@ RUN mkdir -m 0755 /nix \
      done \
   && chown -R sulion:sulion /nix
 
+# The backend and the node read their database URL and service tokens at start
+# with the identity the trust appliance issues them (ahara-trust ADR-0002).
+# bash, curl, openssl and awscli2 are already installed above; only the signing
+# helper and the bootstrap are new.
+ARG AWS_SIGNING_HELPER_VERSION=1.8.4
+ARG AWS_SIGNING_HELPER_SHA256=b7568acd6e1517a4e1adaee68d52bfd6284a0e5305677166cd83d43a07c815c9
+RUN curl -fsSL \
+    "https://rolesanywhere.amazonaws.com/releases/${AWS_SIGNING_HELPER_VERSION}/X86_64/Linux/Amzn2023/aws_signing_helper" \
+    -o /usr/local/bin/aws_signing_helper \
+  && echo "${AWS_SIGNING_HELPER_SHA256}  /usr/local/bin/aws_signing_helper" | sha256sum -c - \
+  && chmod 0755 /usr/local/bin/aws_signing_helper
+
+COPY truenas-roles-anywhere-bootstrap /usr/local/bin/truenas-roles-anywhere-bootstrap
+RUN chmod 0755 /usr/local/bin/truenas-roles-anywhere-bootstrap
+
 COPY dist/sulion /usr/local/bin/sulion
 COPY dist/sulion-node /usr/local/bin/sulion-node
 COPY dist/sulion-devenv /usr/local/bin/sulion-devenv
@@ -317,4 +332,6 @@ USER sulion
 WORKDIR /home/sulion
 
 EXPOSE 8080
-ENTRYPOINT ["/usr/bin/dumb-init", "--", "/opt/sulion/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/dumb-init", "--", \
+            "/usr/local/bin/truenas-roles-anywhere-bootstrap", "AWS_RA_BACKEND", "--", \
+            "/opt/sulion/entrypoint.sh"]
