@@ -23,6 +23,7 @@ RUN dnf install -y --setopt=install_weak_deps=False dnf-plugins-core epel-releas
     git-lfs \
     awscli2 \
     openssh-clients \
+    openssl \
     dumb-init \
     vim-enhanced \
     nano \

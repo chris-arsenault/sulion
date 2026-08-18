@@ -21,7 +21,10 @@ module "workload_role" {
     "code-intel",
   ])
 
-  source = "git::https://github.com/chris-arsenault/ahara-infra.git//infrastructure/terraform/modules/machine-role?ref=main"
+  # This revision makes a project's /ahara/<project> and
+  # /ahara/truenas-db/<project> parameter trees the workload's read boundary.
+  # Pin that security contract rather than resolving a floating ref at apply.
+  source = "git::https://github.com/chris-arsenault/ahara-infra.git//infrastructure/terraform/modules/machine-role?ref=d02a421bc755444dcfb21570e805360496a1ba13"
 
   prefix = local.prefix
   name   = each.key

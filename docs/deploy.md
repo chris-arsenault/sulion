@@ -58,7 +58,7 @@ Across the production split:
 Sulion needs three cross-repo infra registrations in `ahara-infra`:
 
 - `infrastructure/terraform/control/project-sulion.tf` grants the deployer role enough IAM to create the Sulion Cognito app client, publish SSM parameters, manage the project-owned ALB listener/certificate/DNS, and deploy the Komodo stack.
-- `infrastructure/terraform/services/db-migrate-truenas.tf` needs a `sulion` entry in `truenas_db_stacks` with `app` and `broker` database registrations so the shared migration Lambda provisions both databases and publishes `/ahara/truenas-db/sulion/app/{username,password}` plus `/ahara/truenas-db/sulion/broker/{username,password}`.
+- `infrastructure/terraform/services/db-migrate-truenas.tf` needs a `sulion` entry in `truenas_db_stacks` with `app` and `broker` database registrations so the shared migration Lambda provisions both databases and publishes `/ahara/truenas-db/sulion/app/{username,password,url}` plus `/ahara/truenas-db/sulion/broker/{username,password,url}`.
 - `infrastructure/terraform/network/locals.tf` registers `sulion.services.ahara.io` as an `internal` reverse-proxy upstream at `192.168.66.3:30080`, with buffering disabled and WebSocket upgrades enabled. `internal` means Ahara Infra owns nginx and WireGuard ingress while Sulion Terraform owns the public ALB resources. Port `30081/tcp` is deliberately **not** registered: it is the backend's encrypted LAN-only node endpoint (control channel plus broker/retrieval gateway), and routing it publicly would undo the node pairing boundary.
 
 Sulion also carries project-local Terraform under [`infrastructure/terraform/`](</home/sulion/repos/sulion/infrastructure/terraform>) that creates its `sulion.services.ahara.io` ALB listener rules, ACM certificate, Route53 records, Cognito app client, and publishes:
@@ -101,7 +101,7 @@ The broker container mounts this dataset read-only at `/var/lib/sulion-broker`. 
 
 Push to `main`. The shared ahara CI workflow builds all Sulion images, pushes to GHCR, and the `deploy-truenas` action:
 
-1. Invokes `ahara-db-migrate-truenas` with `stack_name: "sulion"` → creates every registered Sulion database and publishes `/ahara/truenas-db/sulion/app/{username,password}` plus `/ahara/truenas-db/sulion/broker/{username,password}` to SSM.
+1. Invokes `ahara-db-migrate-truenas` with `stack_name: "sulion"` → creates every registered Sulion database and publishes `/ahara/truenas-db/sulion/app/{username,password,url}` plus `/ahara/truenas-db/sulion/broker/{username,password,url}` to SSM.
 2. Runs `terraform apply` in [`infrastructure/terraform/`](</home/sulion/repos/sulion/infrastructure/terraform>) → creates the Sulion edge listener rules/certificate/DNS and Cognito app client, then publishes `/ahara/cognito/clients/sulion-app` plus `/ahara/auth-trigger/clients/sulion`.
 3. Creates (or reuses) the `sulion` Komodo stack pointed at this repo's `compose.yaml`.
 4. Resolves the SSM paths declared in [`secret-paths.yml`](</home/sulion/repos/sulion/secret-paths.yml>), sets them as Komodo stack env vars, and deploys.

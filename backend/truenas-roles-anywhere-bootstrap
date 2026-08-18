@@ -290,12 +290,15 @@ if [ -n "${secret_names}" ]; then
       exit 1
     fi
 
+    error_file="$(mktemp)"
     if ! value="$(aws ssm get-parameter --name "${path}" --with-decryption \
-      --query Parameter.Value --output text 2>/dev/null)"; then
+      --query Parameter.Value --output text 2>"${error_file}")"; then
       echo "Cannot read ${path} for ${name}." >&2
-      echo "This workload's role grants its own project's namespace; check the path." >&2
+      sed 's/^/AWS CLI: /' "${error_file}" >&2
+      rm -f "${error_file}"
       exit 1
     fi
+    rm -f "${error_file}"
     if [ -z "${value}" ] || [ "${value}" = "None" ]; then
       echo "${path} resolved to nothing" >&2
       exit 1
