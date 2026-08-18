@@ -293,8 +293,12 @@ if [ -n "${secret_names}" ]; then
     # Report what AWS said rather than guessing why. A message asserting the
     # path is wrong sends the reader after the path when the cause was a
     # missing client, an unusable signing helper, or a denied role.
+    # HOME is overridden for this call alone. The AWS CLI creates ~/.aws before
+    # it reads anything, and a workload whose home is a read-only mount fails
+    # there rather than on the parameter. The certificate directory is already
+    # ours and already writable; the application keeps the HOME it expects.
     error_file="$(mktemp)"
-    if ! value="$(aws ssm get-parameter --name "${path}" --with-decryption \
+    if ! value="$(HOME="${CERT_DIR}" aws ssm get-parameter --name "${path}" --with-decryption \
       --query Parameter.Value --output text 2>"${error_file}")"; then
       echo "Cannot read ${path} for ${name}." >&2
       sed 's/^/AWS CLI: /' "${error_file}" >&2
