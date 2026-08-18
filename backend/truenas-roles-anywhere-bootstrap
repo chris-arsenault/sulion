@@ -272,7 +272,10 @@ if [ -n "${secret_names}" ]; then
   # Written by the caller only when it wants files rather than an environment:
   # a vendor image cannot run this wrapper, so an init container writes here
   # and the application reads the files.
-  WRITE_DIR_VAR="${ENV_PREFIX}_SECRET_DIR"
+  #
+  # SECRETS_DIR rather than SECRET_DIR, so this control variable cannot be
+  # mistaken for a secret called DIR by the enumeration above.
+  WRITE_DIR_VAR="${ENV_PREFIX}_SECRETS_DIR"
   WRITE_DIR="${!WRITE_DIR_VAR:-}"
   if [ -n "${WRITE_DIR}" ]; then
     mkdir -p "${WRITE_DIR}"
