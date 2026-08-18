@@ -2,3 +2,7 @@
 !Dockerfile
 !dist/
 !dist/sulion-broker
+# The broker reads its own database URL and registration token at start, so the
+# enrollment bootstrap has to reach the build context. This file is an
+# allowlist: anything not named here is invisible to the build.
+!truenas-roles-anywhere-bootstrap
