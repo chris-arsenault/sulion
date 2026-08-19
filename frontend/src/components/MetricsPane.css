@@ -111,6 +111,76 @@
   margin-bottom: 10px;
 }
 
+.metrics-usage-windows {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.metrics-usage-window {
+  min-width: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-1);
+  padding: 6px 8px;
+  background: var(--canvas-0);
+}
+
+.metrics-usage-window > span {
+  display: block;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.metrics-usage-window > strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: var(--t-head);
+  font-weight: var(--w-500);
+}
+
+.metrics-usage-window dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 5px 0 0;
+}
+
+.metrics-usage-window dl div {
+  min-width: 0;
+}
+
+.metrics-usage-window dt,
+.metrics-usage-window dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+}
+
+.metrics-usage-window dt {
+  color: var(--text-dis);
+  text-transform: uppercase;
+}
+
+.metrics-usage-window dd {
+  overflow: hidden;
+  color: var(--text-mid);
+  text-overflow: ellipsis;
+}
+
+.metrics-usage-window small {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-dis);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+}
+
 .metrics-tile {
   min-width: 96px;
   flex: 1;
@@ -343,6 +413,29 @@
   color: var(--text-dis);
 }
 
+.metrics-model-table td:first-child {
+  width: 38%;
+  white-space: normal;
+}
+
+.metrics-model__name,
+.metrics-model__rates {
+  display: block;
+}
+
+.metrics-model__name {
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+}
+
+.metrics-model__rates {
+  margin-top: 1px;
+  color: var(--text-dis);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  line-height: 1.25;
+}
+
 .metrics-table__link {
   max-width: 100%;
   display: inline-flex;
@@ -407,4 +500,14 @@
   margin: 8px 0 0;
   color: var(--text-dis);
   font-size: var(--t-meta);
+}
+
+.metrics-note a {
+  color: var(--accent);
+}
+
+@media (max-width: 620px) {
+  .metrics-usage-windows {
+    grid-template-columns: 1fr;
+  }
 }

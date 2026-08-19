@@ -243,6 +243,7 @@ async fn run_control_maintenance(pool: db::Pool) {
             tracing::info!(
                 canonical_events_backfilled = stats.canonical_events_backfilled,
                 timeline_sessions_backfilled = stats.timeline_sessions_backfilled,
+                usage_sessions_backfilled = stats.usage_sessions_backfilled,
                 "startup transcript maintenance complete",
             );
         }

@@ -10,21 +10,37 @@ function fixture(): MetricsResponse {
   return {
     generated_at: "2026-07-24T05:00:00Z",
     usage: {
-      all_time: { fresh_tokens: 2_100_000, cached_tokens: 88_000_000, total_tokens: 90_100_000 },
-      today: { fresh_tokens: 350_000, cached_tokens: 9_000_000, total_tokens: 9_350_000 },
-      last_7d: { fresh_tokens: 1_200_000, cached_tokens: 40_000_000, total_tokens: 41_200_000 },
+      all_time: { input_tokens: 1_600_000, cache_write_input_tokens: 400_000, cached_input_tokens: 88_000_000, output_tokens: 500_000, estimated_cost_usd: 67.5, unpriced_tokens: 0 },
+      today: { input_tokens: 300_000, cache_write_input_tokens: 50_000, cached_input_tokens: 9_000_000, output_tokens: 50_000, estimated_cost_usd: 7.5, unpriced_tokens: 0 },
+      last_7d: { input_tokens: 900_000, cache_write_input_tokens: 200_000, cached_input_tokens: 40_000_000, output_tokens: 300_000, estimated_cost_usd: 34.75, unpriced_tokens: 0 },
       per_repo: [
         {
           repo: "sulion",
-          all_time: { fresh_tokens: 1_500_000, cached_tokens: 60_000_000, total_tokens: 61_500_000 },
-          today: { fresh_tokens: 300_000, cached_tokens: 8_000_000, total_tokens: 8_300_000 },
-          last_7d: { fresh_tokens: 900_000, cached_tokens: 30_000_000, total_tokens: 30_900_000 },
+          all_time: { input_tokens: 1_100_000, cache_write_input_tokens: 300_000, cached_input_tokens: 60_000_000, output_tokens: 400_000, estimated_cost_usd: 48, unpriced_tokens: 0 },
+          today: { input_tokens: 250_000, cache_write_input_tokens: 40_000, cached_input_tokens: 8_000_000, output_tokens: 50_000, estimated_cost_usd: 6.5, unpriced_tokens: 0 },
+          last_7d: { input_tokens: 650_000, cache_write_input_tokens: 150_000, cached_input_tokens: 30_000_000, output_tokens: 250_000, estimated_cost_usd: 27, unpriced_tokens: 0 },
         },
       ],
-      daily: [
-        { day: "2026-07-23", fresh_tokens: 500_000, cached_tokens: 20_000_000, total_tokens: 20_500_000 },
-        { day: "2026-07-24", fresh_tokens: 350_000, cached_tokens: 9_000_000, total_tokens: 9_350_000 },
+      by_model: [
+        {
+          model: "claude-opus-5",
+          agent: "claude-code",
+          usage: { input_tokens: 900_000, cache_write_input_tokens: 200_000, cached_input_tokens: 40_000_000, output_tokens: 300_000, estimated_cost_usd: 34.75, unpriced_tokens: 0 },
+          price: { input_usd_per_million: 5, cached_input_usd_per_million: 0.5, cache_write_usd_per_million: 6.25, cache_write_1h_usd_per_million: 10, output_usd_per_million: 25 },
+        },
       ],
+      model_window_days: 14,
+      daily: [
+        { day: "2026-07-23", input_tokens: 500_000, cache_write_input_tokens: 100_000, cached_input_tokens: 20_000_000, output_tokens: 100_000, estimated_cost_usd: 16.5, unpriced_tokens: 0 },
+        { day: "2026-07-24", input_tokens: 300_000, cache_write_input_tokens: 50_000, cached_input_tokens: 9_000_000, output_tokens: 50_000, estimated_cost_usd: 7.5, unpriced_tokens: 0 },
+      ],
+      pricing: {
+        basis: "API list price (standard tier)",
+        as_of: "2026-08-19",
+        openai_source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+        anthropic_source_url: "https://claude.com/pricing",
+        note: "Subscription fees and long-context multipliers are not included.",
+      },
     },
     git: [
       {
@@ -91,9 +107,10 @@ describe("MetricsPane", () => {
     render(<MetricsPane />);
 
     const tokens = await screen.findByRole("region", { name: "Token spend" });
-    expect(within(tokens).getByText("350K")).toBeDefined();
-    expect(within(tokens).getByText("9.4M processed")).toBeDefined();
-    expect(within(tokens).getByText("2.1M")).toBeDefined();
+    expect(within(tokens).getByText("~$7.50")).toBeDefined();
+    expect(within(tokens).getByText("claude-opus-5")).toBeDefined();
+    expect(within(tokens).getAllByText("300K").length).toBeGreaterThan(0);
+    expect(within(tokens).queryByText(/processed/i)).toBeNull();
 
     const flow = screen.getByRole("region", { name: "Delivery flow" });
     expect(within(flow).getByText("2")).toBeDefined();
@@ -118,14 +135,14 @@ describe("MetricsPane", () => {
     render(<MetricsPane />);
     const tokens = await screen.findByRole("region", { name: "Token spend" });
     const bars = within(tokens).getByRole("img", {
-      name: "Fresh tokens per day",
+      name: "Estimated API cost per day",
     });
 
     const user = userEvent.setup();
     await user.hover(bars.firstElementChild as HTMLElement);
     await waitFor(() =>
       expect(
-        screen.getByText(/500K fresh · 20M cache reads · 20.5M processed/),
+        screen.getByText(/500K input \(100K cache writes\).*20M cached input.*100K output/s),
       ).toBeDefined(),
     );
   });

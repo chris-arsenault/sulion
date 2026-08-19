@@ -6,11 +6,14 @@ const CANONICAL_BLOCKS_KEY: &str = "canonical_blocks";
 const CANONICAL_BLOCKS_VERSION: i32 = 1;
 const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 const TIMELINE_PROJECTION_VERSION: i32 = 2;
+const USAGE_PROJECTION_KEY: &str = "usage_projection";
+const USAGE_PROJECTION_VERSION: i32 = 1;
 
 #[derive(Debug, Default, Clone, Copy, serde::Serialize)]
 pub struct StartupMaintenanceStats {
     pub canonical_events_backfilled: u64,
     pub timeline_sessions_backfilled: u64,
+    pub usage_sessions_backfilled: u64,
 }
 
 pub async fn run_required_startup_maintenance(
@@ -62,12 +65,34 @@ pub async fn run_required_startup_maintenance(
         );
     }
 
+    let usage_version = projection_version(pool, USAGE_PROJECTION_KEY).await?;
+    if usage_version < USAGE_PROJECTION_VERSION {
+        tracing::info!(
+            key = USAGE_PROJECTION_KEY,
+            current = usage_version,
+            target = USAGE_PROJECTION_VERSION,
+            "derived usage data version behind; rebuilding token categories",
+        );
+        stats.usage_sessions_backfilled = super::usage::rebuild_usage_projection(pool)
+            .await
+            .context("rebuild usage projection")?;
+        set_projection_version(pool, USAGE_PROJECTION_KEY, USAGE_PROJECTION_VERSION).await?;
+    } else if usage_version > USAGE_PROJECTION_VERSION {
+        tracing::warn!(
+            key = USAGE_PROJECTION_KEY,
+            current = usage_version,
+            target = USAGE_PROJECTION_VERSION,
+            "database has newer derived usage data version; skipping usage repair",
+        );
+    }
+
     Ok(stats)
 }
 
 pub async fn mark_projection_versions_current(pool: &Pool) -> anyhow::Result<()> {
     set_projection_version(pool, CANONICAL_BLOCKS_KEY, CANONICAL_BLOCKS_VERSION).await?;
     set_projection_version(pool, TIMELINE_PROJECTION_KEY, TIMELINE_PROJECTION_VERSION).await?;
+    set_projection_version(pool, USAGE_PROJECTION_KEY, USAGE_PROJECTION_VERSION).await?;
     Ok(())
 }
 

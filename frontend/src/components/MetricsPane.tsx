@@ -3,9 +3,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { getMetrics } from "../api/client";
 import type {
   FlowCfdDay,
+  MetricsModelPrice,
   MetricsResponse,
   PlanBurndownView,
   RepoGitActivityView,
+  UsageWindowView,
 } from "../api/types";
 import { appCommands } from "../state/AppCommands";
 import { Sigil, Tooltip } from "./ui";
@@ -94,42 +96,34 @@ export function MetricsPane({
 
 function TokensSection({ data }: { data: MetricsResponse }) {
   const { usage } = data;
-  const maxDay = Math.max(1, ...usage.daily.map((d) => d.fresh_tokens));
+  const maxDay = Math.max(0.01, ...usage.daily.map((d) => d.estimated_cost_usd));
   return (
     <section className="metrics-section" aria-label="Token spend">
       <header>Tokens</header>
-      <div className="metrics-tiles">
-        <StatTile
-          label="today"
-          value={formatTokens(usage.today.fresh_tokens)}
-          detail={`${formatTokens(usage.today.total_tokens)} processed`}
-        />
-        <StatTile
-          label="7 days"
-          value={formatTokens(usage.last_7d.fresh_tokens)}
-          detail={`${formatTokens(usage.last_7d.total_tokens)} processed`}
-        />
-        <StatTile
-          label="all time"
-          value={formatTokens(usage.all_time.fresh_tokens)}
-          detail={`${formatTokens(usage.all_time.total_tokens)} processed`}
-        />
+      <div className="metrics-usage-windows">
+        <UsagePeriod label="today" usage={usage.today} />
+        <UsagePeriod label="7 days total" usage={usage.last_7d} />
+        <UsagePeriod label="all time" usage={usage.all_time} />
       </div>
       <figure className="metrics-chart">
-        <figcaption>Fresh tokens per day</figcaption>
+        <figcaption>API list-price estimate per day</figcaption>
         {usage.daily.length === 0 ? (
           <div className="metrics-chart__empty">No usage recorded yet.</div>
         ) : (
-          <div className="metrics-bars" role="img" aria-label="Fresh tokens per day">
+          <div
+            className="metrics-bars"
+            role="img"
+            aria-label="Estimated API cost per day"
+          >
             {usage.daily.map((d) => (
               <Tooltip
                 key={d.day}
-                label={`${dayLabel(d.day)}\n${formatTokens(d.fresh_tokens)} fresh · ${formatTokens(d.cached_tokens)} cache reads · ${formatTokens(d.total_tokens)} processed`}
+                label={usageTooltip(dayLabel(d.day), d)}
               >
                 <div className="metrics-bars__slot">
                   <div
                     className="metrics-bars__fill"
-                    data-h={barStep(d.fresh_tokens, maxDay)}
+                    data-h={barStep(d.estimated_cost_usd, maxDay)}
                   />
                 </div>
               </Tooltip>
@@ -143,38 +137,126 @@ function TokensSection({ data }: { data: MetricsResponse }) {
           </span>
         </div>
       </figure>
-      <table className="metrics-table" aria-label="Tokens by repo">
+      <table className="metrics-table metrics-model-table" aria-label="Tokens by model">
         <thead>
           <tr>
-            <th>repo</th>
-            <th>today</th>
-            <th>7d</th>
-            <th>all time</th>
+            <th>model · {usage.model_window_days}d</th>
+            <th>input</th>
+            <th>cached</th>
+            <th>output</th>
+            <th>est.</th>
           </tr>
         </thead>
         <tbody>
-          {usage.per_repo.slice(0, 8).map((row) => (
-            <tr key={row.repo}>
-              <td>{row.repo}</td>
-              <td className="tabular">{formatTokens(row.today.fresh_tokens)}</td>
-              <td className="tabular">{formatTokens(row.last_7d.fresh_tokens)}</td>
-              <td className="tabular">
-                {formatTokens(row.all_time.fresh_tokens)}
-                <span className="metrics-table__minor">
-                  {" "}
-                  / {formatTokens(row.all_time.total_tokens)}
+          {usage.by_model.map((row) => (
+            <tr key={`${row.agent}:${row.model}`}>
+              <td>
+                <span className="metrics-model__name">{row.model}</span>
+                <span className="metrics-model__rates">
+                  {row.price ? priceLabel(row.price) : "price unavailable"}
                 </span>
+              </td>
+              <td className="tabular">
+                {formatTokens(row.usage.input_tokens)}
+                {row.usage.cache_write_input_tokens > 0 ? (
+                  <span className="metrics-table__minor">
+                    {" "}({formatTokens(row.usage.cache_write_input_tokens)} writes)
+                  </span>
+                ) : null}
+              </td>
+              <td className="tabular">
+                {formatTokens(row.usage.cached_input_tokens)}
+              </td>
+              <td className="tabular">{formatTokens(row.usage.output_tokens)}</td>
+              <td className="tabular">
+                {row.price ? formatUsd(row.usage.estimated_cost_usd) : "unpriced"}
               </td>
             </tr>
           ))}
         </tbody>
       </table>
       <p className="metrics-note">
-        fresh = input + cache writes + output; processed additionally counts
-        cache reads of prior context.
+        Input excludes cache reads and includes cache writes. Cost is a standard-tier
+        API-list-price estimate as of {usage.pricing.as_of}; subscriptions and
+        long-context multipliers are excluded. Rates: {" "}
+        <a href={usage.pricing.openai_source_url} target="_blank" rel="noreferrer">
+          OpenAI
+        </a>{" "}
+        · {" "}
+        <a href={usage.pricing.anthropic_source_url} target="_blank" rel="noreferrer">
+          Anthropic
+        </a>
+        .
       </p>
     </section>
   );
+}
+
+function UsagePeriod({
+  label,
+  usage,
+}: {
+  label: string;
+  usage: UsageWindowView;
+}) {
+  return (
+    <div className="metrics-usage-window">
+      <span>{label}</span>
+      <strong className="tabular">~{formatUsd(usage.estimated_cost_usd)}</strong>
+      <dl>
+        <div>
+          <dt>in</dt>
+          <dd className="tabular">{formatTokens(usage.input_tokens)}</dd>
+        </div>
+        <div>
+          <dt>cached</dt>
+          <dd className="tabular">{formatTokens(usage.cached_input_tokens)}</dd>
+        </div>
+        <div>
+          <dt>out</dt>
+          <dd className="tabular">{formatTokens(usage.output_tokens)}</dd>
+        </div>
+      </dl>
+      {usage.unpriced_tokens > 0 ? (
+        <small>{formatTokens(usage.unpriced_tokens)} tokens unpriced</small>
+      ) : usage.cache_write_input_tokens > 0 ? (
+        <small>{formatTokens(usage.cache_write_input_tokens)} input tokens were cache writes</small>
+      ) : null}
+    </div>
+  );
+}
+
+function usageTooltip(
+  label: string,
+  usage: Pick<
+    UsageWindowView,
+    | "input_tokens"
+    | "cache_write_input_tokens"
+    | "cached_input_tokens"
+    | "output_tokens"
+    | "estimated_cost_usd"
+    | "unpriced_tokens"
+  >,
+): string {
+  return [
+    `${label} · ~${formatUsd(usage.estimated_cost_usd)}`,
+    `${formatTokens(usage.input_tokens)} input (${formatTokens(usage.cache_write_input_tokens)} cache writes)`,
+    `${formatTokens(usage.cached_input_tokens)} cached input`,
+    `${formatTokens(usage.output_tokens)} output`,
+    usage.unpriced_tokens > 0
+      ? `${formatTokens(usage.unpriced_tokens)} tokens unpriced`
+      : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function priceLabel(price: MetricsModelPrice): string {
+  const write =
+    price.cache_write_1h_usd_per_million === price.cache_write_usd_per_million
+      ? formatRate(price.cache_write_usd_per_million)
+      : `${formatRate(price.cache_write_usd_per_million)}/${formatRate(price.cache_write_1h_usd_per_million)} 1h`;
+  return `per 1M: in ${formatRate(price.input_usd_per_million)} · write ${write} · cached ${formatRate(price.cached_input_usd_per_million)} · out ${formatRate(price.output_usd_per_million)}`;
 }
 
 // ─── Flow ───────────────────────────────────────────────────────────
@@ -634,6 +716,21 @@ const COMPACT_NUMBER = new Intl.NumberFormat("en", {
 
 function formatTokens(tokens: number): string {
   return COMPACT_NUMBER.format(Math.max(0, Math.round(tokens)));
+}
+
+const USD = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+function formatUsd(value: number): string {
+  return USD.format(Math.max(0, value));
+}
+
+function formatRate(value: number): string {
+  return `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
 }
 
 function formatHours(hours: number): string {

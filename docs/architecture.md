@@ -117,7 +117,7 @@ Code boundary:
 - `backend/src/ingest/canonical/` — source-specific (Claude, Codex) translation into the canonical event schema
 - `backend/src/ingest/timeline/` — app-shaped timeline projection
 - `backend/src/ingest/projection.rs` — materialization into `timeline_*` tables
-- `backend/src/ingest/usage.rs` — cache-aware session spend and latest context-pressure projection
+- `backend/src/ingest/usage.rs` — cache-aware session spend, exact daily model attribution, and latest context-pressure projection
 
 ## Invariants — do not break
 

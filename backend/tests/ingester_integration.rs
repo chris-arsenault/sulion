@@ -268,17 +268,21 @@ async fn projects_cache_aware_usage_without_double_counting_replayed_events() {
     ingester.tick(&pool, &claude.config()).await.unwrap();
     ingester.tick(&pool, &claude.config()).await.unwrap();
 
-    // Cache creation folds into fresh input; cached column carries reads
-    // only; the duplicated msg_dup line adds nothing.
-    let claude_usage: (i64, i64, i64, i64, Option<i64>) = sqlx::query_as(
-        "SELECT input_tokens, cached_input_tokens, output_tokens, total_tokens, context_tokens \
+    // Standard input, cache writes, and cache reads stay disjoint; the
+    // duplicated msg_dup line adds nothing.
+    let claude_usage: (i64, i64, i64, i64, i64, i64, Option<i64>) = sqlx::query_as(
+        "SELECT input_tokens, cached_input_tokens, cache_write_input_tokens, \
+                cache_write_1h_input_tokens, output_tokens, total_tokens, context_tokens \
            FROM agent_session_usage WHERE session_uuid = $1",
     )
     .bind(claude.session_uuid)
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(claude_usage, (3_350, 15_500, 1_725, 20_575, Some(575)));
+    assert_eq!(
+        claude_usage,
+        (350, 15_500, 3_000, 0, 1_725, 20_575, Some(575))
+    );
 
     // The daily snapshot mirrors the session's cumulative totals.
     let daily: (i64, i64) = sqlx::query_as(
@@ -290,6 +294,17 @@ async fn projects_cache_aware_usage_without_double_counting_replayed_events() {
     .await
     .unwrap();
     assert_eq!(daily, (20_575, 15_500));
+    let claude_model_daily: (i64, i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT input_tokens, cached_input_tokens, cache_write_input_tokens, \
+                cache_write_1h_input_tokens, output_tokens \
+           FROM agent_model_usage_daily \
+          WHERE session_uuid = $1 AND model = 'claude-sonnet-4'",
+    )
+    .bind(claude.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(claude_model_daily, (350, 15_500, 3_000, 0, 1_725));
 
     let codex = CodexFixture::new();
     codex.append(
@@ -302,8 +317,9 @@ async fn projects_cache_aware_usage_without_double_counting_replayed_events() {
     codex.append("\n");
     ingester.tick(&pool, &codex.config()).await.unwrap();
 
-    let codex_usage: (i64, i64, i64, i64, Option<i64>, Option<i64>) = sqlx::query_as(
-        "SELECT input_tokens, cached_input_tokens, output_tokens, total_tokens, \
+    let codex_usage: (i64, i64, i64, i64, i64, Option<i64>, Option<i64>) = sqlx::query_as(
+        "SELECT input_tokens, cached_input_tokens, cache_write_input_tokens, \
+                output_tokens, total_tokens, \
                 context_tokens, model_context_window \
            FROM agent_session_usage WHERE session_uuid = $1",
     )
@@ -313,7 +329,106 @@ async fn projects_cache_aware_usage_without_double_counting_replayed_events() {
     .unwrap();
     assert_eq!(
         codex_usage,
-        (42_000, 31_000, 5_000, 47_000, Some(26_000), Some(100_000))
+        (
+            11_000,
+            31_000,
+            0,
+            5_000,
+            47_000,
+            Some(26_000),
+            Some(100_000)
+        )
+    );
+    let codex_model_daily: (String, i64, i64, i64) = sqlx::query_as(
+        "SELECT model, input_tokens, cached_input_tokens, output_tokens \
+           FROM agent_model_usage_daily WHERE session_uuid = $1",
+    )
+    .bind(codex.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        codex_model_daily,
+        ("(unknown model)".to_string(), 11_000, 31_000, 5_000)
+    );
+}
+
+#[tokio::test]
+async fn startup_usage_repair_rebuilds_cache_write_categories_from_events() {
+    let pool = fresh_pool().await;
+    let claude = Fixture::new();
+    claude.append(
+        r#"{"type":"assistant","timestamp":"2026-04-19T01:00:00Z","message":{"id":"msg_priced","model":"claude-opus-5","content":[],"usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":500,"ephemeral_1h_input_tokens":1500},"cache_read_input_tokens":7000,"output_tokens":900}}}"#,
+    );
+    claude.append("\n");
+    claude.append(
+        r#"{"type":"assistant","timestamp":"2026-04-19T01:01:00Z","message":{"id":"msg_switched","model":"claude-fable-5","content":[],"usage":{"input_tokens":50,"cache_creation_input_tokens":100,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":0},"cache_read_input_tokens":1000,"output_tokens":200}}}"#,
+    );
+    claude.append("\n");
+
+    let ingester = Ingester::new();
+    ingester.tick(&pool, &claude.config()).await.unwrap();
+    sqlx::query(
+        "UPDATE agent_session_usage SET input_tokens = 0, cached_input_tokens = 0, \
+            cache_write_input_tokens = 0, cache_write_1h_input_tokens = 0, \
+            output_tokens = 0, total_tokens = 0 \
+          WHERE session_uuid = $1",
+    )
+    .bind(claude.session_uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM agent_usage_daily WHERE session_uuid = $1")
+        .bind(claude.session_uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ingest_projection_versions WHERE name = 'usage_projection'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let stats = sulion::ingest::run_required_startup_maintenance(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stats.usage_sessions_backfilled, 1);
+
+    let rebuilt: (i64, i64, i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT input_tokens, cached_input_tokens, cache_write_input_tokens, \
+                cache_write_1h_input_tokens, output_tokens, total_tokens \
+           FROM agent_session_usage WHERE session_uuid = $1",
+    )
+    .bind(claude.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rebuilt, (150, 8_000, 600, 1_500, 1_100, 11_350));
+
+    let daily: (i64, i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT input_tokens, cached_input_tokens, cache_write_input_tokens, \
+                cache_write_1h_input_tokens, output_tokens \
+           FROM agent_usage_daily WHERE session_uuid = $1",
+    )
+    .bind(claude.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(daily, (150, 8_000, 600, 1_500, 1_100));
+    let model_daily: Vec<(String, i64, i64, i64, i64, i64)> = sqlx::query_as(
+        "SELECT model, input_tokens, cached_input_tokens, cache_write_input_tokens, \
+                cache_write_1h_input_tokens, output_tokens \
+           FROM agent_model_usage_daily WHERE session_uuid = $1 ORDER BY model",
+    )
+    .bind(claude.session_uuid)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        model_daily,
+        vec![
+            ("claude-fable-5".to_string(), 50, 1_000, 100, 0, 200),
+            ("claude-opus-5".to_string(), 100, 7_000, 500, 1_500, 900),
+        ]
     );
 }
 

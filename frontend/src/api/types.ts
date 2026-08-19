@@ -35,6 +35,8 @@ export interface AgentSessionMetadata {
 export interface AgentSessionUsage {
   input_tokens: number;
   cached_input_tokens: number;
+  cache_write_input_tokens: number;
+  cache_write_1h_input_tokens: number;
   output_tokens: number;
   reasoning_output_tokens: number;
   total_tokens: number;
@@ -787,16 +789,24 @@ export interface UpdateFuturePromptInput {
 // ─── Portfolio metrics (`/api/metrics`) ─────────────────────────────
 
 export interface UsageWindowView {
-  fresh_tokens: number;
-  cached_tokens: number;
-  total_tokens: number;
+  /** Standard input plus cache writes; cache reads are excluded. */
+  input_tokens: number;
+  /** Cache-write subset of input_tokens. */
+  cache_write_input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  estimated_cost_usd: number;
+  unpriced_tokens: number;
 }
 
 export interface MetricsUsageDay {
   day: string;
-  fresh_tokens: number;
-  cached_tokens: number;
-  total_tokens: number;
+  input_tokens: number;
+  cache_write_input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  estimated_cost_usd: number;
+  unpriced_tokens: number;
 }
 
 export interface MetricsRepoUsage {
@@ -811,7 +821,33 @@ export interface MetricsUsage {
   today: UsageWindowView;
   last_7d: UsageWindowView;
   per_repo: MetricsRepoUsage[];
+  by_model: MetricsModelUsage[];
+  model_window_days: number;
   daily: MetricsUsageDay[];
+  pricing: MetricsUsagePricing;
+}
+
+export interface MetricsModelPrice {
+  input_usd_per_million: number;
+  cached_input_usd_per_million: number;
+  cache_write_usd_per_million: number;
+  cache_write_1h_usd_per_million: number;
+  output_usd_per_million: number;
+}
+
+export interface MetricsModelUsage {
+  model: string;
+  agent: string;
+  usage: UsageWindowView;
+  price: MetricsModelPrice | null;
+}
+
+export interface MetricsUsagePricing {
+  basis: string;
+  as_of: string;
+  openai_source_url: string;
+  anthropic_source_url: string;
+  note: string;
 }
 
 export interface MetricsGitDay {

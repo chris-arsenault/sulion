@@ -171,18 +171,23 @@ export function MonitorPane({
     }
     return map;
   }, [repos]);
-  // Live-session token rollup: fresh work vs full processed volume (the
-  // difference is cache reads re-counting the context each API call).
+  // Live-session categories match the metrics page and do not overlap:
+  // input includes cache writes, cached means cache reads, output is output.
   const tokenTotals = useMemo(() => {
-    let fresh = 0;
-    let processed = 0;
+    let input = 0;
+    let cached = 0;
+    let output = 0;
     for (const session of liveSessions) {
       const usage = session.agent_usage;
       if (!usage) continue;
-      processed += usage.total_tokens;
-      fresh += Math.max(usage.total_tokens - usage.cached_input_tokens, 0);
+      input +=
+        usage.input_tokens +
+        usage.cache_write_input_tokens +
+        usage.cache_write_1h_input_tokens;
+      cached += usage.cached_input_tokens;
+      output += usage.output_tokens;
     }
-    return { fresh, processed };
+    return { input, cached, output };
   }, [liveSessions]);
   const openMetrics = useCallback(() => {
     if (onOpenMetrics) {
@@ -220,17 +225,18 @@ export function MonitorPane({
             tone="mute"
           />
           <Tooltip
-            label={`Live sessions: ${formatTokens(tokenTotals.fresh)} fresh tokens of ${formatTokens(tokenTotals.processed)} processed (the rest is cache reads re-counting context)`}
+            label={`Live sessions: ${formatTokens(tokenTotals.input)} input · ${formatTokens(tokenTotals.cached)} cached input · ${formatTokens(tokenTotals.output)} output`}
           >
             <span className="monitor-bar-stat monitor-bar-stat--tokens">
               <strong className="tabular">
-                {formatTokens(tokenTotals.fresh)}
+                {formatTokens(tokenTotals.input)}
               </strong>{" "}
-              fresh ·{" "}
+              in ·{" "}
               <span className="tabular">
-                {formatTokens(tokenTotals.processed)}
+                {formatTokens(tokenTotals.cached)}
               </span>{" "}
-              processed
+              cached · <span className="tabular">{formatTokens(tokenTotals.output)}</span>{" "}
+              out
             </span>
           </Tooltip>
         </div>
@@ -662,11 +668,15 @@ function TerminalCard({
   const context = contextHealth(session);
   const uptimeStart = session.agent_runtime?.started_at ?? session.created_at;
   const uptime = elapsedDuration(uptimeStart);
-  const totalTokens = session.agent_usage?.total_tokens ?? null;
-  const cachedTokens = session.agent_usage?.cached_input_tokens ?? 0;
-  const freshTokens =
-    totalTokens == null ? null : Math.max(totalTokens - cachedTokens, 0);
-  const burnRate = averageTokensPerHour(freshTokens, uptimeStart);
+  const usage = session.agent_usage;
+  const inputTokens = usage
+    ? usage.input_tokens +
+      usage.cache_write_input_tokens +
+      usage.cache_write_1h_input_tokens
+    : null;
+  const cachedTokens = usage?.cached_input_tokens ?? 0;
+  const outputTokens = usage?.output_tokens ?? 0;
+  const burnRate = averageTokensPerHour(inputTokens, uptimeStart);
   const agent = session.current_session_agent ?? session.agent_runtime?.agent;
   const model = session.agent_metadata?.model;
   const openTimeline = useCallback(() => {
@@ -889,22 +899,22 @@ function TerminalCard({
         </Tooltip>
         <Tooltip
           label={
-            totalTokens == null || freshTokens == null
+            inputTokens == null
               ? "Token spend not reported"
               : [
-                  `${formatTokens(freshTokens)} fresh`,
-                  `${formatTokens(cachedTokens)} cache reads`,
-                  `${formatTokens(totalTokens)} processed`,
+                  `${formatTokens(inputTokens)} input`,
+                  `${formatTokens(cachedTokens)} cached input`,
+                  `${formatTokens(outputTokens)} output`,
                   burnRate == null
                     ? null
-                    : `${formatTokens(burnRate)} fresh/hr avg`,
+                    : `${formatTokens(burnRate)} input/hr avg`,
                 ]
                   .filter(Boolean)
                   .join(" · ")
           }
         >
           <span className="monitor-card__stat tabular">
-            {freshTokens == null ? "—" : formatTokens(freshTokens)}
+            {inputTokens == null ? "—" : formatTokens(inputTokens)}
           </span>
         </Tooltip>
         {session.current_plan ? (

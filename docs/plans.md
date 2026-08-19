@@ -116,20 +116,26 @@ Each repo has a **Plans** subsection in the sidebar. Its plan tab supports
 creation, metadata edits, phase status/notes, phase addition, PTY attachment,
 closure, and history.
 
-The **Metrics** tab (`/api/metrics`) aggregates the portfolio: token rollups
-(fresh vs processed, where fresh excludes cache reads), a tokens-per-day
-series from `agent_usage_daily`, git activity per repo with agent/human
-commit attribution via `Co-Authored-By` trailers, churn hotspots from
-repeated file writes, and plan-flow charts (cumulative flow, per-plan
-burndown, throughput, cycle time) replayed from `plan_events`.
+The **Metrics** tab (`/api/metrics`) aggregates the portfolio: non-overlapping
+input, cached-input, and output rollups; a reconciled 14-day series from
+`agent_model_usage_daily`; per-model usage with standard-tier API list-price
+estimates; git activity per repo with agent/human commit attribution via
+`Co-Authored-By` trailers; churn hotspots from repeated file writes; and
+plan-flow charts (cumulative flow, per-plan burndown, throughput, cycle time)
+replayed from `plan_events`. Input includes cache writes but excludes cache
+reads. The projection retains ordinary and one-hour cache writes separately so
+their provider rates can be applied without inference. Unknown model prices
+remain visibly unpriced.
 
 The **Overview** tab presents repos as teams and every live PTY as an engineer
 card, including shells or sessions without an open browser tab. Teams needing
 attention sort first. Each card combines operational activity, attached
 plan/current phase, latest timeline output, agent uptime, cumulative token
 spend, average token rate, and context remaining when the agent reports enough
-data to calculate it. Missing usage telemetry is shown as unavailable rather
-than estimated. Open plans remain visible even when no PTY is attached.
+data to calculate it. Its live token summary uses the same input, cached-input,
+and output categories as Metrics. Missing usage telemetry is shown as
+unavailable rather than estimated. Open plans remain visible even when no PTY
+is attached.
 
 ## Runtime boundary
 
@@ -138,5 +144,6 @@ The socket and browser REST handlers call the same plan/activity services and
 write Postgres. Neither path reads transcript JSONL. The app-state poll carries
 open-plan summaries plus each session's operational activity and current-plan
 projection. The ingester also normalizes Codex cumulative usage snapshots and
-Claude per-response usage into `agent_session_usage`; cumulative spend and the
-latest context footprint stay separate.
+Claude per-response usage into `agent_session_usage`; standard input, cache
+writes, cache reads, output, cumulative spend, and the latest context footprint
+stay separate.

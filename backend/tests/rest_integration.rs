@@ -227,13 +227,12 @@ async fn app_state_includes_agent_usage_health_metrics() {
             (session_uuid, agent, input_tokens, cached_input_tokens, output_tokens, \
              reasoning_output_tokens, total_tokens, context_tokens, model_context_window, \
              last_byte_offset, observed_at) \
-         VALUES ($1, 'codex', 42000, 31000, 5000, 1800, 47000, 26000, NULL, 120, NOW())",
+         VALUES ($1, 'codex', 11000, 31000, 5000, 1800, 47000, 26000, NULL, 120, NOW())",
     )
     .bind(session_uuid)
     .execute(&h.state.pool)
     .await
     .unwrap();
-
     let state: serde_json::Value = h
         .client
         .get(format!("{}/api/app-state", h.base))
@@ -251,7 +250,10 @@ async fn app_state_includes_agent_usage_health_metrics() {
         .unwrap();
 
     assert_eq!(session["agent_usage"]["total_tokens"], 47_000);
+    assert_eq!(session["agent_usage"]["input_tokens"], 11_000);
     assert_eq!(session["agent_usage"]["cached_input_tokens"], 31_000);
+    assert_eq!(session["agent_usage"]["cache_write_input_tokens"], 0);
+    assert_eq!(session["agent_usage"]["cache_write_1h_input_tokens"], 0);
     assert_eq!(session["agent_usage"]["context_tokens"], 26_000);
     assert_eq!(session["agent_usage"]["model_context_window"], 100_000);
 }
@@ -394,6 +396,14 @@ async fn metrics_endpoint_rolls_up_usage_and_plan_flow() {
     .await
     .unwrap();
     sqlx::query(
+        "INSERT INTO agent_session_metadata (session_uuid, agent, model) \
+         VALUES ($1, 'claude-code', 'claude-opus-5')",
+    )
+    .bind(session_uuid)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+    sqlx::query(
         "INSERT INTO agent_session_usage \
             (session_uuid, agent, input_tokens, cached_input_tokens, output_tokens, \
              reasoning_output_tokens, total_tokens, context_tokens, model_context_window, \
@@ -418,6 +428,18 @@ async fn metrics_endpoint_rolls_up_usage_and_plan_flow() {
     .await
     .unwrap();
 
+    sqlx::query(
+        "INSERT INTO agent_model_usage_daily \
+            (day, session_uuid, agent, model, input_tokens, cached_input_tokens, \
+             output_tokens) \
+         VALUES (CURRENT_DATE - 1, $1, 'claude-code', 'claude-opus-5', 800, 39000, 200), \
+                (CURRENT_DATE, $1, 'claude-code', 'claude-opus-5', 200, 51000, 300)",
+    )
+    .bind(session_uuid)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+
     // A session that never correlated to a PTY: attribution must fall back
     // to the transcript project hash (the tsonu-music case).
     let orphan_session = Uuid::new_v4();
@@ -431,11 +453,39 @@ async fn metrics_endpoint_rolls_up_usage_and_plan_flow() {
     .await
     .unwrap();
     sqlx::query(
+        "INSERT INTO agent_session_metadata (session_uuid, agent, model) \
+         VALUES ($1, 'claude-code', 'claude-opus-5')",
+    )
+    .bind(orphan_session)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+    sqlx::query(
         "INSERT INTO agent_session_usage \
             (session_uuid, agent, input_tokens, cached_input_tokens, output_tokens, \
              reasoning_output_tokens, total_tokens, context_tokens, model_context_window, \
              last_byte_offset, observed_at) \
          VALUES ($1, 'claude-code', 100, 8000, 400, 0, 8500, NULL, NULL, 10, NOW())",
+    )
+    .bind(orphan_session)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO agent_usage_daily \
+            (day, session_uuid, agent, input_tokens, cached_input_tokens, output_tokens, \
+             reasoning_output_tokens, total_tokens) \
+         VALUES (CURRENT_DATE, $1, 'claude-code', 100, 8000, 400, 0, 8500)",
+    )
+    .bind(orphan_session)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO agent_model_usage_daily \
+            (day, session_uuid, agent, model, input_tokens, cached_input_tokens, \
+             output_tokens) \
+         VALUES (CURRENT_DATE, $1, 'claude-code', 'claude-opus-5', 100, 8000, 400)",
     )
     .bind(orphan_session)
     .execute(&h.state.pool)
@@ -531,11 +581,28 @@ async fn metrics_endpoint_rolls_up_usage_and_plan_flow() {
         .await
         .unwrap();
 
-    assert_eq!(metrics["usage"]["all_time"]["total_tokens"], 100_000);
-    assert_eq!(metrics["usage"]["all_time"]["cached_tokens"], 98_000);
-    assert_eq!(metrics["usage"]["all_time"]["fresh_tokens"], 2_000);
-    assert_eq!(metrics["usage"]["today"]["total_tokens"], 60_000);
-    assert_eq!(metrics["usage"]["today"]["fresh_tokens"], 1_000);
+    assert_eq!(metrics["usage"]["all_time"]["input_tokens"], 1_100);
+    assert_eq!(metrics["usage"]["all_time"]["cached_input_tokens"], 98_000);
+    assert_eq!(metrics["usage"]["all_time"]["output_tokens"], 900);
+    assert_eq!(metrics["usage"]["today"]["input_tokens"], 300);
+    assert_eq!(metrics["usage"]["today"]["cached_input_tokens"], 59_000);
+    assert_eq!(metrics["usage"]["today"]["output_tokens"], 700);
+    assert_eq!(
+        metrics["usage"]["today"],
+        metrics["usage"]["daily"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone()
+            .as_object()
+            .map(|row| {
+                let mut usage = row.clone();
+                usage.remove("day");
+                serde_json::Value::Object(usage)
+            })
+            .unwrap()
+    );
     // Both sessions attribute to the repo — the second only via project
     // hash — so no "(unattributed)" bucket appears.
     let repo_usage = metrics["usage"]["per_repo"]
@@ -544,7 +611,7 @@ async fn metrics_endpoint_rolls_up_usage_and_plan_flow() {
         .iter()
         .find(|row| row["repo"] == "metrics-repo")
         .unwrap();
-    assert_eq!(repo_usage["all_time"]["total_tokens"], 100_000);
+    assert_eq!(repo_usage["all_time"]["input_tokens"], 1_100);
     assert!(
         !metrics["usage"]["per_repo"]
             .as_array()
@@ -553,6 +620,14 @@ async fn metrics_endpoint_rolls_up_usage_and_plan_flow() {
             .any(|row| row["repo"] == "(unattributed)"),
         "project-hash fallback should attribute the uncorrelated session",
     );
+    let model_usage = metrics["usage"]["by_model"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["model"] == "claude-opus-5")
+        .unwrap();
+    assert_eq!(model_usage["usage"]["cached_input_tokens"], 98_000);
+    assert_eq!(model_usage["price"]["output_usd_per_million"], 25.0);
 
     // Control-plane metrics still see the probe commit after the repository
     // path becomes unavailable because they read node-materialized state.

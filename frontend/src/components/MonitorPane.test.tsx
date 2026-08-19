@@ -173,6 +173,8 @@ describe("MonitorPane", () => {
           agent_usage: {
             input_tokens: 42_000,
             cached_input_tokens: 31_000,
+            cache_write_input_tokens: 3_000,
+            cache_write_1h_input_tokens: 2_000,
             output_tokens: 5_000,
             reasoning_output_tokens: 1_800,
             total_tokens: 47_000,
@@ -204,8 +206,8 @@ describe("MonitorPane", () => {
     expect(within(alpha).getByText("batcher dedupe pass")).toBeDefined();
     expect(within(beta).getByText("sess-b")).toBeDefined();
     expect(within(alpha).getByText("20%")).toBeDefined();
-    // Fresh tokens (total 47K − 31K cache reads) headline the card.
-    expect(within(alpha).getByText("16K")).toBeDefined();
+    // Input includes ordinary and one-hour cache writes, not cache reads.
+    expect(within(alpha).getByText("47K")).toBeDefined();
     expect(within(alpha).getByText("Implementing the dashboard")).toBeDefined();
 
     const user = userEvent.setup();

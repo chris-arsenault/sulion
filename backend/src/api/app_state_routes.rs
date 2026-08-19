@@ -100,6 +100,8 @@ struct AppAgentSessionMetadataView {
 struct AppAgentUsageView {
     input_tokens: i64,
     cached_input_tokens: i64,
+    cache_write_input_tokens: i64,
+    cache_write_1h_input_tokens: i64,
     output_tokens: i64,
     reasoning_output_tokens: i64,
     total_tokens: i64,
@@ -175,6 +177,8 @@ struct AppSessionRow {
     usage_agent: Option<String>,
     usage_input_tokens: Option<i64>,
     usage_cached_input_tokens: Option<i64>,
+    usage_cache_write_input_tokens: Option<i64>,
+    usage_cache_write_1h_input_tokens: Option<i64>,
     usage_output_tokens: Option<i64>,
     usage_reasoning_output_tokens: Option<i64>,
     usage_total_tokens: Option<i64>,
@@ -246,6 +250,10 @@ impl From<AppSessionRow> for AppSessionView {
             agent_usage: row.usage_agent.map(|_| AppAgentUsageView {
                 input_tokens: row.usage_input_tokens.unwrap_or_default(),
                 cached_input_tokens: row.usage_cached_input_tokens.unwrap_or_default(),
+                cache_write_input_tokens: row.usage_cache_write_input_tokens.unwrap_or_default(),
+                cache_write_1h_input_tokens: row
+                    .usage_cache_write_1h_input_tokens
+                    .unwrap_or_default(),
                 output_tokens: row.usage_output_tokens.unwrap_or_default(),
                 reasoning_output_tokens: row.usage_reasoning_output_tokens.unwrap_or_default(),
                 total_tokens: row.usage_total_tokens.unwrap_or_default(),
@@ -424,6 +432,8 @@ async fn load_sessions(pool: &crate::db::Pool) -> ApiResult<Vec<AppSessionView>>
                 asm.updated_at AS metadata_updated_at, \
                 aus.agent AS usage_agent, aus.input_tokens AS usage_input_tokens, \
                 aus.cached_input_tokens AS usage_cached_input_tokens, \
+                aus.cache_write_input_tokens AS usage_cache_write_input_tokens, \
+                aus.cache_write_1h_input_tokens AS usage_cache_write_1h_input_tokens, \
                 aus.output_tokens AS usage_output_tokens, \
                 aus.reasoning_output_tokens AS usage_reasoning_output_tokens, \
                 aus.total_tokens AS usage_total_tokens, \
