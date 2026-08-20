@@ -63,6 +63,10 @@ const MAX_INSPECTOR_FRACTION = 0.78;
 
 interface CachedTurnDetail {
   fingerprint: string;
+  /** Resource revision at fetch time. While the subagent modal is open the
+   * detail refetches on every revision tick, because subagent (sidechain)
+   * events don't move the parent turn's summary fingerprint. */
+  revision: number;
   turn: Turn;
 }
 
@@ -92,7 +96,10 @@ export function TimelinePane({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const virtuoso = useRef<VirtuosoHandle | null>(null);
-  const [subagent, setSubagent] = useState<TimelineSubagent | null>(null);
+  // Pair ids from the selected turn down through nested Task pairs. The
+  // subagent shown in the modal is re-derived from the (live) detail cache
+  // on every render, so it updates as the subagent emits events.
+  const [subagentPath, setSubagentPath] = useState<string[]>([]);
   const [selectedTurnKey, setSelectedTurnKey] = useState<string | null>(null);
   const appliedFocusKeyRef = useRef<string | null>(null);
   const loadedSummaryKeyRef = useRef<string | null>(null);
@@ -159,7 +166,7 @@ export function TimelinePane({
     setLoadError(null);
     setDetailError(null);
     setDetailCache(new Map());
-    setSubagent(null);
+    setSubagentPath([]);
     setSelectedTurnKey(null);
     appliedFocusKeyRef.current = null;
     loadedSummaryKeyRef.current = null;
@@ -243,10 +250,15 @@ export function TimelinePane({
   const detailPending =
     selectedSummary != null && selectedTurn == null && !detailError;
 
+  const subagentOpen = subagentPath.length > 0;
   useEffect(() => {
     if (!active || !selectedSummary || !selectedTurnKey) return;
     if (selectedFingerprint == null) return;
-    if (detailCache.get(selectedTurnKey)?.fingerprint === selectedFingerprint) return;
+    const cached = detailCache.get(selectedTurnKey);
+    const cacheFresh =
+      cached?.fingerprint === selectedFingerprint &&
+      (!subagentOpen || cached.revision === resourceRevision);
+    if (cacheFresh) return;
     if (!sessionId && (!repo || !selectedSummary.session_uuid)) return;
 
     let cancelled = false;
@@ -262,12 +274,17 @@ export function TimelinePane({
             );
         if (cancelled) return;
         setDetailCache((prev) => {
-          if (prev.get(selectedTurnKey)?.fingerprint === selectedFingerprint) {
+          const entry = prev.get(selectedTurnKey);
+          if (
+            entry?.fingerprint === selectedFingerprint &&
+            entry.revision === resourceRevision
+          ) {
             return prev;
           }
           const next = new Map(prev);
           next.set(selectedTurnKey, {
             fingerprint: selectedFingerprint,
+            revision: resourceRevision,
             turn: resp.turn,
           });
           return next;
@@ -289,16 +306,45 @@ export function TimelinePane({
     active,
     query,
     repo,
+    resourceRevision,
     selectedFingerprint,
     selectedSummary,
     selectedTurnKey,
     sessionId,
+    subagentOpen,
   ]);
 
+  // Resolve the open subagent by walking pair ids from the selected turn
+  // through nested Task pairs. Derived (not stored) so a detail refetch
+  // refreshes the modal in place.
+  const subagent = useMemo<TimelineSubagent | null>(() => {
+    if (!selectedTurn || subagentPath.length === 0) return null;
+    let pairs = selectedTurn.tool_pairs;
+    let current: TimelineSubagent | null = null;
+    for (const pairId of subagentPath) {
+      current = pairs.find((pair) => pair.id === pairId)?.subagent ?? null;
+      if (!current) return null;
+      pairs = current.turns.flatMap((turn) => turn.tool_pairs);
+    }
+    return current;
+  }, [selectedTurn, subagentPath]);
+
   const handleSubagent = useCallback((pair: ToolPair) => {
-    if (pair.subagent) setSubagent(pair.subagent);
+    if (pair.subagent) setSubagentPath((prev) => [...prev, pair.id]);
   }, []);
-  const closeSubagent = useCallback(() => setSubagent(null), []);
+  const closeSubagent = useCallback(() => setSubagentPath([]), []);
+  const backSubagent = useCallback(
+    () => setSubagentPath((prev) => prev.slice(0, -1)),
+    [],
+  );
+
+  // The path can stop resolving when a filter change or refetch drops the
+  // pair it pointed at; drop it rather than let later opens append to it.
+  useEffect(() => {
+    if (subagentPath.length > 0 && selectedTurn && !subagent) {
+      setSubagentPath([]);
+    }
+  }, [subagent, selectedTurn, subagentPath.length]);
 
   // A manual click in the turn list is the user overriding whatever
   // focus the tab was opened with. Strip the focus fields from the
@@ -311,6 +357,7 @@ export function TimelinePane({
   const handleTurnSelect = useCallback(
     (key: string) => {
       setSelectedTurnKey(key);
+      setSubagentPath([]);
       if (tabId) clearTimelineFocus(tabId);
       if (filters.followLatest) setFollowLatest(false);
     },
@@ -544,6 +591,8 @@ export function TimelinePane({
           subagent={subagent}
           showThinking={filters.showThinking}
           onClose={closeSubagent}
+          onOpenSubagent={handleSubagent}
+          onBack={subagentPath.length > 1 ? backSubagent : undefined}
         />
       )}
     </div>

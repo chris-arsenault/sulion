@@ -8,11 +8,18 @@ use uuid::Uuid;
 use crate::ingest::canonical::{Block, OperationCategory};
 
 pub(crate) const BOOKKEEPING_KINDS: &[&str] = &[
-    "file-history-snapshot",
-    "permission-mode",
-    "last-prompt",
-    "queue-operation",
+    "agent-name",
+    "ai-title",
     "attachment",
+    "bridge-session",
+    "custom-title",
+    "file-history-delta",
+    "file-history-snapshot",
+    "frame-link",
+    "last-prompt",
+    "mode",
+    "permission-mode",
+    "queue-operation",
 ];
 
 #[derive(Debug, Clone)]
@@ -98,6 +105,8 @@ pub struct TimelineTurnSummary {
     pub operation_badges: Vec<TimelineOperationBadge>,
     pub thinking_count: usize,
     pub has_errors: bool,
+    #[serde(default)]
+    pub is_sidechain: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pty_session_id: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -116,6 +125,13 @@ pub struct TimelineOperationBadge {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operation_type: Option<String>,
     pub count: usize,
+    /// Operations in this badge whose result has not arrived yet.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pending_count: usize,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,6 +156,8 @@ pub struct TimelineTurn {
     pub tool_pairs: Vec<TimelineToolPair>,
     pub thinking_count: usize,
     pub has_errors: bool,
+    #[serde(default)]
+    pub is_sidechain: bool,
     pub markdown: String,
     pub chunks: Vec<TimelineChunk>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

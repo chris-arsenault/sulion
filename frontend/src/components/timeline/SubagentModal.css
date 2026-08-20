@@ -22,3 +22,22 @@
 .sm__turn + .sm__turn {
   margin-top: 4px;
 }
+
+.sm__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+  padding: 2px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-1);
+  background: var(--canvas-2);
+  color: var(--text-mid);
+  font-size: var(--t-ui);
+  cursor: pointer;
+}
+
+.sm__back:hover {
+  color: var(--text-hi);
+  border-color: color-mix(in oklab, var(--text-mid) 35%, transparent);
+}

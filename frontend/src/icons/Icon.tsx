@@ -2,6 +2,7 @@ import type { ComponentType, SVGProps } from "react";
 import {
   Activity,
   AlertTriangle,
+  ArrowLeft,
   Check,
   ChevronDown,
   ChevronRight,
@@ -57,6 +58,7 @@ const REGISTRY = {
   // Lucide — generic verbs/nouns
   activity: Activity,
   "alert-triangle": AlertTriangle,
+  "arrow-left": ArrowLeft,
   check: Check,
   "chevron-down": ChevronDown,
   "chevron-right": ChevronRight,

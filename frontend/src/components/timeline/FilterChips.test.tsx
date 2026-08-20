@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { FilterChips } from "./FilterChips";
@@ -67,6 +67,24 @@ describe("FilterChips — exclusion UI", () => {
     const input = screen.getByPlaceholderText(/path/i);
     await user.type(input, "foo");
     expect((input as HTMLInputElement).value).toBe("foo");
+  });
+
+  it("file-path publishes to the filter only after the debounce pause", async () => {
+    const user = userEvent.setup();
+    render(<Host />);
+    const input = screen.getByPlaceholderText(/path/i);
+    await user.type(input, "src/lib");
+    // Immediately after typing, the persisted filter is still empty.
+    const before = JSON.parse(
+      window.localStorage.getItem("sulion.timeline.filters.v3") ?? "{}",
+    );
+    expect(before.filePath ?? "").toBe("");
+    await waitFor(() => {
+      const after = JSON.parse(
+        window.localStorage.getItem("sulion.timeline.filters.v3") ?? "{}",
+      );
+      expect(after.filePath).toBe("src/lib");
+    });
   });
 
   it("errors-only is an include chip (dim default, bright when active)", async () => {

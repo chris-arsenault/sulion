@@ -23,7 +23,7 @@ pub fn project_timeline(
         .filter(|event| filters.show_sidechain || !event.is_sidechain)
         .collect();
 
-    let turns = project_turns(&filtered_events, events, filters, true)
+    let turns = project_turns(&filtered_events, events, filters, SUBAGENT_LINK_DEPTH)
         .into_iter()
         .filter(|turn| turn_matches_filters(turn, filters))
         .collect();
@@ -36,15 +36,20 @@ pub fn project_timeline(
     }
 }
 
+/// How many levels of Task pairs get an embedded subagent projection.
+/// 2 = top-level turns link their subagents, and those subagent turns link
+/// their own nested Tasks; deeper nesting renders as plain tool pairs.
+pub(crate) const SUBAGENT_LINK_DEPTH: u8 = 2;
+
 fn project_turns(
     events: &[&StoredEvent],
     all_events: &[StoredEvent],
     filters: &ProjectionFilters,
-    include_subagent_links: bool,
+    subagent_link_depth: u8,
 ) -> Vec<TimelineTurn> {
     group_into_turns(events)
         .into_iter()
-        .map(|turn| project_turn(turn, all_events, filters, include_subagent_links))
+        .map(|turn| project_turn(turn, all_events, filters, subagent_link_depth))
         .collect()
 }
 
@@ -98,7 +103,7 @@ pub(crate) fn project_turn(
     turn: TurnSeed<'_>,
     all_events: &[StoredEvent],
     filters: &ProjectionFilters,
-    include_subagent_links: bool,
+    subagent_link_depth: u8,
 ) -> TimelineTurn {
     let mut tool_pairs = Vec::new();
     let mut results: HashMap<String, (ToolResultView, &StoredEvent)> = HashMap::new();
@@ -160,9 +165,14 @@ pub(crate) fn project_turn(
             subagent: None,
         };
 
-        if include_subagent_links && pair_operation_type(&pair) == "task" && !pair.id.is_empty() {
-            pair.subagent =
-                project_subagent(all_events, &pair, event.event_uuid.as_deref()).map(Box::new);
+        if subagent_link_depth > 0 && pair_operation_type(&pair) == "task" && !pair.id.is_empty() {
+            pair.subagent = project_subagent(
+                all_events,
+                &pair,
+                event.event_uuid.as_deref(),
+                subagent_link_depth - 1,
+            )
+            .map(Box::new);
         }
 
         tool_pairs.push(pair);
@@ -174,6 +184,11 @@ pub(crate) fn project_turn(
         .collect();
     let markdown = format_turn_markdown(turn.user_prompt, &turn.events, &pair_by_id);
     let chunks = build_chunks(turn.user_prompt, &turn.events, &pair_by_id, filters);
+    let is_sidechain = turn
+        .user_prompt
+        .map(|event| event.is_sidechain)
+        .or_else(|| turn.events.first().copied().map(|event| event.is_sidechain))
+        .unwrap_or(false);
 
     TimelineTurn {
         id: turn.id,
@@ -188,6 +203,7 @@ pub(crate) fn project_turn(
         tool_pairs,
         thinking_count,
         has_errors,
+        is_sidechain,
         markdown,
         chunks,
         pty_session_id: None,
@@ -324,13 +340,19 @@ fn project_subagent(
     all_events: &[StoredEvent],
     pair: &TimelineToolPair,
     seed_uuid: Option<&str>,
+    link_depth: u8,
 ) -> Option<TimelineSubagent> {
     let selected = collect_subagent_events(all_events, &pair.id, seed_uuid);
     if selected.is_empty() {
         return None;
     }
 
-    let turns = project_turns(&selected, all_events, &ProjectionFilters::default(), false);
+    let turns = project_turns(
+        &selected,
+        all_events,
+        &ProjectionFilters::default(),
+        link_depth,
+    );
     Some(TimelineSubagent {
         title: subagent_title(pair),
         event_count: selected.len(),

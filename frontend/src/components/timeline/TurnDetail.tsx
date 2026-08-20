@@ -227,6 +227,13 @@ export function TurnDetail({
           </div>
         </div>
         <div className="td__header-meta">
+          {turn.is_sidechain && (
+            <Tooltip label="Subagent (sidechain) turn">
+              <span className="td__session-chip td__session-chip--sidechain">
+                <Icon name="parent-session" size={12} /> subagent
+              </span>
+            </Tooltip>
+          )}
           {sessionBadge && (
             <Tooltip label={sessionBadge.title}>
               <span className="td__session-chip">{sessionBadge.label}</span>

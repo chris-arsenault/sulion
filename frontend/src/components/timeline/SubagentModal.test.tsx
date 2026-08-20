@@ -57,6 +57,59 @@ describe("SubagentModal", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("shows a back button only when nested, and it fires onBack", async () => {
+    const onBack = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <SubagentModal
+        subagent={makeSubagent()}
+        showThinking={true}
+        onClose={noop}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /parent agent/i })).toBeNull();
+    rerender(
+      <SubagentModal
+        subagent={makeSubagent()}
+        showThinking={true}
+        onClose={noop}
+        onBack={onBack}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /parent agent/i }));
+    expect(onBack).toHaveBeenCalled();
+  });
+
+  it("nested task pairs expose their own agent log link", () => {
+    const nested = makeSubagent({ title: "inner agent" });
+    render(
+      <SubagentModal
+        subagent={makeSubagent({
+          turns: [
+            makeTurn({
+              tool_pairs: [
+                {
+                  id: "task-2",
+                  name: "Task",
+                  operation_type: "task",
+                  is_error: false,
+                  is_pending: false,
+                  file_touches: [],
+                  subagent: nested,
+                },
+              ],
+              chunks: [{ kind: "tool", pair_id: "task-2" }],
+            }),
+          ],
+        })}
+        showThinking={true}
+        onClose={noop}
+        onOpenSubagent={noop}
+      />,
+    );
+    expect(screen.getByText(/view agent log/i)).toBeDefined();
+  });
+
   it("renders projected turns", () => {
     render(
       <SubagentModal

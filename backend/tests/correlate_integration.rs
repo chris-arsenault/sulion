@@ -409,6 +409,7 @@ async fn codex_launcher_correlates_session_uuid_from_open_rollout_file() {
             pty_id,
             sessions_dir: sessions_dir.clone(),
             correlate_sock: sock.clone(),
+            agent: "codex".to_string(),
             args: vec![rollout_path.into_os_string()],
         }),
     )
@@ -489,6 +490,7 @@ async fn codex_launcher_ignores_nested_child_rollout_files() {
             pty_id,
             sessions_dir,
             correlate_sock: sock.clone(),
+            agent: "codex".to_string(),
             args: vec![
                 child_rollout.into_os_string(),
                 root_rollout.into_os_string(),
@@ -554,6 +556,7 @@ async fn codex_launcher_exits_when_correlation_ack_never_arrives() {
             pty_id: Uuid::new_v4(),
             sessions_dir,
             correlate_sock: sock.clone(),
+            agent: "codex".to_string(),
             args: vec![rollout_path.into_os_string()],
         }),
     )

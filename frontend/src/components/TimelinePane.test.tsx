@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("react-virtuoso", () => ({
@@ -169,6 +169,93 @@ describe("TimelinePane", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /hello/ }));
     await waitFor(() => expect(screen.getByText("hi there")).toBeDefined());
+  });
+
+  it("opens the subagent modal, drills into a nested subagent, and returns", async () => {
+    const nested = {
+      title: "inner agent",
+      event_count: 1,
+      turns: [
+        {
+          ...timelinePayload().turns[0],
+          id: 3,
+          preview: "inner prompt",
+          user_prompt_text: "inner prompt",
+          tool_pairs: [],
+          chunks: [],
+          turn_key: `${transcriptSessionUuid}:3`,
+        },
+      ],
+    };
+    const outer = {
+      title: "outer agent",
+      event_count: 2,
+      turns: [
+        {
+          ...timelinePayload().turns[0],
+          id: 2,
+          preview: "outer prompt",
+          user_prompt_text: "outer prompt",
+          tool_pairs: [
+            {
+              id: "task-2",
+              name: "Task",
+              operation_type: "task",
+              is_error: false,
+              is_pending: false,
+              file_touches: [],
+              subagent: nested,
+            },
+          ],
+          chunks: [{ kind: "tool", pair_id: "task-2" }],
+          turn_key: `${transcriptSessionUuid}:2`,
+        },
+      ],
+    };
+    const turn = {
+      ...timelinePayload().turns[0],
+      operation_count: 1,
+      tool_pairs: [
+        {
+          id: "task-1",
+          name: "Task",
+          operation_type: "task",
+          is_error: false,
+          is_pending: false,
+          file_touches: [],
+          subagent: outer,
+        },
+      ],
+      chunks: [{ kind: "tool", pair_id: "task-1" }],
+    };
+    const payload = timelinePayload({ turns: [turn] });
+    stubFetch((url) =>
+      new Response(
+        url.includes("/timeline/turns/") ? timelineDetailBody(turn) : JSON.stringify(payload),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    render(<TimelinePane sessionId="abc" />);
+    const user = userEvent.setup();
+    await waitFor(() => expect(screen.getByText(/hello/)).toBeDefined());
+    await user.click(screen.getByRole("button", { name: /hello/ }));
+
+    // Open the top-level agent log from the inspector's Task pair.
+    await waitFor(() => expect(screen.getByText(/view agent log/i)).toBeDefined());
+    await user.click(screen.getByText(/view agent log/i));
+    await waitFor(() => expect(screen.getByText("outer agent")).toBeDefined());
+    expect(screen.queryByRole("button", { name: /parent agent/i })).toBeNull();
+
+    // Drill into the nested Task's agent log; back returns to the parent.
+    const modal = screen.getByTestId("subagent-modal");
+    await user.click(within(modal).getByText(/view agent log/i));
+    await waitFor(() => expect(screen.getByText("inner agent")).toBeDefined());
+    await user.click(screen.getByRole("button", { name: /parent agent/i }));
+    await waitFor(() => expect(screen.getByText("outer agent")).toBeDefined());
   });
 
   it("shows empty-state copy when the API returns no correlated session", async () => {

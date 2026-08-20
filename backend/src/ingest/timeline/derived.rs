@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::ingest::canonical::OperationCategory;
 
 use super::file_touches::{extract_file_touches, FileTouchContext};
-use super::project::{group_into_turns, project_turn};
+use super::project::{group_into_turns, project_turn, SUBAGENT_LINK_DEPTH};
 use super::{ProjectionFilters, StoredEvent, TimelineChunk, TimelineTurn};
 
 #[derive(Debug, Clone)]
@@ -63,12 +63,13 @@ pub fn build_session_projection(
         .into_iter()
         .enumerate()
         .map(|(turn_ord, seed)| {
-            let is_sidechain_turn = seed
-                .user_prompt
-                .map(|event| event.is_sidechain)
-                .or_else(|| seed.events.first().copied().map(|event| event.is_sidechain))
-                .unwrap_or(false);
-            let mut turn = project_turn(seed, events, &ProjectionFilters::default(), true);
+            let mut turn = project_turn(
+                seed,
+                events,
+                &ProjectionFilters::default(),
+                SUBAGENT_LINK_DEPTH,
+            );
+            let is_sidechain_turn = turn.is_sidechain;
             let operations = build_operation_projections(&turn, file_context);
             apply_operation_file_touches(&mut turn, &operations);
             let file_touches = build_file_touch_projections(&operations);

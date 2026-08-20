@@ -191,6 +191,30 @@ fn hidden_categories_merge_assistant_chunks() {
     }
 }
 
+/// Newer Claude Code builds write bookkeeping record kinds (`mode`,
+/// `ai-title`, `file-history-delta`, …) that must not surface as generic
+/// timeline rows when bookkeeping is hidden.
+#[test]
+fn newer_bookkeeping_kinds_stay_hidden_by_default() {
+    let events = vec![
+        event(1, "user", vec![text(0, "prompt")]),
+        event(2, "mode", vec![]),
+        event(3, "ai-title", vec![]),
+        event(4, "file-history-delta", vec![]),
+        event(5, "assistant", vec![text(0, "reply")]),
+    ];
+
+    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
+    let turn = &projected.turns[0];
+    assert!(
+        turn.chunks
+            .iter()
+            .all(|chunk| !matches!(chunk, TimelineChunk::Generic { .. })),
+        "bookkeeping kinds leaked into chunks: {:?}",
+        turn.chunks,
+    );
+}
+
 #[test]
 fn task_pairs_capture_subagent_turns() {
     let mut root = event(
@@ -221,6 +245,81 @@ fn task_pairs_capture_subagent_turns() {
     assert_eq!(subagent.event_count, 2);
     assert_eq!(subagent.turns.len(), 1);
     assert_eq!(subagent.turns[0].preview, "sub prompt");
+    assert!(subagent.turns[0].is_sidechain);
+}
+
+#[test]
+fn subagent_turns_link_their_own_nested_tasks_one_level_deep() {
+    let mut root = event(
+        1,
+        "assistant",
+        vec![tool_use(
+            0,
+            "task-1",
+            "task",
+            OperationCategory::Delegate,
+            json!({"description": "outer"}),
+        )],
+    );
+    root.event_uuid = Some("asst-1".to_string());
+
+    let mut sub_prompt = event(2, "user", vec![text(0, "sub prompt")]);
+    sub_prompt.is_sidechain = true;
+    sub_prompt.parent_event_uuid = Some("asst-1".to_string());
+
+    let mut sub_task = event(
+        3,
+        "assistant",
+        vec![tool_use(
+            0,
+            "task-2",
+            "task",
+            OperationCategory::Delegate,
+            json!({"description": "inner"}),
+        )],
+    );
+    sub_task.is_sidechain = true;
+    sub_task.parent_event_uuid = Some("evt-2".to_string());
+    sub_task.event_uuid = Some("asst-2".to_string());
+
+    let mut inner_prompt = event(4, "user", vec![text(0, "inner prompt")]);
+    inner_prompt.is_sidechain = true;
+    inner_prompt.parent_event_uuid = Some("asst-2".to_string());
+
+    let events = vec![root, sub_prompt, sub_task, inner_prompt];
+    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
+    let outer = projected.turns[0].tool_pairs[0]
+        .subagent
+        .as_ref()
+        .expect("outer subagent projected");
+    let inner_pair = outer
+        .turns
+        .iter()
+        .flat_map(|turn| turn.tool_pairs.iter())
+        .find(|pair| pair.id == "task-2")
+        .expect("nested task pair present");
+    let inner = inner_pair
+        .subagent
+        .as_ref()
+        .expect("nested subagent linked one level deep");
+    assert!(
+        inner
+            .turns
+            .iter()
+            .any(|turn| turn.preview == "inner prompt"),
+        "inner prompt turn projected: {:?}",
+        inner
+            .turns
+            .iter()
+            .map(|turn| &turn.preview)
+            .collect::<Vec<_>>(),
+    );
+    // Depth stops there: the nested subagent's own pairs never link further.
+    assert!(inner
+        .turns
+        .iter()
+        .flat_map(|turn| turn.tool_pairs.iter())
+        .all(|pair| pair.subagent.is_none()));
 }
 
 /// The preview truncates at a character count, not a byte index. Slicing bytes

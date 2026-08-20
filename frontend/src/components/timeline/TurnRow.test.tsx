@@ -59,6 +59,35 @@ describe("TurnRow", () => {
     expect(screen.getByText("bash")).toBeDefined();
   });
 
+  it("marks badges with running operations and shows the running count", () => {
+    render(
+      <TurnRow
+        turn={makeSummary({
+          operation_badges: [
+            { name: "task", operation_type: "task", count: 2, pending_count: 1 },
+          ],
+        })}
+        selected={false}
+        showThinking={true}
+        onSelect={noop}
+      />,
+    );
+    const badge = screen.getByText("task×2…");
+    expect(badge.className).toContain("tr__badge--pending");
+  });
+
+  it("marks sidechain turns with a subagent chip", () => {
+    render(
+      <TurnRow
+        turn={makeSummary({ is_sidechain: true })}
+        selected={false}
+        showThinking={true}
+        onSelect={noop}
+      />,
+    );
+    expect(screen.getByText("subagent")).toBeDefined();
+  });
+
   it("shows thinking and error badges from projected metrics", () => {
     render(
       <TurnRow

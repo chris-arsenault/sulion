@@ -476,6 +476,8 @@ export interface TimelineOperationBadge {
   name: string;
   operation_type?: string | null;
   count: number;
+  /** Operations in this badge whose result has not arrived yet. */
+  pending_count?: number;
 }
 
 export interface TimelineToolResult {
@@ -547,6 +549,7 @@ export interface TimelineTurn {
   tool_pairs: TimelineToolPair[];
   thinking_count: number;
   has_errors: boolean;
+  is_sidechain?: boolean;
   markdown: string;
   chunks: TimelineChunk[];
   pty_session_id?: string | null;
@@ -568,6 +571,7 @@ export interface TimelineTurnSummary {
   operation_badges: TimelineOperationBadge[];
   thinking_count: number;
   has_errors: boolean;
+  is_sidechain?: boolean;
   pty_session_id?: string | null;
   session_uuid?: string | null;
   session_agent?: string | null;

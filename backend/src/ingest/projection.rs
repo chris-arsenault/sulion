@@ -55,6 +55,7 @@ struct ProjectedTurnSummaryRow {
     operation_count: i32,
     thinking_count: i32,
     has_errors: bool,
+    is_sidechain_turn: bool,
 }
 
 #[derive(FromRow)]
@@ -81,6 +82,7 @@ struct ProjectedOperationBadgeRow {
     name: String,
     operation_type: Option<String>,
     count: i64,
+    pending_count: i64,
 }
 
 #[derive(FromRow)]
@@ -478,7 +480,7 @@ async fn load_projected_turn_summary_rows(
         .unwrap_or_default();
     sqlx::query_as(
         "SELECT turn_id, preview, start_timestamp, end_timestamp, duration_ms, \
-                event_count, operation_count, thinking_count, has_errors \
+                event_count, operation_count, thinking_count, has_errors, is_sidechain_turn \
            FROM timeline_turns \
           WHERE session_uuid = $1 \
             AND ($2 OR turn_id = ANY($3)) \
@@ -546,19 +548,28 @@ async fn load_projected_operation_badge_rows(
     pool: &Pool,
     session_uuid: Uuid,
     turn_ids: &[i64],
+    hidden_operation_categories: &HashSet<OperationCategory>,
 ) -> anyhow::Result<Vec<ProjectedOperationBadgeRow>> {
     if turn_ids.is_empty() {
         return Ok(Vec::new());
     }
+    let hidden = hidden_operation_categories
+        .iter()
+        .map(|category| category.as_str().to_string())
+        .collect::<Vec<_>>();
     sqlx::query_as(
-        "SELECT turn_id, COALESCE(operation_type, name) AS name, operation_type, COUNT(*)::BIGINT AS count \
+        "SELECT turn_id, COALESCE(operation_type, name) AS name, operation_type, \
+                COUNT(*)::BIGINT AS count, \
+                COUNT(*) FILTER (WHERE is_pending)::BIGINT AS pending_count \
            FROM timeline_operations \
           WHERE session_uuid = $1 AND turn_id = ANY($2) \
+            AND (operation_category IS NULL OR operation_category != ALL($3)) \
           GROUP BY turn_id, COALESCE(operation_type, name), operation_type \
           ORDER BY turn_id ASC, count DESC, name ASC",
     )
     .bind(session_uuid)
     .bind(turn_ids)
+    .bind(&hidden)
     .fetch_all(pool)
     .await
     .context("load projected timeline operation badges")
@@ -626,6 +637,7 @@ fn build_operation_badges_by_turn(
                 name: row.name,
                 operation_type: row.operation_type,
                 count: row.count.max(0) as usize,
+                pending_count: row.pending_count.max(0) as usize,
             });
     }
     badges_by_turn
@@ -703,6 +715,7 @@ fn build_projected_turn_summary(
         operation_badges: badges_by_turn.remove(&turn_id).unwrap_or_default(),
         thinking_count: row.thinking_count.max(0) as usize,
         has_errors: row.has_errors,
+        is_sidechain: row.is_sidechain_turn,
         pty_session_id: None,
         session_uuid: None,
         session_agent: None,
@@ -729,6 +742,7 @@ fn build_projected_turn(
         tool_pairs: operations_by_turn.remove(&turn_id).unwrap_or_default(),
         thinking_count: row.thinking_count.max(0) as usize,
         has_errors: row.has_errors,
+        is_sidechain: row.is_sidechain_turn,
         markdown: row.markdown,
         chunks: serde_json::from_value(row.chunks_json)
             .with_context(|| format!("deserialize projected timeline chunks for turn {turn_id}"))?,
@@ -763,7 +777,13 @@ pub async fn load_timeline_summary_response(
         load_projected_turn_summary_rows(pool, session_uuid, referenced_turn_ids.as_ref(), filters)
             .await?;
     let turn_ids = rows.iter().map(|row| row.turn_id).collect::<Vec<_>>();
-    let badge_rows = load_projected_operation_badge_rows(pool, session_uuid, &turn_ids).await?;
+    let badge_rows = load_projected_operation_badge_rows(
+        pool,
+        session_uuid,
+        &turn_ids,
+        &filters.hidden_operation_categories,
+    )
+    .await?;
     let mut badges_by_turn = build_operation_badges_by_turn(badge_rows);
 
     let turns = rows

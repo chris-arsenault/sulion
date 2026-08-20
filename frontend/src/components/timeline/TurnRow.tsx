@@ -44,6 +44,18 @@ export function TurnRow({ turn, selected, showThinking, onSelect }: Props) {
             {formatDuration(turn.duration_ms)}
           </span>
         )}
+        {turn.is_sidechain && (
+          <>
+            <span className="tr__dot" aria-hidden>
+              ·
+            </span>
+            <Tooltip label="Subagent (sidechain) turn">
+              <span className="tr__badge tr__badge--sidechain">
+                <Icon name="parent-session" size={12} /> subagent
+              </span>
+            </Tooltip>
+          </>
+        )}
         {sessionBadge && (
           <>
             <span className="tr__dot" aria-hidden>
@@ -64,7 +76,11 @@ export function TurnRow({ turn, selected, showThinking, onSelect }: Props) {
         <span className="tr__badges">
           {badges.map((badge) => (
             <Tooltip key={badge.label} label={badge.title}>
-              <span className={`tr__badge tr__badge--${badge.variant}`}>
+              <span
+                className={`tr__badge tr__badge--${badge.variant}${
+                  badge.pending ? " tr__badge--pending" : ""
+                }`}
+              >
                 {badge.label}
               </span>
             </Tooltip>
@@ -94,6 +110,7 @@ interface Badge {
   label: string;
   variant: string;
   title: string;
+  pending: boolean;
 }
 
 function toolBadges(
@@ -102,10 +119,16 @@ function toolBadges(
   return badges.map((badge) => {
     const name = badge.operation_type ?? badge.name;
     const count = badge.count;
+    const pending = badge.pending_count ?? 0;
+    const base = count === 1 ? name : `${name}×${count}`;
+    const title = `${count} ${name} call${count === 1 ? "" : "s"}${
+      pending > 0 ? ` (${pending} running)` : ""
+    }`;
     return {
-      label: count === 1 ? name : `${name}×${count}`,
+      label: pending > 0 ? `${base}…` : base,
       variant: name.toLowerCase(),
-      title: `${count} ${name} call${count === 1 ? "" : "s"}`,
+      title,
+      pending: pending > 0,
     };
   });
 }

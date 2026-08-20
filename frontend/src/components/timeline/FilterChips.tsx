@@ -5,7 +5,7 @@
 // The left-bar "errors only" and the file-path textbox are include-only
 // filters (they're labeled as such and behave intuitively).
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   KNOWN_OPERATION_CATEGORIES,
@@ -83,9 +83,28 @@ export function FilterChips({
     () => setFollowLatest(!filters.followLatest),
     [filters.followLatest, setFollowLatest],
   );
+  // The file-path filter is served by the backend, so a fetch fires on
+  // every value change. Type locally, publish after a quiet pause.
+  const [filePathDraft, setFilePathDraft] = useState(filters.filePath);
+  const filePathRef = useRef(filters.filePath);
+  useEffect(() => {
+    // External change (reset button, another tab) wins over a stale draft.
+    if (filters.filePath !== filePathRef.current) {
+      filePathRef.current = filters.filePath;
+      setFilePathDraft(filters.filePath);
+    }
+  }, [filters.filePath]);
+  useEffect(() => {
+    if (filePathDraft === filePathRef.current) return;
+    const timer = setTimeout(() => {
+      filePathRef.current = filePathDraft;
+      setFilePath(filePathDraft);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [filePathDraft, setFilePath]);
   const onFilePathChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => setFilePath(e.target.value),
-    [setFilePath],
+    (e: React.ChangeEvent<HTMLInputElement>) => setFilePathDraft(e.target.value),
+    [],
   );
 
   return (
@@ -160,7 +179,7 @@ export function FilterChips({
           type="text"
           className="fc__input"
           placeholder="show only turns touching this path…"
-          value={filters.filePath}
+          value={filePathDraft}
           onChange={onFilePathChange}
           aria-label="Filter to turns referencing file path"
         />

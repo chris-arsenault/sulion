@@ -82,6 +82,13 @@
   letter-spacing: 0.03em;
 }
 
+.td__session-chip--sidechain {
+  gap: 3px;
+  background: var(--atn-bg);
+  color: var(--atn-fg);
+  border-color: color-mix(in oklab, var(--atn-mark) 25%, transparent);
+}
+
 .td__save-error {
   margin-top: 8px;
   color: var(--crit-fg);

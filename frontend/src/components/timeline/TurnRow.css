@@ -159,3 +159,17 @@
   color: var(--cat-research);
   border-color: color-mix(in oklab, var(--cat-research) 30%, transparent);
 }
+
+.tr__badge--sidechain {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--atn-bg);
+  color: var(--atn-fg);
+  border-color: color-mix(in oklab, var(--atn-mark) 25%, transparent);
+}
+
+/* An operation in this badge is still awaiting its result. */
+.tr__badge--pending {
+  border-style: dashed;
+}
