@@ -680,7 +680,7 @@ pub(super) async fn drop_session_ws(
 
 pub(super) fn parse_launch_agent(raw: &str) -> ApiResult<AgentType> {
     AgentType::parse(raw.trim())
-        .map_err(|_| ApiError::BadRequest("agent must be one of: claude, codex".to_string()))
+        .map_err(|_| ApiError::BadRequest("agent must be one of: claude, codex, fugu".to_string()))
 }
 
 const AGENT_PROMPT_SUBMIT_DELAY_MS: u64 = 50;

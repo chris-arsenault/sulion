@@ -319,6 +319,7 @@ RUN ln -s /run/sulion/bin/sulion /usr/local/bin/sulion
 COPY bin/sulion-agent /opt/sulion/bin/sulion-agent
 COPY bin/cl /opt/sulion/bin/cl
 COPY bin/co /opt/sulion/bin/co
+COPY bin/fugu /opt/sulion/bin/fugu
 COPY bin/docker /opt/sulion/bin/docker
 COPY bin/docker-compose /opt/sulion/bin/docker-compose
 COPY bin/aws /opt/sulion/bin/aws
@@ -329,7 +330,7 @@ COPY docs/toolset.md /opt/sulion/docs/toolset.md
 COPY hooks/session-start.sh /opt/sulion/hooks/session-start.sh
 COPY hooks/activity-hook.sh /opt/sulion/hooks/activity-hook.sh
 COPY entrypoint.sh /opt/sulion/entrypoint.sh
-RUN chmod +x /opt/sulion/bin/sulion-agent /opt/sulion/bin/cl /opt/sulion/bin/co /opt/sulion/bin/docker /opt/sulion/bin/docker-compose /opt/sulion/bin/aws /opt/sulion/bin/with-cred /opt/sulion/bin/sulion-retrieve /opt/sulion/bin/sulion-code /opt/sulion/hooks/session-start.sh /opt/sulion/hooks/activity-hook.sh /opt/sulion/entrypoint.sh
+RUN chmod +x /opt/sulion/bin/sulion-agent /opt/sulion/bin/cl /opt/sulion/bin/co /opt/sulion/bin/fugu /opt/sulion/bin/docker /opt/sulion/bin/docker-compose /opt/sulion/bin/aws /opt/sulion/bin/with-cred /opt/sulion/bin/sulion-retrieve /opt/sulion/bin/sulion-code /opt/sulion/hooks/session-start.sh /opt/sulion/hooks/activity-hook.sh /opt/sulion/entrypoint.sh
 USER sulion
 WORKDIR /home/sulion
 

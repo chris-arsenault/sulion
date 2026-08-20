@@ -143,6 +143,21 @@ fn default_agent() -> String {
     "claude-code".to_string()
 }
 
+/// Map a PTY-facing agent identity to the agent that labels its transcript.
+///
+/// `fugu` runs through the Codex launcher and writes a Codex-format rollout, so
+/// its `events`/`claude_sessions` rows are ingested as `codex`. Binding the
+/// session row as `codex` keeps it consistent with the ingester (which knows
+/// only the transcript source) instead of flapping between `fugu` and `codex`
+/// on every poll. The `fugu` identity lives on the PTY row's
+/// `current_session_agent`, which the ingester never touches.
+fn transcript_agent(display_agent: &str) -> &str {
+    match display_agent {
+        "fugu" => "codex",
+        other => other,
+    }
+}
+
 /// Bind the socket and run an accept loop. The socket file is removed
 /// if it already exists (stale from a crashed prior instance).
 pub async fn run(pool: Pool, sock_path: PathBuf) -> anyhow::Result<()> {
@@ -360,7 +375,7 @@ pub async fn apply(pool: &Pool, msg: &CorrelateMsg) -> anyhow::Result<()> {
                pty_session_id = EXCLUDED.pty_session_id",
     )
     .bind(msg.session_uuid)
-    .bind(&msg.agent)
+    .bind(transcript_agent(&msg.agent))
     .bind(msg.pty_id)
     .execute(pool)
     .await?;
@@ -628,6 +643,16 @@ fn unexpected_ack_eof() -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fugu_binds_its_transcript_row_as_codex() {
+        // The PTY badge reads `fugu`, but the on-disk rollout is Codex-format,
+        // so the transcript row stays `codex` and never flaps against the
+        // ingester.
+        assert_eq!(transcript_agent("fugu"), "codex");
+        assert_eq!(transcript_agent("codex"), "codex");
+        assert_eq!(transcript_agent("claude-code"), "claude-code");
+    }
 
     #[test]
     /// The shape `hooks/session-start.sh` sends.

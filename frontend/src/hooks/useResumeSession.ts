@@ -13,7 +13,8 @@ export function isResumableSession(session: SessionView): boolean {
     session.state === "orphaned" &&
     session.current_session_uuid != null &&
     (session.current_session_agent === "claude-code" ||
-      session.current_session_agent === "codex")
+      session.current_session_agent === "codex" ||
+      session.current_session_agent === "fugu")
   );
 }
 

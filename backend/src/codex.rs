@@ -18,6 +18,10 @@ pub struct LauncherConfig {
     pub pty_id: Uuid,
     pub sessions_dir: PathBuf,
     pub correlate_sock: PathBuf,
+    /// Agent identity reported to the correlate socket — `codex` for stock
+    /// Codex, `fugu` for the Sakana wrapper. The transcript on disk is
+    /// Codex-format either way; this only sets the PTY's displayed agent.
+    pub agent: String,
     pub args: Vec<OsString>,
 }
 
@@ -26,6 +30,7 @@ pub fn parse_launcher_args(args: &[OsString]) -> anyhow::Result<LauncherConfig> 
     let mut pty_id: Option<Uuid> = None;
     let mut sessions_dir: Option<PathBuf> = None;
     let mut correlate_sock: Option<PathBuf> = None;
+    let mut agent: Option<String> = None;
     let mut codex_args = Vec::new();
 
     let mut i = 0usize;
@@ -59,6 +64,10 @@ pub fn parse_launcher_args(args: &[OsString]) -> anyhow::Result<LauncherConfig> 
                 correlate_sock = Some(PathBuf::from(next(i)?));
                 i += 2;
             }
+            "--agent" => {
+                agent = Some(next(i)?.to_string());
+                i += 2;
+            }
             other => {
                 return Err(anyhow::anyhow!("unknown launcher arg: {other}"));
             }
@@ -71,6 +80,7 @@ pub fn parse_launcher_args(args: &[OsString]) -> anyhow::Result<LauncherConfig> 
         sessions_dir: sessions_dir.ok_or_else(|| anyhow::anyhow!("--sessions-dir is required"))?,
         correlate_sock: correlate_sock
             .ok_or_else(|| anyhow::anyhow!("--correlate-sock is required"))?,
+        agent: agent.unwrap_or_else(|| "codex".to_string()),
         args: codex_args,
     })
 }
@@ -115,7 +125,7 @@ pub async fn run_launcher(cfg: LauncherConfig) -> anyhow::Result<i32> {
                     &cfg.correlate_sock,
                     cfg.pty_id,
                     session_uuid,
-                    "codex",
+                    &cfg.agent,
                 )
                 .await
                 {

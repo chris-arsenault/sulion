@@ -2933,6 +2933,7 @@ function NewSessionForm({
         <option value="">Shell only</option>
         <option value="claude">Launch Claude</option>
         <option value="codex">Launch Codex</option>
+        <option value="fugu">Launch Fugu</option>
       </select>
       <div className="sidebar__form-actions">
         <button type="button" onClick={onCancel}>

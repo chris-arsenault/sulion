@@ -653,6 +653,9 @@ function TimelinePromptBar({
   const onStartCodex = useCallback(() => {
     void startAgent("codex");
   }, [startAgent]);
+  const onStartFugu = useCallback(() => {
+    void startAgent("fugu");
+  }, [startAgent]);
 
   return (
     <div className="timeline-prompt" aria-label="Agent prompt controls">
@@ -711,6 +714,14 @@ function TimelinePromptBar({
           >
             {pending === "codex" ? "Starting…" : "Start Codex"}
           </button>
+          <button
+            type="button"
+            className="timeline-prompt__button"
+            onClick={onStartFugu}
+            disabled={!canLaunch || pending != null}
+          >
+            {pending === "fugu" ? "Starting…" : "Start Fugu"}
+          </button>
         </div>
       )}
     </div>
@@ -756,6 +767,7 @@ function promptMetadataText(metadata: SessionView["agent_metadata"]): string | n
 function agentDisplayName(agent: string): string {
   if (agent === "claude" || agent === "claude-code") return "Claude";
   if (agent === "codex") return "Codex";
+  if (agent === "fugu") return "Fugu";
   return agent;
 }
 

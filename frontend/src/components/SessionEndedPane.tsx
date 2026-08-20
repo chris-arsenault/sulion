@@ -69,6 +69,9 @@ export function SessionEndedPane({ session }: Props) {
   })();
 
   const resumeTitle = (() => {
+    if (resumeAgent === "fugu") {
+      return "Spawn a new PTY and run `sulion-agent --type fugu --mode real -- resume` against this Fugu session";
+    }
     if (resumeAgent === "codex") {
       return "Spawn a new PTY and run `sulion-agent --type codex --mode real -- resume` against this Codex session";
     }

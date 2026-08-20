@@ -520,7 +520,7 @@ fn validate_repo_name(name: &str) -> Result<(), RuntimeError> {
 
 fn parse_agent(value: &str) -> Result<AgentType, RuntimeError> {
     AgentType::parse(value)
-        .map_err(|_| RuntimeError::BadRequest("agent must be claude or codex".into()))
+        .map_err(|_| RuntimeError::BadRequest("agent must be claude, codex, or fugu".into()))
 }
 
 fn agent_launch_command(
@@ -530,7 +530,7 @@ fn agent_launch_command(
 ) -> String {
     let mut agent_args = match agent {
         AgentType::Claude => vec!["--dangerously-skip-permissions".to_string()],
-        AgentType::Codex => vec!["--yolo".to_string()],
+        AgentType::Codex | AgentType::Fugu => vec!["--yolo".to_string()],
     };
     if let Some(session_id) = resume_session_uuid {
         match agent {
@@ -538,7 +538,7 @@ fn agent_launch_command(
                 agent_args.push("--resume".into());
                 agent_args.push(session_id.to_string());
             }
-            AgentType::Codex => {
+            AgentType::Codex | AgentType::Fugu => {
                 agent_args.push("resume".into());
                 agent_args.push(session_id.to_string());
             }

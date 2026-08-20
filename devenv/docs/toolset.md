@@ -35,12 +35,15 @@ Sulion installs executable wrapper shortcuts for agent sessions:
 ```sh
 cl
 co
+fugu
 ```
 
 They expand to Sulion-managed agent launchers:
 
 - `cl`: Claude Code with Sulion correlation hooks
 - `co`: Codex with Sulion correlation hooks
+- `fugu`: Codex running Sakana's Fugu model (`codex-fugu`) with Sulion
+  correlation hooks
 
 Use the wrappers instead of invoking raw `claude` or `codex` when you want the
 session to appear correctly in Sulion timelines.

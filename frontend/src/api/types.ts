@@ -2,7 +2,7 @@
 // manually — a small enough surface that codegen would be overkill.
 
 export type SessionState = "live" | "dead" | "deleted" | "orphaned";
-export type AgentLaunchType = "claude" | "codex";
+export type AgentLaunchType = "claude" | "codex" | "fugu";
 export type AgentRuntimeState = "none" | "starting" | "running" | "exited";
 export type SessionActivityState =
   | "shell"

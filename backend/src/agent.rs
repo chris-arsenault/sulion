@@ -15,6 +15,10 @@ use mock_transcripts::{emit_mock_claude_roundtrip, emit_mock_codex_roundtrip};
 pub enum AgentType {
     Claude,
     Codex,
+    /// Sakana's `fugu` model, run through the `codex-fugu` wrapper. It shares
+    /// Codex's transcript format and launcher correlation, but carries its own
+    /// identity so the UI can badge it distinctly.
+    Fugu,
 }
 
 impl AgentType {
@@ -23,6 +27,7 @@ impl AgentType {
             "claude-code" => Ok(Self::Claude),
             "claude" => Ok(Self::Claude),
             "codex" => Ok(Self::Codex),
+            "fugu" => Ok(Self::Fugu),
             other => bail!("unknown agent type: {other}"),
         }
     }
@@ -31,6 +36,7 @@ impl AgentType {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Fugu => "fugu",
         }
     }
 
@@ -38,6 +44,7 @@ impl AgentType {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Fugu => "codex-fugu",
         }
     }
 }
@@ -214,7 +221,7 @@ async fn report_runtime(
 async fn run_real(cfg: LauncherConfig, env: LauncherEnv) -> anyhow::Result<i32> {
     let args = agent_args_with_additional_dirs(cfg.agent_type, &cfg.args, &env.repo_paths);
     match (cfg.agent_type, env.pty_id) {
-        (AgentType::Codex, Some(pty_id)) => {
+        (AgentType::Codex | AgentType::Fugu, Some(pty_id)) => {
             let sessions_dir = env.codex_sessions_dir.ok_or_else(|| {
                 anyhow::anyhow!("SULION_CODEX_SESSIONS is required inside sulion")
             })?;
@@ -222,10 +229,11 @@ async fn run_real(cfg: LauncherConfig, env: LauncherEnv) -> anyhow::Result<i32> 
                 anyhow::anyhow!("SULION_CORRELATE_SOCK is required inside sulion")
             })?;
             crate::codex::run_launcher(crate::codex::LauncherConfig {
-                codex_bin: raw_agent_binary(AgentType::Codex),
+                codex_bin: raw_agent_binary(cfg.agent_type),
                 pty_id,
                 sessions_dir,
                 correlate_sock,
+                agent: cfg.agent_type.as_str().to_string(),
                 args,
             })
             .await
@@ -272,6 +280,9 @@ fn raw_agent_binary(agent_type: AgentType) -> PathBuf {
         AgentType::Codex => std::env::var_os("SULION_REAL_CODEX")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("codex")),
+        AgentType::Fugu => std::env::var_os("SULION_REAL_FUGU")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("codex-fugu")),
     }
 }
 
@@ -328,7 +339,7 @@ async fn run_mock(cfg: LauncherConfig, env: LauncherEnv) -> anyhow::Result<i32> 
                 )
                 .await?
             }
-            AgentType::Codex => {
+            AgentType::Codex | AgentType::Fugu => {
                 let codex_sessions_dir = env.codex_sessions_dir.clone().ok_or_else(|| {
                     anyhow::anyhow!("mock Codex mode requires SULION_CODEX_SESSIONS")
                 })?;
