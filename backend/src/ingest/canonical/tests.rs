@@ -523,6 +523,26 @@ fn codex_exec_code_extracts_embedded_patches_as_file_edits() {
     assert!(input.get("command").is_none());
 }
 
+/// A NUL escape decoded out of the JS source must never reach the
+/// database — Postgres rejects it in TEXT and JSONB alike, and one such
+/// event aborted an entire session's canonical repair.
+#[test]
+fn codex_exec_decoded_nul_is_stripped() {
+    let ev = parse_codex(json!({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "call-5",
+            "input": "const r = await tools.exec_command({\"cmd\":\"printf 'a\\u0000b'\"});",
+        }
+    }));
+    let input = ev.blocks[0].tool_input.as_ref().expect("tool input");
+    let command = input["command"].as_str().expect("command extracted");
+    assert!(!command.contains('\u{0}'), "NUL survived: {command:?}");
+    assert_eq!(command, "printf 'ab'");
+}
+
 #[test]
 fn codex_exec_code_without_commands_keeps_only_the_source() {
     let ev = parse_codex(json!({

@@ -250,6 +250,14 @@ fn js_string_literal_at(code: &str, start: usize) -> Option<(String, usize)> {
             (false, b'\\') => escaped = true,
             (false, b'"') => {
                 let decoded = serde_json::from_str::<String>(&code[start..=idx]).ok()?;
+                // A decoded NUL (an escaped u0000 in the JS source)
+                // cannot be stored: Postgres rejects it in both TEXT
+                // and JSONB values.
+                let decoded = if decoded.contains('\u{0}') {
+                    decoded.replace('\u{0}', "")
+                } else {
+                    decoded
+                };
                 return Some((decoded, idx + 1));
             }
             _ => {}
