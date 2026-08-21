@@ -182,29 +182,40 @@ impl UsageUpdate {
                 return UsageComponents::default();
             }
             return UsageComponents {
-                input_tokens: self.input_tokens,
-                cached_input_tokens: self.cached_input_tokens,
-                cache_write_input_tokens: self.cache_write_input_tokens,
-                cache_write_1h_input_tokens: self.cache_write_1h_input_tokens,
-                output_tokens: self.output_tokens,
+                input_tokens: self.input_tokens.max(0),
+                cached_input_tokens: self.cached_input_tokens.max(0),
+                cache_write_input_tokens: self.cache_write_input_tokens.max(0),
+                cache_write_1h_input_tokens: self.cache_write_1h_input_tokens.max(0),
+                output_tokens: self.output_tokens.max(0),
             };
         }
+        // A cumulative total can legitimately shrink below the stored
+        // baseline: codex compaction restarts session totals, and rows
+        // written by an earlier accounting scheme can exceed the current
+        // one. A negative delta violates the daily table's checks and
+        // would wedge ingestion of the whole event, so floor at zero and
+        // let the stored baseline reset to the new totals.
         UsageComponents {
             input_tokens: self
                 .input_tokens
-                .saturating_sub(previous.map_or(0, |row| row.input_tokens)),
+                .saturating_sub(previous.map_or(0, |row| row.input_tokens))
+                .max(0),
             cached_input_tokens: self
                 .cached_input_tokens
-                .saturating_sub(previous.map_or(0, |row| row.cached_input_tokens)),
+                .saturating_sub(previous.map_or(0, |row| row.cached_input_tokens))
+                .max(0),
             cache_write_input_tokens: self
                 .cache_write_input_tokens
-                .saturating_sub(previous.map_or(0, |row| row.cache_write_input_tokens)),
+                .saturating_sub(previous.map_or(0, |row| row.cache_write_input_tokens))
+                .max(0),
             cache_write_1h_input_tokens: self
                 .cache_write_1h_input_tokens
-                .saturating_sub(previous.map_or(0, |row| row.cache_write_1h_input_tokens)),
+                .saturating_sub(previous.map_or(0, |row| row.cache_write_1h_input_tokens))
+                .max(0),
             output_tokens: self
                 .output_tokens
-                .saturating_sub(previous.map_or(0, |row| row.output_tokens)),
+                .saturating_sub(previous.map_or(0, |row| row.output_tokens))
+                .max(0),
         }
     }
 }
@@ -326,9 +337,12 @@ fn extract_codex_usage(value: &Value) -> Option<UsageUpdate> {
         mode: UsageMode::Cumulative,
         message_id: None,
         model: None,
+        // Some codex versions report input_tokens inclusive of the cache
+        // categories, others not; never let the subtraction go negative.
         input_tokens: reported_input_tokens
             .saturating_sub(cached_input_tokens)
-            .saturating_sub(cache_write_input_tokens),
+            .saturating_sub(cache_write_input_tokens)
+            .max(0),
         cached_input_tokens,
         cache_write_input_tokens,
         cache_write_1h_input_tokens: 0,
@@ -802,6 +816,65 @@ mod tests {
         assert_eq!(usage.cache_write_1h_input_tokens, 0);
         assert_eq!(usage.context_tokens, Some(19_200));
         assert_eq!(usage.model_context_window, Some(100_000));
+    }
+
+    /// A shrunken cumulative total (codex compaction, or baselines
+    /// written under an earlier accounting scheme) must clamp the daily
+    /// delta to zero — a negative component violates the daily table's
+    /// checks and would wedge ingestion of the whole event.
+    #[test]
+    fn shrunken_cumulative_totals_clamp_daily_deltas_to_zero() {
+        let update = UsageUpdate {
+            mode: UsageMode::Cumulative,
+            message_id: None,
+            model: None,
+            input_tokens: 1_000,
+            cached_input_tokens: 500,
+            cache_write_input_tokens: 100,
+            cache_write_1h_input_tokens: 0,
+            output_tokens: 200,
+            reasoning_output_tokens: 0,
+            total_tokens: 1_800,
+            context_tokens: None,
+            model_context_window: None,
+        };
+        let previous = StoredUsage {
+            input_tokens: 50_000,
+            cached_input_tokens: 40_000,
+            cache_write_input_tokens: 5_000,
+            cache_write_1h_input_tokens: 0,
+            output_tokens: 9_000,
+            last_usage_message_id: None,
+        };
+        let delta = update.daily_delta(Some(&previous));
+        assert_eq!(delta.input_tokens, 0);
+        assert_eq!(delta.cached_input_tokens, 0);
+        assert_eq!(delta.cache_write_input_tokens, 0);
+        assert_eq!(delta.cache_write_1h_input_tokens, 0);
+        assert_eq!(delta.output_tokens, 0);
+    }
+
+    /// Codex builds that report input_tokens exclusive of cache reads
+    /// would otherwise extract a negative fresh-input figure.
+    #[test]
+    fn codex_input_smaller_than_cache_extracts_zero_fresh_input() {
+        let usage = extract_codex_usage(&json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": 1_000,
+                        "cached_input_tokens": 20_000,
+                        "cache_write_input_tokens": 2_000,
+                        "output_tokens": 3_000,
+                        "total_tokens": 26_000
+                    }
+                }
+            }
+        }))
+        .unwrap();
+        assert_eq!(usage.input_tokens, 0);
     }
 
     #[test]

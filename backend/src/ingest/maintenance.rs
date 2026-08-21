@@ -35,11 +35,22 @@ pub async fn run_required_startup_maintenance(
             target = CANONICAL_BLOCKS_VERSION,
             "derived transcript data version behind; repairing missing canonical fields",
         );
-        stats.canonical_events_backfilled = super::ingester::backfill_canonical_blocks(pool)
+        let outcome = super::ingester::backfill_canonical_blocks(pool)
             .await
-            .context("backfill canonical blocks")?
-            as u64;
-        set_projection_version(pool, CANONICAL_BLOCKS_KEY, CANONICAL_BLOCKS_VERSION).await?;
+            .context("backfill canonical blocks")?;
+        stats.canonical_events_backfilled = outcome.repaired as u64;
+        if outcome.failed == 0 {
+            set_projection_version(pool, CANONICAL_BLOCKS_KEY, CANONICAL_BLOCKS_VERSION).await?;
+        } else {
+            // Failed rows were logged individually with their error
+            // chains. Holding the version back retries them next
+            // startup; the repaired sessions are no-ops by then.
+            tracing::warn!(
+                failed = outcome.failed,
+                repaired = outcome.repaired,
+                "canonical repair incomplete; version gate held for retry",
+            );
+        }
     } else if canonical_version > CANONICAL_BLOCKS_VERSION {
         tracing::warn!(
             key = CANONICAL_BLOCKS_KEY,

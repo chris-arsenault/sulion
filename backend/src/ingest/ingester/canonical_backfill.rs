@@ -1,3 +1,5 @@
+use anyhow::Context as _;
+
 use super::*;
 
 async fn rewrite_canonical_event(
@@ -44,7 +46,15 @@ async fn rewrite_canonical_event(
 /// that pre-date this migration. This must stay partial: startup callers
 /// gate it by derived-data version and it should only repair rows with
 /// missing structured fields or known legacy block shapes.
-pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<usize> {
+/// What a canonical repair pass accomplished. `failed` > 0 means some
+/// rows are still on the old shape; the caller must hold the version
+/// gate back so the next startup retries them.
+pub struct CanonicalBackfillOutcome {
+    pub repaired: usize,
+    pub failed: usize,
+}
+
+pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<CanonicalBackfillOutcome> {
     let codex_sessions: Vec<(Uuid,)> = sqlx::query_as(
         "SELECT DISTINCT session_uuid \
          FROM events e \
@@ -69,53 +79,24 @@ pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<usize> {
     .fetch_all(pool)
     .await?;
     let mut count = 0usize;
+    let mut failures = 0usize;
     for (session_uuid,) in codex_sessions {
-        let rows: Vec<(Uuid, i64, String, serde_json::Value, bool)> = sqlx::query_as(
-            "SELECT e.session_uuid, e.byte_offset, e.agent, e.payload, \
-                    ( \
-                        e.speaker IS NULL OR \
-                        e.content_kind IS NULL OR \
-                        (e.content_kind IS DISTINCT FROM 'none' AND NOT EXISTS ( \
-                            SELECT 1 FROM event_blocks b \
-                             WHERE b.session_uuid = e.session_uuid \
-                               AND b.byte_offset = e.byte_offset \
-                        )) OR \
-                        EXISTS ( \
-                            SELECT 1 FROM event_blocks b \
-                             WHERE b.session_uuid = e.session_uuid \
-                               AND b.byte_offset = e.byte_offset \
-                               AND b.kind = 'tool_use' \
-                               AND COALESCE(b.tool_name_canonical, b.tool_name) = 'exec' \
-                               AND jsonb_typeof(b.tool_input) = 'string' \
-                        ) \
-                    ) AS needs_backfill \
-             FROM events e \
-             WHERE e.session_uuid = $1 \
-             ORDER BY byte_offset",
-        )
-        .bind(session_uuid)
-        .fetch_all(pool)
-        .await?;
-        let mut ctx = CodexSessionContext::new(session_uuid);
-        for (row_session_uuid, byte_offset, agent, payload, needs_backfill) in rows {
-            if needs_backfill {
-                let parsed = parse_canonical_event(
-                    &agent,
-                    &payload,
-                    row_session_uuid,
-                    byte_offset,
-                    Some(&ctx),
+        // One poisoned session must not abort the whole repair: log the
+        // full error chain with its location and keep going. The version
+        // gate is only advanced when nothing failed, so skipped sessions
+        // are retried on the next startup.
+        match repair_codex_session(pool, session_uuid).await {
+            Ok(repaired) => count += repaired,
+            Err(err) => {
+                failures += 1;
+                tracing::warn!(
+                    session = %session_uuid,
+                    error = format!("{err:#}"),
+                    "canonical backfill failed for codex session; skipping",
                 );
-                rewrite_canonical_event(pool, row_session_uuid, byte_offset, &parsed).await?;
-                if let Some(parent) = detect_codex_parent_session(&payload, row_session_uuid) {
-                    set_parent_session(pool, row_session_uuid, parent).await?;
-                }
-                count += 1;
             }
-            update_codex_context(&mut ctx, &payload, row_session_uuid);
         }
     }
-
     let rows: Vec<(Uuid, i64, String, serde_json::Value)> = sqlx::query_as(
         "SELECT e.session_uuid, e.byte_offset, e.agent, e.payload \
          FROM events e \
@@ -149,16 +130,77 @@ pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<usize> {
     .fetch_all(pool)
     .await?;
 
-    let legacy_count = rows.len();
-    if legacy_count == 0 {
-        return Ok(count);
-    }
-
     for (session_uuid, byte_offset, agent, payload) in rows {
         let parsed = parse_canonical_event(&agent, &payload, session_uuid, byte_offset, None);
-        rewrite_canonical_event(pool, session_uuid, byte_offset, &parsed).await?;
+        match rewrite_canonical_event(pool, session_uuid, byte_offset, &parsed).await {
+            Ok(()) => count += 1,
+            Err(err) => {
+                failures += 1;
+                tracing::warn!(
+                    session = %session_uuid,
+                    byte_offset,
+                    error = format!("{err:#}"),
+                    "canonical backfill failed for event; skipping",
+                );
+            }
+        }
     }
-    Ok(count + legacy_count)
+    Ok(CanonicalBackfillOutcome {
+        repaired: count,
+        failed: failures,
+    })
+}
+
+/// Re-derive one codex session's canonical rows, threading the session
+/// context in offset order so tool correlation stays correct.
+async fn repair_codex_session(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<usize> {
+    let rows: Vec<(Uuid, i64, String, serde_json::Value, bool)> = sqlx::query_as(
+        "SELECT e.session_uuid, e.byte_offset, e.agent, e.payload, \
+                ( \
+                    e.speaker IS NULL OR \
+                    e.content_kind IS NULL OR \
+                    (e.content_kind IS DISTINCT FROM 'none' AND NOT EXISTS ( \
+                        SELECT 1 FROM event_blocks b \
+                         WHERE b.session_uuid = e.session_uuid \
+                           AND b.byte_offset = e.byte_offset \
+                    )) OR \
+                    EXISTS ( \
+                        SELECT 1 FROM event_blocks b \
+                         WHERE b.session_uuid = e.session_uuid \
+                           AND b.byte_offset = e.byte_offset \
+                           AND b.kind = 'tool_use' \
+                           AND COALESCE(b.tool_name_canonical, b.tool_name) = 'exec' \
+                           AND jsonb_typeof(b.tool_input) = 'string' \
+                    ) \
+                ) AS needs_backfill \
+         FROM events e \
+         WHERE e.session_uuid = $1 \
+         ORDER BY byte_offset",
+    )
+    .bind(session_uuid)
+    .fetch_all(pool)
+    .await
+    .context("list session events")?;
+
+    let mut repaired = 0usize;
+    let mut ctx = CodexSessionContext::new(session_uuid);
+    for (row_session_uuid, byte_offset, agent, payload, needs_backfill) in rows {
+        if needs_backfill {
+            let parsed =
+                parse_canonical_event(&agent, &payload, row_session_uuid, byte_offset, Some(&ctx));
+            rewrite_canonical_event(pool, row_session_uuid, byte_offset, &parsed)
+                .await
+                .with_context(|| format!("rewrite event at byte offset {byte_offset}"))?;
+            if let Some(parent) = detect_codex_parent_session(&payload, row_session_uuid) {
+                set_parent_session(pool, row_session_uuid, parent)
+                    .await
+                    .with_context(|| format!("set parent session at byte offset {byte_offset}"))?;
+            }
+            repaired += 1;
+        }
+        update_codex_context(&mut ctx, &payload, row_session_uuid);
+    }
+    Ok(repaired)
 }
 
 /// Scan a JSONL event payload for hints that the current session is a

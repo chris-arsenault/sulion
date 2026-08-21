@@ -248,7 +248,13 @@ async fn run_control_maintenance(pool: db::Pool) {
             );
         }
         Err(err) => {
-            tracing::warn!(%err, "startup transcript maintenance failed");
+            // Alternate format prints the whole context chain — the top
+            // context alone ("backfill canonical blocks") says nothing
+            // about which row or database error was responsible.
+            tracing::warn!(
+                error = format!("{err:#}"),
+                "startup transcript maintenance failed"
+            );
         }
     }
 }

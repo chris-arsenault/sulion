@@ -65,7 +65,13 @@ pub async fn rebuild_ingest_derivatives(pool: &Pool) -> anyhow::Result<ReindexSt
 
     tx.commit().await?;
 
-    let canonical_events_rebuilt = super::ingester::backfill_canonical_blocks(pool).await?;
+    let canonical_outcome = super::ingester::backfill_canonical_blocks(pool).await?;
+    if canonical_outcome.failed > 0 {
+        anyhow::bail!(
+            "{} events failed canonical rebuild (see backfill warnings)",
+            canonical_outcome.failed,
+        );
+    }
     let mut timeline_sessions_rebuilt = 0u64;
     for (session_uuid,) in &sessions {
         super::projection::rebuild_session_projection(pool, *session_uuid).await?;
@@ -76,7 +82,7 @@ pub async fn rebuild_ingest_derivatives(pool: &Pool) -> anyhow::Result<ReindexSt
     Ok(ReindexStats {
         sessions_rebuilt: sessions.len() as u64,
         events_preserved: events_preserved.max(0) as u64,
-        canonical_events_rebuilt: canonical_events_rebuilt as u64,
+        canonical_events_rebuilt: canonical_outcome.repaired as u64,
         timeline_sessions_rebuilt,
     })
 }
