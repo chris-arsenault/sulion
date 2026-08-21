@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
+use crate::ingest::canonical::BlockKind;
 use crate::ingest::timeline::{
-    ProjectionFilters, SpeakerFacet, TimelineAssistantItem, TimelineChunk, TimelineToolPair,
-    TimelineTurn, BOOKKEEPING_KINDS,
+    is_local_command_text, ProjectionFilters, SpeakerFacet, TimelineAssistantItem, TimelineChunk,
+    TimelineToolPair, TimelineTurn, BOOKKEEPING_KINDS,
 };
 
 pub(super) fn apply_projection_filters(turn: &mut TimelineTurn, filters: &ProjectionFilters) {
@@ -78,7 +79,17 @@ fn filter_chunk(
             }
         }
         TimelineChunk::Generic { label, details } => {
-            if !filters.show_bookkeeping && BOOKKEEPING_KINDS.contains(&label.as_str()) {
+            // Local slash-command user records project as generic chunks;
+            // they hide with the rest of the bookkeeping.
+            let local_command = details
+                .blocks
+                .iter()
+                .find(|block| block.kind == BlockKind::Text)
+                .and_then(|block| block.text.as_deref())
+                .is_some_and(is_local_command_text);
+            if !filters.show_bookkeeping
+                && (BOOKKEEPING_KINDS.contains(&label.as_str()) || local_command)
+            {
                 None
             } else {
                 Some(TimelineChunk::Generic { label, details })
@@ -159,6 +170,46 @@ mod tests {
         apply_projection_filters(&mut turn, &filters);
         assert!(turn.tool_pairs[0].result.is_none());
         assert_eq!(turn.user_prompt_text.as_deref(), Some("prompt"));
+    }
+
+    #[test]
+    fn local_command_generic_chunks_hide_with_bookkeeping() {
+        use crate::ingest::canonical::Block;
+        use crate::ingest::timeline::TimelineGenericDetails;
+
+        let chunk = TimelineChunk::Generic {
+            label: "user".to_string(),
+            details: TimelineGenericDetails {
+                event_uuid: None,
+                parent_event_uuid: None,
+                related_tool_use_id: None,
+                subtype: None,
+                speaker: Some("user".to_string()),
+                content_kind: None,
+                blocks: vec![Block::text(
+                    0,
+                    "<local-command-stdout>Set model to X</local-command-stdout>",
+                )],
+            },
+        };
+        let mut turn = turn_with_pair();
+        turn.chunks = vec![chunk];
+
+        let mut hidden = turn.clone();
+        apply_projection_filters(&mut hidden, &ProjectionFilters::default());
+        assert!(
+            hidden.chunks.is_empty(),
+            "chunk visible: {:?}",
+            hidden.chunks
+        );
+
+        let mut shown = turn;
+        let filters = ProjectionFilters {
+            show_bookkeeping: true,
+            ..Default::default()
+        };
+        apply_projection_filters(&mut shown, &filters);
+        assert_eq!(shown.chunks.len(), 1);
     }
 
     #[test]

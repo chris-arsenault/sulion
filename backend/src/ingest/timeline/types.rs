@@ -7,6 +7,25 @@ use uuid::Uuid;
 
 use crate::ingest::canonical::{Block, OperationCategory};
 
+/// Claude Code writes local slash-command activity (`/model`, `/login`,
+/// …) as plain `user` records whose text is wrapped in these tags. They
+/// are terminal plumbing, not prompts: they must not seed turns and hide
+/// with the rest of the bookkeeping.
+pub(crate) const LOCAL_COMMAND_PREFIXES: &[&str] = &[
+    "<command-name>",
+    "<command-message>",
+    "<local-command-stdout>",
+    "<local-command-stderr>",
+    "<local-command-caveat>",
+];
+
+pub(crate) fn is_local_command_text(text: &str) -> bool {
+    let text = text.trim_start();
+    LOCAL_COMMAND_PREFIXES
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
+}
+
 pub(crate) const BOOKKEEPING_KINDS: &[&str] = &[
     "agent-name",
     "ai-title",

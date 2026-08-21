@@ -37,6 +37,12 @@ export interface ClipboardImage {
   mediaType: string;
 }
 
+/** Pastes above either threshold offer save-as-file under
+ * `.sulion-paste/` instead of landing inline. Shared by every surface
+ * that accepts agent-bound pastes (terminal, timeline prompt bar). */
+export const PASTE_AS_FILE_BYTES = 4 * 1024;
+export const PASTE_AS_FILE_LINES = 200;
+
 export function sanitizePaste(text: string): string {
   return text
     .replace(INVISIBLE_CHARS, "")

@@ -544,6 +544,19 @@ fn is_real_user_prompt(event: &StoredEvent) -> bool {
     event_speaker(event) == "user"
         && !is_tool_result_event(event)
         && !is_claude_task_notification(event)
+        && !is_local_command_event(event)
+}
+
+/// Local slash-command plumbing (`/model`, `/login`, …) arrives as user
+/// records; it must not seed turns or read as a prompt.
+pub(crate) fn is_local_command_event(event: &StoredEvent) -> bool {
+    event_speaker(event) == "user"
+        && event
+            .blocks
+            .iter()
+            .find(|block| block.kind == BlockKind::Text)
+            .and_then(|block| block.text.as_deref())
+            .is_some_and(super::is_local_command_text)
 }
 
 fn is_claude_task_notification(event: &StoredEvent) -> bool {
@@ -575,7 +588,9 @@ fn is_system_event(event: &StoredEvent) -> bool {
 }
 
 fn is_bookkeeping_event(event: &StoredEvent) -> bool {
-    BOOKKEEPING_KINDS.contains(&event.kind.as_str()) || (is_system_event(event) && event.is_meta)
+    BOOKKEEPING_KINDS.contains(&event.kind.as_str())
+        || (is_system_event(event) && event.is_meta)
+        || is_local_command_event(event)
 }
 
 fn speaker_facet_of(event: &StoredEvent) -> Option<SpeakerFacet> {

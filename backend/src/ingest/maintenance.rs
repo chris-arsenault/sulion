@@ -9,7 +9,9 @@ const CANONICAL_BLOCKS_VERSION: i32 = 2;
 const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // v3: sessions with codex `exec` operations reprojected after their
 // inputs were re-canonicalized into the {command, code} shape.
-const TIMELINE_PROJECTION_VERSION: i32 = 3;
+// v4: local slash-command user records (`<command-name>` etc.) no longer
+// seed turns; sessions whose previews show them get reprojected.
+const TIMELINE_PROJECTION_VERSION: i32 = 4;
 const USAGE_PROJECTION_KEY: &str = "usage_projection";
 const USAGE_PROJECTION_VERSION: i32 = 1;
 

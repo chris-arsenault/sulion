@@ -27,7 +27,15 @@ import {
   interruptSessionAgent,
   sendSessionPrompt,
   startSessionAgent,
+  uploadRepoFile,
 } from "../api/client";
+import { ConfirmDialog } from "./common/ConfirmDialog";
+import {
+  createClipboardImageUpload,
+  imageFromClipboard,
+  PASTE_AS_FILE_BYTES,
+  PASTE_AS_FILE_LINES,
+} from "./terminal/clipboard";
 import type {
   AgentLaunchType,
   SessionView,
@@ -659,6 +667,9 @@ function TimelinePromptBar({
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [pendingPaste, setPendingPaste] = useState<PendingPromptPaste | null>(null);
+  const [pasteError, setPasteError] = useState<string | null>(null);
   const runtime = session?.agent_runtime ?? {
     agent: null,
     state: "none",
@@ -727,6 +738,91 @@ function TimelinePromptBar({
     (e: React.ChangeEvent<HTMLTextAreaElement>) => setText(e.target.value),
     [],
   );
+
+  // Same paste model as the terminal: clipboard images and oversized
+  // text offer save-as-file under `.sulion-paste/`, inserting the
+  // repo-relative path where the caret is.
+  const repo = session?.repo ?? null;
+  const insertText = useCallback((snippet: string) => {
+    setText((prev) => {
+      const el = textareaRef.current;
+      const start = el?.selectionStart ?? prev.length;
+      const end = el?.selectionEnd ?? prev.length;
+      return prev.slice(0, start) + snippet + prev.slice(end);
+    });
+    textareaRef.current?.focus();
+  }, []);
+
+  const onTextPaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      if (!e.clipboardData) return;
+      setPasteError(null);
+
+      const clipboardImage = imageFromClipboard(e.clipboardData);
+      if (clipboardImage) {
+        e.preventDefault();
+        if (!repo) {
+          setPasteError("Clipboard images require a repository-backed session.");
+          return;
+        }
+        setPendingPaste({
+          kind: "image",
+          file: createClipboardImageUpload(clipboardImage),
+          repo,
+        });
+        return;
+      }
+
+      const raw = e.clipboardData.getData("text/plain");
+      const lines = (raw.match(/\n/g)?.length ?? 0) + 1;
+      if (repo && (raw.length > PASTE_AS_FILE_BYTES || lines > PASTE_AS_FILE_LINES)) {
+        e.preventDefault();
+        setPendingPaste({ kind: "text", raw, size: raw.length, lines, repo });
+      }
+      // Small text falls through to the browser's default insertion.
+    },
+    [repo],
+  );
+
+  const acceptPasteAsFile = useCallback(async () => {
+    const parked = pendingPaste;
+    if (!parked) return;
+    setPendingPaste(null);
+    setPasteError(null);
+    const file =
+      parked.kind === "image"
+        ? parked.file
+        : new File(
+            [parked.raw],
+            `paste-${new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_")}.txt`,
+            { type: "text/plain" },
+          );
+    try {
+      const res = await uploadRepoFile(parked.repo, ".sulion-paste", file);
+      insertText(res.path + " ");
+    } catch (err) {
+      // Text still has an inline fallback; an image cannot be
+      // represented in the textarea, so keep its failure visible.
+      if (parked.kind === "text") {
+        insertText(parked.raw);
+      } else {
+        setPasteError(
+          err instanceof Error
+            ? `Clipboard image upload failed: ${err.message}`
+            : "Clipboard image upload failed.",
+        );
+      }
+    }
+  }, [insertText, pendingPaste]);
+
+  const cancelPendingPaste = useCallback(() => {
+    const parked = pendingPaste;
+    if (!parked) return;
+    setPendingPaste(null);
+    if (parked.kind === "text") {
+      insertText(parked.raw);
+    }
+  }, [insertText, pendingPaste]);
   const onTextKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -758,13 +854,16 @@ function TimelinePromptBar({
         <span>{status}</span>
         {meta && <span className="timeline-prompt__meta">{meta}</span>}
         {error && <span className="timeline-prompt__error">{error}</span>}
+        {pasteError && <span className="timeline-prompt__error">{pasteError}</span>}
       </div>
       {running ? (
         <div className="timeline-prompt__input-row">
           <textarea
+            ref={textareaRef}
             value={text}
             onChange={onTextChange}
             onKeyDown={onTextKeyDown}
+            onPaste={onTextPaste}
             placeholder="Type a prompt. Ctrl+Enter sends to the running agent."
             rows={2}
             className="timeline-prompt__textarea"
@@ -819,9 +918,32 @@ function TimelinePromptBar({
           </button>
         </div>
       )}
+      {pendingPaste && (
+        <ConfirmDialog
+          title={pendingPaste.kind === "text" ? "Large paste" : "Clipboard image"}
+          message={
+            pendingPaste.kind === "text"
+              ? `Clipboard is ${pendingPaste.size} bytes / ${pendingPaste.lines} lines. ` +
+                "Save it to .sulion-paste/ and insert the path, or paste the raw contents inline?"
+              : `Upload ${pendingPaste.file.name} (${pendingPaste.file.size} bytes) to ` +
+                ".sulion-paste/ and insert its path?"
+          }
+          confirmLabel={pendingPaste.kind === "text" ? "Save as file" : "Upload image"}
+          cancelLabel={pendingPaste.kind === "text" ? "Paste inline" : "Cancel"}
+          onConfirm={acceptPasteAsFile}
+          onCancel={cancelPendingPaste}
+        />
+      )}
     </div>
   );
 }
+
+/** Parked paste in the prompt bar waiting on the user to choose inline
+ * vs save-as-file or confirm a clipboard image upload. Mirrors the
+ * terminal's paste model. */
+type PendingPromptPaste =
+  | { kind: "text"; raw: string; size: number; lines: number; repo: string }
+  | { kind: "image"; file: File; repo: string };
 
 function promptStatusText(
   session: SessionView | null,

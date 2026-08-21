@@ -256,6 +256,11 @@ pub async fn backfill_timeline_projection(pool: &Pool) -> anyhow::Result<usize> 
                FROM timeline_operations o \
               WHERE COALESCE(o.operation_type, o.name) = 'exec' \
                 AND jsonb_typeof(o.input) = 'string' \
+             UNION \
+             SELECT DISTINCT tt.session_uuid \
+               FROM timeline_turns tt \
+              WHERE tt.preview LIKE '<command-%' \
+                 OR tt.preview LIKE '<local-command-%' \
          ) \
          SELECT session_uuid \
            FROM sessions_to_rebuild \

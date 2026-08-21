@@ -31,4 +31,4 @@ pub use types::{
     TimelineTurnSummary,
 };
 
-pub(crate) use types::BOOKKEEPING_KINDS;
+pub(crate) use types::{is_local_command_text, BOOKKEEPING_KINDS};

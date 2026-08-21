@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("react-virtuoso", () => ({
@@ -396,6 +396,103 @@ describe("TimelinePane", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => expect(calls).toEqual([{ text: "inspect this" }]));
+  });
+
+  it("offers save-as-file for large pastes and inserts the uploaded path", async () => {
+    const uploads: string[] = [];
+    stubFetch(
+      (url, init) => {
+        if (url.startsWith("/api/repos/alpha/upload")) {
+          uploads.push(url);
+          void init;
+          return new Response(
+            JSON.stringify({ path: ".sulion-paste/paste-test.txt", size: 9000 }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(timelineBody(), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+      [
+        sessionView(0, {
+          agent_runtime: {
+            agent: "claude",
+            state: "running",
+            started_at: sessionStartedAt,
+            ended_at: null,
+            exit_code: null,
+          },
+        }),
+      ],
+    );
+
+    render(<TimelinePane sessionId="abc" />);
+    const user = userEvent.setup();
+    const input = await screen.findByLabelText("Prompt text");
+    input.focus();
+
+    const raw = "x".repeat(9000);
+    fireEvent.paste(input, {
+      clipboardData: {
+        items: [],
+        files: [],
+        getData: () => raw,
+      },
+    });
+
+    await screen.findByText(/save it to \.sulion-paste/i);
+    await user.click(screen.getByRole("button", { name: /save as file/i }));
+
+    await waitFor(() => expect(uploads.length).toBe(1));
+    await waitFor(() =>
+      expect((input as HTMLTextAreaElement).value).toContain(
+        ".sulion-paste/paste-test.txt",
+      ),
+    );
+    // The oversized text never landed inline.
+    expect((input as HTMLTextAreaElement).value).not.toContain("xxxx");
+  });
+
+  it("paste-inline keeps the raw text in the prompt box", async () => {
+    stubFetch(
+      () =>
+        new Response(timelineBody(), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      [
+        sessionView(0, {
+          agent_runtime: {
+            agent: "claude",
+            state: "running",
+            started_at: sessionStartedAt,
+            ended_at: null,
+            exit_code: null,
+          },
+        }),
+      ],
+    );
+
+    render(<TimelinePane sessionId="abc" />);
+    const user = userEvent.setup();
+    const input = await screen.findByLabelText("Prompt text");
+    input.focus();
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        items: [],
+        files: [],
+        getData: () => "line\n".repeat(300),
+      },
+    });
+
+    await screen.findByText(/save it to \.sulion-paste/i);
+    await user.click(screen.getByRole("button", { name: /paste inline/i }));
+    await waitFor(() =>
+      expect((input as HTMLTextAreaElement).value).toContain("line\nline"),
+    );
   });
 
   it("strips textarea-only trailing newlines before sending a prompt", async () => {

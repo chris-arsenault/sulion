@@ -60,12 +60,11 @@ import {
   imageFromClipboard,
   readClipboard,
   sanitizePaste,
+  PASTE_AS_FILE_BYTES,
+  PASTE_AS_FILE_LINES,
 } from "./terminal/clipboard";
 import "@xterm/xterm/css/xterm.css";
 import "./TerminalPane.css";
-
-const PASTE_AS_FILE_BYTES = 4 * 1024;
-const PASTE_AS_FILE_LINES = 200;
 
 export function TerminalPane({ sessionId }: { sessionId: string }) {
   const hostRef = useRef<HTMLDivElement>(null);

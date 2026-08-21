@@ -218,6 +218,51 @@ fn exec_pairs_summarize_their_command_in_markdown() {
     );
 }
 
+/// Local slash-command plumbing (`/model`, `/login`, …) arrives as user
+/// records wrapped in command tags. It must not seed turns of its own,
+/// and it hides with the rest of the bookkeeping.
+#[test]
+fn local_command_records_do_not_seed_turns() {
+    let events = vec![
+        event(1, "user", vec![text(0, "real prompt")]),
+        event(2, "assistant", vec![text(0, "reply")]),
+        event(
+            3,
+            "user",
+            vec![text(
+                0,
+                "<command-name>/model</command-name> <command-message>model</command-message>",
+            )],
+        ),
+        event(
+            4,
+            "user",
+            vec![text(
+                0,
+                "<local-command-stdout>Set model to X</local-command-stdout>",
+            )],
+        ),
+        event(5, "user", vec![text(0, "second real prompt")]),
+    ];
+
+    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
+    let previews: Vec<&str> = projected
+        .turns
+        .iter()
+        .map(|turn| turn.preview.as_str())
+        .collect();
+    assert_eq!(previews, vec!["real prompt", "second real prompt"]);
+    // Hidden by default alongside the rest of the bookkeeping.
+    assert!(
+        projected.turns[0]
+            .chunks
+            .iter()
+            .all(|chunk| !matches!(chunk, TimelineChunk::Generic { .. })),
+        "local command records leaked into chunks: {:?}",
+        projected.turns[0].chunks,
+    );
+}
+
 /// Newer Claude Code builds write bookkeeping record kinds (`mode`,
 /// `ai-title`, `file-history-delta`, …) that must not surface as generic
 /// timeline rows when bookkeeping is hidden.
