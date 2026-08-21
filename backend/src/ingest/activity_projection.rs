@@ -61,6 +61,17 @@ fn claude_transition(value: &Value) -> Option<(ActivityState, Option<String>, &'
             let interactive = interactive_claude_tool(value)?;
             Some((ActivityState::NeedsInput, Some(interactive), "derived"))
         }
+        // Claude writes turn telemetry (stop-hook summary, duration) as
+        // its last records of a turn — the reliable "turn is over,
+        // agent is idle" signal the prompt bar keys off.
+        Some("system") => {
+            let subtype = value.get("subtype").and_then(Value::as_str);
+            if matches!(subtype, Some("turn_duration" | "stop_hook_summary")) {
+                Some((ActivityState::AwaitingPrompt, None, "derived"))
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -215,6 +226,16 @@ mod tests {
         });
         let (state, _, _) = claude_transition(&value).expect("transition");
         assert_eq!(state, ActivityState::Working);
+    }
+
+    #[test]
+    fn claude_turn_telemetry_resolves_to_awaiting_prompt() {
+        for subtype in ["turn_duration", "stop_hook_summary"] {
+            let value = json!({ "type": "system", "subtype": subtype });
+            let (state, _, _) = claude_transition(&value).expect("transition");
+            assert_eq!(state, ActivityState::AwaitingPrompt);
+        }
+        assert!(claude_transition(&json!({ "type": "system", "subtype": "other" })).is_none());
     }
 
     #[test]

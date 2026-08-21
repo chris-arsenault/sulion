@@ -7,9 +7,9 @@ use crate::ingest::canonical::{BlockKind, OperationCategory};
 
 use super::render::{format_turn_markdown, pair_operation_type, subagent_title, truncate};
 use super::{
-    ProjectionFilters, SpeakerFacet, StoredEvent, TimelineAssistantItem, TimelineChunk,
-    TimelineGenericDetails, TimelineResponse, TimelineSubagent, TimelineToolPair,
-    TimelineToolResult, TimelineTurn, BOOKKEEPING_KINDS,
+    is_bookkeeping_system_subtype, ProjectionFilters, SpeakerFacet, StoredEvent,
+    TimelineAssistantItem, TimelineChunk, TimelineGenericDetails, TimelineResponse,
+    TimelineSubagent, TimelineToolPair, TimelineToolResult, TimelineTurn, BOOKKEEPING_KINDS,
 };
 
 pub fn project_timeline(
@@ -588,8 +588,11 @@ fn is_system_event(event: &StoredEvent) -> bool {
 }
 
 fn is_bookkeeping_event(event: &StoredEvent) -> bool {
+    // is_meta covers any speaker: claude meta-system records and codex
+    // plumbing records (world_state, turn_context, …) alike.
     BOOKKEEPING_KINDS.contains(&event.kind.as_str())
-        || (is_system_event(event) && event.is_meta)
+        || event.is_meta
+        || (is_system_event(event) && is_bookkeeping_system_subtype(event.subtype.as_deref()))
         || is_local_command_event(event)
 }
 

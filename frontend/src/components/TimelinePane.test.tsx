@@ -495,6 +495,74 @@ describe("TimelinePane", () => {
     );
   });
 
+  it("marks a turn in progress and relabels Send as Steer", async () => {
+    stubFetch(
+      () =>
+        new Response(timelineBody(), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      [
+        sessionView(0, {
+          agent_runtime: {
+            agent: "claude",
+            state: "running",
+            started_at: sessionStartedAt,
+            ended_at: null,
+            exit_code: null,
+          },
+          activity: {
+            state: "working",
+            summary: null,
+            reason: null,
+            source: "ingester",
+            confidence: "derived",
+            updated_at: null,
+          },
+        }),
+      ],
+    );
+
+    render(<TimelinePane sessionId="abc" />);
+    const indicator = await screen.findByTestId("prompt-activity");
+    expect(indicator.textContent).toContain("turn in progress");
+    expect(screen.getByRole("button", { name: "Steer" })).toBeDefined();
+  });
+
+  it("marks an idle agent as ready for a new prompt", async () => {
+    stubFetch(
+      () =>
+        new Response(timelineBody(), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      [
+        sessionView(0, {
+          agent_runtime: {
+            agent: "claude",
+            state: "running",
+            started_at: sessionStartedAt,
+            ended_at: null,
+            exit_code: null,
+          },
+          activity: {
+            state: "awaiting_prompt",
+            summary: null,
+            reason: null,
+            source: "ingester",
+            confidence: "derived",
+            updated_at: null,
+          },
+        }),
+      ],
+    );
+
+    render(<TimelinePane sessionId="abc" />);
+    const indicator = await screen.findByTestId("prompt-activity");
+    expect(indicator.textContent).toContain("ready for a new prompt");
+    expect(screen.getByRole("button", { name: "Send" })).toBeDefined();
+  });
+
   it("strips textarea-only trailing newlines before sending a prompt", async () => {
     const calls: Array<Record<string, unknown>> = [];
     stubFetch(

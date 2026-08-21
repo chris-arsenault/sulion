@@ -185,6 +185,49 @@
   border-color: var(--atn-mark);
 }
 
+/* Mid-turn vs idle marker in the prompt bar: whether input steers the
+ * running turn or opens a new one. */
+.timeline-prompt__activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--timeline-t-meta);
+}
+
+.timeline-prompt__activity::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.timeline-prompt__activity--working {
+  color: var(--atn-fg);
+}
+
+.timeline-prompt__activity--working::before {
+  background: var(--atn-mark);
+  animation: timeline-prompt-pulse 1.2s ease-in-out infinite;
+}
+
+.timeline-prompt__activity--idle {
+  color: var(--ok-fg, var(--text-mid));
+}
+
+.timeline-prompt__activity--idle::before {
+  background: var(--ok-mark);
+}
+
+@keyframes timeline-prompt-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
 .timeline-prompt {
   border-top: 1px solid var(--canvas-3);
   background: color-mix(in srgb, var(--canvas-2) 88%, var(--accent) 12%);

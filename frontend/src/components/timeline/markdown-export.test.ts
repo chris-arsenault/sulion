@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
 
+import { stripAssistantAnnotations } from "./markdown-export";
+
+describe("stripAssistantAnnotations", () => {
+  it("drops oai-mem-citation markup and keeps the message", () => {
+    const text =
+      "The remaining gap is coverage.\n" +
+      "<oai-mem-citation> <citation_entries> MEMORY.md:3-4|note=[x] " +
+      "</citation_entries> <rollout_ids> 01a01bb8 </rollout_ids> </oai-mem-citation>";
+    expect(stripAssistantAnnotations(text)).toBe("The remaining gap is coverage.");
+  });
+
+  it("leaves ordinary text untouched", () => {
+    expect(stripAssistantAnnotations("plain text")).toBe("plain text");
+  });
+});
+
 import {
   formatAssistantItems,
   formatAssistantText,

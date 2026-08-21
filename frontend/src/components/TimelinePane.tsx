@@ -683,6 +683,10 @@ function TimelinePromptBar({
   const metadata = session?.agent_metadata ?? null;
   const live = session?.state === "live";
   const running = live && runtime.state === "running";
+  // Whether a prompt lands as a new turn or steers a turn in flight.
+  const activityState = session?.activity?.state ?? null;
+  const midTurn = running && activityState === "working";
+  const idle = running && activityState === "awaiting_prompt";
   const starting = live && runtime.state === "starting";
   const canLaunch = live && !starting && runtime.state !== "running";
   const canSend = running && text.trim().length > 0 && pending == null;
@@ -855,6 +859,22 @@ function TimelinePromptBar({
     <div className="timeline-prompt" aria-label="Agent prompt controls">
       <div className="timeline-prompt__status">
         <span>{status}</span>
+        {midTurn && (
+          <span
+            className="timeline-prompt__activity timeline-prompt__activity--working"
+            data-testid="prompt-activity"
+          >
+            turn in progress — input will steer it
+          </span>
+        )}
+        {idle && (
+          <span
+            className="timeline-prompt__activity timeline-prompt__activity--idle"
+            data-testid="prompt-activity"
+          >
+            idle — ready for a new prompt
+          </span>
+        )}
         {meta && <span className="timeline-prompt__meta">{meta}</span>}
         {error && <span className="timeline-prompt__error">{error}</span>}
         {pasteError && <span className="timeline-prompt__error">{pasteError}</span>}
@@ -867,7 +887,11 @@ function TimelinePromptBar({
             onChange={onTextChange}
             onKeyDown={onTextKeyDown}
             onPaste={onTextPaste}
-            placeholder="Type a prompt. Ctrl+Enter sends to the running agent."
+            placeholder={
+              midTurn
+                ? "Type a steering message. Ctrl+Enter sends into the running turn."
+                : "Type a prompt. Ctrl+Enter sends to the running agent."
+            }
             rows={2}
             className="timeline-prompt__textarea"
             aria-label="Prompt text"
@@ -879,7 +903,7 @@ function TimelinePromptBar({
             onClick={onSendClick}
             disabled={!canSend}
           >
-            {pending === "send" ? "Sending…" : "Send"}
+            {pending === "send" ? "Sending…" : midTurn ? "Steer" : "Send"}
           </button>
           <Tooltip label="Interrupt running agent (Esc)">
             <button

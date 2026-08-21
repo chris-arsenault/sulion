@@ -148,10 +148,76 @@ describe("TurnDetail", () => {
         showThinking={true}
       />,
     );
-    const user = userEvent.setup();
-    await user.click(screen.getByLabelText(/expand tool details/i));
+    // The newest (only) card arrives expanded, so the diff is already
+    // visible without a click.
+    expect(screen.getByLabelText(/collapse tool details/i)).toBeDefined();
     expect(screen.getByText("before")).toBeDefined();
     expect(screen.getByText("after")).toBeDefined();
+  });
+
+  it("expands the newest card, collapses it when another arrives, and keeps manual toggles", async () => {
+    const first = makePair({ id: "t1", name: "bash", input: { command: "one" } });
+    const second = makePair({ id: "t2", name: "bash", input: { command: "two" } });
+    const turnWith = (pairs: ReturnType<typeof makePair>[]) =>
+      makeTurn({
+        tool_pairs: pairs,
+        operation_count: pairs.length,
+        chunks: pairs.map((pair) => toolChunk(pair.id)),
+      });
+
+    const { rerender } = renderWithContextMenu(
+      <TurnDetail turn={turnWith([first])} showThinking={true} />,
+    );
+    const rowFor = (id: string) =>
+      document.querySelector(`[data-pair-id="${id}"]`) as HTMLElement;
+    const expandedIn = (id: string) =>
+      rowFor(id).querySelector('[aria-label="Collapse tool details"]') != null;
+    expect(expandedIn("t1")).toBe(true);
+
+    // A second card arrives: it expands, the first collapses.
+    rerender(
+      <>
+        <TurnDetail turn={turnWith([first, second])} showThinking={true} />
+        <ContextMenuHost />
+      </>,
+    );
+    expect(expandedIn("t1")).toBe(false);
+    expect(expandedIn("t2")).toBe(true);
+
+    // Manually expand the first; a further refetch keeps it open.
+    const user = userEvent.setup();
+    await user.click(
+      rowFor("t1").querySelector('[aria-label="Expand tool details"]')!,
+    );
+    rerender(
+      <>
+        <TurnDetail turn={turnWith([first, second])} showThinking={true} />
+        <ContextMenuHost />
+      </>,
+    );
+    expect(expandedIn("t1")).toBe(true);
+    expect(expandedIn("t2")).toBe(true);
+  });
+
+  it("prefers the agent's description over the command in collapsed summaries", () => {
+    const pair = makePair({
+      id: "b1",
+      name: "bash",
+      input: { command: "cargo test --quiet", description: "Run backend gates" },
+    });
+    renderWithContextMenu(
+      <TurnDetail
+        turn={makeTurn({
+          tool_pairs: [pair],
+          operation_count: 1,
+          chunks: [toolChunk("b1")],
+        })}
+        showThinking={true}
+      />,
+    );
+    // Appears both as the collapsed summary and inside the expanded body.
+    const summary = document.querySelector(".td__tool-summary");
+    expect(summary?.textContent).toBe("Run backend gates");
   });
 
   it("opens subagent log button only for task pairs with projected subagent data", async () => {

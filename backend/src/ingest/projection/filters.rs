@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use crate::ingest::canonical::BlockKind;
 use crate::ingest::timeline::{
-    is_local_command_text, ProjectionFilters, SpeakerFacet, TimelineAssistantItem, TimelineChunk,
-    TimelineToolPair, TimelineTurn, BOOKKEEPING_KINDS,
+    is_bookkeeping_system_subtype, is_local_command_text, ProjectionFilters, SpeakerFacet,
+    TimelineAssistantItem, TimelineChunk, TimelineToolPair, TimelineTurn, BOOKKEEPING_KINDS,
 };
 
 pub(super) fn apply_projection_filters(turn: &mut TimelineTurn, filters: &ProjectionFilters) {
@@ -69,7 +69,11 @@ fn filter_chunk(
             text,
             is_meta,
         } => {
-            if !filters.show_bookkeeping && is_meta {
+            // Turn telemetry (hook summaries, durations) hides with the
+            // meta-flagged system records.
+            if !filters.show_bookkeeping
+                && (is_meta || is_bookkeeping_system_subtype(subtype.as_deref()))
+            {
                 None
             } else {
                 Some(TimelineChunk::System {
@@ -206,6 +210,29 @@ mod tests {
             "chunk visible: {:?}",
             hidden.chunks
         );
+
+        let mut shown = turn;
+        let filters = ProjectionFilters {
+            show_bookkeeping: true,
+            ..Default::default()
+        };
+        apply_projection_filters(&mut shown, &filters);
+        assert_eq!(shown.chunks.len(), 1);
+    }
+
+    #[test]
+    fn turn_telemetry_system_chunks_hide_with_bookkeeping() {
+        let chunk = TimelineChunk::System {
+            subtype: Some("stop_hook_summary".to_string()),
+            text: String::new(),
+            is_meta: false,
+        };
+        let mut turn = turn_with_pair();
+        turn.chunks = vec![chunk];
+
+        let mut hidden = turn.clone();
+        apply_projection_filters(&mut hidden, &ProjectionFilters::default());
+        assert!(hidden.chunks.is_empty());
 
         let mut shown = turn;
         let filters = ProjectionFilters {

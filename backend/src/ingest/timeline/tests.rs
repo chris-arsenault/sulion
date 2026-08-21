@@ -263,6 +263,29 @@ fn local_command_records_do_not_seed_turns() {
     );
 }
 
+/// Codex world-model snapshots (`world_state`) and any meta-flagged
+/// record hide with the bookkeeping.
+#[test]
+fn codex_world_state_records_hide_with_bookkeeping() {
+    let mut world_state = event(2, "world_state", vec![]);
+    world_state.is_meta = true;
+    let events = vec![
+        event(1, "user", vec![text(0, "prompt")]),
+        world_state,
+        event(3, "assistant", vec![text(0, "reply")]),
+    ];
+
+    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
+    assert!(
+        projected.turns[0]
+            .chunks
+            .iter()
+            .all(|chunk| !matches!(chunk, TimelineChunk::Generic { .. })),
+        "world_state leaked: {:?}",
+        projected.turns[0].chunks,
+    );
+}
+
 /// Newer Claude Code builds write bookkeeping record kinds (`mode`,
 /// `ai-title`, `file-history-delta`, …) that must not surface as generic
 /// timeline rows when bookkeeping is hidden.

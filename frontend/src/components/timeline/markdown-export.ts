@@ -1,13 +1,25 @@
 import type { TimelineAssistantItem } from "../../api/types";
 import type { ToolPair, Turn } from "./grouping";
 
+/** OpenAI appends memory-citation markup to assistant text
+ * (`<oai-mem-citation>…</oai-mem-citation>`). It's provenance metadata,
+ * not conversation — drop it from every rendered or exported surface. */
+export function stripAssistantAnnotations(text: string): string {
+  if (!text.includes("<oai-mem-citation>")) return text;
+  return text
+    .replace(/<oai-mem-citation>[\s\S]*?<\/oai-mem-citation>/g, "")
+    .trimEnd();
+}
+
 export function formatTurn(turn: Turn): string {
   return turn.markdown;
 }
 
 export function formatAssistantText(items: TimelineAssistantItem[]): string {
   return items
-    .flatMap((item) => (item.kind === "text" ? [item.text] : []))
+    .flatMap((item) =>
+      item.kind === "text" ? [stripAssistantAnnotations(item.text)] : [],
+    )
     .join("\n\n")
     .trim();
 }
@@ -18,7 +30,9 @@ export function formatAssistantItems(
 ): string {
   return items
     .flatMap((item) => {
-      if (item.kind === "text") return [item.text.trim()].filter(Boolean);
+      if (item.kind === "text") {
+        return [stripAssistantAnnotations(item.text).trim()].filter(Boolean);
+      }
       const pair = pairById.get(item.pair_id);
       return pair ? [formatToolPair(pair)] : [];
     })

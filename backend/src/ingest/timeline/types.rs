@@ -26,6 +26,15 @@ pub(crate) fn is_local_command_text(text: &str) -> bool {
         .any(|prefix| text.starts_with(prefix))
 }
 
+/// System-record subtypes that are turn telemetry, not conversation:
+/// hook execution summaries and turn timing. Hidden with the rest of
+/// the bookkeeping.
+pub(crate) const BOOKKEEPING_SYSTEM_SUBTYPES: &[&str] = &["stop_hook_summary", "turn_duration"];
+
+pub(crate) fn is_bookkeeping_system_subtype(subtype: Option<&str>) -> bool {
+    subtype.is_some_and(|subtype| BOOKKEEPING_SYSTEM_SUBTYPES.contains(&subtype))
+}
+
 pub(crate) const BOOKKEEPING_KINDS: &[&str] = &[
     "agent-name",
     "ai-title",
@@ -39,6 +48,8 @@ pub(crate) const BOOKKEEPING_KINDS: &[&str] = &[
     "mode",
     "permission-mode",
     "queue-operation",
+    // Codex world-model snapshots ride along on most turns.
+    "world_state",
 ];
 
 #[derive(Debug, Clone)]

@@ -111,7 +111,9 @@ fn tool_one_line(pair: &TimelineToolPair) -> String {
     let pick = |key: &str| input.get(key).and_then(Value::as_str);
     let summary = match pair_operation_type(pair) {
         "edit" | "write" | "multi_edit" | "read" => pick("path").unwrap_or_default(),
-        "bash" | "exec" => pick("command").unwrap_or_default(),
+        "bash" | "exec" => pick("description")
+            .or_else(|| pick("command"))
+            .unwrap_or_default(),
         "exec_command" => pick("cmd").or_else(|| pick("command")).unwrap_or_default(),
         "grep" | "glob" => pick("pattern").unwrap_or_default(),
         "task" => pick("description")

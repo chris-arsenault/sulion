@@ -23,6 +23,7 @@ import {
   formatAssistantItems,
   formatAssistantText,
   formatTurn,
+  stripAssistantAnnotations,
 } from "./markdown-export";
 import { ThinkingFlyout } from "./ThinkingFlyout";
 import { ToolHoverCard } from "./ToolHoverCard";
@@ -67,6 +68,46 @@ export function TurnDetail({
   const pairById = useMemo(
     () => new Map(turn.tool_pairs.map((pair) => [pair.id, pair] as const)),
     [turn.tool_pairs],
+  );
+
+  // Card expansion lives here, not in the rows: the newest card arrives
+  // expanded and collapses again when the next one lands, manual toggles
+  // stick, errors stay open, and a focus request rebases everything onto
+  // the focused row. Manual choices reset when the selection moves to a
+  // different turn but survive live refetches of the same turn.
+  const [manualExpansion, setManualExpansion] = useState<Record<string, boolean>>({});
+  const turnIdentity = `${turn.session_uuid ?? ""}:${turn.id}`;
+  const seenTurnRef = useRef(turnIdentity);
+  useEffect(() => {
+    if (seenTurnRef.current !== turnIdentity) {
+      seenTurnRef.current = turnIdentity;
+      setManualExpansion({});
+    }
+  }, [turnIdentity]);
+  const seenFocusRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (focusKey == null || seenFocusRef.current === focusKey) return;
+    seenFocusRef.current = focusKey;
+    setManualExpansion({});
+  }, [focusKey]);
+
+  const focusActive = focusKey != null && focusPairId != null;
+  const lastPairId =
+    turn.tool_pairs.length > 0 ? turn.tool_pairs[turn.tool_pairs.length - 1]!.id : null;
+  const isExpanded = useCallback(
+    (pair: ToolPair): boolean => {
+      const manual = manualExpansion[pair.id];
+      if (manual !== undefined) return manual;
+      if (focusActive) return pair.id === focusPairId;
+      return pair.id === lastPairId || pair.is_error || pair.is_pending;
+    },
+    [manualExpansion, focusActive, focusPairId, lastPairId],
+  );
+  const toggleExpansion = useCallback(
+    (pair: ToolPair, currentlyExpanded: boolean) => {
+      setManualExpansion((prev) => ({ ...prev, [pair.id]: !currentlyExpanded }));
+    },
+    [],
   );
   const [saveError, setSaveError] = useState<string | null>(null);
   const [thinking, setThinking] = useState<ThinkingAnchor | null>(null);
@@ -287,6 +328,8 @@ export function TurnDetail({
               <ToolPairRow
                 key={`t-${pair.id || idx}`}
                 pair={pair}
+                expanded={isExpanded(pair)}
+                onToggle={toggleExpansion}
                 onOpenSubagent={onOpenSubagent}
                 onEnter={openHover}
                 onLeave={scheduleDismiss}
@@ -366,7 +409,10 @@ function AssistantBlock({
   onThinkingChip: (el: HTMLElement, text: string) => void;
 }) {
   const texts = useMemo(
-    () => items.flatMap((item) => (item.kind === "text" ? [item.text] : [])),
+    () =>
+      items.flatMap((item) =>
+        item.kind === "text" ? [stripAssistantAnnotations(item.text)] : [],
+      ),
     [items],
   );
   const hasCopyable = texts.length > 0;
@@ -490,6 +536,8 @@ function defaultReferenceName(text: string): string {
 
 function ToolPairRow({
   pair,
+  expanded,
+  onToggle,
   onOpenSubagent,
   onEnter,
   onLeave,
@@ -497,32 +545,26 @@ function ToolPairRow({
   focusToken,
 }: {
   pair: ToolPair;
+  /** Controlled by TurnDetail: newest-card default, sticky manual
+   * toggles, focus rebasing. */
+  expanded: boolean;
+  onToggle: (pair: ToolPair, currentlyExpanded: boolean) => void;
   onOpenSubagent?: (pair: ToolPair) => void;
   onEnter: (el: HTMLElement, pair: ToolPair) => void;
   onLeave: () => void;
   isFocused: boolean;
   focusToken: string | null;
 }) {
-  const lowSignal = !pair.is_error && !pair.is_pending;
-  // Seeded from the incoming focus: if this row is the focused one it
-  // starts expanded, if the focus is on a sibling it starts collapsed
-  // (user can still toggle). Falls back to the error/pending heuristic
-  // when there's no focus request.
-  const [expanded, setExpanded] = useState(
-    focusToken != null ? isFocused : !lowSignal,
-  );
   const rowRef = useRef<HTMLDivElement>(null);
   const enterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const appliedFocusTokenRef = useRef<string | null>(null);
 
-  // A new focus request rebases the pair's expansion + scrolls the
-  // focused row into view. Sibling rows also re-rebase on the same
-  // token, which collapses them.
+  // A new focus request scrolls the focused row into view; the
+  // expansion rebase itself happens in TurnDetail.
   useEffect(() => {
     if (focusToken == null) return;
     if (appliedFocusTokenRef.current === focusToken) return;
     appliedFocusTokenRef.current = focusToken;
-    setExpanded(isFocused);
     if (isFocused && rowRef.current) {
       rowRef.current.scrollIntoView({ block: "center", behavior: "auto" });
     }
@@ -541,7 +583,10 @@ function ToolPairRow({
     }
     onLeave();
   }, [onLeave]);
-  const toggleExpanded = useCallback(() => setExpanded((v) => !v), []);
+  const toggleExpanded = useCallback(
+    () => onToggle(pair, expanded),
+    [onToggle, pair, expanded],
+  );
   const onOpenSubagentClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
@@ -674,7 +719,11 @@ function toolSummary(pair: ToolPair): string {
     case "bash":
     case "exec":
     case "exec_command":
+      // The agent's own description ("Run backend gates") reads better
+      // collapsed than the raw command line; codex exec carries none,
+      // so its command stays the summary.
       return (
+        pick("description") ??
         pick("command") ??
         pick("cmd") ??
         firstEditedPath()
