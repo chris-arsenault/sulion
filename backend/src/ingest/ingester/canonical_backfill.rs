@@ -54,7 +54,10 @@ pub struct CanonicalBackfillOutcome {
     pub failed: usize,
 }
 
-pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<CanonicalBackfillOutcome> {
+pub async fn backfill_canonical_blocks(
+    pool: &Pool,
+    job: Option<&super::super::jobs::JobHandle>,
+) -> anyhow::Result<CanonicalBackfillOutcome> {
     let codex_sessions: Vec<(Uuid,)> = sqlx::query_as(
         "SELECT DISTINCT session_uuid \
          FROM events e \
@@ -80,6 +83,9 @@ pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<CanonicalB
     .await?;
     let mut count = 0usize;
     let mut failures = 0usize;
+    if let Some(job) = job {
+        job.set_total(codex_sessions.len() as i64).await;
+    }
     for (session_uuid,) in codex_sessions {
         // One poisoned session must not abort the whole repair: log the
         // full error chain with its location and keep going. The version
@@ -95,6 +101,9 @@ pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<CanonicalB
                     "canonical backfill failed for codex session; skipping",
                 );
             }
+        }
+        if let Some(job) = job {
+            job.advance(Some(&session_uuid.to_string())).await;
         }
     }
     let rows: Vec<(Uuid, i64, String, serde_json::Value)> = sqlx::query_as(
@@ -138,6 +147,9 @@ pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<CanonicalB
     .fetch_all(pool)
     .await?;
 
+    if let Some(job) = job {
+        job.set_total(job.counted() + rows.len() as i64).await;
+    }
     for (session_uuid, byte_offset, agent, payload) in rows {
         let parsed = parse_canonical_event(&agent, &payload, session_uuid, byte_offset, None);
         match rewrite_canonical_event(pool, session_uuid, byte_offset, &parsed).await {
@@ -151,6 +163,9 @@ pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<CanonicalB
                     "canonical backfill failed for event; skipping",
                 );
             }
+        }
+        if let Some(job) = job {
+            job.advance(Some(&session_uuid.to_string())).await;
         }
     }
     Ok(CanonicalBackfillOutcome {

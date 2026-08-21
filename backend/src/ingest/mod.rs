@@ -2,6 +2,7 @@ mod activity_projection;
 pub mod canonical;
 mod file_scan;
 mod ingester;
+pub mod jobs;
 mod maintenance;
 mod metadata;
 mod projection;

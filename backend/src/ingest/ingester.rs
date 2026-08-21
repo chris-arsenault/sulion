@@ -40,6 +40,12 @@ use canonical_backfill::{detect_compaction_parent, set_parent_session};
 /// Heartbeat interval for the "I'm alive, here's what I've done" log.
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(60);
 
+/// A tick whose dirty-file list is at least this long records itself as
+/// a catch-up job, so a long drain (first-deploy import, downtime
+/// backlog) is visible in the jobs panel rather than looking like a
+/// stalled ingester.
+const CATCHUP_JOB_THRESHOLD: usize = 10;
+
 use super::tail::{next_line_boundary, MAX_READ_BYTES};
 
 #[derive(Debug, Clone)]
@@ -87,6 +93,11 @@ pub struct Ingester {
     parse_errors_total: AtomicU64,
     last_tick_started_at_unix: AtomicI64,
     last_progress_at_unix: AtomicI64,
+    // Catch-up job per transcript root, carried across ticks while a
+    // backlog drains so the whole drain shows as one job row.
+    catchup_jobs:
+        tokio::sync::Mutex<std::collections::HashMap<&'static str, super::jobs::JobHandle>>,
+    interrupted_stale_jobs: std::sync::atomic::AtomicBool,
 }
 
 impl Ingester {
@@ -201,6 +212,17 @@ impl Ingester {
     /// a summary of what happened this tick. Exposed so tests can drive
     /// the ingester synchronously.
     pub async fn tick(&self, pool: &Pool, cfg: &IngesterConfig) -> anyhow::Result<TickSummary> {
+        // A previous process may have died mid-drain and left its
+        // catch-up rows running; close them once before the first tick.
+        if !self.interrupted_stale_jobs.swap(true, Ordering::Relaxed) {
+            for source in [TranscriptSource::ClaudeCode, TranscriptSource::Codex] {
+                if let Err(err) =
+                    super::jobs::interrupt_running(pool, &catchup_job_name(source)).await
+                {
+                    tracing::warn!(%err, "stale catch-up job interruption failed");
+                }
+            }
+        }
         let mut summary = TickSummary::default();
         self.tick_root(
             pool,
@@ -238,8 +260,11 @@ impl Ingester {
                 return;
             }
         };
-        for file in dirty_files {
-            match process_file(pool, &file, source).await {
+        let job = self
+            .catchup_job_for_tick(pool, source, dirty_files.len())
+            .await;
+        for file in &dirty_files {
+            match process_file(pool, file, source).await {
                 Ok(file_result) => {
                     summary.events_inserted += file_result.events_inserted;
                     summary.parse_errors += file_result.parse_errors;
@@ -269,8 +294,56 @@ impl Ingester {
                     );
                 }
             }
+            if let Some(job) = &job {
+                job.advance(Some(&file.path.display().to_string())).await;
+            }
+        }
+        if let Some(job) = job {
+            // A short dirty list means the backlog has drained: the job
+            // closes and steady-state ticks stop reporting. A long one
+            // stashes the handle so the next tick keeps extending it.
+            if dirty_files.len() < CATCHUP_JOB_THRESHOLD {
+                job.complete().await;
+            } else {
+                self.catchup_jobs
+                    .lock()
+                    .await
+                    .insert(source.agent_id(), job);
+            }
         }
     }
+
+    /// Resume the root's cross-tick catch-up job, or start one when this
+    /// tick faces a backlog. Returns None during steady-state ticks.
+    async fn catchup_job_for_tick(
+        &self,
+        pool: &Pool,
+        source: TranscriptSource,
+        dirty_count: usize,
+    ) -> Option<super::jobs::JobHandle> {
+        let existing = self.catchup_jobs.lock().await.remove(source.agent_id());
+        match existing {
+            Some(job) => {
+                job.set_total(job.counted() + dirty_count as i64).await;
+                Some(job)
+            }
+            None if dirty_count >= CATCHUP_JOB_THRESHOLD => super::jobs::start(
+                pool,
+                &catchup_job_name(source),
+                &format!("{} transcript catch-up", source.agent_id()),
+                "files",
+                Some(dirty_count as i64),
+            )
+            .await
+            .map_err(|err| tracing::warn!(%err, "catch-up job start failed"))
+            .ok(),
+            None => None,
+        }
+    }
+}
+
+fn catchup_job_name(source: TranscriptSource) -> String {
+    format!("transcript_catchup_{}", source.agent_id())
 }
 
 fn unix_timestamp_from_atomic(value: &AtomicI64) -> Option<i64> {

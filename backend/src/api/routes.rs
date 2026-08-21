@@ -97,6 +97,7 @@ pub fn router() -> Router<Arc<AppState>> {
             post(timeline_routes::monitor_timeline),
         )
         .route("/api/metrics", get(portfolio_metrics))
+        .route("/api/jobs", get(background_jobs))
         .merge(workspace_router())
         .route("/api/repos/:name/git/diff", get(repo_routes::get_repo_diff))
         .route(
@@ -221,6 +222,14 @@ async fn portfolio_metrics(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Json<crate::metrics::MetricsResponse>> {
     Ok(Json(crate::metrics::portfolio_metrics(&state.pool).await?))
+}
+
+/// Active and recently finished background jobs (startup backfills,
+/// transcript catch-up) for the jobs panel.
+async fn background_jobs(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<crate::ingest::jobs::JobsResponse>> {
+    Ok(Json(crate::ingest::jobs::list_jobs(&state.pool).await?))
 }
 
 // ─── error type ───────────────────────────────────────────────────────

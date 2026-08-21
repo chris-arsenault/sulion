@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { getMetrics } from "../api/client";
+import { getJobs, getMetrics } from "../api/client";
 import type {
   FlowCfdDay,
+  JobView,
+  JobsResponse,
   MetricsModelPrice,
   MetricsResponse,
   PlanBurndownView,
@@ -93,6 +95,7 @@ export function MetricsPane({
         </div>
       ) : (
         <div className="metrics-pane__grid">
+          <JobsSection active={active} />
           <TokensSection data={data} />
           <FlowSection data={data} />
           <GitSection data={data} />
@@ -101,6 +104,132 @@ export function MetricsPane({
       )}
     </div>
   );
+}
+
+// ─── Background jobs ────────────────────────────────────────────────
+
+const JOBS_REFRESH_MS = 10_000;
+
+function JobsSection({ active }: { active: boolean }) {
+  const [jobs, setJobs] = useState<JobsResponse | null>(null);
+
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const next = await getJobs();
+        if (!cancelled) setJobs(next);
+      } catch {
+        // metrics header already surfaces fetch problems; a missed jobs
+        // poll just keeps the previous list.
+      }
+    };
+    void load();
+    const timer = setInterval(() => void load(), JOBS_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [active]);
+
+  if (!jobs) return null;
+  return (
+    <section className="metrics-section" aria-label="Background jobs">
+      <header>Background jobs</header>
+      {jobs.active.length === 0 ? (
+        <div className="metrics-chart__empty">Nothing running.</div>
+      ) : (
+        jobs.active.map((job) => <ActiveJob key={job.id} job={job} />)
+      )}
+      {jobs.recent.length > 0 ? (
+        <table className="metrics-table" aria-label="Recent jobs">
+          <thead>
+            <tr>
+              <th>recent</th>
+              <th>status</th>
+              <th>work</th>
+              <th>took</th>
+              <th>when</th>
+            </tr>
+          </thead>
+          <tbody>
+            {jobs.recent.map((job) => (
+              <tr key={job.id}>
+                <td>{job.label}</td>
+                <td>
+                  <span className="metrics-job__status" data-status={job.status}>
+                    {job.status}
+                  </span>
+                </td>
+                <td className="tabular">
+                  {formatTokens(job.progress_current)} {job.unit}
+                </td>
+                <td className="tabular">
+                  {job.finished_at
+                    ? formatElapsed(job.started_at, job.finished_at)
+                    : "—"}
+                </td>
+                <td className="tabular">
+                  {job.finished_at ? shortAge(job.finished_at) : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </section>
+  );
+}
+
+function ActiveJob({ job }: { job: JobView }) {
+  const total = job.progress_total;
+  const pct =
+    total && total > 0
+      ? Math.min(100, Math.round((job.progress_current / total) * 100))
+      : null;
+  return (
+    <div className="metrics-job">
+      <div className="metrics-job__head">
+        <span className="metrics-job__label">{job.label}</span>
+        {job.stalled ? (
+          <span className="metrics-job__status" data-status="stalled">
+            stalled
+          </span>
+        ) : null}
+        <span className="metrics-job__count tabular">
+          {total
+            ? `${formatTokens(job.progress_current)}/${formatTokens(total)} ${job.unit}`
+            : `${formatTokens(job.progress_current)} ${job.unit}`}
+          {" · "}
+          {formatElapsed(job.started_at, job.updated_at)}
+        </span>
+      </div>
+      <div
+        className="metrics-job__bar"
+        data-indeterminate={pct == null || undefined}
+        role="progressbar"
+        aria-valuenow={pct ?? undefined}
+      >
+        <div className="metrics-job__fill" data-w={pct == null ? 20 : barStep(pct, 100)} />
+      </div>
+      {job.detail ? (
+        <div className="metrics-job__detail" title={job.detail}>
+          {job.detail}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function formatElapsed(fromIso: string, toIso: string): string {
+  const ms = new Date(toIso).getTime() - new Date(fromIso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 // ─── Tokens ─────────────────────────────────────────────────────────

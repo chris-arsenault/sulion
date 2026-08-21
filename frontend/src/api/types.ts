@@ -931,3 +931,24 @@ export interface MetricsResponse {
   churn: ChurnHotspotView[];
   flow: FlowMetricsView;
 }
+
+export interface JobView {
+  id: number;
+  name: string;
+  label: string;
+  status: "running" | "completed" | "failed" | "interrupted";
+  progress_current: number;
+  progress_total: number | null;
+  unit: string;
+  detail: string | null;
+  error: string | null;
+  started_at: string;
+  updated_at: string;
+  finished_at: string | null;
+  stalled: boolean;
+}
+
+export interface JobsResponse {
+  active: JobView[];
+  recent: JobView[];
+}

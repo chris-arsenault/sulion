@@ -34,7 +34,7 @@ async fn fresh_pool() -> db::Pool {
     sqlx::query(
         "TRUNCATE retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, \
          plan_events, plan_attachments, plan_phases, plans, session_activity_state, \
-         events, ingester_state, claude_sessions, pty_sessions, repos, \
+         events, ingester_state, ingest_jobs, claude_sessions, pty_sessions, repos, \
          workspaces, workspace_dirty_paths RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
@@ -1164,7 +1164,7 @@ async fn claude_task_notifications_collapse_into_primary_projected_turns() {
     .await
     .unwrap();
 
-    assert_eq!(backfill_timeline_projection(&pool).await.unwrap(), 1);
+    assert_eq!(backfill_timeline_projection(&pool, None).await.unwrap(), 1);
     let repaired_preview: String = sqlx::query_scalar(
         "SELECT preview \
            FROM timeline_turns \
@@ -1570,4 +1570,68 @@ async fn file_truncation_resets_offset() {
     // First tick after truncation resets the offset; second tick re-ingests.
     Ingester::new().tick(&pool, &fx.config()).await.unwrap();
     assert_eq!(committed_offset(&pool, fx.session_uuid).await, 0);
+}
+
+#[tokio::test]
+async fn transcript_backlog_records_a_visible_catchup_job() {
+    let pool = fresh_pool().await;
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("mock-project-hash");
+    std::fs::create_dir_all(&project).unwrap();
+    for i in 0..12 {
+        let session = Uuid::new_v4();
+        std::fs::write(
+            project.join(format!("{session}.jsonl")),
+            format!(
+                "{{\"type\":\"user\",\"timestamp\":\"2025-01-01T00:00:{i:02}Z\",\"uuid\":\"u{i}\",\"message\":{{\"role\":\"user\",\"content\":\"hello\"}}}}\n",
+            ),
+        )
+        .unwrap();
+    }
+
+    let ingester = Ingester::new();
+    let cfg = IngesterConfig::new(root.path().to_path_buf());
+
+    // The backlog tick opens a catch-up job and leaves it running: new
+    // dirty files may appear before the next scan.
+    ingester.tick(&pool, &cfg).await.unwrap();
+    let (status, total): (String, Option<i64>) = sqlx::query_as(
+        "SELECT status, progress_total FROM ingest_jobs \
+          WHERE name = 'transcript_catchup_claude-code'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "running");
+    assert_eq!(total, Some(12));
+
+    // A caught-up tick closes it with the full count.
+    ingester.tick(&pool, &cfg).await.unwrap();
+    let jobs = sulion::ingest::jobs::list_jobs(&pool).await.unwrap();
+    assert!(jobs.active.is_empty());
+    let job = jobs
+        .recent
+        .iter()
+        .find(|job| job.name == "transcript_catchup_claude-code")
+        .expect("finished catch-up job listed");
+    assert_eq!(job.status, "completed");
+    assert_eq!(job.progress_current, 12);
+
+    // A fresh ingester (process restart) interrupts a job the previous
+    // process left running instead of letting it dangle.
+    sqlx::query(
+        "UPDATE ingest_jobs SET status = 'running', finished_at = NULL \
+          WHERE name = 'transcript_catchup_claude-code'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    Ingester::new().tick(&pool, &cfg).await.unwrap();
+    let (status,): (String,) = sqlx::query_as(
+        "SELECT status FROM ingest_jobs WHERE name = 'transcript_catchup_claude-code'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "interrupted");
 }

@@ -42,9 +42,35 @@ pub async fn run_required_startup_maintenance(
             target = CANONICAL_BLOCKS_VERSION,
             "derived transcript data version behind; repairing missing canonical fields",
         );
-        let outcome = super::ingester::backfill_canonical_blocks(pool)
-            .await
-            .context("backfill canonical blocks")?;
+        let job = super::jobs::start(
+            pool,
+            "canonical_backfill",
+            "Canonical block repair",
+            "items",
+            None,
+        )
+        .await
+        .ok();
+        let outcome = match super::ingester::backfill_canonical_blocks(pool, job.as_ref()).await {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                if let Some(job) = &job {
+                    job.fail(&format!("{err:#}")).await;
+                }
+                return Err(err).context("backfill canonical blocks");
+            }
+        };
+        if let Some(job) = &job {
+            if outcome.failed > 0 {
+                job.fail(&format!(
+                    "{} rows failed; retried next startup",
+                    outcome.failed
+                ))
+                .await;
+            } else {
+                job.complete().await;
+            }
+        }
         stats.canonical_events_backfilled = outcome.repaired as u64;
         if outcome.failed == 0 {
             set_projection_version(pool, CANONICAL_BLOCKS_KEY, CANONICAL_BLOCKS_VERSION).await?;
@@ -75,10 +101,29 @@ pub async fn run_required_startup_maintenance(
             target = TIMELINE_PROJECTION_VERSION,
             "derived transcript data version behind; repairing missing timeline projection rows",
         );
-        stats.timeline_sessions_backfilled = super::projection::backfill_timeline_projection(pool)
-            .await
-            .context("backfill timeline projection")?
-            as u64;
+        let job = super::jobs::start(
+            pool,
+            "timeline_backfill",
+            "Timeline projection rebuild",
+            "sessions",
+            None,
+        )
+        .await
+        .ok();
+        match super::projection::backfill_timeline_projection(pool, job.as_ref()).await {
+            Ok(rebuilt) => {
+                if let Some(job) = &job {
+                    job.complete().await;
+                }
+                stats.timeline_sessions_backfilled = rebuilt as u64;
+            }
+            Err(err) => {
+                if let Some(job) = &job {
+                    job.fail(&format!("{err:#}")).await;
+                }
+                return Err(err).context("backfill timeline projection");
+            }
+        }
         set_projection_version(pool, TIMELINE_PROJECTION_KEY, TIMELINE_PROJECTION_VERSION).await?;
     } else if timeline_version > TIMELINE_PROJECTION_VERSION {
         tracing::warn!(
@@ -97,9 +142,29 @@ pub async fn run_required_startup_maintenance(
             target = USAGE_PROJECTION_VERSION,
             "derived usage data version behind; rebuilding token categories",
         );
-        stats.usage_sessions_backfilled = super::usage::rebuild_usage_projection(pool)
-            .await
-            .context("rebuild usage projection")?;
+        let job = super::jobs::start(
+            pool,
+            "usage_backfill",
+            "Usage projection rebuild",
+            "sessions",
+            None,
+        )
+        .await
+        .ok();
+        match super::usage::rebuild_usage_projection(pool).await {
+            Ok(rebuilt) => {
+                if let Some(job) = &job {
+                    job.complete().await;
+                }
+                stats.usage_sessions_backfilled = rebuilt;
+            }
+            Err(err) => {
+                if let Some(job) = &job {
+                    job.fail(&format!("{err:#}")).await;
+                }
+                return Err(err).context("rebuild usage projection");
+            }
+        }
         set_projection_version(pool, USAGE_PROJECTION_KEY, USAGE_PROJECTION_VERSION).await?;
     } else if usage_version > USAGE_PROJECTION_VERSION {
         tracing::warn!(

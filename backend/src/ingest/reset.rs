@@ -65,26 +65,53 @@ pub async fn rebuild_ingest_derivatives(pool: &Pool) -> anyhow::Result<ReindexSt
 
     tx.commit().await?;
 
-    let canonical_outcome = super::ingester::backfill_canonical_blocks(pool).await?;
+    let job = super::jobs::start(pool, "reindex", "Reindex derived tables", "items", None)
+        .await
+        .ok();
+    let result = rebuild_derivative_phases(pool, &sessions, job.as_ref()).await;
+    match (&result, &job) {
+        (Ok(_), Some(job)) => job.complete().await,
+        (Err(err), Some(job)) => job.fail(&format!("{err:#}")).await,
+        _ => {}
+    }
+    let (canonical_events_rebuilt, timeline_sessions_rebuilt) = result?;
+
+    Ok(ReindexStats {
+        sessions_rebuilt: sessions.len() as u64,
+        events_preserved: events_preserved.max(0) as u64,
+        canonical_events_rebuilt,
+        timeline_sessions_rebuilt,
+    })
+}
+
+/// Canonical rebuild then per-session timeline rebuild, sharing one job
+/// record: canonical sets the running total for its own items, then the
+/// timeline phase extends it by the session count.
+async fn rebuild_derivative_phases(
+    pool: &Pool,
+    sessions: &[(Uuid,)],
+    job: Option<&super::jobs::JobHandle>,
+) -> anyhow::Result<(u64, u64)> {
+    let canonical_outcome = super::ingester::backfill_canonical_blocks(pool, job).await?;
     if canonical_outcome.failed > 0 {
         anyhow::bail!(
             "{} events failed canonical rebuild (see backfill warnings)",
             canonical_outcome.failed,
         );
     }
+    if let Some(job) = job {
+        job.set_total(job.counted() + sessions.len() as i64).await;
+    }
     let mut timeline_sessions_rebuilt = 0u64;
-    for (session_uuid,) in &sessions {
+    for (session_uuid,) in sessions {
         super::projection::rebuild_session_projection(pool, *session_uuid).await?;
         timeline_sessions_rebuilt += 1;
+        if let Some(job) = job {
+            job.advance(Some(&session_uuid.to_string())).await;
+        }
     }
     super::maintenance::mark_projection_versions_current(pool).await?;
-
-    Ok(ReindexStats {
-        sessions_rebuilt: sessions.len() as u64,
-        events_preserved: events_preserved.max(0) as u64,
-        canonical_events_rebuilt: canonical_outcome.repaired as u64,
-        timeline_sessions_rebuilt,
-    })
+    Ok((canonical_outcome.repaired as u64, timeline_sessions_rebuilt))
 }
 
 #[derive(Debug, Default, Clone, Copy, serde::Serialize)]

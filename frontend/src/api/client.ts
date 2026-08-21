@@ -15,6 +15,7 @@ import type {
   FuturePromptListResponse,
   HistoryQuery,
   HistoryResponse,
+  JobsResponse,
   LibraryEntry,
   LibraryKind,
   MonitorTimelineRequest,
@@ -300,6 +301,10 @@ export function getMonitorTimeline(
 
 export function getMetrics(): Promise<MetricsResponse> {
   return request<MetricsResponse>("/api/metrics");
+}
+
+export function getJobs(): Promise<JobsResponse> {
+  return request<JobsResponse>("/api/jobs");
 }
 
 export function listRepoPlans(

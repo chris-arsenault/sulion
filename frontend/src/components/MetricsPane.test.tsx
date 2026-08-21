@@ -3,8 +3,58 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { MetricsPane } from "./MetricsPane";
-import type { MetricsResponse } from "../api/types";
+import type { JobsResponse, MetricsResponse } from "../api/types";
 import { jsonResponse } from "../test/appState";
+
+function jobsFixture(): JobsResponse {
+  return {
+    active: [
+      {
+        id: 3,
+        name: "transcript_catchup_claude-code",
+        label: "claude-code transcript catch-up",
+        status: "running",
+        progress_current: 72,
+        progress_total: 176,
+        unit: "files",
+        detail: "/projects/x/subagents/agent-a1.jsonl",
+        error: null,
+        started_at: "2026-07-24T04:40:00Z",
+        updated_at: "2026-07-24T04:59:00Z",
+        finished_at: null,
+        stalled: false,
+      },
+    ],
+    recent: [
+      {
+        id: 2,
+        name: "timeline_backfill",
+        label: "Timeline projection rebuild",
+        status: "completed",
+        progress_current: 420,
+        progress_total: 420,
+        unit: "sessions",
+        detail: null,
+        error: null,
+        started_at: "2026-07-24T04:00:00Z",
+        updated_at: "2026-07-24T04:12:00Z",
+        finished_at: "2026-07-24T04:12:00Z",
+        stalled: false,
+      },
+    ],
+  };
+}
+
+function stubFetch() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) =>
+      String(input).includes("/api/jobs")
+        ? jsonResponse(jobsFixture())
+        : jsonResponse(fixture()),
+    ),
+  );
+}
 
 function fixture(): MetricsResponse {
   return {
@@ -100,10 +150,7 @@ describe("MetricsPane", () => {
   });
 
   it("renders token rollups, flow, git, and churn sections", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse(fixture())),
-    );
+    stubFetch();
     render(<MetricsPane />);
 
     const tokens = await screen.findByRole("region", { name: "Token spend" });
@@ -127,11 +174,22 @@ describe("MetricsPane", () => {
     ).toBeDefined();
   });
 
+  it("shows active background jobs with progress and recent history", async () => {
+    stubFetch();
+    render(<MetricsPane />);
+
+    const jobs = await screen.findByRole("region", { name: "Background jobs" });
+    expect(
+      within(jobs).getByText("claude-code transcript catch-up"),
+    ).toBeDefined();
+    expect(within(jobs).getByText(/72\/176 files/)).toBeDefined();
+    expect(within(jobs).getByText(/agent-a1\.jsonl/)).toBeDefined();
+    expect(within(jobs).getByText("Timeline projection rebuild")).toBeDefined();
+    expect(within(jobs).getByText("completed")).toBeDefined();
+  });
+
   it("shows day detail in the chart hover tooltip", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse(fixture())),
-    );
+    stubFetch();
     render(<MetricsPane />);
     const tokens = await screen.findByRole("region", { name: "Token spend" });
     const bars = within(tokens).getByRole("img", {

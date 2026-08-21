@@ -245,7 +245,10 @@ fn filter_descendant_projection_events(
         .collect()
 }
 
-pub async fn backfill_timeline_projection(pool: &Pool) -> anyhow::Result<usize> {
+pub async fn backfill_timeline_projection(
+    pool: &Pool,
+    job: Option<&super::jobs::JobHandle>,
+) -> anyhow::Result<usize> {
     let sessions: Vec<(Uuid,)> = sqlx::query_as(
         "WITH sessions_to_rebuild AS ( \
              SELECT DISTINCT e.session_uuid \
@@ -293,8 +296,14 @@ pub async fn backfill_timeline_projection(pool: &Pool) -> anyhow::Result<usize> 
     .await
     .context("list sessions requiring timeline projection rebuild")?;
 
+    if let Some(job) = job {
+        job.set_total(sessions.len() as i64).await;
+    }
     for (session_uuid,) in &sessions {
         rebuild_session_projection(pool, *session_uuid).await?;
+        if let Some(job) = job {
+            job.advance(Some(&session_uuid.to_string())).await;
+        }
     }
     Ok(sessions.len())
 }
