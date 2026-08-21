@@ -21,8 +21,35 @@ services:
       - ${SULION_WORKSPACES_HOST_PATH:-/mnt/apps/apps/sulion/workspaces}:/home/sulion/workspaces
       - sulion_run:/run/sulion
 
+  # This role runs code intelligence on TrueNAS rather than on a node, so here
+  # it is a declared workload of that site and reads its own values, like every
+  # other service in this file. The node-shaped defaults in the base graph are
+  # reset rather than left empty: a blank value beside a fetched one reads as a
+  # missing deploy input when it is neither.
   code-intel:
     profiles: !reset []
+    entrypoint:
+      - /usr/bin/tini
+      - --
+      - /usr/local/bin/truenas-roles-anywhere-bootstrap
+      - AWS_RA_CODE_INTEL
+      - --
+      - /usr/local/bin/sulion-code-intel
+    environment:
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_SDK_LOAD_CONFIG: "1"
+      AWS_RA_CODE_INTEL_CERT_DIR: /tmp/ahara-identity
+      AWS_RA_CODE_INTEL_WORKLOAD_ID: ${AWS_RA_CODE_INTEL_WORKLOAD_ID}
+      AWS_RA_CODE_INTEL_ENROLLMENT_URL: ${AWS_RA_CODE_INTEL_ENROLLMENT_URL}
+      AWS_RA_CODE_INTEL_TRUST_ANCHOR_ARN: ${AWS_RA_CODE_INTEL_TRUST_ANCHOR_ARN}
+      AWS_RA_CODE_INTEL_PROFILE_ARN: ${AWS_RA_CODE_INTEL_PROFILE_ARN}
+      AWS_RA_CODE_INTEL_ENTRY_ROLE_ARN: ${AWS_RA_CODE_INTEL_ENTRY_ROLE_ARN}
+      AWS_RA_CODE_INTEL_ROLE_ARN: ${AWS_RA_CODE_INTEL_ROLE_ARN}
+      AWS_RA_CODE_INTEL_SECRET_SULION_DB_URL: /ahara/truenas-db/sulion/app/url
+      AWS_RA_CODE_INTEL_SECRET_SULION_CODE_INTEL_TOKEN: /ahara/sulion/code-intel-token
+      SULION_DB_URL: !reset null
+      SULION_CODE_INTEL_TOKEN: !reset null
 
   runner:
     profiles: !reset []

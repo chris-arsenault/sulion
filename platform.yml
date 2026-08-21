@@ -20,9 +20,11 @@ images:
   - runner
   - frontend
   - devenv
-# Every container that holds a secret needs an identity to read it with
-# (ahara-trust ADR-0002). backend, node and ingester share the backend image
-# and one identity; runner and frontend hold no secret.
+# Every container that holds a secret and runs on TrueNAS needs an identity to
+# read it with (ahara-trust ADR-0002). node and ingester run on the dedicated
+# host, so they are absent: what they need is delivered over the node channel.
+# code-intel is here for the standalone role, which runs it on TrueNAS. runner
+# and frontend hold no secret.
 truenas_roles_anywhere:
   backend:
     env_prefix: AWS_RA_BACKEND

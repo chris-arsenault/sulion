@@ -132,7 +132,7 @@ pkgs.testers.runNixOSTest {
     assert "SULION_REPOS_HOST_PATH=/home/sulion/repos" in bootstrap
     assert "SULION_DEV_PORT_RANGE=26000-26010" in bootstrap
     # Shared credentials are delivered, never generated here.
-    assert "DB_PASSWORD" not in bootstrap
+    assert "SULION_DB_URL" not in bootstrap
     assert "SULION_RETRIEVAL_TOKEN" not in bootstrap
     assert "SULION_SECRET_BROKER_REGISTRATION_TOKEN" not in bootstrap
 

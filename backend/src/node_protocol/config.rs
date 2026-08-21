@@ -28,14 +28,23 @@ pub const DEFAULT_DELIVERED_PATH: &str = "/var/lib/sulion-node/delivered.env";
 
 /// Control-plane environment variables forwarded to an approved node.
 ///
+/// This channel is the node's only source of shared credentials. A node runs
+/// on its own host with no AWS identity, so it cannot read them for itself the
+/// way a TrueNAS workload does; the control plane reads them with its identity
+/// and hands over exactly this list.
+///
+/// The database URL crosses whole rather than as user and password. Nothing on
+/// the node assembles a connection string: Compose expands its variables before
+/// a container runs, and the node's own env file is written after delivery, so
+/// a DSN built from parts would have to be built in one of those two places and
+/// neither can see the credential at the time it would need it.
+///
 /// The broker master key and Cognito credentials are deliberately absent: they
-/// stay on TrueNAS and no node role reads them.
+/// stay on TrueNAS and no node role reads them. So is the code-intelligence
+/// token, whose two ends both live on the node's own loopback — that host
+/// generates its own rather than sharing the control plane's.
 const FORWARDED_KEYS: &[&str] = &[
-    "DB_USER",
-    "DB_PASSWORD",
-    "SULION_POSTGRES_HOST",
-    "SULION_POSTGRES_PORT",
-    "SULION_DB_NAME",
+    "SULION_DB_URL",
     "SULION_RETRIEVAL_TOKEN",
     "SULION_SECRET_BROKER_REGISTRATION_TOKEN",
 ];
@@ -224,21 +233,30 @@ mod tests {
 
     #[test]
     fn digest_is_stable_across_insertion_order() {
-        let first = config(&[("DB_USER", "sulion"), ("DB_PASSWORD", "secret")]);
-        let second = config(&[("DB_PASSWORD", "secret"), ("DB_USER", "sulion")]);
+        let first = config(&[
+            ("SULION_DB_URL", "postgres://a"),
+            ("SULION_RETRIEVAL_TOKEN", "secret"),
+        ]);
+        let second = config(&[
+            ("SULION_RETRIEVAL_TOKEN", "secret"),
+            ("SULION_DB_URL", "postgres://a"),
+        ]);
         assert_eq!(first.digest(), second.digest());
     }
 
     #[test]
     fn digest_changes_when_a_credential_rotates() {
-        let before = config(&[("DB_PASSWORD", "secret")]);
-        let after = config(&[("DB_PASSWORD", "rotated")]);
+        let before = config(&[("SULION_RETRIEVAL_TOKEN", "secret")]);
+        let after = config(&[("SULION_RETRIEVAL_TOKEN", "rotated")]);
         assert_ne!(before.digest(), after.digest());
     }
 
     #[test]
     fn payload_round_trips_without_changing_the_digest() {
-        let original = config(&[("DB_USER", "sulion"), ("SULION_DB_NAME", "sulion")]);
+        let original = config(&[
+            ("SULION_DB_URL", "postgres://sulion@192.168.66.3/sulion"),
+            ("SULION_RETRIEVAL_TOKEN", "token"),
+        ]);
         let restored = NodeRuntimeConfig::accept(original.payload()).expect("accept payload");
         assert_eq!(original, restored);
     }
@@ -246,17 +264,20 @@ mod tests {
     #[test]
     fn key_names_do_not_expose_values() {
         assert_eq!(
-            config(&[("DB_PASSWORD", "secret")]).key_names(),
-            vec!["DB_PASSWORD"]
+            config(&[("SULION_RETRIEVAL_TOKEN", "secret")]).key_names(),
+            vec!["SULION_RETRIEVAL_TOKEN"]
         );
     }
 
     #[test]
     fn rendered_values_are_quoted_and_carry_the_digest() {
-        let delivered = config(&[("DB_PASSWORD", "p@ss w#rd$1"), ("DB_USER", "sulion")]);
+        let delivered = config(&[
+            ("SULION_DB_URL", "postgres://sulion:p@ss w#rd$1@host/sulion"),
+            ("SULION_RETRIEVAL_TOKEN", "token"),
+        ]);
         let rendered = delivered.render_env_file();
-        assert!(rendered.contains("DB_PASSWORD='p@ss w#rd$1'\n"));
-        assert!(rendered.contains("DB_USER='sulion'\n"));
+        assert!(rendered.contains("SULION_DB_URL='postgres://sulion:p@ss w#rd$1@host/sulion'\n"));
+        assert!(rendered.contains("SULION_RETRIEVAL_TOKEN='token'\n"));
         assert!(rendered.contains(&format!("{CONFIG_DIGEST_ENV}='{}'\n", delivered.digest())));
     }
 
@@ -269,7 +290,7 @@ mod tests {
             signature: None,
             digest: "irrelevant".into(),
             values: [
-                ("DB_USER".to_string(), "sulion".to_string()),
+                ("SULION_DB_URL".to_string(), "postgres://a".to_string()),
                 (
                     "SULION_IMAGE_REGISTRY".to_string(),
                     "ghcr.io/attacker".to_string(),
@@ -287,7 +308,7 @@ mod tests {
         let tampered = NodeConfigPayload {
             signature: None,
             digest: "not-the-real-digest".into(),
-            values: [("DB_USER".to_string(), "sulion".to_string())]
+            values: [("SULION_DB_URL".to_string(), "postgres://a".to_string())]
                 .into_iter()
                 .collect(),
         };
@@ -296,10 +317,10 @@ mod tests {
 
     #[test]
     fn a_delivered_value_that_breaks_the_env_file_is_refused() {
-        let mut payload = config(&[("DB_USER", "sulion")]).payload();
+        let mut payload = config(&[("SULION_DB_URL", "postgres://a")]).payload();
         payload
             .values
-            .insert("DB_PASSWORD".into(), "quote'injection".into());
+            .insert("SULION_RETRIEVAL_TOKEN".into(), "quote'injection".into());
         assert!(NodeRuntimeConfig::accept(payload).is_err());
     }
 
@@ -316,11 +337,11 @@ mod tests {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("nested").join("delivered.env");
 
-        let delivered = config(&[("DB_USER", "sulion")]);
+        let delivered = config(&[("SULION_RETRIEVAL_TOKEN", "token")]);
         assert!(delivered.write_delivered(&path).expect("first write"));
         assert!(!delivered.write_delivered(&path).expect("second write"));
 
-        let rotated = config(&[("DB_USER", "rotated")]);
+        let rotated = config(&[("SULION_RETRIEVAL_TOKEN", "rotated")]);
         assert!(rotated.write_delivered(&path).expect("rotated write"));
         assert_eq!(
             std::fs::read_to_string(&path).expect("read back"),
@@ -334,7 +355,7 @@ mod tests {
 
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("delivered.env");
-        config(&[("DB_PASSWORD", "secret")])
+        config(&[("SULION_RETRIEVAL_TOKEN", "secret")])
             .write_delivered(&path)
             .expect("write");
 

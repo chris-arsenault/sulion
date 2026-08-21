@@ -175,8 +175,12 @@ control.node_config
   values   — the forwarded environment map
 ```
 
-`values` carries a fixed key list (database credentials, retrieval token,
-broker registration token). **Both ends enforce that list.** The receiving check
+`values` carries a fixed key list: `SULION_DB_URL`, `SULION_RETRIEVAL_TOKEN`,
+and `SULION_SECRET_BROKER_REGISTRATION_TOKEN`. The database URL crosses whole
+rather than as host, name, user and password, because nothing on the node
+assembles a connection string — Compose expands its variables before a
+container runs, and this file is written after that. **Both ends enforce that
+list.** The receiving check
 is the one that matters: the file the node writes is consumed as a Compose
 `--env-file` and as `EnvironmentFile=` for a root systemd unit, where Compose
 interpolates it into image references, bind-mount sources, and the

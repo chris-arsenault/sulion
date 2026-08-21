@@ -4,9 +4,12 @@
 # certificate the trust appliance issued it, rather than receiving values the
 # deploy pipeline resolved into Komodo (ahara-trust ADR-0002).
 #
-# backend, node and ingester share the backend image and the backend identity:
-# same stack, same host, same image, so separate identities would distinguish
-# nothing. runner and frontend hold no secret and appear here not at all.
+# Only TrueNAS workloads appear here. node and ingester run on the dedicated
+# host and enroll for nothing: they receive the values they need over the
+# authenticated node channel after an operator approves the node (ADR-0002).
+# code-intel is listed because the standalone role runs it on TrueNAS; in the
+# split topology it runs beside the node and is delivered to in the same way.
+# runner and frontend hold no secret and appear here not at all.
 #
 # No policy is passed to any of them: reading this project's parameters is all
 # they do with credentials, and machine-role derives that from the prefix.

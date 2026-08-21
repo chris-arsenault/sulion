@@ -9,10 +9,16 @@ x-sulion-aws: &sulion-aws
   AWS_DEFAULT_REGION: "us-east-1"
   AWS_SDK_LOAD_CONFIG: "1"
 
-# backend, node and ingester share the backend image and one identity: same
-# stack, same host, same image, so separate identities would distinguish
-# nothing. The certificate directory is under /tmp because these containers run
-# as a non-root user whose home is either read-only or a bind mount.
+# Only services that run on TrueNAS enroll: an identity is issued to a declared
+# workload of that site, and node, ingester and code-intel run on the dedicated
+# host in the split topology. Those three receive what they need over the node
+# channel instead, which is the whole reason a dedicated node is provisioned
+# with no credential of its own (ADR-0002).
+#
+# The backend identity is named as an anchor because the standalone role hosts
+# services here that a split deployment runs on the node. The certificate
+# directory is under /tmp because these containers run as a non-root user whose
+# home is either read-only or a bind mount.
 x-sulion-backend-identity: &sulion-backend-identity
   AWS_RA_BACKEND_CERT_DIR: "/tmp/ahara-identity"
   AWS_RA_BACKEND_WORKLOAD_ID: "${AWS_RA_BACKEND_WORKLOAD_ID}"
@@ -58,10 +64,6 @@ services:
       # cover the LAN address nodes dial.
       SULION_NODE_LISTEN: "0.0.0.0:8085"
       SULION_NODE_TLS_SAN: "${SULION_NODE_TLS_SAN:-192.168.66.3}"
-      # Forwarded verbatim to a node once an operator approves its identity
-      SULION_POSTGRES_HOST: "${SULION_POSTGRES_HOST:-192.168.66.3}"
-      SULION_POSTGRES_PORT: "${SULION_POSTGRES_PORT:-5432}"
-      SULION_DB_NAME: "${SULION_DB_NAME:-sulion}"
       SULION_DOCKER_MODE: "none"
       SULION_REPOS_ROOT: "/var/empty/sulion/repos"
       SULION_WORKSPACES_ROOT: "/var/empty/sulion/workspaces"
@@ -92,16 +94,23 @@ services:
     profiles:
       - split-runtime
     user: root
-    # This entrypoint replaces the image's, so the wrapper is named here too.
+    # The image entrypoint enrolls for a TrueNAS identity before starting; this
+    # replaces it, because a node has none and needs none.
     entrypoint:
       - /usr/bin/dumb-init
       - --
-      - /usr/local/bin/truenas-roles-anywhere-bootstrap
-      - AWS_RA_BACKEND
-      - --
       - /opt/sulion/node-entrypoint.sh
     environment:
-      <<: [*sulion-aws, *sulion-backend-identity]
+      # Delivered over the node channel after an operator approves this node,
+      # then written to root-owned host state the PTY identity cannot read.
+      # Empty until that happens, which is what keeps an unapproved machine
+      # from running.
+      SULION_DB_URL: "${SULION_DB_URL:-}"
+      SULION_SECRET_BROKER_REGISTRATION_TOKEN: "${SULION_SECRET_BROKER_REGISTRATION_TOKEN:-}"
+      SULION_RETRIEVAL_TOKEN: "${SULION_RETRIEVAL_TOKEN:-}"
+      # Not delivered: both ends of this call are on the node's own loopback,
+      # so the host generates its own rather than sharing the control plane's.
+      SULION_CODE_INTEL_TOKEN: "${SULION_CODE_INTEL_TOKEN:-}"
       SULION_NODE_ID: "${SULION_NODE_ID:-}"
       SULION_NODE_CONTROL_URL: "${SULION_NODE_CONTROL_URL:-}"
       SULION_NODE_ALLOW_INSECURE_WS: "${SULION_NODE_ALLOW_INSECURE_WS:-0}"
@@ -138,16 +147,15 @@ services:
     restart: unless-stopped
     profiles:
       - split-runtime
-    # This entrypoint replaces the image's, so the wrapper is named here too.
+    # The image entrypoint enrolls for a TrueNAS identity before starting; this
+    # replaces it, because a node has none and needs none.
     entrypoint:
       - /usr/bin/dumb-init
       - --
-      - /usr/local/bin/truenas-roles-anywhere-bootstrap
-      - AWS_RA_BACKEND
-      - --
       - /usr/local/bin/sulion-ingester
     environment:
-      <<: [*sulion-aws, *sulion-backend-identity]
+      # Delivered over the node channel, exactly as for the node beside it.
+      SULION_DB_URL: "${SULION_DB_URL:-}"
       SULION_CLAUDE_PROJECTS: "/home/sulion/.claude/projects"
       SULION_CODEX_SESSIONS: "/home/sulion/.codex/sessions"
       HOME: "/home/sulion"
@@ -209,18 +217,19 @@ services:
     restart: unless-stopped
     profiles:
       - node-runtime
+    # Its default profile is node-runtime, so this service is described here as
+    # it runs on the node: no identity, values from the host beside it. The
+    # standalone overlay relocates it onto TrueNAS and enrolls it there.
+    entrypoint:
+      - /usr/bin/tini
+      - --
+      - /usr/local/bin/sulion-code-intel
     environment:
-      <<: *sulion-aws
       SULION_CODE_INTEL_LISTEN: "0.0.0.0:8084"
-      AWS_RA_CODE_INTEL_CERT_DIR: "/tmp/ahara-identity"
-      AWS_RA_CODE_INTEL_WORKLOAD_ID: "${AWS_RA_CODE_INTEL_WORKLOAD_ID}"
-      AWS_RA_CODE_INTEL_ENROLLMENT_URL: "${AWS_RA_CODE_INTEL_ENROLLMENT_URL}"
-      AWS_RA_CODE_INTEL_TRUST_ANCHOR_ARN: "${AWS_RA_CODE_INTEL_TRUST_ANCHOR_ARN}"
-      AWS_RA_CODE_INTEL_PROFILE_ARN: "${AWS_RA_CODE_INTEL_PROFILE_ARN}"
-      AWS_RA_CODE_INTEL_ENTRY_ROLE_ARN: "${AWS_RA_CODE_INTEL_ENTRY_ROLE_ARN}"
-      AWS_RA_CODE_INTEL_ROLE_ARN: "${AWS_RA_CODE_INTEL_ROLE_ARN}"
-      AWS_RA_CODE_INTEL_SECRET_SULION_DB_URL: "/ahara/truenas-db/sulion/app/url"
-      AWS_RA_CODE_INTEL_SECRET_SULION_CODE_INTEL_TOKEN: "/ahara/sulion/code-intel-token"
+      # Delivered over the node channel; the token is generated by the node
+      # host, because both ends of this call are on its loopback.
+      SULION_DB_URL: "${SULION_DB_URL:-}"
+      SULION_CODE_INTEL_TOKEN: "${SULION_CODE_INTEL_TOKEN:-}"
       SULION_CODE_INTEL_ALLOWED_ROOTS: "/home/sulion/repos,/home/sulion/workspaces"
       SULION_CODE_INTEL_LSP_MAX_SERVERS: "6"
       SULION_CODE_INTEL_LSP_IDLE_SECONDS: "1200"

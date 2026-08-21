@@ -800,8 +800,10 @@ async fn an_approved_node_receives_the_runtime_configuration_it_was_never_given(
     // credential onto it.
     let pool = fresh_pool().await;
     let config = delivered_config(&[
-        ("DB_PASSWORD", "delivered-secret"),
-        ("DB_USER", "sulion"),
+        (
+            "SULION_DB_URL",
+            "postgres://sulion:delivered-secret@192.168.66.3/sulion",
+        ),
         ("SULION_RETRIEVAL_TOKEN", "retrieval-token"),
     ]);
     let (base, state) = start_server_with_peer_addresses(
@@ -820,8 +822,10 @@ async fn an_approved_node_receives_the_runtime_configuration_it_was_never_given(
 
     let payload = receive_node_config(&mut socket).await;
     assert_eq!(payload["digest"], config.digest());
-    assert_eq!(payload["values"]["DB_USER"], "sulion");
-    assert_eq!(payload["values"]["DB_PASSWORD"], "delivered-secret");
+    assert_eq!(
+        payload["values"]["SULION_DB_URL"],
+        "postgres://sulion:delivered-secret@192.168.66.3/sulion"
+    );
     assert_eq!(
         payload["values"]["SULION_RETRIEVAL_TOKEN"],
         "retrieval-token"
@@ -835,7 +839,10 @@ async fn an_unapproved_node_is_told_nothing() {
     let pool = fresh_pool().await;
     let (base, _state) = start_server_with_peer_addresses(
         pool,
-        Some(delivered_config(&[("DB_PASSWORD", "delivered-secret")])),
+        Some(delivered_config(&[(
+            "SULION_RETRIEVAL_TOKEN",
+            "delivered-secret",
+        )])),
         NodeSourcePolicy::new(
             NodeLanGuard::parse("127.0.0.0/8").expect("lan"),
             NodeLanGuard::parse("").expect("proxies"),
@@ -855,7 +862,10 @@ async fn a_node_outside_the_lan_never_reaches_the_challenge() {
     // boundary, which is the shape of a node dialling in from off-LAN.
     let (base, _state) = start_server_with_peer_addresses(
         pool,
-        Some(delivered_config(&[("DB_PASSWORD", "delivered-secret")])),
+        Some(delivered_config(&[(
+            "SULION_RETRIEVAL_TOKEN",
+            "delivered-secret",
+        )])),
         NodeSourcePolicy::new(
             NodeLanGuard::parse("192.168.66.0/24").expect("lan"),
             NodeLanGuard::parse("").expect("proxies"),
@@ -959,7 +969,7 @@ async fn control_proves_its_identity_and_signs_what_it_delivers() {
     let pool = fresh_pool().await;
     let identity = control_identity();
     let expected_key = identity.public_key().to_string();
-    let config = delivered_config(&[("DB_PASSWORD", "delivered-secret")]);
+    let config = delivered_config(&[("SULION_RETRIEVAL_TOKEN", "delivered-secret")]);
     let (base, state) = start_server_with_identity(
         pool,
         Some(config.clone()),
