@@ -33,149 +33,173 @@ pub async fn run_required_startup_maintenance(
     pool: &Pool,
 ) -> anyhow::Result<StartupMaintenanceStats> {
     let mut stats = StartupMaintenanceStats::default();
+    repair_canonical_blocks_if_behind(pool, &mut stats).await?;
+    repair_timeline_projection_if_behind(pool, &mut stats).await?;
+    repair_usage_projection_if_behind(pool, &mut stats).await?;
+    Ok(stats)
+}
 
-    let canonical_version = projection_version(pool, CANONICAL_BLOCKS_KEY).await?;
-    if canonical_version < CANONICAL_BLOCKS_VERSION {
-        tracing::info!(
-            key = CANONICAL_BLOCKS_KEY,
-            current = canonical_version,
-            target = CANONICAL_BLOCKS_VERSION,
-            "derived transcript data version behind; repairing missing canonical fields",
+/// Version check shared by the repair passes: Some(current) when the
+/// stored version is behind and the repair should run; None otherwise
+/// (with a warning when the database is ahead of this binary).
+async fn version_behind(pool: &Pool, key: &str, target: i32) -> anyhow::Result<Option<i32>> {
+    let current = projection_version(pool, key).await?;
+    if current < target {
+        return Ok(Some(current));
+    }
+    if current > target {
+        tracing::warn!(
+            key,
+            current,
+            target,
+            "database has newer derived data version; skipping repair",
         );
-        let job = super::jobs::start(
-            pool,
-            "canonical_backfill",
-            "Canonical block repair",
-            "items",
-            None,
-        )
-        .await
-        .ok();
-        let outcome = match super::ingester::backfill_canonical_blocks(pool, job.as_ref()).await {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                if let Some(job) = &job {
-                    job.fail(&format!("{err:#}")).await;
-                }
-                return Err(err).context("backfill canonical blocks");
+    }
+    Ok(None)
+}
+
+async fn repair_canonical_blocks_if_behind(
+    pool: &Pool,
+    stats: &mut StartupMaintenanceStats,
+) -> anyhow::Result<()> {
+    let Some(current) =
+        version_behind(pool, CANONICAL_BLOCKS_KEY, CANONICAL_BLOCKS_VERSION).await?
+    else {
+        return Ok(());
+    };
+    tracing::info!(
+        key = CANONICAL_BLOCKS_KEY,
+        current,
+        target = CANONICAL_BLOCKS_VERSION,
+        "derived transcript data version behind; repairing missing canonical fields",
+    );
+    let job = super::jobs::start(
+        pool,
+        "canonical_backfill",
+        "Canonical block repair",
+        "items",
+        None,
+    )
+    .await
+    .ok();
+    let outcome = match super::ingester::backfill_canonical_blocks(pool, job.as_ref()).await {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            if let Some(job) = &job {
+                job.fail(&format!("{err:#}")).await;
             }
-        };
-        if let Some(job) = &job {
-            if outcome.failed > 0 {
-                job.fail(&format!(
-                    "{} rows failed; retried next startup",
-                    outcome.failed
-                ))
-                .await;
-            } else {
+            return Err(err).context("backfill canonical blocks");
+        }
+    };
+    if let Some(job) = &job {
+        if outcome.failed > 0 {
+            job.fail(&format!(
+                "{} rows failed; retried next startup",
+                outcome.failed
+            ))
+            .await;
+        } else {
+            job.complete().await;
+        }
+    }
+    stats.canonical_events_backfilled = outcome.repaired as u64;
+    if outcome.failed == 0 {
+        set_projection_version(pool, CANONICAL_BLOCKS_KEY, CANONICAL_BLOCKS_VERSION).await?;
+    } else {
+        // Failed rows were logged individually with their error
+        // chains. Holding the version back retries them next
+        // startup; the repaired sessions are no-ops by then.
+        tracing::warn!(
+            failed = outcome.failed,
+            repaired = outcome.repaired,
+            "canonical repair incomplete; version gate held for retry",
+        );
+    }
+    Ok(())
+}
+
+async fn repair_timeline_projection_if_behind(
+    pool: &Pool,
+    stats: &mut StartupMaintenanceStats,
+) -> anyhow::Result<()> {
+    let Some(current) =
+        version_behind(pool, TIMELINE_PROJECTION_KEY, TIMELINE_PROJECTION_VERSION).await?
+    else {
+        return Ok(());
+    };
+    tracing::info!(
+        key = TIMELINE_PROJECTION_KEY,
+        current,
+        target = TIMELINE_PROJECTION_VERSION,
+        "derived transcript data version behind; repairing missing timeline projection rows",
+    );
+    let job = super::jobs::start(
+        pool,
+        "timeline_backfill",
+        "Timeline projection rebuild",
+        "sessions",
+        None,
+    )
+    .await
+    .ok();
+    match super::projection::backfill_timeline_projection(pool, job.as_ref()).await {
+        Ok(rebuilt) => {
+            if let Some(job) = &job {
                 job.complete().await;
             }
+            stats.timeline_sessions_backfilled = rebuilt as u64;
         }
-        stats.canonical_events_backfilled = outcome.repaired as u64;
-        if outcome.failed == 0 {
-            set_projection_version(pool, CANONICAL_BLOCKS_KEY, CANONICAL_BLOCKS_VERSION).await?;
-        } else {
-            // Failed rows were logged individually with their error
-            // chains. Holding the version back retries them next
-            // startup; the repaired sessions are no-ops by then.
-            tracing::warn!(
-                failed = outcome.failed,
-                repaired = outcome.repaired,
-                "canonical repair incomplete; version gate held for retry",
-            );
+        Err(err) => {
+            if let Some(job) = &job {
+                job.fail(&format!("{err:#}")).await;
+            }
+            return Err(err).context("backfill timeline projection");
         }
-    } else if canonical_version > CANONICAL_BLOCKS_VERSION {
-        tracing::warn!(
-            key = CANONICAL_BLOCKS_KEY,
-            current = canonical_version,
-            target = CANONICAL_BLOCKS_VERSION,
-            "database has newer derived transcript data version; skipping canonical repair",
-        );
     }
+    set_projection_version(pool, TIMELINE_PROJECTION_KEY, TIMELINE_PROJECTION_VERSION).await?;
+    Ok(())
+}
 
-    let timeline_version = projection_version(pool, TIMELINE_PROJECTION_KEY).await?;
-    if timeline_version < TIMELINE_PROJECTION_VERSION {
-        tracing::info!(
-            key = TIMELINE_PROJECTION_KEY,
-            current = timeline_version,
-            target = TIMELINE_PROJECTION_VERSION,
-            "derived transcript data version behind; repairing missing timeline projection rows",
-        );
-        let job = super::jobs::start(
-            pool,
-            "timeline_backfill",
-            "Timeline projection rebuild",
-            "sessions",
-            None,
-        )
-        .await
-        .ok();
-        match super::projection::backfill_timeline_projection(pool, job.as_ref()).await {
-            Ok(rebuilt) => {
-                if let Some(job) = &job {
-                    job.complete().await;
-                }
-                stats.timeline_sessions_backfilled = rebuilt as u64;
+async fn repair_usage_projection_if_behind(
+    pool: &Pool,
+    stats: &mut StartupMaintenanceStats,
+) -> anyhow::Result<()> {
+    let Some(current) =
+        version_behind(pool, USAGE_PROJECTION_KEY, USAGE_PROJECTION_VERSION).await?
+    else {
+        return Ok(());
+    };
+    tracing::info!(
+        key = USAGE_PROJECTION_KEY,
+        current,
+        target = USAGE_PROJECTION_VERSION,
+        "derived usage data version behind; rebuilding token categories",
+    );
+    let job = super::jobs::start(
+        pool,
+        "usage_backfill",
+        "Usage projection rebuild",
+        "sessions",
+        None,
+    )
+    .await
+    .ok();
+    match super::usage::rebuild_usage_projection(pool).await {
+        Ok(rebuilt) => {
+            if let Some(job) = &job {
+                job.complete().await;
             }
-            Err(err) => {
-                if let Some(job) = &job {
-                    job.fail(&format!("{err:#}")).await;
-                }
-                return Err(err).context("backfill timeline projection");
-            }
+            stats.usage_sessions_backfilled = rebuilt;
         }
-        set_projection_version(pool, TIMELINE_PROJECTION_KEY, TIMELINE_PROJECTION_VERSION).await?;
-    } else if timeline_version > TIMELINE_PROJECTION_VERSION {
-        tracing::warn!(
-            key = TIMELINE_PROJECTION_KEY,
-            current = timeline_version,
-            target = TIMELINE_PROJECTION_VERSION,
-            "database has newer derived transcript data version; skipping timeline repair",
-        );
-    }
-
-    let usage_version = projection_version(pool, USAGE_PROJECTION_KEY).await?;
-    if usage_version < USAGE_PROJECTION_VERSION {
-        tracing::info!(
-            key = USAGE_PROJECTION_KEY,
-            current = usage_version,
-            target = USAGE_PROJECTION_VERSION,
-            "derived usage data version behind; rebuilding token categories",
-        );
-        let job = super::jobs::start(
-            pool,
-            "usage_backfill",
-            "Usage projection rebuild",
-            "sessions",
-            None,
-        )
-        .await
-        .ok();
-        match super::usage::rebuild_usage_projection(pool).await {
-            Ok(rebuilt) => {
-                if let Some(job) = &job {
-                    job.complete().await;
-                }
-                stats.usage_sessions_backfilled = rebuilt;
+        Err(err) => {
+            if let Some(job) = &job {
+                job.fail(&format!("{err:#}")).await;
             }
-            Err(err) => {
-                if let Some(job) = &job {
-                    job.fail(&format!("{err:#}")).await;
-                }
-                return Err(err).context("rebuild usage projection");
-            }
+            return Err(err).context("rebuild usage projection");
         }
-        set_projection_version(pool, USAGE_PROJECTION_KEY, USAGE_PROJECTION_VERSION).await?;
-    } else if usage_version > USAGE_PROJECTION_VERSION {
-        tracing::warn!(
-            key = USAGE_PROJECTION_KEY,
-            current = usage_version,
-            target = USAGE_PROJECTION_VERSION,
-            "database has newer derived usage data version; skipping usage repair",
-        );
     }
-
-    Ok(stats)
+    set_projection_version(pool, USAGE_PROJECTION_KEY, USAGE_PROJECTION_VERSION).await?;
+    Ok(())
 }
 
 pub async fn mark_projection_versions_current(pool: &Pool) -> anyhow::Result<()> {
