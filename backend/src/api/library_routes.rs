@@ -17,7 +17,7 @@ pub(super) async fn list_library(
     Path(kind): Path<String>,
 ) -> ApiResult<Json<Vec<library::LibraryEntry>>> {
     let kind = parse_kind(&kind)?;
-    let entries = library::list(&state.library_root, kind)
+    let entries = library::list(&state.pool, kind)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
     Ok(Json(entries))
@@ -28,7 +28,7 @@ pub(super) async fn get_library_entry(
     Path((kind, slug)): Path<(String, String)>,
 ) -> ApiResult<Json<library::LibraryEntry>> {
     let kind = parse_kind(&kind)?;
-    let entry = library::read(&state.library_root, kind, &slug)
+    let entry = library::read(&state.pool, kind, &slug)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?
         .ok_or(ApiError::NotFound)?;
@@ -45,8 +45,10 @@ pub(super) async fn put_library_root(
     let kind = parse_kind(&kind)?;
     let desired_slug = library::sanitise_slug(&input.name)
         .ok_or_else(|| ApiError::BadRequest("name must derive a valid slug".into()))?;
-    let slug = library::next_available_slug(&state.library_root, kind, &desired_slug);
-    let entry = library::save(&state.library_root, kind, &slug, input)
+    let slug = library::next_available_slug(&state.pool, kind, &desired_slug)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
+    let entry = library::save(&state.pool, kind, &slug, input)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
     Ok(Json(entry))
@@ -58,7 +60,7 @@ pub(super) async fn put_library_entry(
     Json(input): Json<library::SaveInput>,
 ) -> ApiResult<Json<library::LibraryEntry>> {
     let kind = parse_kind(&kind)?;
-    let entry = library::save(&state.library_root, kind, &slug, input)
+    let entry = library::save(&state.pool, kind, &slug, input)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
     Ok(Json(entry))
@@ -69,7 +71,7 @@ pub(super) async fn delete_library_entry(
     Path((kind, slug)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
     let kind = parse_kind(&kind)?;
-    let removed = library::delete(&state.library_root, kind, &slug)
+    let removed = library::delete(&state.pool, kind, &slug)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
     Ok(if removed {

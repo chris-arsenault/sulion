@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::ingest::canonical::{BlockKind, OperationCategory};
 
@@ -64,7 +65,16 @@ pub(crate) struct TurnSeed<'a> {
 
 pub(crate) fn group_into_turns<'a>(events: &[&'a StoredEvent]) -> Vec<TurnSeed<'a>> {
     let mut turns = Vec::new();
-    let mut current_idx: Option<usize> = None;
+    // Main-line turn currently receiving events. Sidechain events never
+    // touch it: concurrent subagents interleave with the parent's own
+    // work by timestamp, and letting a sidechain seed capture the main
+    // pointer swallowed every later main-turn event.
+    let mut current_main: Option<usize> = None;
+    // One open sidechain turn per origin: merged descendant sessions
+    // are keyed by their session uuid, the parent's own in-file
+    // sidechain records by None. Two concurrent subagents must land in
+    // two turns even though their events interleave.
+    let mut current_sidechain: HashMap<Option<Uuid>, usize> = HashMap::new();
     // Bookkeeping that arrives before the first real turn. Claude
     // stamps attachment records a few ms before their prompt, so
     // letting them seed a turn created a decoy orphan the incremental
@@ -73,30 +83,57 @@ pub(crate) fn group_into_turns<'a>(events: &[&'a StoredEvent]) -> Vec<TurnSeed<'
     let mut pending_prefix: Vec<&'a StoredEvent> = Vec::new();
 
     for event in events.iter().copied() {
-        if is_real_user_prompt(event) {
-            turns.push(new_turn(Some(event), None));
-            current_idx = Some(turns.len() - 1);
-            let turn = &mut turns[current_idx.expect("turn exists")];
-            for pending in pending_prefix.drain(..) {
-                turn.events.push(pending);
-            }
-            continue;
-        }
+        let sidechain_key =
+            (event.is_sidechain || event.source_session.is_some()).then_some(event.source_session);
 
-        if current_idx.is_none() {
-            if is_bookkeeping_event(event) {
-                pending_prefix.push(event);
-                continue;
+        let target = match sidechain_key {
+            Some(key) => {
+                if is_real_user_prompt(event) {
+                    turns.push(new_turn(Some(event), None));
+                    let idx = turns.len() - 1;
+                    current_sidechain.insert(key, idx);
+                    continue;
+                }
+                match current_sidechain.get(&key) {
+                    Some(idx) => *idx,
+                    None => {
+                        turns.push(new_turn(None, Some(event)));
+                        let idx = turns.len() - 1;
+                        current_sidechain.insert(key, idx);
+                        idx
+                    }
+                }
             }
-            turns.push(new_turn(None, Some(event)));
-            current_idx = Some(turns.len() - 1);
-            let turn = &mut turns[current_idx.expect("turn exists")];
-            for pending in pending_prefix.drain(..) {
-                turn.events.push(pending);
+            None => {
+                if is_real_user_prompt(event) {
+                    turns.push(new_turn(Some(event), None));
+                    let idx = turns.len() - 1;
+                    current_main = Some(idx);
+                    for pending in pending_prefix.drain(..) {
+                        turns[idx].events.push(pending);
+                    }
+                    continue;
+                }
+                match current_main {
+                    Some(idx) => idx,
+                    None => {
+                        if is_bookkeeping_event(event) {
+                            pending_prefix.push(event);
+                            continue;
+                        }
+                        turns.push(new_turn(None, Some(event)));
+                        let idx = turns.len() - 1;
+                        current_main = Some(idx);
+                        for pending in pending_prefix.drain(..) {
+                            turns[idx].events.push(pending);
+                        }
+                        idx
+                    }
+                }
             }
-        }
+        };
 
-        let turn = &mut turns[current_idx.expect("turn exists")];
+        let turn = &mut turns[target];
         turn.events.push(event);
         turn.end_timestamp = event.timestamp;
         turn.duration_ms = duration_ms_between(turn.start_timestamp, turn.end_timestamp);
@@ -117,12 +154,32 @@ pub(crate) fn group_into_turns<'a>(events: &[&'a StoredEvent]) -> Vec<TurnSeed<'
 fn new_turn<'a>(prompt: Option<&'a StoredEvent>, seed: Option<&'a StoredEvent>) -> TurnSeed<'a> {
     let first = prompt.or(seed).expect("turn needs prompt or seed");
     TurnSeed {
-        id: first.byte_offset,
+        id: turn_seed_id(first),
         user_prompt: prompt,
         events: prompt.into_iter().collect(),
         start_timestamp: first.timestamp,
         end_timestamp: first.timestamp,
         duration_ms: 0,
+    }
+}
+
+/// Stable turn identity. Root-session turns keep the seed event's byte
+/// offset (existing ids must survive rebuilds). Turns seeded by merged
+/// descendant events fold the origin session into the id: subagent
+/// transcripts all start at offset 0, and `timeline_turns` upserts on
+/// `(session_uuid, turn_id)`, so plain offsets made two concurrent
+/// subagents clobber each other's turn.
+fn turn_seed_id(seed: &StoredEvent) -> i64 {
+    match seed.source_session {
+        None => seed.byte_offset,
+        Some(session) => {
+            let high = u32::from_be_bytes(
+                session.as_bytes()[..4]
+                    .try_into()
+                    .expect("uuid has 4 bytes"),
+            ) as i64;
+            ((high & 0x3fff_ffff) << 32) | (seed.byte_offset & 0xffff_ffff)
+        }
     }
 }
 

@@ -189,6 +189,7 @@ pub async fn load_session_events(
                 subtype,
                 usage_json,
                 usage_message_id,
+                source_session: None,
                 blocks: blocks_by_offset
                     .get(&byte_offset)
                     .cloned()

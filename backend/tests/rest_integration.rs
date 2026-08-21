@@ -34,8 +34,9 @@ async fn fresh_pool() -> db::Pool {
          retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, \
          plan_events, plan_attachments, plan_phases, plans, session_activity_state, \
          events, ingester_state, claude_sessions, pty_sessions, repos, \
-         repo_runtime_state, repo_dirty_paths, timeline_session_state, \
-         future_prompt_session_state, workspaces, workspace_dirty_paths RESTART IDENTITY CASCADE",
+         repo_runtime_state, repo_dirty_paths, timeline_session_state, library_entries, \
+         future_prompt_session_state, future_prompts, workspaces, workspace_dirty_paths \
+         RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
     .await
@@ -1955,4 +1956,180 @@ async fn node_mode_delete_removes_husks_without_a_connected_node() {
         .await
         .unwrap();
     assert_eq!(row_state, "live");
+}
+
+/// Storage-level roundtrip; the former module unit tests exercised the
+/// markdown files this table replaced.
+#[tokio::test]
+async fn future_prompts_roundtrip_in_the_database() {
+    use sulion::future_prompts::{self, CreateInput, FuturePromptState, UpdateInput};
+
+    let pool = fresh_pool().await;
+    let session = Uuid::new_v4();
+    assert_eq!(
+        future_prompts::count_pending(&pool, session).await.unwrap(),
+        0,
+        "empty session counts zero, not an error"
+    );
+
+    let first = future_prompts::create(
+        &pool,
+        session,
+        CreateInput {
+            text: "first".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let _second = future_prompts::create(
+        &pool,
+        session,
+        CreateInput {
+            text: "second".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        future_prompts::count_pending(&pool, session).await.unwrap(),
+        2
+    );
+
+    let updated = future_prompts::update(
+        &pool,
+        session,
+        &first.id,
+        UpdateInput {
+            text: Some("send this next".into()),
+            state: Some(FuturePromptState::Sent),
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(updated.text, "send this next");
+    assert_eq!(updated.state, FuturePromptState::Sent);
+    assert_eq!(updated.created_at, first.created_at);
+    assert_eq!(
+        future_prompts::count_pending(&pool, session).await.unwrap(),
+        1,
+        "sent entries drop out of the pending count"
+    );
+
+    // Pending entries list first, sent history after.
+    let listed = future_prompts::list(&pool, session).await.unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].text, "second");
+    assert_eq!(listed[0].state, FuturePromptState::Pending);
+    assert_eq!(listed[1].id, first.id);
+
+    // Another session sees nothing.
+    assert!(future_prompts::list(&pool, Uuid::new_v4())
+        .await
+        .unwrap()
+        .is_empty());
+
+    assert!(future_prompts::delete(&pool, session, &first.id)
+        .await
+        .unwrap());
+    assert!(!future_prompts::delete(&pool, session, &first.id)
+        .await
+        .unwrap());
+    assert_eq!(future_prompts::list(&pool, session).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn library_entries_roundtrip_in_the_database() {
+    let h = Harness::new().await;
+
+    let created: serde_json::Value = h
+        .client
+        .put(format!("{}/api/library/prompts", h.base))
+        .json(&serde_json::json!({"name": "Commit and push", "body": "commit everything"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(created["slug"], "Commit-and-push");
+    assert_eq!(created["body"], "commit everything");
+
+    // Same name again: the derived slug must not collide.
+    let second: serde_json::Value = h
+        .client
+        .put(format!("{}/api/library/prompts", h.base))
+        .json(&serde_json::json!({"name": "Commit and push", "body": "other"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(second["slug"], "Commit-and-push-2");
+
+    let list: Vec<serde_json::Value> = h
+        .client
+        .get(format!("{}/api/library/prompts", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(list.len(), 2);
+
+    // Kinds are separate namespaces.
+    let refs: Vec<serde_json::Value> = h
+        .client
+        .get(format!("{}/api/library/references", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(refs.is_empty());
+
+    // Overwrite keeps created_at and replaces the body.
+    let updated: serde_json::Value = h
+        .client
+        .put(format!("{}/api/library/prompts/Commit-and-push", h.base))
+        .json(&serde_json::json!({"name": "Commit and push", "body": "with diff summary"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(updated["created_at"], created["created_at"]);
+    assert_eq!(updated["body"], "with diff summary");
+
+    let fetched: serde_json::Value = h
+        .client
+        .get(format!("{}/api/library/prompts/Commit-and-push", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(fetched["body"], "with diff summary");
+
+    let deleted = h
+        .client
+        .delete(format!("{}/api/library/prompts/Commit-and-push", h.base))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(deleted, 204);
+    let missing = h
+        .client
+        .get(format!("{}/api/library/prompts/Commit-and-push", h.base))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(missing, 404);
 }

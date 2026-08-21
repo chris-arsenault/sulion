@@ -52,6 +52,7 @@ fn event(byte_offset: i64, kind: &str, blocks: Vec<Block>) -> StoredEvent {
         subtype: None,
         usage_json: None,
         usage_message_id: None,
+        source_session: None,
         blocks,
     }
 }
@@ -297,6 +298,68 @@ fn pre_prompt_bookkeeping_joins_the_first_real_turn() {
             .collect::<Vec<_>>()
     );
     assert_eq!(projected.turns[0].preview, "real prompt");
+}
+
+/// Two subagents running concurrently interleave by timestamp. Each
+/// must keep its own turn (keyed by origin session), main-line events
+/// arriving mid-flight must stay in the main turn, and the turn ids
+/// must differ even though both subagent transcripts start at offset 0.
+#[test]
+fn concurrent_subagents_group_into_separate_turns() {
+    let child_a = uuid::Uuid::from_u128(0xaaaa_0000_0000_0000_0000_0000_0000_0001);
+    let child_b = uuid::Uuid::from_u128(0xbbbb_0000_0000_0000_0000_0000_0000_0002);
+
+    let sidechain = |offset: i64, kind: &str, body: &str, source: uuid::Uuid, ts_at: i64| {
+        let mut e = event(offset, kind, vec![text(0, body)]);
+        e.is_sidechain = true;
+        e.source_session = Some(source);
+        e.event_uuid = Some(format!("{source}-{offset}"));
+        e.timestamp = ts(ts_at);
+        e
+    };
+    let mut main_prompt = event(100, "user", vec![text(0, "spawn two agents")]);
+    main_prompt.timestamp = ts(0);
+    let mut late_main = event(200, "assistant", vec![text(0, "main keeps working")]);
+    late_main.timestamp = ts(4);
+
+    let events = vec![
+        main_prompt,
+        sidechain(0, "user", "survey repo A", child_a, 1),
+        sidechain(0, "user", "survey repo B", child_b, 2),
+        sidechain(30, "assistant", "A finds things", child_a, 3),
+        late_main,
+        sidechain(30, "assistant", "B finds things", child_b, 5),
+    ];
+    let refs: Vec<&StoredEvent> = events.iter().collect();
+    let seeds = super::project::group_into_turns(&refs);
+
+    let previews: Vec<Option<String>> = seeds
+        .iter()
+        .map(|seed| seed.user_prompt.map(|e| e.byte_offset.to_string()))
+        .collect();
+    assert_eq!(seeds.len(), 3, "seeds: {previews:?}");
+
+    // Main turn holds the prompt plus the interleaved main-line event.
+    assert_eq!(seeds[0].user_prompt.unwrap().byte_offset, 100);
+    assert!(seeds[0]
+        .events
+        .iter()
+        .any(|event| event.byte_offset == 200 && !event.is_sidechain));
+
+    // Each subagent turn holds exactly its own session's events.
+    for (seed, child) in [(&seeds[1], child_a), (&seeds[2], child_b)] {
+        assert_eq!(seed.events.len(), 2);
+        assert!(seed
+            .events
+            .iter()
+            .all(|event| event.source_session == Some(child)));
+    }
+
+    // Distinct, stable turn identities despite shared byte offsets.
+    assert_eq!(seeds[0].id, 100);
+    assert_ne!(seeds[1].id, seeds[2].id);
+    assert!(seeds[1].id > u32::MAX as i64);
+    assert!(seeds[2].id > u32::MAX as i64);
 }
 
 /// Claude usage sums per turn, deduped by message id across streamed

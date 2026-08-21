@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -31,7 +30,7 @@ pub(super) async fn list_future_prompts(
         }));
     };
 
-    let prompts = future_prompts::list(&future_prompts_root(&state), resolved.session_uuid)
+    let prompts = future_prompts::list(&state.pool, resolved.session_uuid)
         .await
         .map_err(ApiError::Internal)?;
     Ok(Json(FuturePromptListResponse {
@@ -52,7 +51,7 @@ pub(super) async fn create_future_prompt(
         ));
     };
 
-    let entry = future_prompts::create(&future_prompts_root(&state), resolved.session_uuid, input)
+    let entry = future_prompts::create(&state.pool, resolved.session_uuid, input)
         .await
         .map_err(ApiError::Internal)?;
     refresh_future_prompt_count(&state, resolved.session_uuid).await?;
@@ -70,14 +69,9 @@ pub(super) async fn update_future_prompt(
         ));
     };
 
-    let entry = future_prompts::update(
-        &future_prompts_root(&state),
-        resolved.session_uuid,
-        &item_id,
-        input,
-    )
-    .await
-    .map_err(ApiError::Internal)?;
+    let entry = future_prompts::update(&state.pool, resolved.session_uuid, &item_id, input)
+        .await
+        .map_err(ApiError::Internal)?;
     let Some(entry) = entry else {
         return Err(ApiError::NotFound);
     };
@@ -95,26 +89,14 @@ pub(super) async fn delete_future_prompt(
         ));
     };
 
-    let removed = future_prompts::delete(
-        &future_prompts_root(&state),
-        resolved.session_uuid,
-        &item_id,
-    )
-    .await
-    .map_err(ApiError::Internal)?;
+    let removed = future_prompts::delete(&state.pool, resolved.session_uuid, &item_id)
+        .await
+        .map_err(ApiError::Internal)?;
     if !removed {
         return Err(ApiError::NotFound);
     }
     refresh_future_prompt_count(&state, resolved.session_uuid).await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-pub(super) fn future_prompts_root(state: &AppState) -> PathBuf {
-    state
-        .library_root
-        .parent()
-        .unwrap_or(state.library_root.as_path())
-        .join("future-prompts")
 }
 
 async fn resolve_future_prompt_session(
@@ -130,7 +112,7 @@ async fn resolve_future_prompt_session(
 }
 
 async fn refresh_future_prompt_count(state: &AppState, session_uuid: Uuid) -> ApiResult<()> {
-    let pending = future_prompts::count_pending(&future_prompts_root(state), session_uuid)
+    let pending = future_prompts::count_pending(&state.pool, session_uuid)
         .await
         .map_err(ApiError::Internal)?;
     sqlx::query(

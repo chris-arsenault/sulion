@@ -152,8 +152,11 @@ async fn load_projection_source_events(
         let descendant_events = load_all_session_events(pool, descendant)
             .await
             .with_context(|| format!("load descendant projection events for {descendant}"))?;
-        let filtered =
+        let mut filtered =
             filter_descendant_projection_events(&descendant_events, &known_ids, descendant);
+        for event in &mut filtered {
+            event.source_session = Some(descendant);
+        }
         known_ids.extend(filtered.iter().filter_map(|event| event.event_uuid.clone()));
         events.extend(filtered);
     }
@@ -287,6 +290,10 @@ pub async fn backfill_timeline_projection(
              SELECT DISTINCT o.session_uuid \
                FROM timeline_operations o \
               WHERE o.name = 'agent' \
+             UNION \
+             SELECT DISTINCT cs.parent_session_uuid \
+               FROM claude_sessions cs \
+              WHERE cs.parent_session_uuid IS NOT NULL \
          ) \
          SELECT session_uuid \
            FROM sessions_to_rebuild \

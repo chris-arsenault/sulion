@@ -72,6 +72,11 @@ pub struct StoredEvent {
     /// Claude message id the usage belongs to; streamed records repeat
     /// a message, so per-turn sums dedupe on it.
     pub usage_message_id: Option<String>,
+    /// Set when this event was merged in from a descendant session
+    /// during parent projection. Subagent transcripts restart byte
+    /// offsets at 0, so turn identity and turn routing must key on the
+    /// origin session, not the offset alone.
+    pub source_session: Option<Uuid>,
     pub blocks: Vec<Block>,
 }
 #[derive(Debug, Clone)]

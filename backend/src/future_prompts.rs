@@ -2,12 +2,15 @@
 //! invocation. Unlike the reusable prompt library, these entries are
 //! one-off follow-ups tied to a specific transcript session UUID.
 //!
-//! Layout: `<future_prompts_root>/<session_uuid>/<id>.md`
+//! One row per prompt in `future_prompts`, keyed `(session_uuid, id)`.
+//! Formerly markdown files under a node-local directory; database rows
+//! are what let any process that answers the API see the same entries.
 
-use std::path::{Path, PathBuf};
-
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::db::Pool;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -55,14 +58,6 @@ pub struct UpdateInput {
     pub state: Option<FuturePromptState>,
 }
 
-fn session_dir(root: &Path, session_uuid: Uuid) -> PathBuf {
-    root.join(session_uuid.to_string())
-}
-
-fn entry_path(root: &Path, session_uuid: Uuid, id: &str) -> PathBuf {
-    session_dir(root, session_uuid).join(format!("{id}.md"))
-}
-
 fn sanitise_id(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -80,27 +75,31 @@ fn sanitise_id(raw: &str) -> Option<String> {
     Some(out)
 }
 
-pub async fn list(root: &Path, session_uuid: Uuid) -> anyhow::Result<Vec<FuturePromptEntry>> {
-    let dir = session_dir(root, session_uuid);
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
+type EntryRow = (String, String, DateTime<Utc>, DateTime<Utc>, String);
 
-    let mut entries = Vec::new();
-    let mut rd = tokio::fs::read_dir(&dir).await?;
-    while let Some(entry) = rd.next_entry().await? {
-        let file_name = entry.file_name().to_string_lossy().into_owned();
-        if !file_name.ends_with(".md") {
-            continue;
-        }
-        let id = file_name.trim_end_matches(".md").to_string();
-        let full = entry.path();
-        match read_file(&full, &id).await {
-            Ok(entry) => entries.push(entry),
-            Err(err) => tracing::warn!(%err, path = %full.display(), "future prompt read failed"),
-        }
+fn entry_from_row((id, state, created_at, updated_at, text): EntryRow) -> FuturePromptEntry {
+    FuturePromptEntry {
+        id,
+        state: FuturePromptState::parse(&state).unwrap_or(FuturePromptState::Pending),
+        created_at: Some(created_at.to_rfc3339()),
+        updated_at: Some(updated_at.to_rfc3339()),
+        text,
     }
+}
 
+pub async fn list(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<Vec<FuturePromptEntry>> {
+    let rows: Vec<EntryRow> = sqlx::query_as(
+        "SELECT id, state, created_at, updated_at, text \
+           FROM future_prompts \
+          WHERE session_uuid = $1",
+    )
+    .bind(session_uuid)
+    .fetch_all(pool)
+    .await?;
+    let mut entries: Vec<FuturePromptEntry> = rows.into_iter().map(entry_from_row).collect();
+
+    // Pending first, oldest first (send order); everything else newest
+    // first (recent history on top).
     entries.sort_by(|a, b| {
         state_rank(a.state)
             .cmp(&state_rank(b.state))
@@ -125,34 +124,19 @@ pub async fn list(root: &Path, session_uuid: Uuid) -> anyhow::Result<Vec<FutureP
 /// Cheap companion to `list` — returns only how many entries are in
 /// the `pending` state. Used by `/api/app-state` to power the sidebar
 /// badge without materialising every prompt body.
-pub async fn count_pending(root: &Path, session_uuid: Uuid) -> anyhow::Result<usize> {
-    let dir = session_dir(root, session_uuid);
-    if !dir.exists() {
-        return Ok(0);
-    }
-
-    let mut rd = tokio::fs::read_dir(&dir).await?;
-    let mut count = 0usize;
-    while let Some(entry) = rd.next_entry().await? {
-        let file_name = entry.file_name().to_string_lossy().into_owned();
-        if !file_name.ends_with(".md") {
-            continue;
-        }
-        let id = file_name.trim_end_matches(".md").to_string();
-        let full = entry.path();
-        match read_file(&full, &id).await {
-            Ok(parsed) if parsed.state == FuturePromptState::Pending => count += 1,
-            Ok(_) => {}
-            Err(err) => {
-                tracing::warn!(%err, path = %full.display(), "future prompt read failed")
-            }
-        }
-    }
-    Ok(count)
+pub async fn count_pending(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<usize> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM future_prompts \
+          WHERE session_uuid = $1 AND state = 'pending'",
+    )
+    .bind(session_uuid)
+    .fetch_one(pool)
+    .await?;
+    Ok(count.max(0) as usize)
 }
 
 pub async fn create(
-    root: &Path,
+    pool: &Pool,
     session_uuid: Uuid,
     input: CreateInput,
 ) -> anyhow::Result<FuturePromptEntry> {
@@ -160,25 +144,22 @@ pub async fn create(
     if text.is_empty() {
         anyhow::bail!("text must not be empty");
     }
-
-    let dir = session_dir(root, session_uuid);
-    tokio::fs::create_dir_all(&dir).await?;
     let id = Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
-    let entry = FuturePromptEntry {
-        id: id.clone(),
-        state: FuturePromptState::Pending,
-        created_at: Some(now.clone()),
-        updated_at: Some(now),
-        text,
-    };
-
-    tokio::fs::write(entry_path(root, session_uuid, &id), render_entry(&entry)).await?;
-    Ok(entry)
+    let row: EntryRow = sqlx::query_as(
+        "INSERT INTO future_prompts (session_uuid, id, state, text) \
+         VALUES ($1, $2, 'pending', $3) \
+         RETURNING id, state, created_at, updated_at, text",
+    )
+    .bind(session_uuid)
+    .bind(&id)
+    .bind(&text)
+    .fetch_one(pool)
+    .await?;
+    Ok(entry_from_row(row))
 }
 
 pub async fn update(
-    root: &Path,
+    pool: &Pool,
     session_uuid: Uuid,
     id: &str,
     input: UpdateInput,
@@ -187,223 +168,45 @@ pub async fn update(
         Some(id) => id,
         None => return Ok(None),
     };
-    let path = entry_path(root, session_uuid, &id);
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let mut entry = read_file(&path, &id).await?;
-    if let Some(text) = input.text {
-        let text = text.trim().to_string();
-        if text.is_empty() {
+    if let Some(text) = &input.text {
+        if text.trim().is_empty() {
             anyhow::bail!("text must not be empty");
         }
-        entry.text = text;
     }
-    if let Some(state) = input.state {
-        entry.state = state;
-    }
-    entry.updated_at = Some(chrono::Utc::now().to_rfc3339());
-
-    tokio::fs::write(&path, render_entry(&entry)).await?;
-    Ok(Some(entry))
+    let row: Option<EntryRow> = sqlx::query_as(
+        "UPDATE future_prompts SET \
+             text = COALESCE($3, text), \
+             state = COALESCE($4, state), \
+             updated_at = now() \
+          WHERE session_uuid = $1 AND id = $2 \
+          RETURNING id, state, created_at, updated_at, text",
+    )
+    .bind(session_uuid)
+    .bind(&id)
+    .bind(input.text.as_ref().map(|text| text.trim().to_string()))
+    .bind(input.state.map(FuturePromptState::as_str))
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(entry_from_row))
 }
 
-pub async fn delete(root: &Path, session_uuid: Uuid, id: &str) -> anyhow::Result<bool> {
+pub async fn delete(pool: &Pool, session_uuid: Uuid, id: &str) -> anyhow::Result<bool> {
     let id = match sanitise_id(id) {
         Some(id) => id,
         None => return Ok(false),
     };
-    let path = entry_path(root, session_uuid, &id);
-    if !path.exists() {
-        return Ok(false);
-    }
-    tokio::fs::remove_file(path).await?;
-    Ok(true)
-}
-
-async fn read_file(path: &Path, id: &str) -> anyhow::Result<FuturePromptEntry> {
-    let raw = tokio::fs::read_to_string(path).await?;
-    Ok(parse_entry(&raw, id))
-}
-
-fn parse_entry(raw: &str, id: &str) -> FuturePromptEntry {
-    let mut body_start = 0;
-    let mut state = FuturePromptState::Pending;
-    let mut created_at = None;
-    let mut updated_at = None;
-
-    if let Some(rest) = raw.strip_prefix("---\n") {
-        if let Some(end) = rest.find("\n---") {
-            let header = &rest[..end];
-            body_start = 4 + end + 4;
-            for line in header.lines() {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                let Some((k, v)) = trimmed.split_once(':') else {
-                    continue;
-                };
-                match k.trim() {
-                    "state" => {
-                        if let Some(parsed) = FuturePromptState::parse(unquote(v.trim()).as_str()) {
-                            state = parsed;
-                        }
-                    }
-                    "created_at" => created_at = Some(unquote(v.trim())),
-                    "updated_at" => updated_at = Some(unquote(v.trim())),
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    FuturePromptEntry {
-        id: id.to_string(),
-        state,
-        created_at,
-        updated_at,
-        text: raw
-            .get(body_start..)
-            .unwrap_or("")
-            .trim_start_matches('\n')
-            .to_string(),
-    }
-}
-
-fn render_entry(entry: &FuturePromptEntry) -> String {
-    let mut out = String::from("---\n");
-    out.push_str(&format!("state: \"{}\"\n", entry.state.as_str()));
-    if let Some(created_at) = &entry.created_at {
-        out.push_str(&format!("created_at: \"{}\"\n", escape_quote(created_at)));
-    }
-    if let Some(updated_at) = &entry.updated_at {
-        out.push_str(&format!("updated_at: \"{}\"\n", escape_quote(updated_at)));
-    }
-    out.push_str("---\n");
-    out.push_str(entry.text.trim_start_matches('\n'));
-    out
+    let deleted = sqlx::query("DELETE FROM future_prompts WHERE session_uuid = $1 AND id = $2")
+        .bind(session_uuid)
+        .bind(&id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    Ok(deleted > 0)
 }
 
 fn state_rank(state: FuturePromptState) -> u8 {
     match state {
         FuturePromptState::Pending => 0,
         FuturePromptState::Sent => 1,
-    }
-}
-
-fn unquote(s: &str) -> String {
-    let s = s.trim();
-    if (s.starts_with('"') && s.ends_with('"') && s.len() >= 2)
-        || (s.starts_with('\'') && s.ends_with('\'') && s.len() >= 2)
-    {
-        s[1..s.len() - 1].replace("\\\"", "\"")
-    } else {
-        s.to_string()
-    }
-}
-
-fn escape_quote(s: &str) -> String {
-    s.replace('"', "\\\"")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn count_pending_ignores_sent_and_missing_dirs() {
-        let root = tempfile::tempdir().unwrap();
-        let session_uuid = Uuid::new_v4();
-
-        assert_eq!(
-            count_pending(root.path(), session_uuid).await.unwrap(),
-            0,
-            "missing dir is zero, not an error"
-        );
-
-        let first = create(
-            root.path(),
-            session_uuid,
-            CreateInput {
-                text: "first".into(),
-            },
-        )
-        .await
-        .unwrap();
-        let _second = create(
-            root.path(),
-            session_uuid,
-            CreateInput {
-                text: "second".into(),
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            count_pending(root.path(), session_uuid).await.unwrap(),
-            2,
-            "both newly created prompts are pending"
-        );
-
-        update(
-            root.path(),
-            session_uuid,
-            &first.id,
-            UpdateInput {
-                text: None,
-                state: Some(FuturePromptState::Sent),
-            },
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            count_pending(root.path(), session_uuid).await.unwrap(),
-            1,
-            "sent entries drop out of the pending count"
-        );
-    }
-
-    #[tokio::test]
-    async fn create_list_update_delete_round_trip() {
-        let root = tempfile::tempdir().unwrap();
-        let session_uuid = Uuid::new_v4();
-
-        let created = create(
-            root.path(),
-            session_uuid,
-            CreateInput {
-                text: "follow up later".into(),
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(created.state, FuturePromptState::Pending);
-
-        let listed = list(root.path(), session_uuid).await.unwrap();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].text, "follow up later");
-
-        let updated = update(
-            root.path(),
-            session_uuid,
-            &created.id,
-            UpdateInput {
-                text: Some("send this next".into()),
-                state: Some(FuturePromptState::Sent),
-            },
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(updated.text, "send this next");
-        assert_eq!(updated.state, FuturePromptState::Sent);
-
-        assert!(delete(root.path(), session_uuid, &created.id)
-            .await
-            .unwrap());
-        assert!(list(root.path(), session_uuid).await.unwrap().is_empty());
     }
 }

@@ -18,7 +18,10 @@ const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // v6: bookkeeping no longer seeds turns and Agent spawns project as
 // task delegations; sessions showing orphan first turns or agent pairs
 // get reprojected.
-const TIMELINE_PROJECTION_VERSION: i32 = 6;
+// v7: concurrent subagent turns are keyed by origin session instead of
+// byte offset (offset-0 collisions clobbered one another); sessions
+// with descendants get reprojected.
+const TIMELINE_PROJECTION_VERSION: i32 = 7;
 const USAGE_PROJECTION_KEY: &str = "usage_projection";
 const USAGE_PROJECTION_VERSION: i32 = 1;
 
