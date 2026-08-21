@@ -312,6 +312,14 @@ body.is-dragging-tab .wa__drop-zone {
   height: 100%;
 }
 
+/* Terminal-only / timeline-only display modes: one full-height pane,
+ * no split divider. */
+.wa--single {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
 .wa__pane--mobile {
   height: 100%;
 }

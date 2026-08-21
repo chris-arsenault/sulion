@@ -29,11 +29,15 @@ const BAR_COLOR = "#4a90e2";
 export function MetricsPane({
   active = true,
   onOpenOverview,
+  onOpenDisplay,
 }: {
   active?: boolean;
   /** Modal host override: switch the overlay back to the team overview
    * instead of leaving the modal. */
   onOpenOverview?: () => void;
+  /** Modal host override: show display settings inside the overlay.
+   * Without it the link opens the overlay via the app command. */
+  onOpenDisplay?: () => void;
 }) {
   const [data, setData] = useState<MetricsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -74,6 +78,13 @@ export function MetricsPane({
             overview
           </button>
         ) : null}
+        <button
+          type="button"
+          className="metrics-pane__overview-link"
+          onClick={onOpenDisplay ?? appCommands.openDisplaySettings}
+        >
+          display
+        </button>
       </header>
       {error ? <div className="metrics-pane__error">{error}</div> : null}
       {!data ? (

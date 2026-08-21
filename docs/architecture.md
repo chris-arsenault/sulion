@@ -138,10 +138,21 @@ Three surfaces, one work area.
   resume/diff/delete actions. Collection sessions appear once at their
   meta-repository; repo sessions remain under the repo. See
   `frontend/src/components/Sidebar.tsx`.
-- **Work area** — tab-strip over two horizontal panes. Each tab is its own subtree keyed by its stable handle and view kind. Terminal, timeline, overview, plan, file, diff, reference, and secrets-management tabs all live here.
+- **Work area** — tab-strip over two horizontal panes. Terminal, timeline, overview, plan, file, diff, reference, and secrets-management tabs all live here. Display modes (split / terminal-only / timeline-only) collapse the two panes to one; the hidden projection stays reachable through a peek overlay.
 - **Mobile** — single-pane with drawer below 768px.
 
 State management rules live in [`state-management.md`](state-management.md). Visual framework is in [`design.md`](design.md).
+
+**Tab content renders by reference.** A root-level `TabHost`
+(`frontend/src/components/tabhost/`) renders every tab's content exactly once,
+through a portal, into a stable host element owned by a DOM registry. Panes and
+the peek overlay render empty `TabSlot` containers that *claim* a tab's host;
+the registry parents the host into the highest-priority claimant and detaches
+it when nothing claims it. React only reconciles inside the host, so pane
+drags, display-mode switches, and peeks move live DOM instead of remounting —
+terminals keep their WebSocket and scrollback throughout. Host release happens
+only when the tab leaves the store, never from portal cleanup (StrictMode runs
+cleanup on mounted components).
 
 The **terminal pane** is the one React-opaque island: imperatively mounted `xterm.js`, direct WebSocket pipe, no React re-render on bytes.
 

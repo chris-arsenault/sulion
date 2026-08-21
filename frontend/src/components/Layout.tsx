@@ -8,10 +8,18 @@ import { FuturePromptsModal } from "./FuturePromptsModal";
 import { PlanModal } from "./PlanModal";
 import { MetricsPane } from "./MetricsPane";
 import { MonitorPane } from "./MonitorPane";
+import { DisplaySettings } from "./DisplaySettings";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { appCommands, useAppCommand } from "../state/AppCommands";
 import { useTabs } from "../state/TabStore";
 import { useSessions } from "../state/SessionStore";
+import {
+  DISPLAY_MODE_LABELS,
+  DISPLAY_MODES,
+  useDisplay,
+} from "../state/DisplayStore";
+import { TabHost, TabSlot } from "./tabhost/TabHost";
+import { peekSessionIdFrom, usePeekTabId } from "./tabhost/shown";
 import { CommandPalette, Overlay, type PaletteCommand } from "./ui";
 import "./Layout.css";
 
@@ -19,7 +27,6 @@ import "./Layout.css";
  * jumps to the same line re-trigger the scroll. */
 let fileFocusSeq = 0;
 
-const PIN_STORAGE_KEY = "sulion.sidebar.pinned.v1";
 const WIDTH_STORAGE_KEY = "sulion.sidebar.width.v1";
 const DEFAULT_WIDTH = 280;
 const MIN_WIDTH = 220;
@@ -45,24 +52,23 @@ export function Layout() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [monitorOverlayOpen, setMonitorOverlayOpen] = useState(false);
+  const [monitorView, setMonitorView] = useState<MonitorOverlayView>("overview");
   const [futurePromptsSessionId, setFuturePromptsSessionId] = useState<string | null>(null);
   const [planTarget, setPlanTarget] = useState<{
     repo: string;
     planId?: string;
   } | null>(null);
 
-  const [pinned, setPinned] = useState<boolean>(() => {
-    if (typeof localStorage === "undefined") return true;
-    const v = localStorage.getItem(PIN_STORAGE_KEY);
-    return v === null ? true : v === "1";
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem(PIN_STORAGE_KEY, pinned ? "1" : "0");
-    } catch {
-      /* ignore */
-    }
-  }, [pinned]);
+  const pinned = useDisplay((store) => store.sidebarPinned);
+  const toggleSidebar = useDisplay((store) => store.toggleSidebar);
+  const displayMode = useDisplay((store) => store.mode);
+  const peekOpen = useDisplay((store) => store.peekOpen);
+  const closePeek = useDisplay((store) => store.closePeek);
+  const selectedSessionId = useSessions((store) => store.selectedSessionId);
+  const peekSessionId = useTabs((store) =>
+    peekSessionIdFrom(store, selectedSessionId),
+  );
+  const peekTabId = usePeekTabId();
 
   const [sidebarWidth, setSidebarWidth] = useState<number>(() =>
     readInt(WIDTH_STORAGE_KEY, DEFAULT_WIDTH),
@@ -77,6 +83,18 @@ export function Layout() {
 
   const openTabRef = useRef(openTab);
   openTabRef.current = openTab;
+
+  // The peek adopts the counterpart tab's live host. If the session has
+  // no counterpart tab open yet, open one — hidden from the strip in the
+  // current mode, but its content mounts under TabHost for adoption.
+  useEffect(() => {
+    if (!peekOpen || displayMode === "split" || peekTabId) return;
+    if (!peekSessionId) return;
+    openTabRef.current({
+      kind: displayMode === "terminal" ? "timeline" : "terminal",
+      sessionId: peekSessionId,
+    });
+  }, [peekOpen, displayMode, peekTabId, peekSessionId]);
 
   useAppCommand("open-file", ({ repo, path, workspaceId, line }) => {
     openTabRef.current({
@@ -109,19 +127,39 @@ export function Layout() {
   useAppCommand("close-drawer", () => {
     setDrawerOpen(false);
   });
+  useAppCommand("open-display-settings", () => {
+    setMonitorView("display");
+    setMonitorOverlayOpen(true);
+  });
 
   // ⌘K / Ctrl-K opens the command palette. ⌘M / Ctrl-M toggles the monitor
-  // overlay (TerminalPane excludes the chord from xterm so it never reaches
-  // the PTY). Esc is handled by the Overlay.
+  // overlay. ⌘⇧B toggles the sidebar, ⌘⇧D cycles the display mode, and
+  // ⌘⇧E peeks at the hidden projection in the single-pane modes.
+  // (TerminalPane excludes these chords from xterm so they never reach
+  // the PTY.) Esc is handled by the Overlay.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "k") {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (!e.shiftKey && key === "k") {
         e.preventDefault();
         setPaletteOpen(true);
       }
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "m") {
+      if (!e.shiftKey && key === "m") {
         e.preventDefault();
         setMonitorOverlayOpen((open) => !open);
+      }
+      if (e.shiftKey && key === "b") {
+        e.preventDefault();
+        useDisplay.getState().toggleSidebar();
+      }
+      if (e.shiftKey && key === "d") {
+        e.preventDefault();
+        useDisplay.getState().cycleMode();
+      }
+      if (e.shiftKey && key === "e") {
+        e.preventDefault();
+        useDisplay.getState().togglePeek();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -143,10 +181,8 @@ export function Layout() {
   const closePlan = useCallback(() => setPlanTarget(null), []);
   const openDrawer = useCallback(() => setDrawerOpen(true), []);
   const closeDrawerLocal = useCallback(() => setDrawerOpen(false), []);
-  const togglePinned = useCallback(() => setPinned((v) => !v), []);
 
   const commands = usePaletteCommands({
-    setPinned,
     onOpenPalette: openPalette,
   });
 
@@ -161,6 +197,7 @@ export function Layout() {
   if (isMobile) {
     return (
       <div className="layout layout--mobile">
+        <TabHost />
         <MobileTopBar onOpenDrawer={openDrawer} />
         {drawerOpen && (
           <>
@@ -182,7 +219,12 @@ export function Layout() {
           onClose={closePalette}
           commands={commands}
         />
-        <MonitorOverlay open={monitorOverlayOpen} onClose={closeMonitorOverlay} />
+        <MonitorOverlay
+        open={monitorOverlayOpen}
+        view={monitorView}
+        onViewChange={setMonitorView}
+        onClose={closeMonitorOverlay}
+      />
         <FuturePromptsModal
           open={futurePromptsSessionId !== null}
           sessionId={futurePromptsSessionId}
@@ -204,9 +246,10 @@ export function Layout() {
       // eslint-disable-next-line local/no-inline-styles -- sidebar width is drag-resized per user; pass-through CSS custom property drives the grid-template-columns
       style={layoutStyle}
     >
+      <TabHost />
       <Rail
         pinned={pinned}
-        onTogglePinned={togglePinned}
+        onTogglePinned={toggleSidebar}
         onOpenMonitor={openMonitor}
         onOpenSecrets={openSecrets}
         onOpenPalette={openPalette}
@@ -227,7 +270,20 @@ export function Layout() {
         onClose={closePalette}
         commands={commands}
       />
-      <MonitorOverlay open={monitorOverlayOpen} onClose={closeMonitorOverlay} />
+      <MonitorOverlay
+        open={monitorOverlayOpen}
+        view={monitorView}
+        onViewChange={setMonitorView}
+        onClose={closeMonitorOverlay}
+      />
+      {displayMode !== "split" && (
+        <PeekOverlay
+          open={peekOpen}
+          hidden={displayMode === "terminal" ? "timeline" : "terminal"}
+          tabId={peekTabId}
+          onClose={closePeek}
+        />
+      )}
       <FuturePromptsModal
         open={futurePromptsSessionId !== null}
         sessionId={futurePromptsSessionId}
@@ -243,24 +299,73 @@ export function Layout() {
   );
 }
 
-/** The monitor as a transient modal over the workspace (⌘M / Ctrl-M
- * toggles it). Same components as the monitor/metrics tabs; mounting on
- * open is what starts their polling, so a closed overlay costs nothing.
- * The metrics button swaps the overlay's content in place — it never
- * opens a workspace tab from the modal. */
-function MonitorOverlay({
+/** The projection the current display mode hides, shown transiently over
+ * the workspace (⌘⇧E / Ctrl-⇧E toggles it). The overlay adopts the
+ * counterpart tab's live host from the tab registry — the same terminal
+ * instance the split layout shows, not a fresh attachment — so scrollback
+ * and connection state carry over. */
+function PeekOverlay({
   open,
+  hidden,
+  tabId,
   onClose,
 }: {
   open: boolean;
+  hidden: "terminal" | "timeline";
+  tabId: string | null;
   onClose: () => void;
 }) {
-  const [view, setView] = useState<"overview" | "metrics">("overview");
+  const title = hidden === "terminal" ? "Terminal" : "Timeline";
+  return (
+    <Overlay
+      open={open}
+      onClose={onClose}
+      modal
+      className="peek-overlay"
+      title={title}
+      width="min(94vw, 1400px)"
+      maxWidth="94vw"
+      maxHeight="92vh"
+    >
+      {!tabId ? (
+        <div className="peek-overlay__empty">
+          No session tab is active to peek at.
+        </div>
+      ) : (
+        <div className="peek-overlay__body">
+          <TabSlot tabId={tabId} priority={2} className="tab-slot tab-slot--peek" />
+        </div>
+      )}
+    </Overlay>
+  );
+}
+
+type MonitorOverlayView = "overview" | "metrics" | "display";
+
+/** The monitor as a transient modal over the workspace (⌘M / Ctrl-M
+ * toggles it). Same components as the monitor/metrics tabs; mounting on
+ * open is what starts their polling, so a closed overlay costs nothing.
+ * The view links swap the overlay's content in place — they never open
+ * a workspace tab from the modal. The view is owned by Layout so the
+ * open-display-settings command can land directly on the display tab. */
+function MonitorOverlay({
+  open,
+  view,
+  onViewChange,
+  onClose,
+}: {
+  open: boolean;
+  view: MonitorOverlayView;
+  onViewChange: (view: MonitorOverlayView) => void;
+  onClose: () => void;
+}) {
   useEffect(() => {
-    if (!open) setView("overview");
+    if (!open) onViewChange("overview");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only on close
   }, [open]);
-  const showMetrics = useCallback(() => setView("metrics"), []);
-  const showOverview = useCallback(() => setView("overview"), []);
+  const showMetrics = useCallback(() => onViewChange("metrics"), [onViewChange]);
+  const showOverview = useCallback(() => onViewChange("overview"), [onViewChange]);
+  const showDisplay = useCallback(() => onViewChange("display"), [onViewChange]);
   return (
     <Overlay
       open={open}
@@ -273,9 +378,18 @@ function MonitorOverlay({
       maxHeight="92vh"
     >
       {view === "overview" ? (
-        <MonitorPane onNavigate={onClose} onOpenMetrics={showMetrics} />
+        <MonitorPane
+          onNavigate={onClose}
+          onOpenMetrics={showMetrics}
+          onOpenDisplay={showDisplay}
+        />
+      ) : view === "metrics" ? (
+        <MetricsPane onOpenOverview={showOverview} onOpenDisplay={showDisplay} />
       ) : (
-        <MetricsPane onOpenOverview={showOverview} />
+        <DisplaySettings
+          onOpenOverview={showOverview}
+          onOpenMetrics={showMetrics}
+        />
       )}
     </Overlay>
   );
@@ -359,10 +473,8 @@ function MobileTopBar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
 }
 
 function usePaletteCommands({
-  setPinned,
   onOpenPalette,
 }: {
-  setPinned: (fn: (v: boolean) => boolean) => void;
   onOpenPalette: () => void;
 }): PaletteCommand[] {
   const repos = useSessions((s) => s.repos);
@@ -415,8 +527,17 @@ function usePaletteCommands({
       label: "Toggle sidebar pin",
       icon: "panel-left",
       group: "view",
-      run: () => setPinned((v) => !v),
+      run: () => useDisplay.getState().toggleSidebar(),
     });
+    for (const mode of DISPLAY_MODES) {
+      out.push({
+        id: `display.${mode}`,
+        label: `Display mode · ${DISPLAY_MODE_LABELS[mode]}`,
+        icon: mode === "terminal" ? "terminal" : mode === "timeline" ? "list" : "layers",
+        group: "view",
+        run: () => useDisplay.getState().setMode(mode),
+      });
+    }
     for (const metaRepo of metaRepos) {
       out.push({
         id: `meta-repo.${metaRepo.id}`,
@@ -492,5 +613,5 @@ function usePaletteCommands({
       });
     }
     return out;
-  }, [metaRepos, openTab, plans, repos, sessions, setPinned, openTerminalFor]);
+  }, [metaRepos, openTab, plans, repos, sessions, openTerminalFor]);
 }

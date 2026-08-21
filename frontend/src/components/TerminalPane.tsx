@@ -229,6 +229,13 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
         return false;
       }
 
+      // Ctrl+Shift+B / D / E are app-wide layout chords (sidebar, display
+      // mode, peek — Layout listens on window). Shift keeps the plain
+      // Ctrl+B / Ctrl+U-style readline chords flowing to the PTY.
+      if (ev.shiftKey && ["b", "d", "e"].includes(ev.key.toLowerCase())) {
+        return false;
+      }
+
       return true;
     });
 

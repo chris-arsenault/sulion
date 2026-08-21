@@ -18,6 +18,7 @@ import {
 } from "../state/TabStore";
 import { useSessions } from "../state/SessionStore";
 import { useSecretStore } from "../state/SecretStore";
+import { useDisplay } from "../state/DisplayStore";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { Icon, type IconName } from "../icons";
 import { Tooltip } from "./ui";
@@ -27,15 +28,8 @@ import {
   useContextMenu,
 } from "./common/contextMenuStore";
 import { buildSecretContextMenu } from "./common/secretContextMenu";
-import { TerminalPane } from "./TerminalPane";
-import { TimelinePane } from "./TimelinePane";
-import { MetricsPane } from "./MetricsPane";
-import { MonitorPane } from "./MonitorPane";
-import { SessionEndedPane } from "./SessionEndedPane";
-import { FileTab } from "./FileTab";
-import { DiffTab } from "./DiffTab";
-import { RefTab } from "./RefTab";
-import { SecretsTab } from "./SecretsTab";
+import { TabSlot } from "./tabhost/TabHost";
+import { singlePaneActiveId, tabVisibleInMode } from "./tabhost/shown";
 import "./WorkArea.css";
 
 const TAB_DRAG_MIME = "application/x-sulion-tab";
@@ -50,6 +44,7 @@ export function WorkArea() {
     })),
   );
   const isMobile = useMediaQuery("(max-width: 767px)");
+  const displayMode = useDisplay((store) => store.mode);
   const [topFraction, setTopFraction] = useState(0.55);
   // No more automatic prune: tabs survive their session's deletion and
   // show an orphan placeholder with a manual close. That keeps tab
@@ -79,6 +74,36 @@ export function WorkArea() {
         <Pane
           paneId="top"
           tabIds={mobileTabIds}
+          activeId={activeId}
+          tabs={tabs}
+          mobile
+        />
+      </div>
+    );
+  }
+
+  // Terminal-only / timeline-only: one merged pane (the mobile layout's
+  // proven shape) with the other projection's tabs filtered out. The
+  // pane split assignments in the store are untouched, so returning to
+  // split mode restores the previous two-pane arrangement.
+  if (displayMode !== "split") {
+    const visibleIds = mobileTabIds.filter((id) =>
+      tabVisibleInMode(tabs[id], displayMode),
+    );
+    if (visibleIds.length === 0) {
+      return <EmptyWorkArea />;
+    }
+    const activeId = singlePaneActiveId(
+      visibleIds,
+      [activeByPane.top, activeByPane.bottom],
+      tabs,
+      displayMode,
+    );
+    return (
+      <div className="wa wa--single">
+        <Pane
+          paneId="top"
+          tabIds={visibleIds}
           activeId={activeId}
           tabs={tabs}
           mobile
@@ -273,7 +298,7 @@ function Pane({
               }
               aria-hidden={!visible}
             >
-              <TabContent tab={tab} active={visible} />
+              <TabSlot tabId={id} />
             </div>
           );
         })}
@@ -788,66 +813,3 @@ function tabTitle(tab: TabData, label: string): string {
   return bits.join(" · ");
 }
 
-function TabContent({ tab, active }: { tab: TabData; active: boolean }) {
-  return useMemo(() => {
-    switch (tab.kind) {
-      case "terminal":
-        return <TerminalOrEndedPane sessionId={tab.sessionId!} />;
-      case "timeline":
-        return (
-          <TimelinePane
-            tabId={tab.id}
-            sessionId={tab.sessionId}
-            repo={tab.repo}
-            active={active}
-            focusTurnId={tab.focusTurnId}
-            focusPairId={tab.focusPairId}
-            focusKey={tab.focusKey}
-          />
-        );
-      case "file":
-        return (
-          <FileTab
-            repo={tab.repo!}
-            path={tab.path!}
-            workspaceId={tab.workspaceId}
-            focusLine={tab.focusLine}
-            focusKey={tab.focusKey}
-          />
-        );
-      case "diff":
-        return <DiffTab repo={tab.repo!} path={tab.path} workspaceId={tab.workspaceId} />;
-      case "ref":
-        return <RefTab slug={tab.slug!} />;
-      case "secrets":
-        return <SecretsTab />;
-      case "monitor":
-        return <MonitorPane active={active} />;
-      case "metrics":
-        return <MetricsPane active={active} />;
-    }
-  }, [active, tab]);
-}
-
-function TerminalOrEndedPane({ sessionId }: { sessionId: string }) {
-  const { sessions, sessionsLoaded } = useSessions(
-    useShallow((store) => ({
-      sessions: store.sessions,
-      sessionsLoaded: store.sessionsLoaded,
-    })),
-  );
-  const s = sessions.find((x) => x.id === sessionId) ?? null;
-  // Sessions not loaded yet → render the terminal optimistically; the
-  // WS will connect once things stabilise.
-  if (!sessionsLoaded) return <TerminalPane sessionId={sessionId} />;
-  if (!s) {
-    return (
-      <div className="wa__orphan">
-        <p>This tab's session (<code>{sessionId.slice(0, 8)}</code>) is no longer available.</p>
-        <p>Close the tab via the × button, or open a fresh session from the sidebar.</p>
-      </div>
-    );
-  }
-  if (s.state !== "live") return <SessionEndedPane session={s} />;
-  return <TerminalPane sessionId={sessionId} />;
-}

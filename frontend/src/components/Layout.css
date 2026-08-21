@@ -194,3 +194,27 @@
   min-width: 32px;
   min-height: 32px;
 }
+
+/* Peek at the hidden projection (⌘⇧E / Ctrl-⇧E) — the terminal or
+ * timeline the current display mode is not showing, in a modal. */
+.peek-overlay .ui-overlay__surface {
+  height: 92vh;
+}
+
+.peek-overlay .ui-overlay__body {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+
+.peek-overlay__body {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.peek-overlay__empty {
+  padding: 24px;
+  color: var(--text-mid);
+}

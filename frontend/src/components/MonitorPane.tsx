@@ -31,6 +31,7 @@ export function MonitorPane({
   active = true,
   onNavigate,
   onOpenMetrics,
+  onOpenDisplay,
 }: {
   active?: boolean;
   /** Called after any action that navigates to another surface (open
@@ -40,6 +41,9 @@ export function MonitorPane({
   /** Modal host override: show metrics inside the overlay instead of
    * opening the metrics workspace tab. */
   onOpenMetrics?: () => void;
+  /** Modal host override: show display settings inside the overlay.
+   * Without it the link opens the overlay via the app command. */
+  onOpenDisplay?: () => void;
 }) {
   const [data, setData] = useState<MonitorTimelineResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -197,6 +201,13 @@ export function MonitorPane({
     openTab({ kind: "metrics" }, "top");
     onNavigate?.();
   }, [onNavigate, onOpenMetrics, openTab]);
+  const openDisplay = useCallback(() => {
+    if (onOpenDisplay) {
+      onOpenDisplay();
+      return;
+    }
+    appCommands.openDisplaySettings();
+  }, [onOpenDisplay]);
 
   return (
     <div className="monitor-pane" data-testid="monitor-pane">
@@ -246,6 +257,13 @@ export function MonitorPane({
           onClick={openMetrics}
         >
           metrics
+        </button>
+        <button
+          type="button"
+          className="monitor-pane__metrics-link"
+          onClick={openDisplay}
+        >
+          display
         </button>
         <span className="monitor-pane__refresh">
           {loading ? "refreshing" : "live telemetry"}

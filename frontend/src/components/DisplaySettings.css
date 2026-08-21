@@ -1,0 +1,121 @@
+.display-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+  padding: 14px 18px;
+  overflow-y: auto;
+  background: var(--canvas-0);
+}
+
+.display-settings__bar {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  border-bottom: 1px solid var(--hairline);
+  padding-bottom: 10px;
+}
+
+.display-settings__bar h2 {
+  margin: 0;
+  color: var(--text-hi);
+  font-size: var(--t-body);
+  font-weight: var(--w-600);
+}
+
+.display-settings__link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--text-mid);
+  font-size: var(--t-ui);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.display-settings__link:hover {
+  color: var(--text-hi);
+}
+
+.display-settings__section > header {
+  margin-bottom: 8px;
+  font-size: var(--t-meta);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-mid);
+}
+
+.display-settings__modes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 560px;
+}
+
+.display-settings__mode {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-2);
+  background: var(--canvas-1);
+  text-align: left;
+  cursor: pointer;
+}
+
+.display-settings__mode:hover {
+  border-color: color-mix(in oklab, var(--text-mid) 35%, transparent);
+}
+
+.display-settings__mode--selected {
+  border-color: var(--accent);
+  background: var(--canvas-2);
+}
+
+.display-settings__mode-label {
+  color: var(--text-hi);
+  font-size: var(--t-ui);
+  font-weight: 600;
+}
+
+.display-settings__mode-desc {
+  color: var(--text-mid);
+  font-size: var(--t-meta);
+}
+
+.display-settings__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-hi);
+  font-size: var(--t-ui);
+  cursor: pointer;
+}
+
+.display-settings__keys {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+
+.display-settings__keys > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.display-settings__keys dt {
+  min-width: 64px;
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  color: var(--text-hi);
+}
+
+.display-settings__keys dd {
+  margin: 0;
+  font-size: var(--t-meta);
+  color: var(--text-mid);
+}

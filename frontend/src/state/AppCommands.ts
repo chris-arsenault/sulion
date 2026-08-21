@@ -20,7 +20,8 @@ export type AppCommand =
   | { type: "new-meta-repo-session"; metaRepoId: string }
   | { type: "close-drawer" }
   | { type: "inject-terminal"; sessionId: string; text: string }
-  | { type: "library-changed"; kind: LibraryKind };
+  | { type: "library-changed"; kind: LibraryKind }
+  | { type: "open-display-settings" };
 
 type AppCommandType = AppCommand["type"];
 type AppCommandOf<T extends AppCommandType> = Extract<AppCommand, { type: T }>;
@@ -79,6 +80,10 @@ export const appCommands = {
 
   libraryChanged(detail: Omit<AppCommandOf<"library-changed">, "type">) {
     dispatchAppCommand({ type: "library-changed", ...detail });
+  },
+
+  openDisplaySettings() {
+    dispatchAppCommand({ type: "open-display-settings" });
   },
 };
 
