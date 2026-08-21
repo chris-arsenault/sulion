@@ -277,9 +277,17 @@ if [ -n "${secret_names}" ]; then
   # mistaken for a secret called DIR by the enumeration above.
   WRITE_DIR_VAR="${ENV_PREFIX}_SECRETS_DIR"
   WRITE_DIR="${!WRITE_DIR_VAR:-}"
+  # Who reads them. The point of file mode is that another container does, and
+  # it runs as its own user, so the writer hands over ownership rather than
+  # widening the mode: the files stay owner-only, and the owner is the reader.
+  OWNER_VAR="${ENV_PREFIX}_SECRETS_OWNER"
+  OWNER="${!OWNER_VAR:-}"
   if [ -n "${WRITE_DIR}" ]; then
     mkdir -p "${WRITE_DIR}"
     chmod 700 "${WRITE_DIR}"
+    if [ -n "${OWNER}" ]; then
+      chown "${OWNER}" "${WRITE_DIR}"
+    fi
   fi
 
   for name in ${secret_names}; do
@@ -316,6 +324,9 @@ if [ -n "${secret_names}" ]; then
       # never sees a partial secret.
       printf '%s' "${value}" > "${WRITE_DIR}/.${name}.tmp"
       chmod 600 "${WRITE_DIR}/.${name}.tmp"
+      if [ -n "${OWNER}" ]; then
+        chown "${OWNER}" "${WRITE_DIR}/.${name}.tmp"
+      fi
       mv "${WRITE_DIR}/.${name}.tmp" "${WRITE_DIR}/${name}"
     else
       export "${name}=${value}"
