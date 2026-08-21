@@ -265,6 +265,40 @@ fn local_command_records_do_not_seed_turns() {
     );
 }
 
+/// Claude stamps attachment records a few ms before their prompt.
+/// Sorted by timestamp they precede it — they must join the prompt's
+/// turn, not seed a decoy orphan that later work attaches to.
+#[test]
+fn pre_prompt_bookkeeping_joins_the_first_real_turn() {
+    let mut attachment = event(2, "attachment", vec![]);
+    attachment.timestamp = ts(0);
+    let mut prompt = event(1, "user", vec![text(0, "real prompt")]);
+    prompt.timestamp = ts(1);
+    let mut reply = event(3, "assistant", vec![text(0, "reply")]);
+    reply.timestamp = ts(2);
+
+    // Timestamp order: attachment, prompt, reply. show_bookkeeping so
+    // the attachment stays in the grouped stream, as it always does on
+    // the projection write path.
+    let events = vec![attachment, prompt, reply];
+    let filters = ProjectionFilters {
+        show_bookkeeping: true,
+        ..Default::default()
+    };
+    let projected = project_timeline(&events, events.len() as i64, &filters);
+    assert_eq!(
+        projected.turns.len(),
+        1,
+        "turns: {:?}",
+        projected
+            .turns
+            .iter()
+            .map(|turn| &turn.preview)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(projected.turns[0].preview, "real prompt");
+}
+
 /// Claude usage sums per turn, deduped by message id across streamed
 /// repeats of the same message.
 #[test]

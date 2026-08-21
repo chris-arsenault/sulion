@@ -195,10 +195,16 @@ fn filter_descendant_projection_events(
     descendant_session_uuid: Uuid,
 ) -> Vec<StoredEvent> {
     let descendant_session_id = descendant_session_uuid.to_string();
+    // Chain roots differ by agent: codex child events reference their
+    // session id as parent; claude subagent transcripts start with a
+    // parentless sidechain record.
     let mut included_ids: HashSet<String> = events
         .iter()
         .filter(|event| event.is_sidechain)
-        .filter(|event| event.parent_event_uuid.as_deref() == Some(descendant_session_id.as_str()))
+        .filter(|event| {
+            event.parent_event_uuid.as_deref() == Some(descendant_session_id.as_str())
+                || event.parent_event_uuid.is_none()
+        })
         .filter_map(|event| event.event_uuid.clone())
         .filter(|id| !known_ids.contains(id))
         .collect();
@@ -270,6 +276,14 @@ pub async fn backfill_timeline_projection(pool: &Pool) -> anyhow::Result<usize> 
                FROM timeline_turns tt \
               GROUP BY tt.session_uuid \
              HAVING SUM(tt.input_tokens + tt.output_tokens) = 0 \
+             UNION \
+             SELECT DISTINCT tt.session_uuid \
+               FROM timeline_turns tt \
+              WHERE tt.preview = '(no user prompt)' \
+             UNION \
+             SELECT DISTINCT o.session_uuid \
+               FROM timeline_operations o \
+              WHERE o.name = 'agent' \
          ) \
          SELECT session_uuid \
            FROM sessions_to_rebuild \

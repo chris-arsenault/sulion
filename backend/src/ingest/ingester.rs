@@ -322,6 +322,15 @@ async fn process_file(
     )
     .await?;
 
+    // A claude subagent transcript: bind it to its parent session and
+    // read the spawn's tool-use id from the sibling meta file so every
+    // event links back to the parent's Agent pair.
+    let mut subagent_tool_use_id: Option<String> = None;
+    if let Some(parent) = file.subagent_parent {
+        set_parent_session(pool, file.session_uuid, parent).await?;
+        subagent_tool_use_id = read_subagent_tool_use_id(&file.path);
+    }
+
     result.committed_offset = file.committed_offset;
     if file.file_len < file.committed_offset {
         // File truncated or replaced — reset and try again on next tick.
@@ -369,6 +378,7 @@ async fn process_file(
             byte_offset,
             line,
             codex_ctx.as_mut(),
+            subagent_tool_use_id.as_deref(),
         )
         .await
         {
@@ -431,8 +441,24 @@ async fn process_file(
     if let Some(first_inserted_offset) = first_inserted_offset {
         rebuild_projections_after_insert(pool, file.session_uuid, source, first_inserted_offset)
             .await;
+        // Subagent events surface in the parent's timeline (subagent
+        // modal, badges), so the parent's projection must follow.
+        if file.subagent_parent.is_some() {
+            rebuild_ancestor_projections(pool, file.session_uuid, source).await;
+        }
     }
     Ok(result)
+}
+
+/// Best-effort read of the spawn linkage from the transcript's sibling
+/// meta file (`agent-<id>.meta.json` beside `agent-<id>.jsonl`).
+fn read_subagent_tool_use_id(path: &Path) -> Option<String> {
+    let meta_path = path.with_extension("meta.json");
+    let raw = std::fs::read_to_string(meta_path).ok()?;
+    let meta: Value = serde_json::from_str(&raw).ok()?;
+    meta.get("toolUseId")
+        .and_then(Value::as_str)
+        .map(|id| id.to_string())
 }
 
 async fn rebuild_projections_after_insert(
@@ -456,11 +482,11 @@ async fn rebuild_projections_after_insert(
         );
     }
     if source == TranscriptSource::Codex {
-        rebuild_codex_ancestor_projections(pool, session_uuid).await;
+        rebuild_ancestor_projections(pool, session_uuid, source).await;
     }
 }
 
-async fn rebuild_codex_ancestor_projections(pool: &Pool, session_uuid: Uuid) {
+async fn rebuild_ancestor_projections(pool: &Pool, session_uuid: Uuid, _source: TranscriptSource) {
     match codex_parent_session_chain(pool, session_uuid).await {
         Ok(ancestors) => {
             for ancestor in ancestors {
@@ -639,6 +665,7 @@ async fn insert_event(
     byte_offset: i64,
     line: &[u8],
     codex_ctx: Option<&mut CodexSessionContext>,
+    subagent_tool_use_id: Option<&str>,
 ) -> Result<bool, InsertError> {
     if line.iter().all(|b| b.is_ascii_whitespace()) {
         return Ok(false);
@@ -664,13 +691,21 @@ async fn insert_event(
     // with no blocks — the frontend will render via `unknown` blocks or
     // the legacy payload path.
     let codex_ctx_ref = codex_ctx.as_deref();
-    let parsed = parse_canonical_event(
+    let mut parsed = parse_canonical_event(
         source.agent_id(),
         &value,
         session_uuid,
         byte_offset,
         codex_ctx_ref,
     );
+    // Subagent transcripts link every unclaimed record back to the
+    // parent's spawning tool pair so the timeline's lineage walk finds
+    // the whole sidechain.
+    if let Some(tool_use_id) = subagent_tool_use_id {
+        if parsed.related_tool_use_id.is_none() {
+            parsed.related_tool_use_id = Some(tool_use_id.to_string());
+        }
+    }
     let kind = stored_event_kind(source, &value, &parsed);
     let timestamp = parse_event_timestamp(&value).unwrap_or_else(Utc::now);
 

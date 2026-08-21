@@ -10,7 +10,11 @@ pub fn canonicalize_tool_name(raw: &str) -> String {
         "Bash" | "shell" | "execute_shell" => "bash",
         "Grep" | "grep_search" => "grep",
         "Glob" | "glob_files" => "glob",
-        "Task" | "spawn_agent" => "task",
+        // `Agent` is the background-agent successor to Task: same
+        // description/subagent_type/prompt input, same delegation
+        // semantics, so the whole task pipeline (category, badges,
+        // subagent projection) applies.
+        "Task" | "Agent" | "spawn_agent" => "task",
         "TodoWrite" | "todo_update" => "todo_write",
         "WebFetch" | "fetch_url" => "web_fetch",
         "WebSearch" | "web_search_query" => "web_search",

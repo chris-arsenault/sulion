@@ -432,6 +432,107 @@ async fn startup_usage_repair_rebuilds_cache_write_categories_from_events() {
     );
 }
 
+/// Claude background agents: the parent's Agent call plus a
+/// `subagents/agent-*.jsonl` transcript linked by the meta file's
+/// toolUseId must project a subagent onto the parent's task pair, and
+/// pre-prompt attachments must not split the prompt from its work.
+#[tokio::test]
+async fn claude_agent_spawn_projects_subagent_onto_parent_pair() {
+    let pool = fresh_pool().await;
+    let fx = Fixture::new();
+
+    // Attachment stamped 5ms before the prompt — the ordering that
+    // previously seeded a decoy orphan turn.
+    fx.append(
+        r#"{"type":"attachment","timestamp":"2025-01-01T00:00:00.270Z","uuid":"att-1","isSidechain":false}"#,
+    );
+    fx.append("\n");
+    fx.append(
+        r#"{"type":"user","timestamp":"2025-01-01T00:00:00.275Z","uuid":"u1","message":{"role":"user","content":"survey both repos"}}"#,
+    );
+    fx.append("\n");
+    fx.append(
+        r#"{"type":"assistant","timestamp":"2025-01-01T00:00:05Z","uuid":"a1","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_agent1","name":"Agent","input":{"description":"Survey ingest surface","subagent_type":"Explore","prompt":"go"}}]}}"#,
+    );
+    fx.append("\n");
+
+    // The subagent transcript + meta beside it.
+    let subagents_dir = fx
+        .root
+        .path()
+        .join(&fx.project_hash)
+        .join(fx.session_uuid.to_string())
+        .join("subagents");
+    std::fs::create_dir_all(&subagents_dir).unwrap();
+    std::fs::write(
+        subagents_dir.join("agent-abc123.meta.json"),
+        r#"{"agentType":"Explore","description":"Survey ingest surface","toolUseId":"toolu_agent1","spawnDepth":1}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        subagents_dir.join("agent-abc123.jsonl"),
+        concat!(
+            r#"{"type":"user","timestamp":"2025-01-01T00:00:06Z","uuid":"s-u1","parentUuid":null,"isSidechain":true,"agentId":"abc123","message":{"role":"user","content":"survey the ingest surface"}}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2025-01-01T00:00:07Z","uuid":"s-a1","parentUuid":"s-u1","isSidechain":true,"agentId":"abc123","message":{"role":"assistant","content":[{"type":"text","text":"surface surveyed"}]}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+
+    Ingester::new().tick(&pool, &fx.config()).await.unwrap();
+
+    // The attachment joined the prompt turn instead of seeding an
+    // orphan, and the subagent's own turn is stored as sidechain so the
+    // default view hides it.
+    let turns: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT preview, is_sidechain_turn FROM timeline_turns \
+          WHERE session_uuid = $1 ORDER BY turn_ord",
+    )
+    .bind(fx.session_uuid)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        turns
+            .iter()
+            .map(|(preview, sidechain)| (preview.as_str(), *sidechain))
+            .collect::<Vec<_>>(),
+        vec![
+            ("survey both repos", false),
+            ("survey the ingest surface", true),
+        ],
+    );
+
+    // The Agent pair canonicalizes as a task delegation carrying the
+    // subagent's projected turns.
+    let (operation_type, operation_category, subagent_json): (
+        Option<String>,
+        Option<String>,
+        Option<serde_json::Value>,
+    ) = sqlx::query_as(
+        "SELECT operation_type, operation_category, subagent_json \
+           FROM timeline_operations WHERE session_uuid = $1 AND pair_id = 'toolu_agent1'",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(operation_type.as_deref(), Some("task"));
+    assert_eq!(operation_category.as_deref(), Some("delegate"));
+    let subagent = subagent_json.expect("subagent projected on parent pair");
+    let previews: Vec<&str> = subagent["turns"]
+        .as_array()
+        .expect("turns")
+        .iter()
+        .filter_map(|turn| turn["preview"].as_str())
+        .collect();
+    assert!(
+        previews.contains(&"survey the ingest surface"),
+        "subagent turns: {previews:?}",
+    );
+}
+
 #[tokio::test]
 async fn codex_exec_with_embedded_patch_projects_as_content_creation() {
     let pool = fresh_pool().await;

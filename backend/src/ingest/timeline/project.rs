@@ -65,23 +65,50 @@ pub(crate) struct TurnSeed<'a> {
 pub(crate) fn group_into_turns<'a>(events: &[&'a StoredEvent]) -> Vec<TurnSeed<'a>> {
     let mut turns = Vec::new();
     let mut current_idx: Option<usize> = None;
+    // Bookkeeping that arrives before the first real turn. Claude
+    // stamps attachment records a few ms before their prompt, so
+    // letting them seed a turn created a decoy orphan the incremental
+    // rebuild then attached all real work to. They wait here and join
+    // the first turn that actually forms.
+    let mut pending_prefix: Vec<&'a StoredEvent> = Vec::new();
 
     for event in events.iter().copied() {
         if is_real_user_prompt(event) {
             turns.push(new_turn(Some(event), None));
             current_idx = Some(turns.len() - 1);
+            let turn = &mut turns[current_idx.expect("turn exists")];
+            for pending in pending_prefix.drain(..) {
+                turn.events.push(pending);
+            }
             continue;
         }
 
         if current_idx.is_none() {
+            if is_bookkeeping_event(event) {
+                pending_prefix.push(event);
+                continue;
+            }
             turns.push(new_turn(None, Some(event)));
             current_idx = Some(turns.len() - 1);
+            let turn = &mut turns[current_idx.expect("turn exists")];
+            for pending in pending_prefix.drain(..) {
+                turn.events.push(pending);
+            }
         }
 
         let turn = &mut turns[current_idx.expect("turn exists")];
         turn.events.push(event);
         turn.end_timestamp = event.timestamp;
         turn.duration_ms = duration_ms_between(turn.start_timestamp, turn.end_timestamp);
+    }
+
+    // A session of nothing but bookkeeping still needs a home.
+    if !pending_prefix.is_empty() && turns.is_empty() {
+        turns.push(new_turn(None, Some(pending_prefix[0])));
+        let turn = &mut turns[0];
+        for pending in pending_prefix.drain(..) {
+            turn.events.push(pending);
+        }
     }
 
     turns

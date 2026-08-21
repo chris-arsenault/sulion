@@ -5,7 +5,9 @@ use crate::db::Pool;
 const CANONICAL_BLOCKS_KEY: &str = "canonical_blocks";
 // v2: codex code-mode `exec` inputs re-derived from raw JS strings into
 // the canonical {command, code} shape.
-const CANONICAL_BLOCKS_VERSION: i32 = 2;
+// v3: the claude `Agent` tool canonicalizes to `task`; blocks that
+// predate the mapping get re-derived.
+const CANONICAL_BLOCKS_VERSION: i32 = 3;
 const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // v3: sessions with codex `exec` operations reprojected after their
 // inputs were re-canonicalized into the {command, code} shape.
@@ -13,7 +15,10 @@ const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // seed turns; sessions whose previews show them get reprojected.
 // v5: per-turn token usage columns; sessions with no usage recorded yet
 // get reprojected to fill them.
-const TIMELINE_PROJECTION_VERSION: i32 = 5;
+// v6: bookkeeping no longer seeds turns and Agent spawns project as
+// task delegations; sessions showing orphan first turns or agent pairs
+// get reprojected.
+const TIMELINE_PROJECTION_VERSION: i32 = 6;
 const USAGE_PROJECTION_KEY: &str = "usage_projection";
 const USAGE_PROJECTION_VERSION: i32 = 1;
 
