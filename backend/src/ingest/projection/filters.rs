@@ -7,9 +7,10 @@ use crate::ingest::timeline::{
 };
 
 pub(super) fn apply_projection_filters(turn: &mut TimelineTurn, filters: &ProjectionFilters) {
-    if filters.hidden_speakers.contains(&SpeakerFacet::User) {
-        turn.user_prompt_text = None;
-    }
+    // The hidden User facet is applied client-side: blanking
+    // user_prompt_text here made the detail indistinguishable from a
+    // genuine orphan turn ("no user prompt"). The frontend hides the
+    // prompt body itself and labels it as filtered.
     if filters.hidden_speakers.contains(&SpeakerFacet::ToolResult) {
         for pair in &mut turn.tool_pairs {
             pair.result = None;
@@ -152,13 +153,16 @@ mod tests {
         }
     }
 
+    /// The hidden User facet is a client-side render flag — the server
+    /// keeps the prompt so a filtered turn stays distinguishable from a
+    /// genuine orphan turn.
     #[test]
-    fn hiding_the_user_speaker_blanks_the_prompt() {
+    fn hiding_the_user_speaker_keeps_the_prompt_in_the_payload() {
         let mut turn = turn_with_pair();
         let mut filters = ProjectionFilters::default();
         filters.hidden_speakers.insert(SpeakerFacet::User);
         apply_projection_filters(&mut turn, &filters);
-        assert_eq!(turn.user_prompt_text, None);
+        assert_eq!(turn.user_prompt_text.as_deref(), Some("prompt"));
         assert!(turn.tool_pairs[0].result.is_some());
     }
 

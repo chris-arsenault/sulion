@@ -8,6 +8,7 @@ import "./SubagentModal.css";
 interface Props {
   subagent: TimelineSubagent;
   showThinking: boolean;
+  hideUserPrompt?: boolean;
   onClose: () => void;
   /** Drill into a nested Task pair's subagent. */
   onOpenSubagent?: (pair: ToolPair) => void;
@@ -18,6 +19,7 @@ interface Props {
 export function SubagentModal({
   subagent,
   showThinking,
+  hideUserPrompt = false,
   onClose,
   onOpenSubagent,
   onBack,
@@ -55,6 +57,7 @@ export function SubagentModal({
           <TurnDetail
             turn={turn}
             showThinking={showThinking}
+            hideUserPrompt={hideUserPrompt}
             onOpenSubagent={onOpenSubagent}
           />
         </div>

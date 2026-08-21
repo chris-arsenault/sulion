@@ -15,6 +15,10 @@ interface Props {
   turn: Turn | null;
   loading?: boolean;
   showThinking: boolean;
+  /** Render flag from the hidden "user" speaker chip: the prompt body
+   * is replaced with a "hidden by filter" label, never mistaken for an
+   * orphan turn. */
+  hideUserPrompt?: boolean;
   onOpenSubagent?: (pair: ToolPair) => void;
   /** When true, render as a full-screen overlay modal with a backdrop;
    * when false, render as an inline pane. */
@@ -31,6 +35,7 @@ export function SessionInspectorPane({
   turn,
   loading = false,
   showThinking,
+  hideUserPrompt = false,
   onOpenSubagent,
   asOverlay,
   onClose,
@@ -50,6 +55,7 @@ export function SessionInspectorPane({
     <TurnDetail
       turn={turn}
       showThinking={showThinking}
+      hideUserPrompt={hideUserPrompt}
       onOpenSubagent={onOpenSubagent}
       focusPairId={focusPairId ?? null}
       focusKey={focusKey ?? null}

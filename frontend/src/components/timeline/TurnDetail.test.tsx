@@ -56,6 +56,31 @@ describe("TurnDetail", () => {
     expect(screen.getByText("bash")).toBeDefined();
   });
 
+  it("labels a filtered prompt distinctly from a genuine orphan turn", () => {
+    const { rerender } = renderWithContextMenu(
+      <TurnDetail
+        turn={makeTurn({ user_prompt_text: "steer left" })}
+        showThinking={true}
+        hideUserPrompt={true}
+      />,
+    );
+    expect(screen.getByText(/user prompt hidden by filter/)).toBeDefined();
+    expect(screen.queryByText(/steer left/)).toBeNull();
+    expect(screen.queryByText(/orphan turn/)).toBeNull();
+
+    rerender(
+      <>
+        <TurnDetail
+          turn={makeTurn({ user_prompt_text: "" })}
+          showThinking={true}
+          hideUserPrompt={true}
+        />
+        <ContextMenuHost />
+      </>,
+    );
+    expect(screen.getByText(/orphan turn — no user prompt/)).toBeDefined();
+  });
+
   it("hides thinking chips when showThinking=false", () => {
     renderWithContextMenu(
       <TurnDetail

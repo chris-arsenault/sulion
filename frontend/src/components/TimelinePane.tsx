@@ -544,6 +544,7 @@ export function TimelinePane({
             turn={selectedTurn}
             loading={detailPending}
             showThinking={filters.showThinking}
+            hideUserPrompt={filters.hiddenSpeakers.has("user")}
             onOpenSubagent={handleSubagent}
             asOverlay
             onClose={clearSelectedTurn}
@@ -582,6 +583,7 @@ export function TimelinePane({
             turn={selectedTurn}
             loading={detailPending}
             showThinking={filters.showThinking}
+            hideUserPrompt={filters.hiddenSpeakers.has("user")}
             onOpenSubagent={handleSubagent}
             asOverlay={false}
             focusPairId={focusPairId ?? null}
@@ -600,6 +602,7 @@ export function TimelinePane({
         <SubagentModal
           subagent={subagent}
           showThinking={filters.showThinking}
+          hideUserPrompt={filters.hiddenSpeakers.has("user")}
           onClose={closeSubagent}
           onOpenSubagent={handleSubagent}
           onBack={subagentPath.length > 1 ? backSubagent : undefined}

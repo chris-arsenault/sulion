@@ -33,6 +33,9 @@ import "./TurnDetail.css";
 interface Props {
   turn: Turn;
   showThinking: boolean;
+  /** Hidden "user" speaker chip: replace the prompt body with an
+   * explicit filtered label instead of showing it. */
+  hideUserPrompt?: boolean;
   onOpenSubagent?: (pair: ToolPair) => void;
   /** Optional tool-call id to focus inside this turn. When set and
    * matched, that row renders expanded (others collapsed) and carries
@@ -56,6 +59,7 @@ interface HoverAnchor {
 export function TurnDetail({
   turn,
   showThinking,
+  hideUserPrompt = false,
   onOpenSubagent,
   focusPairId = null,
   focusKey = null,
@@ -219,10 +223,12 @@ export function TurnDetail({
             aria-label="Prompt actions"
             {...promptTriggerProps}
           >
-            {turn.user_prompt_text ? (
-              <Markdown source={turn.user_prompt_text} />
-            ) : (
+            {!turn.user_prompt_text ? (
               <span className="td__muted">(orphan turn — no user prompt)</span>
+            ) : hideUserPrompt ? (
+              <span className="td__muted">(user prompt hidden by filter)</span>
+            ) : (
+              <Markdown source={turn.user_prompt_text} />
             )}
           </div>
         </div>
