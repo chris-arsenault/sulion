@@ -144,6 +144,8 @@ export function makeTurn(
     tool_pairs: overrides.tool_pairs ?? [],
     thinking_count: overrides.thinking_count ?? 0,
     has_errors: overrides.has_errors ?? false,
+    input_tokens: overrides.input_tokens ?? 0,
+    output_tokens: overrides.output_tokens ?? 0,
     markdown: overrides.markdown ?? "**Prompt**\n\n> prompt",
     chunks: overrides.chunks ?? [],
   };

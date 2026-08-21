@@ -50,7 +50,9 @@ import {
   TIMELINE_FONT_SCALE_MAX,
   TIMELINE_FONT_SCALE_MIN,
   TIMELINE_FONT_SCALE_STEP,
+  TURN_NAV_MODES,
   useTimelineFontScale,
+  useTurnNavMode,
 } from "../state/paneTextScale";
 import { useSessions } from "../state/SessionStore";
 import { useTabs } from "../state/TabStore";
@@ -60,10 +62,17 @@ import { useTimelineFilters } from "./timeline/filters";
 import { type ToolPair, type Turn, type TurnSummary } from "./timeline/grouping";
 import { SessionInspectorPane } from "./timeline/SessionInspectorPane";
 import { SubagentModal } from "./timeline/SubagentModal";
+import { TurnGrid } from "./timeline/TurnGrid";
 import { TurnRow } from "./timeline/TurnRow";
 import { Icon } from "../icons";
 import { Tooltip } from "./ui";
 import "./TimelinePane.css";
+
+const TURN_NAV_ICONS = {
+  list: "list",
+  grid: "layers",
+  hidden: "panel-left-close",
+} as const;
 
 const INSPECTOR_WIDTH_KEY = "sulion.timeline.inspector.width.v1";
 const DEFAULT_INSPECTOR_FRACTION = 0.55;
@@ -116,6 +125,13 @@ export function TimelinePane({
   const filterHook = useTimelineFilters();
   const { filters } = filterHook;
   const narrow = useMediaQuery("(max-width: 999px)");
+  const [turnNavMode, setTurnNavMode] = useTurnNavMode();
+  const cycleTurnNav = useCallback(() => {
+    setTurnNavMode((mode) => {
+      const idx = TURN_NAV_MODES.indexOf(mode);
+      return TURN_NAV_MODES[(idx + 1) % TURN_NAV_MODES.length]!;
+    });
+  }, [setTurnNavMode]);
   const [timelineFontScale, setTimelineFontScale] = useTimelineFontScale();
   const resourceRevision = useSessions((store) => {
     if (sessionId) {
@@ -487,6 +503,18 @@ export function TimelinePane({
             <span className="timeline-pane__error">error</span>
           </Tooltip>
         )}
+        <Tooltip
+          label={`Turn navigation: ${turnNavMode} — click to switch (list → grid → hidden)`}
+        >
+          <button
+            type="button"
+            className="timeline-pane__text-button timeline-pane__nav-toggle"
+            onClick={cycleTurnNav}
+            aria-label={`Turn navigation mode: ${turnNavMode}`}
+          >
+            <Icon name={TURN_NAV_ICONS[turnNavMode]} size={12} />
+          </button>
+        </Tooltip>
         <div className="timeline-pane__text-controls" aria-label="Timeline text size controls">
           <span className="timeline-pane__text-label">text</span>
           <button
@@ -519,6 +547,13 @@ export function TimelinePane({
       </div>
       <FilterChips {...filterHook} />
       {sessionId && session && <NeedsInputBanner session={session} />}
+      {turnNavMode === "grid" && !empty && (
+        <TurnGrid
+          turns={turns}
+          selectedTurnKey={selectedTurnKey}
+          onSelect={handleTurnSelect}
+        />
+      )}
       {empty ? (
         <div className="timeline-pane__empty">
           {(timeline?.total_event_count ?? 0) === 0
@@ -531,15 +566,17 @@ export function TimelinePane({
         </div>
       ) : narrow ? (
         <>
-          <div className="timeline-pane__list-narrow">
-            <TurnList
-              turns={turns}
-              selectedTurnKey={selectedTurnKey}
-              showThinking={filters.showThinking}
-              onSelect={handleTurnSelect}
-              virtuosoRef={virtuoso}
-            />
-          </div>
+          {turnNavMode === "list" && (
+            <div className="timeline-pane__list-narrow">
+              <TurnList
+                turns={turns}
+                selectedTurnKey={selectedTurnKey}
+                showThinking={filters.showThinking}
+                onSelect={handleTurnSelect}
+                virtuosoRef={virtuoso}
+              />
+            </div>
+          )}
           <SessionInspectorPane
             turn={selectedTurn}
             loading={detailPending}
@@ -552,6 +589,19 @@ export function TimelinePane({
             focusKey={focusKey ?? null}
           />
         </>
+      ) : turnNavMode !== "list" ? (
+        <div className="timeline-pane__solo">
+          <SessionInspectorPane
+            turn={selectedTurn}
+            loading={detailPending}
+            showThinking={filters.showThinking}
+            hideUserPrompt={filters.hiddenSpeakers.has("user")}
+            onOpenSubagent={handleSubagent}
+            asOverlay={false}
+            focusPairId={focusPairId ?? null}
+            focusKey={focusKey ?? null}
+          />
+        </div>
       ) : (
         <div
           className="timeline-pane__split"

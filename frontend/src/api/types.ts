@@ -550,6 +550,8 @@ export interface TimelineTurn {
   thinking_count: number;
   has_errors: boolean;
   is_sidechain?: boolean;
+  input_tokens?: number;
+  output_tokens?: number;
   markdown: string;
   chunks: TimelineChunk[];
   pty_session_id?: string | null;
@@ -572,6 +574,8 @@ export interface TimelineTurnSummary {
   thinking_count: number;
   has_errors: boolean;
   is_sidechain?: boolean;
+  input_tokens?: number;
+  output_tokens?: number;
   pty_session_id?: string | null;
   session_uuid?: string | null;
   session_agent?: string | null;

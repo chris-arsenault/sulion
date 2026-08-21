@@ -42,6 +42,8 @@ struct ProjectedTurnRow {
     markdown: String,
     chunks_json: Value,
     is_sidechain_turn: bool,
+    input_tokens: i64,
+    output_tokens: i64,
 }
 
 #[derive(FromRow)]
@@ -56,6 +58,8 @@ struct ProjectedTurnSummaryRow {
     thinking_count: i32,
     has_errors: bool,
     is_sidechain_turn: bool,
+    input_tokens: i64,
+    output_tokens: i64,
 }
 
 #[derive(FromRow)]
@@ -261,6 +265,11 @@ pub async fn backfill_timeline_projection(pool: &Pool) -> anyhow::Result<usize> 
                FROM timeline_turns tt \
               WHERE tt.preview LIKE '<command-%' \
                  OR tt.preview LIKE '<local-command-%' \
+             UNION \
+             SELECT tt.session_uuid \
+               FROM timeline_turns tt \
+              GROUP BY tt.session_uuid \
+             HAVING SUM(tt.input_tokens + tt.output_tokens) = 0 \
          ) \
          SELECT session_uuid \
            FROM sessions_to_rebuild \
@@ -463,7 +472,7 @@ async fn load_projected_turn_rows(
     sqlx::query_as(
         "SELECT turn_id, preview, user_prompt_text, start_timestamp, end_timestamp, duration_ms, \
                 event_count, operation_count, thinking_count, has_errors, markdown, \
-                chunks_json, is_sidechain_turn \
+                chunks_json, is_sidechain_turn, input_tokens, output_tokens \
            FROM timeline_turns \
           WHERE session_uuid = $1 \
             AND ($2 OR turn_id = ANY($3)) \
@@ -490,7 +499,8 @@ async fn load_projected_turn_summary_rows(
         .unwrap_or_default();
     sqlx::query_as(
         "SELECT turn_id, preview, start_timestamp, end_timestamp, duration_ms, \
-                event_count, operation_count, thinking_count, has_errors, is_sidechain_turn \
+                event_count, operation_count, thinking_count, has_errors, is_sidechain_turn, \
+                input_tokens, output_tokens \
            FROM timeline_turns \
           WHERE session_uuid = $1 \
             AND ($2 OR turn_id = ANY($3)) \
@@ -517,7 +527,7 @@ async fn load_projected_turn_row(
     sqlx::query_as(
         "SELECT turn_id, preview, user_prompt_text, start_timestamp, end_timestamp, duration_ms, \
                 event_count, operation_count, thinking_count, has_errors, markdown, \
-                chunks_json, is_sidechain_turn \
+                chunks_json, is_sidechain_turn, input_tokens, output_tokens \
            FROM timeline_turns \
           WHERE session_uuid = $1 \
             AND turn_id = $2 \
@@ -726,6 +736,8 @@ fn build_projected_turn_summary(
         thinking_count: row.thinking_count.max(0) as usize,
         has_errors: row.has_errors,
         is_sidechain: row.is_sidechain_turn,
+        input_tokens: row.input_tokens,
+        output_tokens: row.output_tokens,
         pty_session_id: None,
         session_uuid: None,
         session_agent: None,
@@ -753,6 +765,8 @@ fn build_projected_turn(
         thinking_count: row.thinking_count.max(0) as usize,
         has_errors: row.has_errors,
         is_sidechain: row.is_sidechain_turn,
+        input_tokens: row.input_tokens,
+        output_tokens: row.output_tokens,
         markdown: row.markdown,
         chunks: serde_json::from_value(row.chunks_json)
             .with_context(|| format!("deserialize projected timeline chunks for turn {turn_id}"))?,

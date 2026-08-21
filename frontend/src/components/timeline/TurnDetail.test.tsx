@@ -199,6 +199,21 @@ describe("TurnDetail", () => {
     expect(expandedIn("t2")).toBe(true);
   });
 
+  it("shows duration and token usage in the header", () => {
+    renderWithContextMenu(
+      <TurnDetail
+        turn={makeTurn({
+          duration_ms: 95_000,
+          input_tokens: 12_345,
+          output_tokens: 678,
+        })}
+        showThinking={true}
+      />,
+    );
+    expect(screen.getByText("1m35s")).toBeDefined();
+    expect(screen.getByText(/↑12\.3k ↓/)).toBeDefined();
+  });
+
   it("prefers the agent's description over the command in collapsed summaries", () => {
     const pair = makePair({
       id: "b1",

@@ -73,6 +73,8 @@ pub async fn load_session_events(
         bool,
         bool,
         Option<String>,
+        Option<Value>,
+        Option<String>,
     );
 
     let after = filter.after.unwrap_or(-1);
@@ -82,7 +84,10 @@ pub async fn load_session_events(
         (Some(kind), Some(limit)) => {
             sqlx::query_as(
                 "SELECT byte_offset, timestamp, kind, agent, speaker, content_kind, \
-                        event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype \
+                        event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype, \
+                        CASE WHEN agent = 'codex' THEN payload #> '{payload,info,total_token_usage}' \
+                             ELSE payload #> '{message,usage}' END, \
+                        payload #>> '{message,id}' \
                    FROM events \
                   WHERE session_uuid = $1 AND byte_offset > $2 AND kind = $3 \
                   ORDER BY byte_offset ASC \
@@ -98,7 +103,10 @@ pub async fn load_session_events(
         (Some(kind), None) => {
             sqlx::query_as(
                 "SELECT byte_offset, timestamp, kind, agent, speaker, content_kind, \
-                        event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype \
+                        event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype, \
+                        CASE WHEN agent = 'codex' THEN payload #> '{payload,info,total_token_usage}' \
+                             ELSE payload #> '{message,usage}' END, \
+                        payload #>> '{message,id}' \
                    FROM events \
                   WHERE session_uuid = $1 AND byte_offset > $2 AND kind = $3 \
                   ORDER BY byte_offset ASC",
@@ -112,7 +120,10 @@ pub async fn load_session_events(
         (None, Some(limit)) => {
             sqlx::query_as(
                 "SELECT byte_offset, timestamp, kind, agent, speaker, content_kind, \
-                        event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype \
+                        event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype, \
+                        CASE WHEN agent = 'codex' THEN payload #> '{payload,info,total_token_usage}' \
+                             ELSE payload #> '{message,usage}' END, \
+                        payload #>> '{message,id}' \
                    FROM events \
                   WHERE session_uuid = $1 AND byte_offset > $2 \
                   ORDER BY byte_offset ASC \
@@ -127,7 +138,10 @@ pub async fn load_session_events(
         (None, None) => {
             sqlx::query_as(
                 "SELECT byte_offset, timestamp, kind, agent, speaker, content_kind, \
-                        event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype \
+                        event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype, \
+                        CASE WHEN agent = 'codex' THEN payload #> '{payload,info,total_token_usage}' \
+                             ELSE payload #> '{message,usage}' END, \
+                        payload #>> '{message,id}' \
                    FROM events \
                   WHERE session_uuid = $1 AND byte_offset > $2 \
                   ORDER BY byte_offset ASC",
@@ -158,6 +172,8 @@ pub async fn load_session_events(
                 is_sidechain,
                 is_meta,
                 subtype,
+                usage_json,
+                usage_message_id,
             )| StoredEvent {
                 byte_offset,
                 timestamp,
@@ -171,6 +187,8 @@ pub async fn load_session_events(
                 is_sidechain,
                 is_meta,
                 subtype,
+                usage_json,
+                usage_message_id,
                 blocks: blocks_by_offset
                     .get(&byte_offset)
                     .cloned()

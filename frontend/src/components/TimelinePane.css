@@ -127,6 +127,19 @@
   flex-direction: column;
 }
 
+/* Grid / hidden nav modes: the inspector is the only reading surface. */
+.timeline-pane__solo {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.timeline-pane__solo .sip {
+  flex: 1;
+  min-width: 0;
+  border-left: none;
+}
+
 .timeline-pane__virtuoso {
   flex: 1;
   min-height: 0;

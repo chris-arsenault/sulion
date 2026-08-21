@@ -2,6 +2,7 @@ import {
   type MouseEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -90,6 +91,32 @@ export function TurnDetail({
     seenFocusRef.current = focusKey;
     setManualExpansion({});
   }, [focusKey]);
+
+  // Long live turns: stay pinned to the bottom while the reader is at
+  // the bottom, hold position otherwise, and jump back to the top when
+  // the selection moves to a different turn.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
+  const onBodyScroll = useCallback(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    atBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 48;
+  }, []);
+  const scrollTurnRef = useRef(turnIdentity);
+  const growthKey = `${turn.event_count}:${turn.chunks.length}:${turn.tool_pairs.length}`;
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    if (scrollTurnRef.current !== turnIdentity) {
+      scrollTurnRef.current = turnIdentity;
+      el.scrollTop = 0;
+      atBottomRef.current = el.clientHeight >= el.scrollHeight - 48;
+      return;
+    }
+    if (atBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [turnIdentity, growthKey]);
 
   const focusActive = focusKey != null && focusPairId != null;
   const lastPairId =
@@ -288,6 +315,21 @@ export function TurnDetail({
           )}
           <span className="tabular">{turn.event_count} events</span>
           <span className="tabular">{turn.operation_count} tool calls</span>
+          {turn.duration_ms > 0 && (
+            <Tooltip label="Turn duration">
+              <span className="tabular">{formatDurationMs(turn.duration_ms)}</span>
+            </Tooltip>
+          )}
+          {((turn.input_tokens ?? 0) > 0 || (turn.output_tokens ?? 0) > 0) && (
+            <Tooltip
+              label={`${(turn.input_tokens ?? 0).toLocaleString()} input tokens (incl. cache) · ${(turn.output_tokens ?? 0).toLocaleString()} output tokens`}
+            >
+              <span className="tabular">
+                ↑{formatTokens(turn.input_tokens ?? 0)} ↓
+                {formatTokens(turn.output_tokens ?? 0)}
+              </span>
+            </Tooltip>
+          )}
           {turn.thinking_count > 0 && showThinking && (
             <span className="td__thinking-tally">
               <Icon name="sparkles" size={12} />
@@ -303,7 +345,12 @@ export function TurnDetail({
         {saveError && <div className="td__save-error">save failed: {saveError}</div>}
       </div>
 
-      <div className="td__body" data-testid="turn-detail">
+      <div
+        className="td__body"
+        data-testid="turn-detail"
+        ref={bodyRef}
+        onScroll={onBodyScroll}
+      >
         {turn.chunks.map((chunk, idx) => {
           if (chunk.kind === "assistant") {
             return (
@@ -751,4 +798,19 @@ function usesStructuredResult(pair: ToolPair): boolean {
 
 function toolType(pair: ToolPair): string {
   return pair.operation_type ?? pair.name;
+}
+
+function formatDurationMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.round(seconds - minutes * 60);
+  return remainder > 0 ? `${minutes}m${remainder}s` : `${minutes}m`;
+}
+
+function formatTokens(count: number): string {
+  if (count < 1000) return `${count}`;
+  if (count < 1_000_000) return `${(count / 1000).toFixed(1)}k`;
+  return `${(count / 1_000_000).toFixed(1)}M`;
 }

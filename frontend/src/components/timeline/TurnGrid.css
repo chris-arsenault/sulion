@@ -1,0 +1,42 @@
+.tg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--hairline);
+  max-height: 84px;
+  overflow-y: auto;
+}
+
+.tg__cell {
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border: 1px solid color-mix(in oklab, var(--text-mid) 35%, transparent);
+  border-radius: 2px;
+  background: var(--canvas-2);
+  cursor: pointer;
+}
+
+.tg__cell:hover {
+  border-color: var(--text-hi);
+}
+
+.tg__cell--selected {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.tg__cell--errors {
+  background: color-mix(in oklab, var(--crit-fg, #b33) 55%, var(--canvas-2));
+  border-color: var(--crit-fg, #b33);
+}
+
+.tg__cell--sidechain {
+  background: color-mix(in oklab, var(--atn-mark) 40%, var(--canvas-2));
+}
+
+.tg__cell--errors.tg__cell--selected,
+.tg__cell--sidechain.tg__cell--selected {
+  outline: 1px solid var(--text-hi);
+}

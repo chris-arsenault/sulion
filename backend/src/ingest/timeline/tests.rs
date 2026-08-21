@@ -50,6 +50,8 @@ fn event(byte_offset: i64, kind: &str, blocks: Vec<Block>) -> StoredEvent {
         is_sidechain: false,
         is_meta: false,
         subtype: None,
+        usage_json: None,
+        usage_message_id: None,
         blocks,
     }
 }
@@ -261,6 +263,53 @@ fn local_command_records_do_not_seed_turns() {
         "local command records leaked into chunks: {:?}",
         projected.turns[0].chunks,
     );
+}
+
+/// Claude usage sums per turn, deduped by message id across streamed
+/// repeats of the same message.
+#[test]
+fn turn_token_usage_dedupes_claude_messages() {
+    let usage = json!({
+        "input_tokens": 100,
+        "cache_read_input_tokens": 900,
+        "cache_creation_input_tokens": 50,
+        "output_tokens": 40
+    });
+    let mut first = event(2, "assistant", vec![text(0, "part one")]);
+    first.usage_json = Some(usage.clone());
+    first.usage_message_id = Some("msg-1".to_string());
+    let mut repeat = event(3, "assistant", vec![text(0, "part two")]);
+    repeat.usage_json = Some(usage);
+    repeat.usage_message_id = Some("msg-1".to_string());
+
+    let events = vec![event(1, "user", vec![text(0, "prompt")]), first, repeat];
+    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
+    assert_eq!(projected.turns[0].input_tokens, 1050);
+    assert_eq!(projected.turns[0].output_tokens, 40);
+}
+
+/// Codex reports cumulative session totals; a turn's usage is the
+/// clamped delta against the last totals before it.
+#[test]
+fn turn_token_usage_deltas_codex_cumulative_totals() {
+    let mut early = event(2, "token_count", vec![]);
+    early.agent = "codex".to_string();
+    early.usage_json = Some(json!({"input_tokens": 1_000, "output_tokens": 100}));
+    let mut late = event(4, "token_count", vec![]);
+    late.agent = "codex".to_string();
+    late.usage_json = Some(json!({"input_tokens": 1_600, "output_tokens": 180}));
+
+    let events = vec![
+        event(1, "user", vec![text(0, "first prompt")]),
+        early,
+        event(3, "user", vec![text(0, "second prompt")]),
+        late,
+    ];
+    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
+    assert_eq!(projected.turns[0].input_tokens, 1_000);
+    assert_eq!(projected.turns[0].output_tokens, 100);
+    assert_eq!(projected.turns[1].input_tokens, 600);
+    assert_eq!(projected.turns[1].output_tokens, 80);
 }
 
 /// Codex world-model snapshots (`world_state`) and any meta-flagged

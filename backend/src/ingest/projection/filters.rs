@@ -147,6 +147,8 @@ mod tests {
             thinking_count: 0,
             has_errors: false,
             is_sidechain: false,
+            input_tokens: 0,
+            output_tokens: 0,
             markdown: String::new(),
             chunks: Vec::new(),
             pty_session_id: None,

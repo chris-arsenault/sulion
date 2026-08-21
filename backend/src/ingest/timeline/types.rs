@@ -66,6 +66,12 @@ pub struct StoredEvent {
     pub is_sidechain: bool,
     pub is_meta: bool,
     pub subtype: Option<String>,
+    /// Token accounting extracted from the raw payload at load time:
+    /// claude per-message usage, codex cumulative session totals.
+    pub usage_json: Option<Value>,
+    /// Claude message id the usage belongs to; streamed records repeat
+    /// a message, so per-turn sums dedupe on it.
+    pub usage_message_id: Option<String>,
     pub blocks: Vec<Block>,
 }
 #[derive(Debug, Clone)]
@@ -137,6 +143,10 @@ pub struct TimelineTurnSummary {
     pub has_errors: bool,
     #[serde(default)]
     pub is_sidechain: bool,
+    #[serde(default)]
+    pub input_tokens: i64,
+    #[serde(default)]
+    pub output_tokens: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pty_session_id: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -188,6 +198,10 @@ pub struct TimelineTurn {
     pub has_errors: bool,
     #[serde(default)]
     pub is_sidechain: bool,
+    #[serde(default)]
+    pub input_tokens: i64,
+    #[serde(default)]
+    pub output_tokens: i64,
     pub markdown: String,
     pub chunks: Vec<TimelineChunk>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

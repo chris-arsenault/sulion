@@ -189,6 +189,7 @@ pub(crate) fn project_turn(
         .map(|event| event.is_sidechain)
         .or_else(|| turn.events.first().copied().map(|event| event.is_sidechain))
         .unwrap_or(false);
+    let (input_tokens, output_tokens) = turn_token_usage(&turn, all_events);
 
     TimelineTurn {
         id: turn.id,
@@ -204,6 +205,8 @@ pub(crate) fn project_turn(
         thinking_count,
         has_errors,
         is_sidechain,
+        input_tokens,
+        output_tokens,
         markdown,
         chunks,
         pty_session_id: None,
@@ -212,6 +215,61 @@ pub(crate) fn project_turn(
         session_label: None,
         session_state: None,
     }
+}
+
+/// Tokens this turn consumed. Claude records per-message usage on
+/// assistant events (streamed repeats dedupe by message id). Codex
+/// records cumulative session totals; the turn's share is the clamped
+/// difference between the last totals inside the turn and the last
+/// totals before it.
+fn turn_token_usage(turn: &TurnSeed<'_>, all_events: &[StoredEvent]) -> (i64, i64) {
+    fn token(usage: &Value, key: &str) -> i64 {
+        usage.get(key).and_then(Value::as_i64).unwrap_or(0)
+    }
+
+    let mut input = 0i64;
+    let mut output = 0i64;
+    let mut seen_messages: HashSet<&str> = HashSet::new();
+    let mut codex_last: Option<&Value> = None;
+
+    for event in turn.events.iter().copied() {
+        let Some(usage) = event.usage_json.as_ref() else {
+            continue;
+        };
+        if event.agent == "codex" {
+            codex_last = Some(usage);
+            continue;
+        }
+        if let Some(message_id) = event.usage_message_id.as_deref() {
+            if !seen_messages.insert(message_id) {
+                continue;
+            }
+        }
+        input += token(usage, "input_tokens")
+            + token(usage, "cache_read_input_tokens")
+            + token(usage, "cache_creation_input_tokens");
+        output += token(usage, "output_tokens");
+    }
+
+    if let Some(last) = codex_last {
+        let first_offset = turn
+            .events
+            .first()
+            .map(|event| event.byte_offset)
+            .unwrap_or(i64::MIN);
+        let baseline = all_events
+            .iter()
+            .take_while(|event| event.byte_offset < first_offset)
+            .filter(|event| event.agent == "codex")
+            .filter_map(|event| event.usage_json.as_ref())
+            .last();
+        let delta =
+            |key: &str| (token(last, key) - baseline.map_or(0, |usage| token(usage, key))).max(0);
+        input += delta("input_tokens");
+        output += delta("output_tokens");
+    }
+
+    (input, output)
 }
 
 fn build_chunks(

@@ -58,6 +58,31 @@ export function clampTerminalFontSize(value: number): number {
   return Math.max(TERMINAL_FONT_SIZE_MIN, Math.min(TERMINAL_FONT_SIZE_MAX, value));
 }
 
+// ─── turn navigation mode ─────────────────────────────────────────────
+
+/** How the timeline presents its turn navigation: the full list pane, a
+ * compact per-turn hover grid under the header, or nothing at all. */
+export type TurnNavMode = "list" | "grid" | "hidden";
+
+export const TURN_NAV_MODES: readonly TurnNavMode[] = ["list", "grid", "hidden"];
+
+const TURN_NAV_MODE_KEY = "sulion.timeline.turn-nav.v1";
+
+export function useTurnNavMode(): [TurnNavMode, Dispatch<SetStateAction<TurnNavMode>>] {
+  const [value, setValue] = useState<TurnNavMode>(() => {
+    if (typeof window === "undefined") return "list";
+    const raw = window.localStorage.getItem(TURN_NAV_MODE_KEY);
+    return raw === "grid" || raw === "hidden" ? raw : "list";
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(TURN_NAV_MODE_KEY, value);
+  }, [value]);
+
+  return [value, setValue];
+}
+
 export function clampTimelineFontScale(value: number): number {
   const clamped = Math.max(TIMELINE_FONT_SCALE_MIN, Math.min(TIMELINE_FONT_SCALE_MAX, value));
   return Math.round(clamped * 10) / 10;

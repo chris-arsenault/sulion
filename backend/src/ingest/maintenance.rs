@@ -11,7 +11,9 @@ const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // inputs were re-canonicalized into the {command, code} shape.
 // v4: local slash-command user records (`<command-name>` etc.) no longer
 // seed turns; sessions whose previews show them get reprojected.
-const TIMELINE_PROJECTION_VERSION: i32 = 4;
+// v5: per-turn token usage columns; sessions with no usage recorded yet
+// get reprojected to fill them.
+const TIMELINE_PROJECTION_VERSION: i32 = 5;
 const USAGE_PROJECTION_KEY: &str = "usage_projection";
 const USAGE_PROJECTION_VERSION: i32 = 1;
 

@@ -353,8 +353,9 @@ async fn insert_projected_turn(
         "INSERT INTO timeline_turns \
              (session_uuid, turn_id, turn_ord, is_sidechain_turn, preview, user_prompt_text, \
               start_timestamp, end_timestamp, duration_ms, event_count, operation_count, \
-              thinking_count, has_errors, markdown, turn_json, chunks_json) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
+              thinking_count, has_errors, markdown, turn_json, chunks_json, \
+              input_tokens, output_tokens) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
          ON CONFLICT (session_uuid, turn_id) DO UPDATE SET \
              turn_ord = EXCLUDED.turn_ord, \
              is_sidechain_turn = EXCLUDED.is_sidechain_turn, \
@@ -369,20 +370,24 @@ async fn insert_projected_turn(
              has_errors = EXCLUDED.has_errors, \
              markdown = EXCLUDED.markdown, \
              turn_json = EXCLUDED.turn_json, \
-             chunks_json = EXCLUDED.chunks_json \
+             chunks_json = EXCLUDED.chunks_json, \
+             input_tokens = EXCLUDED.input_tokens, \
+             output_tokens = EXCLUDED.output_tokens \
          WHERE ROW(timeline_turns.turn_ord, timeline_turns.is_sidechain_turn, \
                    timeline_turns.preview, timeline_turns.user_prompt_text, \
                    timeline_turns.start_timestamp, timeline_turns.end_timestamp, \
                    timeline_turns.duration_ms, timeline_turns.event_count, \
                    timeline_turns.operation_count, timeline_turns.thinking_count, \
                    timeline_turns.has_errors, timeline_turns.markdown, \
-                   timeline_turns.turn_json, timeline_turns.chunks_json) \
+                   timeline_turns.turn_json, timeline_turns.chunks_json, \
+                   timeline_turns.input_tokens, timeline_turns.output_tokens) \
                IS DISTINCT FROM \
                ROW(EXCLUDED.turn_ord, EXCLUDED.is_sidechain_turn, EXCLUDED.preview, \
                    EXCLUDED.user_prompt_text, EXCLUDED.start_timestamp, EXCLUDED.end_timestamp, \
                    EXCLUDED.duration_ms, EXCLUDED.event_count, EXCLUDED.operation_count, \
                    EXCLUDED.thinking_count, EXCLUDED.has_errors, EXCLUDED.markdown, \
-                   EXCLUDED.turn_json, EXCLUDED.chunks_json)",
+                   EXCLUDED.turn_json, EXCLUDED.chunks_json, \
+                   EXCLUDED.input_tokens, EXCLUDED.output_tokens)",
     )
     .bind(session_uuid)
     .bind(turn.turn.id)
@@ -400,6 +405,8 @@ async fn insert_projected_turn(
     .bind(&turn.turn.markdown)
     .bind(turn_json)
     .bind(chunks_json)
+    .bind(turn.turn.input_tokens)
+    .bind(turn.turn.output_tokens)
     .execute(&mut **tx)
     .await
     .context("insert timeline_turns row")?;
