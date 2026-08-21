@@ -226,12 +226,16 @@ async fn load_event_blocks(
         "SELECT b.byte_offset, b.ord, b.kind, b.text, b.tool_id, b.tool_name, \
                 b.tool_name_canonical, \
                 CASE \
-                    WHEN b.kind = 'tool_use' THEN COALESCE(rule.operation_type, regexp_replace(COALESCE(b.tool_name_canonical, b.tool_name, ''), '^.*\\.', '')) \
-                    ELSE NULL \
+                    WHEN b.kind <> 'tool_use' THEN NULL \
+                    WHEN b.tool_input ? 'file_edits' \
+                         AND regexp_replace(COALESCE(b.tool_name_canonical, b.tool_name, ''), '^.*\\.', '') = 'exec' \
+                        THEN 'apply_patch' \
+                    ELSE COALESCE(rule.operation_type, regexp_replace(COALESCE(b.tool_name_canonical, b.tool_name, ''), '^.*\\.', '')) \
                 END AS operation_type, \
                 CASE \
-                    WHEN b.kind = 'tool_use' THEN COALESCE(rule.operation_category, 'other') \
-                    ELSE NULL \
+                    WHEN b.kind <> 'tool_use' THEN NULL \
+                    WHEN b.tool_input ? 'file_edits' THEN 'create_content' \
+                    ELSE COALESCE(rule.operation_category, 'other') \
                 END AS operation_category, \
                 b.tool_input, b.tool_output, b.is_error \
            FROM event_blocks b \

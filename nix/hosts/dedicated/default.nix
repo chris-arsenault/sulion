@@ -18,6 +18,12 @@
     firewall.extraInputRules = ''
       ip saddr { ${lib.concatStringsSep ", " config.sulion.clientCidrs} } tcp dport 22 accept comment "Sulion LAN SSH"
     '';
+    # The second 10G port sits in "connecting (getting IP configuration)"
+    # forever — no DHCP answers there — which kept NetworkManager from
+    # reaching startup-complete, failed NetworkManager-wait-online on
+    # every activation, and wedged node releases with switch status 4.
+    # eno1 is the only uplink; leave this port out of NM's hands.
+    networkmanager.unmanaged = [ "interface-name:enp1s0f1" ];
   };
 
   nix.settings.experimental-features = [

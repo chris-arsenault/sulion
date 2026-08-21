@@ -121,7 +121,9 @@
  * they're the one place category and specific-name meet. */
 .tr__badge--edit,
 .tr__badge--write,
-.tr__badge--multiedit {
+.tr__badge--multiedit,
+.tr__badge--multi_edit,
+.tr__badge--apply_patch {
   background: var(--ok-bg);
   color: var(--ok-fg);
   border-color: color-mix(in oklab, var(--ok-mark) 25%, transparent);

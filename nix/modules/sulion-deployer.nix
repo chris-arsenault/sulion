@@ -143,12 +143,22 @@ let
         previous="$(readlink -f /run/current-system)"
 
         echo "Activating NixOS host release $release"
-        if "$next/bin/switch-to-configuration" test; then
+        rc=0
+        "$next/bin/switch-to-configuration" test || rc=$?
+        # switch-to-configuration exit 4 means the configuration IS
+        # active but some units failed during activation. A flaky unit
+        # (NetworkManager-wait-online wedged releases for days) must not
+        # abort the release: warn and continue to the application stage.
+        # Any other non-zero status is a real activation failure.
+        if [[ "$rc" -eq 0 || "$rc" -eq 4 ]]; then
+          if [[ "$rc" -eq 4 ]]; then
+            echo "Host activation reported failed units (status 4); configuration is active, continuing" >&2
+          fi
           nix-env --profile /nix/var/nix/profiles/system --set "$next"
           "$next/bin/switch-to-configuration" boot
         else
-          echo "Host activation failed; restoring $previous" >&2
-          "$previous/bin/switch-to-configuration" test
+          echo "Host activation failed (status $rc); restoring $previous" >&2
+          "$previous/bin/switch-to-configuration" test || true
           exit 1
         fi
       else

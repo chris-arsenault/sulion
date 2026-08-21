@@ -668,6 +668,7 @@ function toolSummary(pair: ToolPair): string {
     case "edit":
     case "write":
     case "multi_edit":
+    case "apply_patch":
     case "read":
       return pick("path") ?? firstEditedPath();
     case "bash":

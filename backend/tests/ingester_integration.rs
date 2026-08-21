@@ -433,6 +433,51 @@ async fn startup_usage_repair_rebuilds_cache_write_categories_from_events() {
 }
 
 #[tokio::test]
+async fn codex_exec_with_embedded_patch_projects_as_content_creation() {
+    let pool = fresh_pool().await;
+    let fx = CodexFixture::new();
+    let code = concat!(
+        "const patch = \\\"*** Begin Patch\\\\n",
+        "*** Add File: /repo/worlds/npc.rb\\\\n",
+        "+npc :teren do\\\\n",
+        "+end\\\\n",
+        "*** End Patch\\\\n\\\";\\n",
+        "await tools.apply_patch(patch);\\n",
+        "const r = await tools.exec_command({\\\"cmd\\\":\\\"ruby lint\\\"});",
+    );
+    fx.append(&format!(
+        r#"{{"ts":"2026-04-19T01:53:43.100Z","kind":"response_item","payload":{{"type":"custom_tool_call","name":"exec","call_id":"call-1","input":"{code}"}}}}"#,
+    ));
+    fx.append("\n");
+
+    Ingester::new().tick(&pool, &fx.config()).await.unwrap();
+
+    let (operation_type, operation_category, input): (
+        Option<String>,
+        Option<String>,
+        Option<serde_json::Value>,
+    ) = sqlx::query_as(
+        "SELECT operation_type, operation_category, input \
+           FROM timeline_operations WHERE session_uuid = $1",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(operation_type.as_deref(), Some("apply_patch"));
+    assert_eq!(operation_category.as_deref(), Some("create_content"));
+    let input = input.expect("projected input");
+    assert_eq!(input["command"].as_str(), Some("ruby lint"));
+    assert_eq!(
+        input["file_edits"][0]["path"].as_str(),
+        Some("/repo/worlds/npc.rb"),
+    );
+    // Write-touch extraction for file_edits is covered by the
+    // file_touches unit tests; this fixture session has no repo
+    // binding, so no touch context exists here.
+}
+
+#[tokio::test]
 async fn codex_fixture_preserves_subagent_lineage() {
     let pool = fresh_pool().await;
     let claude_root = tempfile::tempdir().unwrap();
