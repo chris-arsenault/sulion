@@ -463,6 +463,83 @@ fn codex_apply_patch_canonicalises_to_file_edits_diff_form() {
 }
 
 #[test]
+fn codex_exec_code_yields_joined_command_and_source() {
+    let code = concat!(
+        "const results = await Promise.all([\n",
+        "  tools.exec_command({\"cmd\":\"git status --short\",\"workdir\":\"/repo\"}),\n",
+        "  tools.exec_command({\"cmd\":\"rg -n \\\"foo \\\\\\\"bar\\\\\\\"\\\" src\",\"yield_time_ms\":10000}),\n",
+        "]);\n",
+        "text(results.map(r => r.output).join(\"\\n\"));",
+    );
+    let ev = parse_codex(json!({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "call-2",
+            "input": code,
+        }
+    }));
+    let input = ev.blocks[0].tool_input.as_ref().expect("tool input");
+    assert_eq!(
+        input["command"].as_str(),
+        Some("git status --short && rg -n \"foo \\\"bar\\\"\" src"),
+    );
+    assert_eq!(input["code"].as_str(), Some(code));
+}
+
+#[test]
+fn codex_exec_code_extracts_embedded_patches_as_file_edits() {
+    let code = concat!(
+        "const patch = \"*** Begin Patch\\n",
+        "*** Add File: /repo/new.rb\\n",
+        "+installation :x do\\n",
+        "+end\\n",
+        "*** Update File: /repo/old.rb\\n",
+        "@@\\n",
+        "-before\\n",
+        "+after\\n",
+        "*** End Patch\\n\";\n",
+        "const r = await tools.apply_patch(patch);\n",
+        "text(r.output);",
+    );
+    let ev = parse_codex(json!({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "call-4",
+            "input": code,
+        }
+    }));
+    let input = ev.blocks[0].tool_input.as_ref().expect("tool input");
+    let edits = input["file_edits"].as_array().expect("file_edits array");
+    assert_eq!(edits.len(), 2);
+    assert_eq!(edits[0]["path"].as_str(), Some("/repo/new.rb"));
+    assert_eq!(edits[0]["operation"].as_str(), Some("add"));
+    assert_eq!(edits[1]["path"].as_str(), Some("/repo/old.rb"));
+    assert_eq!(edits[1]["operation"].as_str(), Some("update"));
+    // No shell command in this snippet.
+    assert!(input.get("command").is_none());
+}
+
+#[test]
+fn codex_exec_code_without_commands_keeps_only_the_source() {
+    let ev = parse_codex(json!({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "call-3",
+            "input": "text(\"no shell here\");",
+        }
+    }));
+    let input = ev.blocks[0].tool_input.as_ref().expect("tool input");
+    assert!(input.get("command").is_none());
+    assert_eq!(input["code"].as_str(), Some("text(\"no shell here\");"));
+}
+
+#[test]
 fn empty_thinking_still_a_thinking_block() {
     // Claude emits signature-only thinking; the frontend filters
     // these out for chip rendering, but the block must still exist

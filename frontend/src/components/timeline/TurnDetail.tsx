@@ -649,15 +649,29 @@ function toolSummary(pair: ToolPair): string {
   const input = (pair.input ?? {}) as Record<string, unknown>;
   const pick = (key: string) =>
     typeof input[key] === "string" ? (input[key] as string) : undefined;
+  // Anything that canonicalised into `file_edits` — including a
+  // code-mode exec that only applies a patch — summarizes by its first
+  // edited path when nothing more specific matches below.
+  const firstEditedPath = (): string => {
+    const edits = input.file_edits;
+    if (!Array.isArray(edits) || edits.length === 0) return "";
+    const first = edits[0] as Record<string, unknown>;
+    return typeof first.path === "string" ? first.path : "";
+  };
   switch (toolType(pair)) {
     case "edit":
     case "write":
     case "multi_edit":
     case "read":
-      return pick("path") ?? "";
+      return pick("path") ?? firstEditedPath();
     case "bash":
+    case "exec":
     case "exec_command":
-      return (pick("command") ?? pick("cmd") ?? "").slice(0, 120);
+      return (
+        pick("command") ??
+        pick("cmd") ??
+        firstEditedPath()
+      ).slice(0, 120);
     case "grep":
     case "glob":
       return pick("pattern") ?? "";

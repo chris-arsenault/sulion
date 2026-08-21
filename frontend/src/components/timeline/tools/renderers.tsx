@@ -35,6 +35,7 @@ export function ToolCallRenderer({ tool }: { tool: ToolUseSummary }) {
     case "write":
       return <WriteRenderer input={input} fileTouches={fileTouches} />;
     case "bash":
+    case "exec":
     case "exec_command":
       return <BashRenderer input={input} fileTouches={fileTouches} />;
     case "read":
@@ -269,10 +270,17 @@ function BashRenderer({
 }) {
   const command = str(input.command) ?? str(input.cmd);
   const description = str(input.description);
+  // Codex code-mode exec keeps the original JS snippet under `code`;
+  // fall back to it when no shell command could be extracted.
+  const code = str(input.code);
   return (
     <div className="tr tr--bash">
       {description && <div className="tr-desc">{description}</div>}
-      <pre className="tr-code tr-code--cmd">{"$ "}{command ?? ""}</pre>
+      {command != null || code == null ? (
+        <pre className="tr-code tr-code--cmd">{"$ "}{command ?? ""}</pre>
+      ) : (
+        <pre className="tr-code">{code}</pre>
+      )}
       <FileTouchList touches={fileTouches} />
     </div>
   );

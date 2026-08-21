@@ -191,6 +191,33 @@ fn hidden_categories_merge_assistant_chunks() {
     }
 }
 
+/// Codex code-mode exec pairs summarize by their extracted shell
+/// command, exactly like bash pairs.
+#[test]
+fn exec_pairs_summarize_their_command_in_markdown() {
+    let events = vec![
+        event(1, "user", vec![text(0, "prompt")]),
+        event(
+            2,
+            "assistant",
+            vec![tool_use(
+                0,
+                "call-1",
+                "exec",
+                OperationCategory::Utility,
+                json!({"command": "git status --short", "code": "const r = ..."}),
+            )],
+        ),
+    ];
+
+    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
+    assert!(
+        projected.turns[0].markdown.contains("`git status --short`"),
+        "markdown lacks command summary: {}",
+        projected.turns[0].markdown,
+    );
+}
+
 /// Newer Claude Code builds write bookkeeping record kinds (`mode`,
 /// `ai-title`, `file-history-delta`, …) that must not surface as generic
 /// timeline rows when bookkeeping is hidden.

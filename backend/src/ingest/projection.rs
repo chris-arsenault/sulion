@@ -251,6 +251,11 @@ pub async fn backfill_timeline_projection(pool: &Pool) -> anyhow::Result<usize> 
               WHERE e.agent = 'claude-code' \
                 AND e.kind = 'user' \
                 AND e.payload #>> '{origin,kind}' = 'task-notification' \
+             UNION \
+             SELECT DISTINCT o.session_uuid \
+               FROM timeline_operations o \
+              WHERE COALESCE(o.operation_type, o.name) = 'exec' \
+                AND jsonb_typeof(o.input) = 'string' \
          ) \
          SELECT session_uuid \
            FROM sessions_to_rebuild \

@@ -142,6 +142,49 @@
   background: var(--accent);
 }
 
+/* Agent is blocked on a terminal interaction — the one state the
+ * timeline cannot resolve by itself. */
+.timeline-pane__attention {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--atn-mark) 35%, transparent);
+  background: var(--atn-bg);
+  color: var(--atn-fg);
+  font-size: var(--timeline-t-ui);
+}
+
+.timeline-pane__attention-label {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.timeline-pane__attention-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in oklab, var(--atn-fg) 80%, transparent);
+}
+
+.timeline-pane__attention-button {
+  margin-left: auto;
+  padding: 3px 10px;
+  border: 1px solid color-mix(in oklab, var(--atn-mark) 45%, transparent);
+  border-radius: var(--r-1);
+  background: var(--canvas-1);
+  color: var(--atn-fg);
+  font-size: var(--timeline-t-meta);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.timeline-pane__attention-button:hover {
+  border-color: var(--atn-mark);
+}
+
 .timeline-prompt {
   border-top: 1px solid var(--canvas-3);
   background: color-mix(in srgb, var(--canvas-2) 88%, var(--accent) 12%);

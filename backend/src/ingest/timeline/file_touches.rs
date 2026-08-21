@@ -58,21 +58,16 @@ pub fn extract_file_touches(
         }
 
         // Agent-agnostic file-edit list produced by the edit /
-        // multi_edit / apply_patch canonicalisers. Each entry carries
-        // at minimum a `path`; move operations also carry `old_path`.
+        // multi_edit / apply_patch / code-mode exec canonicalisers.
+        // Each entry carries at minimum a `path`; move operations also
+        // carry `old_path`. Always a write, whatever the pair's own
+        // kind — an exec snippet that applies a patch edited the file.
         if let Some(Value::Array(entries)) = input.get("file_edits") {
             for entry in entries {
                 let Value::Object(obj) = entry else { continue };
                 for key in ["path", "old_path"] {
                     if let Some(value) = obj.get(key).and_then(Value::as_str) {
-                        push_touch(
-                            &mut touches,
-                            &mut seen,
-                            context,
-                            value,
-                            &touch_kind,
-                            is_write,
-                        );
+                        push_touch(&mut touches, &mut seen, context, value, "write", true);
                     }
                 }
             }
@@ -196,7 +191,7 @@ fn touch_kind_for_pair(pair: &TimelineToolPair) -> &'static str {
         "write" | "edit" | "multi_edit" | "apply_patch" | "create" | "update" | "delete"
         | "add" | "remove" => "write",
         "grep" | "glob" | "find" | "list" | "read" | "fetch" | "get" => "inspect",
-        "bash" | "exec_command" => "command",
+        "bash" | "exec" | "exec_command" => "command",
         _ => "inspect",
     }
 }
@@ -219,7 +214,7 @@ fn is_write_pair(pair: &TimelineToolPair) -> bool {
 fn is_command_pair(pair: &TimelineToolPair) -> bool {
     matches!(
         pair.operation_type.as_deref().unwrap_or(pair.name.as_str()),
-        "bash" | "exec_command"
+        "bash" | "exec" | "exec_command"
     )
 }
 
@@ -312,5 +307,32 @@ mod tests {
         assert_eq!(touches.len(), 2);
         assert_eq!(touches[0].path, "src/lib.rs");
         assert_eq!(touches[1].path, "src/main.rs");
+    }
+
+    /// Code-mode exec: embedded patch edits touch as writes even though
+    /// the pair itself is a command pair, and its command tokens still
+    /// touch as commands.
+    #[test]
+    fn exec_file_edits_touch_as_writes() {
+        let pair = pair(
+            "exec",
+            json!({
+                "command": "cat /tmp/alpha/src/lib.rs",
+                "file_edits": [{ "path": "/tmp/alpha/src/main.rs", "operation": "update" }],
+            }),
+        );
+        let touches = extract_file_touches(&pair, Some(&context()));
+        let write = touches
+            .iter()
+            .find(|touch| touch.path == "src/main.rs")
+            .expect("edit touch present");
+        assert_eq!(write.touch_kind, "write");
+        assert!(write.is_write);
+        let command = touches
+            .iter()
+            .find(|touch| touch.path == "src/lib.rs")
+            .expect("command touch present");
+        assert_eq!(command.touch_kind, "command");
+        assert!(!command.is_write);
     }
 }

@@ -111,7 +111,7 @@ fn tool_one_line(pair: &TimelineToolPair) -> String {
     let pick = |key: &str| input.get(key).and_then(Value::as_str);
     let summary = match pair_operation_type(pair) {
         "edit" | "write" | "multi_edit" | "read" => pick("path").unwrap_or_default(),
-        "bash" => pick("command").unwrap_or_default(),
+        "bash" | "exec" => pick("command").unwrap_or_default(),
         "exec_command" => pick("cmd").or_else(|| pick("command")).unwrap_or_default(),
         "grep" | "glob" => pick("pattern").unwrap_or_default(),
         "task" => pick("description")
@@ -120,6 +120,20 @@ fn tool_one_line(pair: &TimelineToolPair) -> String {
         "web_fetch" => pick("url").unwrap_or_default(),
         "web_search" => pick("query").unwrap_or_default(),
         _ => "",
+    };
+    // Pairs that canonicalised into `file_edits` (and nothing above
+    // matched — e.g. a code-mode exec that only applies a patch)
+    // summarize by the first edited path.
+    let summary = if summary.is_empty() {
+        input
+            .get("file_edits")
+            .and_then(Value::as_array)
+            .and_then(|entries| entries.first())
+            .and_then(|entry| entry.get("path"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    } else {
+        summary
     };
     if summary.is_empty() {
         String::new()
@@ -138,7 +152,7 @@ fn format_tool_input(pair: &TimelineToolPair) -> Option<String> {
     }
     match pair_operation_type(pair) {
         "write" => format_write_input(input),
-        "bash" | "exec_command" => {
+        "bash" | "exec" | "exec_command" => {
             let command = input
                 .as_object()
                 .and_then(|obj| obj.get("command").or_else(|| obj.get("cmd")))

@@ -55,7 +55,15 @@ pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<usize> {
                  SELECT 1 FROM event_blocks b \
                   WHERE b.session_uuid = e.session_uuid \
                     AND b.byte_offset = e.byte_offset \
-             )) \
+             )) OR \
+             EXISTS ( \
+                 SELECT 1 FROM event_blocks b \
+                  WHERE b.session_uuid = e.session_uuid \
+                    AND b.byte_offset = e.byte_offset \
+                    AND b.kind = 'tool_use' \
+                    AND COALESCE(b.tool_name_canonical, b.tool_name) = 'exec' \
+                    AND jsonb_typeof(b.tool_input) = 'string' \
+             ) \
          )",
     )
     .fetch_all(pool)
@@ -71,7 +79,15 @@ pub async fn backfill_canonical_blocks(pool: &Pool) -> anyhow::Result<usize> {
                             SELECT 1 FROM event_blocks b \
                              WHERE b.session_uuid = e.session_uuid \
                                AND b.byte_offset = e.byte_offset \
-                        )) \
+                        )) OR \
+                        EXISTS ( \
+                            SELECT 1 FROM event_blocks b \
+                             WHERE b.session_uuid = e.session_uuid \
+                               AND b.byte_offset = e.byte_offset \
+                               AND b.kind = 'tool_use' \
+                               AND COALESCE(b.tool_name_canonical, b.tool_name) = 'exec' \
+                               AND jsonb_typeof(b.tool_input) = 'string' \
+                        ) \
                     ) AS needs_backfill \
              FROM events e \
              WHERE e.session_uuid = $1 \

@@ -46,6 +46,7 @@ import {
 } from "../state/paneTextScale";
 import { useSessions } from "../state/SessionStore";
 import { useTabs } from "../state/TabStore";
+import { useDisplay } from "../state/DisplayStore";
 import { FilterChips } from "./timeline/FilterChips";
 import { useTimelineFilters } from "./timeline/filters";
 import { type ToolPair, type Turn, type TurnSummary } from "./timeline/grouping";
@@ -509,6 +510,7 @@ export function TimelinePane({
         </div>
       </div>
       <FilterChips {...filterHook} />
+      {sessionId && session && <NeedsInputBanner session={session} />}
       {empty ? (
         <div className="timeline-pane__empty">
           {(timeline?.total_event_count ?? 0) === 0
@@ -595,6 +597,50 @@ export function TimelinePane({
           onBack={subagentPath.length > 1 ? backSubagent : undefined}
         />
       )}
+    </div>
+  );
+}
+
+/** Attention banner shown while the agent is blocked on a terminal
+ * interaction (plan approval, question, permission screen). The timeline
+ * can't answer those — point at the terminal and offer the fastest way
+ * there for the current display mode. */
+function NeedsInputBanner({ session }: { session: SessionView }) {
+  const activity = session.activity;
+  const displayMode = useDisplay((store) => store.mode);
+  const openTab = useTabs((store) => store.openTab);
+  const showTerminal = useCallback(() => {
+    if (displayMode === "timeline") {
+      useDisplay.getState().togglePeek();
+      return;
+    }
+    openTab({ kind: "terminal", sessionId: session.id }, "top");
+  }, [displayMode, openTab, session.id]);
+
+  if (
+    session.state !== "live" ||
+    (activity?.state !== "needs_input" && activity?.state !== "blocked")
+  ) {
+    return null;
+  }
+  const label =
+    activity.state === "blocked"
+      ? "Agent reports it is blocked"
+      : "Agent needs your input in the terminal";
+  return (
+    <div className="timeline-pane__attention" role="alert" data-testid="needs-input-banner">
+      <Icon name="alert-triangle" size={14} />
+      <span className="timeline-pane__attention-label">{label}</span>
+      {activity.summary && (
+        <span className="timeline-pane__attention-summary">{activity.summary}</span>
+      )}
+      <button
+        type="button"
+        className="timeline-pane__attention-button"
+        onClick={showTerminal}
+      >
+        {displayMode === "timeline" ? "Peek terminal (⌘⇧E)" : "Go to terminal"}
+      </button>
     </div>
   );
 }

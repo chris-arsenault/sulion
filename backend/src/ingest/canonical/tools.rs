@@ -59,6 +59,16 @@ pub(crate) fn canonicalize_tool_input(canonical_name: &str, input: Value) -> Val
             return parse_apply_patch(raw);
         }
     }
+    // Codex code-mode `exec` arrives as a JavaScript snippet that wraps
+    // one or more `tools.exec_command({"cmd": ...})` calls. Surface the
+    // shell commands under the bash-style `command` key so the timeline
+    // can summarize the row like the Codex TUI does, and keep the
+    // original snippet as `code`.
+    if canonical_name == "exec" {
+        if let Value::String(raw) = &input {
+            return parse_exec_code(raw);
+        }
+    }
     let Value::Object(obj) = input else {
         return input;
     };
@@ -165,6 +175,88 @@ pub(crate) fn canonicalize_tool_input(canonical_name: &str, input: Value) -> Val
 
 pub(crate) fn canonicalize_tool_result_payload(payload: Value) -> Value {
     normalize_result_value(payload)
+}
+
+/// Extract the operations a code-mode exec snippet performs: every
+/// `"cmd": "…"` shell command (joined `&&`-style under `command`) and
+/// every embedded `*** Begin Patch` V4A literal (parsed into the
+/// canonical `file_edits` shape). The snippet itself stays under
+/// `code`. The values are JSON-compatible string literals inside the
+/// JavaScript source, so a quote-aware scan plus serde unescaping
+/// recovers them exactly.
+pub(crate) fn parse_exec_code(code: &str) -> Value {
+    let mut commands: Vec<String> = Vec::new();
+    let mut search_from = 0usize;
+    while let Some(found) = code[search_from..].find("\"cmd\"") {
+        let mut idx = search_from + found + "\"cmd\"".len();
+        search_from = idx;
+        let bytes = code.as_bytes();
+        while idx < bytes.len() && (bytes[idx] as char).is_whitespace() {
+            idx += 1;
+        }
+        if idx >= bytes.len() || bytes[idx] != b':' {
+            continue;
+        }
+        idx += 1;
+        while idx < bytes.len() && (bytes[idx] as char).is_whitespace() {
+            idx += 1;
+        }
+        let Some((cmd, end)) = js_string_literal_at(code, idx) else {
+            continue;
+        };
+        commands.push(cmd);
+        search_from = end;
+    }
+
+    let mut file_edits: Vec<Value> = Vec::new();
+    let mut search_from = 0usize;
+    while let Some(found) = code[search_from..].find("\"*** Begin Patch") {
+        let literal_start = search_from + found;
+        let Some((patch, end)) = js_string_literal_at(code, literal_start) else {
+            search_from = literal_start + 1;
+            continue;
+        };
+        if let Some(Value::Array(entries)) = parse_apply_patch(&patch).get("file_edits") {
+            file_edits.extend(entries.iter().cloned());
+        }
+        search_from = end;
+    }
+
+    let mut out = Map::new();
+    if !commands.is_empty() {
+        out.insert("command".to_string(), Value::String(commands.join(" && ")));
+    }
+    if !file_edits.is_empty() {
+        out.insert("file_edits".to_string(), Value::Array(file_edits));
+    }
+    out.insert("code".to_string(), Value::String(code.to_string()));
+    Value::Object(out)
+}
+
+/// Decode the double-quoted string literal starting at byte `start`.
+/// Returns the decoded value and the byte index just past the closing
+/// quote. Quotes and backslashes are ASCII, so a byte walk is safe in
+/// UTF-8 source.
+fn js_string_literal_at(code: &str, start: usize) -> Option<(String, usize)> {
+    let bytes = code.as_bytes();
+    if start >= bytes.len() || bytes[start] != b'"' {
+        return None;
+    }
+    let mut idx = start + 1;
+    let mut escaped = false;
+    while idx < bytes.len() {
+        match (escaped, bytes[idx]) {
+            (true, _) => escaped = false,
+            (false, b'\\') => escaped = true,
+            (false, b'"') => {
+                let decoded = serde_json::from_str::<String>(&code[start..=idx]).ok()?;
+                return Some((decoded, idx + 1));
+            }
+            _ => {}
+        }
+        idx += 1;
+    }
+    None
 }
 
 fn multi_edit_to_file_edit(path: &Value, edit: &Value) -> Value {

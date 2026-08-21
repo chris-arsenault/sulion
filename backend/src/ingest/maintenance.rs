@@ -3,9 +3,13 @@ use anyhow::Context;
 use crate::db::Pool;
 
 const CANONICAL_BLOCKS_KEY: &str = "canonical_blocks";
-const CANONICAL_BLOCKS_VERSION: i32 = 1;
+// v2: codex code-mode `exec` inputs re-derived from raw JS strings into
+// the canonical {command, code} shape.
+const CANONICAL_BLOCKS_VERSION: i32 = 2;
 const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
-const TIMELINE_PROJECTION_VERSION: i32 = 2;
+// v3: sessions with codex `exec` operations reprojected after their
+// inputs were re-canonicalized into the {command, code} shape.
+const TIMELINE_PROJECTION_VERSION: i32 = 3;
 const USAGE_PROJECTION_KEY: &str = "usage_projection";
 const USAGE_PROJECTION_VERSION: i32 = 1;
 

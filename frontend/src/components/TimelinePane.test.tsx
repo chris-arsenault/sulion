@@ -258,6 +258,68 @@ describe("TimelinePane", () => {
     await waitFor(() => expect(screen.getByText("outer agent")).toBeDefined());
   });
 
+  it("shows the needs-input banner and routes to the terminal", async () => {
+    stubFetch(
+      () =>
+        new Response(timelineBody(), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      [
+        sessionView(0, {
+          activity: {
+            state: "needs_input",
+            summary: "Question in the terminal: Which auth method?",
+            reason: null,
+            source: "ingester",
+            confidence: "derived",
+            updated_at: null,
+          },
+        }),
+      ],
+    );
+
+    render(<TimelinePane sessionId="abc" />);
+    const banner = await screen.findByTestId("needs-input-banner");
+    expect(banner.textContent).toContain("needs your input in the terminal");
+    expect(banner.textContent).toContain("Which auth method?");
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /go to terminal/i }));
+    const { useTabStore } = await import("../state/TabStore");
+    expect(
+      Object.values(useTabStore.getState().tabs).some(
+        (tab) => tab.kind === "terminal" && tab.sessionId === "abc",
+      ),
+    ).toBe(true);
+  });
+
+  it("hides the banner while the agent is simply working", async () => {
+    stubFetch(
+      () =>
+        new Response(timelineBody(), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      [
+        sessionView(0, {
+          activity: {
+            state: "working",
+            summary: null,
+            reason: null,
+            source: "ingester",
+            confidence: "derived",
+            updated_at: null,
+          },
+        }),
+      ],
+    );
+
+    render(<TimelinePane sessionId="abc" />);
+    await waitFor(() => expect(screen.getByText(/hello/)).toBeDefined());
+    expect(screen.queryByTestId("needs-input-banner")).toBeNull();
+  });
+
   it("shows empty-state copy when the API returns no correlated session", async () => {
     stubFetch(() => new Response(JSON.stringify({
       session_uuid: null,
