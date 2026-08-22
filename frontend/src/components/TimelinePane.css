@@ -236,7 +236,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 6px;
+  margin-left: auto;
 }
 
 .timeline-prompt__toolbar .timeline-prompt__button--icon {

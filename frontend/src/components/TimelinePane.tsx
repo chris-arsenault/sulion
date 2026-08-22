@@ -849,8 +849,8 @@ function TimelinePromptBar({
         {meta && <span className="timeline-prompt__meta">{meta}</span>}
         {error && <span className="timeline-prompt__error">{error}</span>}
         {pasteError && <span className="timeline-prompt__error">{pasteError}</span>}
+        <PromptBarToolbar turns={turns} selectedTurnKey={selectedTurnKey} onSelectTurn={onSelectTurn} />
       </div>
-      <PromptBarToolbar turns={turns} selectedTurnKey={selectedTurnKey} onSelectTurn={onSelectTurn} />
       {running ? (
         <div className="timeline-prompt__input-row">
           <textarea
