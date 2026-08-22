@@ -1,16 +1,23 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 
+import { useTimelineControlsStore } from "./TimelineControlsStore";
+
+export {
+  TIMELINE_FONT_SCALE_DEFAULT,
+  TIMELINE_FONT_SCALE_MAX,
+  TIMELINE_FONT_SCALE_MIN,
+  TIMELINE_FONT_SCALE_STEP,
+  TURN_NAV_MODES,
+  clampTimelineFontScale,
+  type TurnNavMode,
+} from "./TimelineControlsStore";
+import type { TurnNavMode } from "./TimelineControlsStore";
+
 const TERMINAL_FONT_SIZE_KEY = "sulion.terminal.font-size.v1";
-const TIMELINE_FONT_SCALE_KEY = "sulion.timeline.font-scale.v1";
 
 export const TERMINAL_FONT_SIZE_DEFAULT = 13;
 export const TERMINAL_FONT_SIZE_MIN = 11;
 export const TERMINAL_FONT_SIZE_MAX = 20;
-
-export const TIMELINE_FONT_SCALE_DEFAULT = 1;
-export const TIMELINE_FONT_SCALE_MIN = 0.9;
-export const TIMELINE_FONT_SCALE_MAX = 1.5;
-export const TIMELINE_FONT_SCALE_STEP = 0.1;
 
 function readStoredNumber(key: string, fallback: number, min: number, max: number): number {
   if (typeof window === "undefined") return fallback;
@@ -45,45 +52,24 @@ export function useTerminalFontSize() {
   );
 }
 
-export function useTimelineFontScale() {
-  return useStoredNumber(
-    TIMELINE_FONT_SCALE_KEY,
-    TIMELINE_FONT_SCALE_DEFAULT,
-    TIMELINE_FONT_SCALE_MIN,
-    TIMELINE_FONT_SCALE_MAX,
-  );
-}
-
 export function clampTerminalFontSize(value: number): number {
   return Math.max(TERMINAL_FONT_SIZE_MIN, Math.min(TERMINAL_FONT_SIZE_MAX, value));
 }
 
-// ─── turn navigation mode ─────────────────────────────────────────────
-
-/** How the timeline presents its turn navigation: the full list pane, a
- * compact per-turn hover grid under the header, or nothing at all. */
-export type TurnNavMode = "list" | "grid" | "hidden";
-
-export const TURN_NAV_MODES: readonly TurnNavMode[] = ["list", "grid", "hidden"];
-
-const TURN_NAV_MODE_KEY = "sulion.timeline.turn-nav.v1";
+// ─── timeline controls — backed by the singleton TimelineControlsStore ─
+//
+// These used to be per-`TimelinePane`-instance `useState`, seeded once
+// from localStorage on mount. They're now thin wrappers over one shared
+// store, so every mounted timeline reflects the same setting live.
 
 export function useTurnNavMode(): [TurnNavMode, Dispatch<SetStateAction<TurnNavMode>>] {
-  const [value, setValue] = useState<TurnNavMode>(() => {
-    if (typeof window === "undefined") return "list";
-    const raw = window.localStorage.getItem(TURN_NAV_MODE_KEY);
-    return raw === "grid" || raw === "hidden" ? raw : "list";
-  });
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(TURN_NAV_MODE_KEY, value);
-  }, [value]);
-
-  return [value, setValue];
+  const mode = useTimelineControlsStore((s) => s.turnNavMode);
+  const setMode = useTimelineControlsStore((s) => s.setTurnNavMode);
+  return [mode, setMode];
 }
 
-export function clampTimelineFontScale(value: number): number {
-  const clamped = Math.max(TIMELINE_FONT_SCALE_MIN, Math.min(TIMELINE_FONT_SCALE_MAX, value));
-  return Math.round(clamped * 10) / 10;
+export function useTimelineFontScale(): [number, Dispatch<SetStateAction<number>>] {
+  const scale = useTimelineControlsStore((s) => s.timelineFontScale);
+  const setScale = useTimelineControlsStore((s) => s.setTimelineFontScale);
+  return [scale, setScale];
 }

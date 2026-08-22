@@ -1,16 +1,14 @@
 .tg {
   display: flex;
   flex-wrap: wrap;
-  gap: 3px;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--hairline);
-  max-height: 84px;
+  gap: 4px;
+  padding: 10px 12px;
   overflow-y: auto;
 }
 
 .tg__cell {
-  width: 10px;
-  height: 10px;
+  width: 15px;
+  height: 15px;
   padding: 0;
   border: 1px solid color-mix(in oklab, var(--text-mid) 35%, transparent);
   border-radius: 2px;

@@ -6,9 +6,13 @@ import {
   OPERATION_CATEGORY_LABELS,
   useTimelineFilters,
 } from "./filters";
+import { resetTimelineControlsStore } from "../../state/TimelineControlsStore";
 
 describe("timeline filters", () => {
-  beforeEach(() => window.localStorage.clear());
+  beforeEach(() => {
+    window.localStorage.clear();
+    resetTimelineControlsStore();
+  });
 
   it("starts with the expected defaults", () => {
     const { result } = renderHook(() => useTimelineFilters());

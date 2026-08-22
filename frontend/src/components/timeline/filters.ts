@@ -12,116 +12,21 @@
 //   - showThinking / showBookkeeping / showSidechain: same "show" toggles
 //     from before — clearly named for their semantics.
 //
-// The backend timeline endpoint owns grouping, pairing, preview
-// generation, and turn-level filtering. This module now just owns the
-// UI filter state and persistence layer.
+// The state itself lives in the singleton `TimelineControlsStore` (state
+// shared across every mounted timeline, not per-component); this module
+// re-exports the type/constants and wraps the store in the same hook
+// shape callers already use.
 
-import { useEffect, useState } from "react";
+import { useTimelineControlsStore } from "../../state/TimelineControlsStore";
 
+export {
+  DEFAULT_FILTERS,
+  KNOWN_OPERATION_CATEGORIES,
+  OPERATION_CATEGORY_LABELS,
+  type TimelineFilters,
+} from "../../state/TimelineControlsStore";
+import type { TimelineFilters } from "../../state/TimelineControlsStore";
 import type { OperationCategory, SpeakerFacet } from "../../api/types";
-
-export interface TimelineFilters {
-  /** Speakers to HIDE from the detail view. Empty = nothing hidden. */
-  hiddenSpeakers: Set<SpeakerFacet>;
-  /** Operation categories to HIDE from the detail view (tool pair rows
-   * with these categories are skipped). Empty = nothing hidden. */
-  hiddenOperationCategories: Set<OperationCategory>;
-  /** Include-only filter: when true, drop turns that have no errors. */
-  errorsOnly: boolean;
-  /** Render flag: false hides thinking content. */
-  showThinking: boolean;
-  /** Prefilter flag: false drops bookkeeping-kind events before grouping. */
-  showBookkeeping: boolean;
-  /** Prefilter flag: false drops sidechain events (subagent modal only). */
-  showSidechain: boolean;
-  /** Include-only filter: substring match against tool_use input paths.
-   * Empty = no constraint. */
-  filePath: string;
-  /** When true, the timeline auto-selects the latest turn as new polls
-   * arrive — tail-follow behaviour. Clicking a turn in the list turns
-   * this off so the user's selection isn't clobbered. */
-  followLatest: boolean;
-}
-
-export const DEFAULT_FILTERS: TimelineFilters = {
-  hiddenSpeakers: new Set(),
-  hiddenOperationCategories: new Set(),
-  errorsOnly: false,
-  showThinking: true,
-  showBookkeeping: false,
-  showSidechain: false,
-  filePath: "",
-  followLatest: false,
-};
-
-// v3 because v2 stored raw tool-name hide state. The app now stores
-// app-facing operation categories instead, so old values should not be
-// replayed into the new semantics.
-const STORAGE_KEY = "sulion.timeline.filters.v3";
-
-// ─── persistence ──────────────────────────────────────────────────────
-
-interface SerializedFilters {
-  hiddenSpeakers: SpeakerFacet[];
-  hiddenOperationCategories: OperationCategory[];
-  errorsOnly: boolean;
-  showThinking: boolean;
-  showBookkeeping: boolean;
-  showSidechain: boolean;
-  filePath: string;
-  followLatest: boolean;
-}
-
-function serialize(f: TimelineFilters): SerializedFilters {
-  return {
-    hiddenSpeakers: Array.from(f.hiddenSpeakers),
-    hiddenOperationCategories: Array.from(f.hiddenOperationCategories),
-    errorsOnly: f.errorsOnly,
-    showThinking: f.showThinking,
-    showBookkeeping: f.showBookkeeping,
-    showSidechain: f.showSidechain,
-    filePath: f.filePath,
-    followLatest: f.followLatest,
-  };
-}
-
-function deserialize(raw: unknown): TimelineFilters {
-  const out: TimelineFilters = {
-    hiddenSpeakers: new Set(),
-    hiddenOperationCategories: new Set(),
-    errorsOnly: DEFAULT_FILTERS.errorsOnly,
-    showThinking: DEFAULT_FILTERS.showThinking,
-    showBookkeeping: DEFAULT_FILTERS.showBookkeeping,
-    showSidechain: DEFAULT_FILTERS.showSidechain,
-    filePath: DEFAULT_FILTERS.filePath,
-    followLatest: DEFAULT_FILTERS.followLatest,
-  };
-  if (!raw || typeof raw !== "object") return out;
-  const r = raw as Partial<SerializedFilters>;
-  if (Array.isArray(r.hiddenSpeakers)) {
-    for (const s of r.hiddenSpeakers) {
-      if (s === "user" || s === "assistant" || s === "tool_result") {
-        out.hiddenSpeakers.add(s);
-      }
-    }
-  }
-  if (Array.isArray(r.hiddenOperationCategories)) {
-    for (const category of r.hiddenOperationCategories) {
-      if (isOperationCategory(category)) {
-        out.hiddenOperationCategories.add(category);
-      }
-    }
-  }
-  if (typeof r.errorsOnly === "boolean") out.errorsOnly = r.errorsOnly;
-  if (typeof r.showThinking === "boolean") out.showThinking = r.showThinking;
-  if (typeof r.showBookkeeping === "boolean") out.showBookkeeping = r.showBookkeeping;
-  if (typeof r.showSidechain === "boolean") out.showSidechain = r.showSidechain;
-  if (typeof r.filePath === "string") out.filePath = r.filePath;
-  if (typeof r.followLatest === "boolean") out.followLatest = r.followLatest;
-  return out;
-}
-
-// ─── hook ─────────────────────────────────────────────────────────────
 
 export function useTimelineFilters(): {
   filters: TimelineFilters;
@@ -135,97 +40,27 @@ export function useTimelineFilters(): {
   setFollowLatest: (v: boolean) => void;
   reset: () => void;
 } {
-  const [filters, setFilters] = useState<TimelineFilters>(() => {
-    if (typeof window === "undefined") return cloneDefault();
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) return deserialize(JSON.parse(raw));
-    } catch {
-      // fall through
-    }
-    return cloneDefault();
-  });
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(serialize(filters)));
-    } catch {
-      // storage full or disabled
-    }
-  }, [filters]);
-
-  const toggleSpeaker = (s: SpeakerFacet) =>
-    setFilters((prev) => {
-      const next = new Set(prev.hiddenSpeakers);
-      if (next.has(s)) next.delete(s);
-      else next.add(s);
-      return { ...prev, hiddenSpeakers: next };
-    });
-
-  const toggleOperationCategory = (category: OperationCategory) =>
-    setFilters((prev) => {
-      const next = new Set(prev.hiddenOperationCategories);
-      if (next.has(category)) next.delete(category);
-      else next.add(category);
-      return { ...prev, hiddenOperationCategories: next };
-    });
+  const filters = useTimelineControlsStore((s) => s.filters);
+  const toggleSpeaker = useTimelineControlsStore((s) => s.toggleSpeaker);
+  const toggleOperationCategory = useTimelineControlsStore((s) => s.toggleOperationCategory);
+  const setErrorsOnly = useTimelineControlsStore((s) => s.setErrorsOnly);
+  const setShowThinking = useTimelineControlsStore((s) => s.setShowThinking);
+  const setShowBookkeeping = useTimelineControlsStore((s) => s.setShowBookkeeping);
+  const setShowSidechain = useTimelineControlsStore((s) => s.setShowSidechain);
+  const setFilePath = useTimelineControlsStore((s) => s.setFilePath);
+  const setFollowLatest = useTimelineControlsStore((s) => s.setFollowLatest);
+  const reset = useTimelineControlsStore((s) => s.resetFilters);
 
   return {
     filters,
     toggleSpeaker,
     toggleOperationCategory,
-    setErrorsOnly: (v) => setFilters((p) => ({ ...p, errorsOnly: v })),
-    setShowThinking: (v) => setFilters((p) => ({ ...p, showThinking: v })),
-    setShowBookkeeping: (v) => setFilters((p) => ({ ...p, showBookkeeping: v })),
-    setShowSidechain: (v) => setFilters((p) => ({ ...p, showSidechain: v })),
-    setFilePath: (v) => setFilters((p) => ({ ...p, filePath: v })),
-    setFollowLatest: (v) => setFilters((p) => ({ ...p, followLatest: v })),
-    reset: () => setFilters(cloneDefault()),
+    setErrorsOnly,
+    setShowThinking,
+    setShowBookkeeping,
+    setShowSidechain,
+    setFilePath,
+    setFollowLatest,
+    reset,
   };
 }
-
-function cloneDefault(): TimelineFilters {
-  return {
-    hiddenSpeakers: new Set(),
-    hiddenOperationCategories: new Set(),
-    errorsOnly: DEFAULT_FILTERS.errorsOnly,
-    showThinking: DEFAULT_FILTERS.showThinking,
-    showBookkeeping: DEFAULT_FILTERS.showBookkeeping,
-    showSidechain: DEFAULT_FILTERS.showSidechain,
-    filePath: DEFAULT_FILTERS.filePath,
-    followLatest: DEFAULT_FILTERS.followLatest,
-  };
-}
-
-function isOperationCategory(value: unknown): value is OperationCategory {
-  return (
-    value === "create_content" ||
-    value === "inspect" ||
-    value === "utility" ||
-    value === "research" ||
-    value === "delegate" ||
-    value === "workflow" ||
-    value === "other"
-  );
-}
-
-export const KNOWN_OPERATION_CATEGORIES = [
-  "create_content",
-  "inspect",
-  "utility",
-  "research",
-  "delegate",
-  "workflow",
-  "other",
-] as const;
-
-export const OPERATION_CATEGORY_LABELS: Record<OperationCategory, string> = {
-  create_content: "create content",
-  inspect: "inspect",
-  utility: "utility",
-  research: "research",
-  delegate: "delegate",
-  workflow: "workflow",
-  other: "other",
-};

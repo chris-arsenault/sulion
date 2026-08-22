@@ -44,35 +44,20 @@ import type {
   TimelineSummaryResponse,
 } from "../api/types";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import {
-  clampTimelineFontScale,
-  TIMELINE_FONT_SCALE_DEFAULT,
-  TIMELINE_FONT_SCALE_MAX,
-  TIMELINE_FONT_SCALE_MIN,
-  TIMELINE_FONT_SCALE_STEP,
-  TURN_NAV_MODES,
-  useTimelineFontScale,
-  useTurnNavMode,
-} from "../state/paneTextScale";
+import { useTimelineFontScale, useTurnNavMode } from "../state/paneTextScale";
 import { useSessions } from "../state/SessionStore";
 import { useTabs } from "../state/TabStore";
 import { useDisplay } from "../state/DisplayStore";
-import { FilterChips } from "./timeline/FilterChips";
 import { useTimelineFilters } from "./timeline/filters";
 import { type ToolPair, type Turn, type TurnSummary } from "./timeline/grouping";
 import { SessionInspectorPane } from "./timeline/SessionInspectorPane";
 import { SubagentModal } from "./timeline/SubagentModal";
-import { TurnGrid } from "./timeline/TurnGrid";
+import { TimelineControlsFlyout } from "./timeline/TimelineControlsFlyout";
+import { TurnGridFlyout } from "./timeline/TurnGridFlyout";
 import { TurnRow } from "./timeline/TurnRow";
 import { Icon } from "../icons";
 import { Tooltip } from "./ui";
 import "./TimelinePane.css";
-
-const TURN_NAV_ICONS = {
-  list: "list",
-  grid: "layers",
-  hidden: "panel-left-close",
-} as const;
 
 const INSPECTOR_WIDTH_KEY = "sulion.timeline.inspector.width.v1";
 const DEFAULT_INSPECTOR_FRACTION = 0.55;
@@ -122,17 +107,10 @@ export function TimelinePane({
   const appliedFocusKeyRef = useRef<string | null>(null);
   const loadedSummaryKeyRef = useRef<string | null>(null);
 
-  const filterHook = useTimelineFilters();
-  const { filters } = filterHook;
+  const { filters, setFollowLatest } = useTimelineFilters();
   const narrow = useMediaQuery("(max-width: 999px)");
-  const [turnNavMode, setTurnNavMode] = useTurnNavMode();
-  const cycleTurnNav = useCallback(() => {
-    setTurnNavMode((mode) => {
-      const idx = TURN_NAV_MODES.indexOf(mode);
-      return TURN_NAV_MODES[(idx + 1) % TURN_NAV_MODES.length]!;
-    });
-  }, [setTurnNavMode]);
-  const [timelineFontScale, setTimelineFontScale] = useTimelineFontScale();
+  const [turnNavMode] = useTurnNavMode();
+  const [timelineFontScale] = useTimelineFontScale();
   const resourceRevision = useSessions((store) => {
     if (sessionId) {
       return store.sessions.find((session) => session.id === sessionId)?.timeline_revision ?? 0;
@@ -378,7 +356,6 @@ export function TimelinePane({
   // drops follow-latest mode, since the user picking a specific turn
   // contradicts "keep snapping to the newest one".
   const clearTimelineFocus = useTabs((store) => store.clearTimelineFocus);
-  const { setFollowLatest } = filterHook;
   const handleTurnSelect = useCallback(
     (key: string) => {
       setSelectedTurnKey(key);
@@ -461,22 +438,6 @@ export function TimelinePane({
     [listFraction, inspectorFraction],
   );
 
-  const decreaseTimelineText = useCallback(() => {
-    setTimelineFontScale((value) =>
-      clampTimelineFontScale(value - TIMELINE_FONT_SCALE_STEP),
-    );
-  }, [setTimelineFontScale]);
-
-  const increaseTimelineText = useCallback(() => {
-    setTimelineFontScale((value) =>
-      clampTimelineFontScale(value + TIMELINE_FONT_SCALE_STEP),
-    );
-  }, [setTimelineFontScale]);
-
-  const resetTimelineText = useCallback(() => {
-    setTimelineFontScale(TIMELINE_FONT_SCALE_DEFAULT);
-  }, [setTimelineFontScale]);
-
   return (
     <div
       className="timeline-pane"
@@ -503,57 +464,8 @@ export function TimelinePane({
             <span className="timeline-pane__error">error</span>
           </Tooltip>
         )}
-        <Tooltip
-          label={`Turn navigation: ${turnNavMode} — click to switch (list → grid → hidden)`}
-        >
-          <button
-            type="button"
-            className="timeline-pane__text-button timeline-pane__nav-toggle"
-            onClick={cycleTurnNav}
-            aria-label={`Turn navigation mode: ${turnNavMode}`}
-          >
-            <Icon name={TURN_NAV_ICONS[turnNavMode]} size={12} />
-          </button>
-        </Tooltip>
-        <div className="timeline-pane__text-controls" aria-label="Timeline text size controls">
-          <span className="timeline-pane__text-label">text</span>
-          <button
-            type="button"
-            className="timeline-pane__text-button"
-            onClick={decreaseTimelineText}
-            disabled={timelineFontScale <= TIMELINE_FONT_SCALE_MIN}
-            aria-label="Decrease timeline text size"
-          >
-            A-
-          </button>
-          <button
-            type="button"
-            className="timeline-pane__text-button timeline-pane__text-button--value"
-            onClick={resetTimelineText}
-            aria-label="Reset timeline text size"
-          >
-            {Math.round(timelineFontScale * 100)}%
-          </button>
-          <button
-            type="button"
-            className="timeline-pane__text-button"
-            onClick={increaseTimelineText}
-            disabled={timelineFontScale >= TIMELINE_FONT_SCALE_MAX}
-            aria-label="Increase timeline text size"
-          >
-            A+
-          </button>
-        </div>
       </div>
-      <FilterChips {...filterHook} />
       {sessionId && session && <NeedsInputBanner session={session} />}
-      {turnNavMode === "grid" && !empty && (
-        <TurnGrid
-          turns={turns}
-          selectedTurnKey={selectedTurnKey}
-          onSelect={handleTurnSelect}
-        />
-      )}
       {empty ? (
         <div className="timeline-pane__empty">
           {(timeline?.total_event_count ?? 0) === 0
@@ -646,6 +558,9 @@ export function TimelinePane({
           sessionId={sessionId}
           session={session}
           onRefresh={refreshSessions}
+          turns={turns}
+          selectedTurnKey={selectedTurnKey}
+          onSelectTurn={handleTurnSelect}
         />
       )}
       {subagent && (
@@ -710,10 +625,16 @@ function TimelinePromptBar({
   sessionId,
   session,
   onRefresh,
+  turns,
+  selectedTurnKey,
+  onSelectTurn,
 }: {
   sessionId: string;
   session?: SessionView;
   onRefresh: () => Promise<void>;
+  turns: TurnSummary[];
+  selectedTurnKey: string | null;
+  onSelectTurn: (key: string) => void;
 }) {
   const [text, setText] = useState("");
   const [pending, setPending] = useState<"send" | "interrupt" | AgentLaunchType | null>(
@@ -929,6 +850,7 @@ function TimelinePromptBar({
         {error && <span className="timeline-prompt__error">{error}</span>}
         {pasteError && <span className="timeline-prompt__error">{pasteError}</span>}
       </div>
+      <PromptBarToolbar turns={turns} selectedTurnKey={selectedTurnKey} onSelectTurn={onSelectTurn} />
       {running ? (
         <div className="timeline-prompt__input-row">
           <textarea
@@ -1012,6 +934,80 @@ function TimelinePromptBar({
         />
       )}
     </div>
+  );
+}
+
+/** Trigger row for the two flyouts relocated out of the timeline header:
+ * the singleton settings panel (always available) and the turn grid
+ * (only when nav mode is "grid" and there's something to navigate). */
+function PromptBarToolbar({
+  turns,
+  selectedTurnKey,
+  onSelectTurn,
+}: {
+  turns: TurnSummary[];
+  selectedTurnKey: string | null;
+  onSelectTurn: (key: string) => void;
+}) {
+  const [openFlyout, setOpenFlyout] = useState<"settings" | "grid" | null>(null);
+  const settingsTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const gridTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [turnNavMode] = useTurnNavMode();
+  const closeFlyout = useCallback(() => setOpenFlyout(null), []);
+  const toggleSettingsFlyout = useCallback(() => {
+    setOpenFlyout((prev) => (prev === "settings" ? null : "settings"));
+  }, []);
+  const toggleGridFlyout = useCallback(() => {
+    setOpenFlyout((prev) => (prev === "grid" ? null : "grid"));
+  }, []);
+  const showGridTrigger = turnNavMode === "grid" && turns.length > 0;
+  useEffect(() => {
+    if (!showGridTrigger) setOpenFlyout((prev) => (prev === "grid" ? null : prev));
+  }, [showGridTrigger]);
+
+  return (
+    <>
+      <div className="timeline-prompt__toolbar">
+        <Tooltip label="Timeline settings">
+          <button
+            ref={settingsTriggerRef}
+            type="button"
+            className="timeline-prompt__button timeline-prompt__button--icon"
+            onClick={toggleSettingsFlyout}
+            aria-label="Timeline settings"
+            aria-pressed={openFlyout === "settings"}
+          >
+            <Icon name="settings" size={14} />
+          </button>
+        </Tooltip>
+        {showGridTrigger && (
+          <Tooltip label="Turn grid">
+            <button
+              ref={gridTriggerRef}
+              type="button"
+              className="timeline-prompt__button timeline-prompt__button--icon"
+              onClick={toggleGridFlyout}
+              aria-label="Turn grid"
+              aria-pressed={openFlyout === "grid"}
+            >
+              <Icon name="layers" size={14} />
+            </button>
+          </Tooltip>
+        )}
+      </div>
+      {openFlyout === "settings" && (
+        <TimelineControlsFlyout anchor={settingsTriggerRef.current} onClose={closeFlyout} />
+      )}
+      {openFlyout === "grid" && (
+        <TurnGridFlyout
+          anchor={gridTriggerRef.current}
+          turns={turns}
+          selectedTurnKey={selectedTurnKey}
+          onSelect={onSelectTurn}
+          onClose={closeFlyout}
+        />
+      )}
+    </>
   );
 }
 

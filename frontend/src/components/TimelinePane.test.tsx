@@ -22,6 +22,7 @@ import { TimelinePane as TimelinePaneRaw } from "./TimelinePane";
 import { ContextMenuHost } from "./common/ContextMenu";
 import type { RepoView, SessionView } from "../api/types";
 import { useSessionStore } from "../state/SessionStore";
+import { resetTimelineControlsStore } from "../state/TimelineControlsStore";
 import { appStatePayload, jsonResponse } from "../test/appState";
 
 const TimelinePane = (props: { sessionId?: string; repo?: string }) => (
@@ -147,6 +148,7 @@ describe("TimelinePane", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     window.localStorage.clear();
+    resetTimelineControlsStore();
   });
 
   it("renders projected turns and opens the inspector on click", async () => {
@@ -812,6 +814,7 @@ describe("TimelinePane", () => {
 
     await waitFor(() => expect(screen.getByText(/1 turn/)).toBeDefined());
 
+    await user.click(screen.getByRole("button", { name: /timeline settings/i }));
     await user.click(screen.getByRole("button", { name: /increase timeline text size/i }));
 
     const pane = screen.getByTestId("timeline-pane");

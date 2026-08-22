@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 import { FilterChips } from "./FilterChips";
 import { DEFAULT_FILTERS, useTimelineFilters } from "./filters";
+import { resetTimelineControlsStore } from "../../state/TimelineControlsStore";
 
 const ARIA_PRESSED = "aria-pressed";
 
@@ -13,7 +14,10 @@ function Host() {
 }
 
 describe("FilterChips — exclusion UI", () => {
-  afterEach(() => window.localStorage.clear());
+  afterEach(() => {
+    window.localStorage.clear();
+    resetTimelineControlsStore();
+  });
 
   it("renders speaker, operation, include, and file-path chips", () => {
     render(<Host />);

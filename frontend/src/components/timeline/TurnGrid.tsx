@@ -1,6 +1,6 @@
 // Compact turn navigation: one small square per turn, hover for the
-// prompt preview, click to select. The grid replaces the full turn list
-// when the timeline's nav mode is "grid".
+// prompt preview, click to select. Rendered inside TurnGridFlyout when
+// the timeline's nav mode is "grid".
 
 import { useCallback } from "react";
 

@@ -1,0 +1,87 @@
+.tcf__card {
+  width: min(640px, 92vw);
+}
+
+.tcf__body {
+  flex: 1;
+  overflow: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tcf__section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tcf__label {
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-mid);
+}
+
+.tcf__nav-group {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.tcf__nav-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--canvas-1);
+  color: var(--text-mid);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-1);
+  font-family: var(--font-sans);
+  font-size: var(--t-ui);
+  cursor: pointer;
+  transition: background var(--dur-0) var(--ease), color var(--dur-0) var(--ease);
+}
+
+.tcf__nav-button:hover {
+  color: var(--text-hi);
+}
+
+.tcf__nav-button--active {
+  background: var(--atn-mark);
+  color: var(--atn-fg);
+  border-color: var(--atn-mark);
+}
+
+.tcf__text-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tcf__text-button {
+  padding: 4px 10px;
+  background: var(--canvas-1);
+  color: var(--text-mid);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-1);
+  font-family: var(--font-mono);
+  font-size: var(--t-ui);
+  cursor: pointer;
+}
+
+.tcf__text-button:hover:not(:disabled) {
+  color: var(--text-hi);
+}
+
+.tcf__text-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.tcf__text-button--value {
+  min-width: 44px;
+  text-align: center;
+}
