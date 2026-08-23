@@ -621,7 +621,7 @@ function ToolPairRow({
     if (enterTimer.current) clearTimeout(enterTimer.current);
     enterTimer.current = setTimeout(() => {
       if (rowRef.current) onEnter(rowRef.current, pair);
-    }, 160);
+    }, 500);
   }, [onEnter, pair]);
   const handleLeave = useCallback(() => {
     if (enterTimer.current) {
