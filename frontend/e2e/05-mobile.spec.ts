@@ -25,6 +25,11 @@ test("opens sessions directly into the timeline-only mobile workspace", async ({
   await expect(page.getByTestId("terminal-pane")).toHaveCount(0);
   await expect(page.getByTestId("timeline-pane")).toBeVisible();
   await expect(page.getByLabel("Agent prompt controls")).toBeVisible();
+  expect(
+    await page.locator(".wa--single > .wa__pane").evaluate(
+      (pane) => pane.getBoundingClientRect().height,
+    ),
+  ).toBeGreaterThan(200);
 
   await page.keyboard.press("Control+Shift+D");
   await page.keyboard.press("Control+Shift+E");

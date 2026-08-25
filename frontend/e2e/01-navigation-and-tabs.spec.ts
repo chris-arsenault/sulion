@@ -63,6 +63,22 @@ test("opens seeded sessions, tabs, and preserves tab layout across reload", asyn
   await expect(page.getByTestId("diff-tab")).toBeVisible();
 });
 
+test("timeline-only mode fills the desktop work area", async ({ page }) => {
+  await gotoApp(page);
+  await openSession(page, "Atlas Claude");
+
+  await page.keyboard.press("Control+Shift+D");
+  await page.keyboard.press("Control+Shift+D");
+
+  await expect(page.locator(".wa--single")).toBeVisible();
+  await expect(page.getByTestId("timeline-pane")).toBeVisible();
+  expect(
+    await page.locator(".wa--single > .wa__pane").evaluate(
+      (pane) => pane.getBoundingClientRect().height,
+    ),
+  ).toBeGreaterThan(200);
+});
+
 test("supports session rename, pin, and colour from the sidebar", async ({ page }) => {
   await gotoApp(page);
 
