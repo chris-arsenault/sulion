@@ -422,7 +422,14 @@ function startBrokerContainer(dbUrl, authIssuerUrl) {
       `SULION_SECRET_BROKER_REGISTRATION_TOKEN=${E2E_BROKER_REGISTRATION_TOKEN}`,
       "-v",
       `${brokerStateDir}:/var/lib/sulion-broker:ro`,
+      // Production starts this image through the Roles Anywhere bootstrap.
+      // The E2E broker is already fully configured above, so run the service
+      // directly and keep tini as its signal-handling init process.
+      "--entrypoint",
+      "/usr/bin/tini",
       BROKER_IMAGE,
+      "--",
+      "/usr/local/bin/sulion-broker",
     ],
     { cwd: REPO_ROOT },
   );
@@ -474,7 +481,16 @@ function startBackendContainer(dbUrl) {
   if (dockerNetworkName) {
     args.push("--network", dockerNetworkName);
   }
-  args.push(BACKEND_IMAGE);
+  // The control-plane image normally enrolls through Roles Anywhere before
+  // invoking its application entrypoint. E2E supplies every runtime value
+  // above, so retain dumb-init and skip only the production enrollment step.
+  args.push(
+    "--entrypoint",
+    "/usr/bin/dumb-init",
+    BACKEND_IMAGE,
+    "--",
+    "/opt/sulion/entrypoint.sh",
+  );
 
   runCommand("docker-run-backend", "docker", args, { cwd: REPO_ROOT });
 }
