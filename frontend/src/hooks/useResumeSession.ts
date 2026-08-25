@@ -3,6 +3,7 @@ import { useCallback } from "react";
 import type { CreateSessionRequest, SessionView } from "../api/types";
 import { useSessions } from "../state/SessionStore";
 import { useTabs } from "../state/TabStore";
+import { useSessionNavigation } from "./useSessionNavigation";
 
 /** The app's resumable rule, extracted verbatim from SessionEndedPane:
  * orphaned (PTY lost, e.g. backend restart) with a correlated session
@@ -27,9 +28,8 @@ export function useResumeSession() {
   const createSession = useSessions((store) => store.createSession);
   const updateSession = useSessions((store) => store.updateSession);
   const deleteSession = useSessions((store) => store.deleteSession);
-  const selectSession = useSessions((store) => store.selectSession);
-  const openTab = useTabs((store) => store.openTab);
   const rebindSessionTabs = useTabs((store) => store.rebindSessionTabs);
+  const openSession = useSessionNavigation();
 
   return useCallback(
     async (session: SessionView): Promise<SessionView> => {
@@ -59,9 +59,7 @@ export function useResumeSession() {
         });
       }
       rebindSessionTabs(session.id, created.id);
-      openTab({ kind: "terminal", sessionId: created.id }, "top");
-      openTab({ kind: "timeline", sessionId: created.id }, "bottom");
-      selectSession(created.id);
+      openSession(created.id);
       await deleteSession(session.id);
       return created;
     },
@@ -69,8 +67,7 @@ export function useResumeSession() {
       createSession,
       updateSession,
       deleteSession,
-      selectSession,
-      openTab,
+      openSession,
       rebindSessionTabs,
     ],
   );

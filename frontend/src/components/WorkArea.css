@@ -323,3 +323,27 @@ body.is-dragging-tab .wa__drop-zone {
 .wa__pane--mobile {
   height: 100%;
 }
+
+@media (max-width: 767px) {
+  .wa__tabs,
+  .wa__tab-handle {
+    min-height: 40px;
+  }
+
+  .wa__tab-handle {
+    max-width: min(72vw, 280px);
+  }
+
+  .wa__tab-close {
+    min-width: 28px;
+    min-height: 28px;
+  }
+
+  .wa--empty {
+    padding: 24px 16px;
+  }
+
+  .wa__empty-hint {
+    display: none;
+  }
+}

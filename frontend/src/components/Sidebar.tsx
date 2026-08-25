@@ -29,6 +29,10 @@ import type {
 import { SESSION_COLORS } from "../api/types";
 import { ApiError, stageRepoPath, uploadRepoFile } from "../api/client";
 import { appCommands, useAppCommand } from "../state/AppCommands";
+import {
+  useIsMobileLayout,
+  useSessionNavigation,
+} from "../hooks/useSessionNavigation";
 import { useSessions } from "../state/SessionStore";
 import { dirtyAncestors, stalenessFor, useRepos } from "../state/RepoStore";
 import { useSecretStore } from "../state/SecretStore";
@@ -73,7 +77,6 @@ export function Sidebar() {
     plans,
     selectedSessionId,
     workspaces,
-    selectSession,
     createSession,
     deleteSession,
     deleteRepo,
@@ -98,7 +101,6 @@ export function Sidebar() {
       plans: store.plans,
       selectedSessionId: store.selectedSessionId,
       workspaces: store.workspaces,
-      selectSession: store.selectSession,
       createSession: store.createSession,
       deleteSession: store.deleteSession,
       deleteRepo: store.deleteRepo,
@@ -118,7 +120,7 @@ export function Sidebar() {
     })),
   );
 
-  const openTab = useTabs((store) => store.openTab);
+  const openSession = useSessionNavigation();
 
   const grouped = useMemo(
     () => groupByRepo(sessions, repos, workspaces, plans),
@@ -154,18 +156,14 @@ export function Sidebar() {
     return result;
   }, [sessions]);
 
-  // Opening a session's work area: terminal top + timeline bottom.
-  // Called directly from the click handler (no useEffect on selected
-  // session) so sidebar interaction doesn't fight file/tab
-  // activation through the global tab state.
+  // Called directly from the click handler so sidebar interaction does
+  // not fight file/tab activation through the global tab state.
   const openSessionTabs = useCallback(
     (id: string) => {
-      selectSession(id);
-      openTab({ kind: "terminal", sessionId: id }, "top");
-      openTab({ kind: "timeline", sessionId: id }, "bottom");
+      openSession(id);
       appCommands.closeDrawer();
     },
-    [openTab, selectSession],
+    [openSession],
   );
   const expandedByRepo = useMemo(
     () =>
@@ -451,15 +449,13 @@ export function Sidebar() {
           repo: workspace.repo_name,
           workspace_id: workspace.id,
         });
-        selectSession(created.id);
-        openTab({ kind: "terminal", sessionId: created.id }, "top");
-        openTab({ kind: "timeline", sessionId: created.id }, "bottom");
+        openSession(created.id);
         appCommands.closeDrawer();
       } catch (err) {
         setFormError(messageOf(err));
       }
     },
-    [createSession, openTab, selectSession],
+    [createSession, openSession],
   );
 
   const requestWorkspaceDelete = useCallback(
@@ -2210,6 +2206,7 @@ function RecentCommit({ commit }: { commit: GitCommit }) {
 function buildSessionMenuItems({
   session,
   openTab,
+  isMobile,
   onRename,
   secretMenu,
   onUpdate,
@@ -2218,6 +2215,7 @@ function buildSessionMenuItems({
 }: {
   session: SessionView;
   openTab: TabStore["openTab"];
+  isMobile: boolean;
   onRename: () => void;
   secretMenu: MenuItem;
   onUpdate: (patch: {
@@ -2228,8 +2226,9 @@ function buildSessionMenuItems({
   onUpgrade: () => void;
   onDelete: () => void;
 }): MenuItem[] {
-  return [
-    {
+  const items: MenuItem[] = [];
+  if (!isMobile) {
+    items.push({
       kind: "item",
       id: "open-terminal",
       label: "Open terminal",
@@ -2237,7 +2236,9 @@ function buildSessionMenuItems({
         openTab({ kind: "terminal", sessionId: session.id }, "top");
         appCommands.closeDrawer();
       },
-    },
+    });
+  }
+  items.push(
     {
       kind: "item",
       id: "open-timeline",
@@ -2314,7 +2315,8 @@ function buildSessionMenuItems({
       destructive: true,
       onSelect: onDelete,
     },
-  ];
+  );
+  return items;
 }
 
 interface SessionRowProps {
@@ -2350,6 +2352,7 @@ function SessionRow({
   onUpdate,
 }: SessionRowProps) {
   const [renaming, setRenaming] = useState(false);
+  const isMobile = useIsMobileLayout();
   const openTab = useTabs((store) => store.openTab);
   const openCtx = useContextMenu((store) => store.open);
   const {
@@ -2419,13 +2422,23 @@ function SessionRow({
       buildSessionMenuItems({
         session: s,
         openTab,
+        isMobile,
         onRename: startRenaming,
         secretMenu,
         onUpdate: updateThis,
         onUpgrade: upgradeThis,
         onDelete: deleteThis,
       }),
-    [s, openTab, startRenaming, secretMenu, updateThis, upgradeThis, deleteThis],
+    [
+      s,
+      openTab,
+      isMobile,
+      startRenaming,
+      secretMenu,
+      updateThis,
+      upgradeThis,
+      deleteThis,
+    ],
   );
   const buildMenuItems = useCallback(() => menuItems, [menuItems]);
   const { onContextMenu: onRowContextMenu, onKeyDown: onRowContextMenuKey } =

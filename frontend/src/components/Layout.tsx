@@ -10,6 +10,10 @@ import { MetricsPane } from "./MetricsPane";
 import { MonitorPane } from "./MonitorPane";
 import { DisplaySettings } from "./DisplaySettings";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import {
+  useIsMobileLayout,
+  useSessionNavigation,
+} from "../hooks/useSessionNavigation";
 import { appCommands, useAppCommand } from "../state/AppCommands";
 import { useTabs } from "../state/TabStore";
 import { useSessions } from "../state/SessionStore";
@@ -18,6 +22,7 @@ import {
   DISPLAY_MODES,
   useDisplay,
 } from "../state/DisplayStore";
+import { MOBILE_LAYOUT_QUERY } from "../state/displayPolicy";
 import { TabHost, TabSlot } from "./tabhost/TabHost";
 import { peekSessionIdFrom, usePeekTabId } from "./tabhost/shown";
 import { CommandPalette, Overlay, type PaletteCommand } from "./ui";
@@ -48,7 +53,7 @@ function readInt(key: string, fallback: number): number {
  * WorkArea. */
 export function Layout() {
   const openTab = useTabs((store) => store.openTab);
-  const isMobile = useMediaQuery("(max-width: 767px)");
+  const isMobile = useMediaQuery(MOBILE_LAYOUT_QUERY);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [monitorOverlayOpen, setMonitorOverlayOpen] = useState(false);
@@ -88,13 +93,17 @@ export function Layout() {
   // no counterpart tab open yet, open one — hidden from the strip in the
   // current mode, but its content mounts under TabHost for adoption.
   useEffect(() => {
-    if (!peekOpen || displayMode === "split" || peekTabId) return;
+    if (isMobile || !peekOpen || displayMode === "split" || peekTabId) return;
     if (!peekSessionId) return;
     openTabRef.current({
       kind: displayMode === "terminal" ? "timeline" : "terminal",
       sessionId: peekSessionId,
     });
-  }, [peekOpen, displayMode, peekTabId, peekSessionId]);
+  }, [isMobile, peekOpen, displayMode, peekTabId, peekSessionId]);
+
+  useEffect(() => {
+    if (isMobile && peekOpen) closePeek();
+  }, [closePeek, isMobile, peekOpen]);
 
   useAppCommand("open-file", ({ repo, path, workspaceId, line }) => {
     openTabRef.current({
@@ -149,22 +158,22 @@ export function Layout() {
         e.preventDefault();
         setMonitorOverlayOpen((open) => !open);
       }
-      if (e.shiftKey && key === "b") {
+      if (!isMobile && e.shiftKey && key === "b") {
         e.preventDefault();
         useDisplay.getState().toggleSidebar();
       }
-      if (e.shiftKey && key === "d") {
+      if (!isMobile && e.shiftKey && key === "d") {
         e.preventDefault();
         useDisplay.getState().cycleMode();
       }
-      if (e.shiftKey && key === "e") {
+      if (!isMobile && e.shiftKey && key === "e") {
         e.preventDefault();
         useDisplay.getState().togglePeek();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [isMobile]);
 
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   const openSecrets = useCallback(() => {
@@ -481,20 +490,12 @@ function usePaletteCommands({
   const metaRepos = useSessions((s) => s.metaRepos);
   const sessions = useSessions((s) => s.sessions);
   const plans = useSessions((s) => s.plans);
-  const selectSession = useSessions((s) => s.selectSession);
   const openTab = useTabs((s) => s.openTab);
+  const openSession = useSessionNavigation();
+  const isMobile = useIsMobileLayout();
   // onOpenPalette retained in signature for future surfaces that want the
   // palette re-entered after dispatching (no-op here today).
   void onOpenPalette;
-
-  const openTerminalFor = useCallback(
-    (id: string) => {
-      selectSession(id);
-      openTab({ kind: "terminal", sessionId: id }, "top");
-      openTab({ kind: "timeline", sessionId: id }, "bottom");
-    },
-    [openTab, selectSession],
-  );
 
   // Empty query shows only the action entries. Navigation entries are
   // searchOnly: they surface as the user types, ranked labeled sessions >
@@ -522,21 +523,23 @@ function usePaletteCommands({
       group: "view",
       run: () => openTab({ kind: "secrets" }, "top"),
     });
-    out.push({
-      id: "sidebar.toggle-pin",
-      label: "Toggle sidebar pin",
-      icon: "panel-left",
-      group: "view",
-      run: () => useDisplay.getState().toggleSidebar(),
-    });
-    for (const mode of DISPLAY_MODES) {
+    if (!isMobile) {
       out.push({
-        id: `display.${mode}`,
-        label: `Display mode · ${DISPLAY_MODE_LABELS[mode]}`,
-        icon: mode === "terminal" ? "terminal" : mode === "timeline" ? "list" : "layers",
+        id: "sidebar.toggle-pin",
+        label: "Toggle sidebar pin",
+        icon: "panel-left",
         group: "view",
-        run: () => useDisplay.getState().setMode(mode),
+        run: () => useDisplay.getState().toggleSidebar(),
       });
+      for (const mode of DISPLAY_MODES) {
+        out.push({
+          id: `display.${mode}`,
+          label: `Display mode · ${DISPLAY_MODE_LABELS[mode]}`,
+          icon: mode === "terminal" ? "terminal" : mode === "timeline" ? "list" : "layers",
+          group: "view",
+          run: () => useDisplay.getState().setMode(mode),
+        });
+      }
     }
     for (const metaRepo of metaRepos) {
       out.push({
@@ -552,7 +555,7 @@ function usePaletteCommands({
       out.push({
         id: `meta-repo.${metaRepo.id}.new-session`,
         label: `New collection session · ${metaRepo.name}`,
-        icon: "terminal",
+        icon: isMobile ? "list" : "terminal",
         group: "repo",
         searchOnly: true,
         rank: 20,
@@ -609,9 +612,9 @@ function usePaletteCommands({
         group: "session",
         searchOnly: true,
         rank: labeled ? 30 : 5,
-        run: () => openTerminalFor(s.id),
+        run: () => openSession(s.id),
       });
     }
     return out;
-  }, [metaRepos, openTab, plans, repos, sessions, openTerminalFor]);
+  }, [isMobile, metaRepos, openSession, openTab, plans, repos, sessions]);
 }

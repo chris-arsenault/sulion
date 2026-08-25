@@ -10,6 +10,7 @@ import {
   useDisplay,
   type DisplayMode,
 } from "../state/DisplayStore";
+import { useIsMobileLayout } from "../hooks/useSessionNavigation";
 import "./DisplaySettings.css";
 
 const MODE_DESCRIPTIONS: Record<DisplayMode, string> = {
@@ -31,6 +32,7 @@ export function DisplaySettings({
   onOpenMetrics?: () => void;
 }) {
   const mode = useDisplay((store) => store.mode);
+  const isMobile = useIsMobileLayout();
   const sidebarPinned = useDisplay((store) => store.sidebarPinned);
   const setMode = useDisplay((store) => store.setMode);
   const toggleSidebar = useDisplay((store) => store.toggleSidebar);
@@ -61,45 +63,58 @@ export function DisplaySettings({
 
       <section className="display-settings__section" aria-label="Display mode">
         <header>Reading pane</header>
-        <div role="radiogroup" aria-label="Display mode" className="display-settings__modes">
-          {DISPLAY_MODES.map((candidate) => (
-            <ModeOption
-              key={candidate}
-              mode={candidate}
-              selected={mode === candidate}
-              onSelect={setMode}
-            />
-          ))}
-        </div>
+        {isMobile ? (
+          <p className="display-settings__mobile-policy">
+            Timeline only is fixed on mobile. Your desktop setting remains{" "}
+            {DISPLAY_MODE_LABELS[mode].toLowerCase()}.
+          </p>
+        ) : (
+          <div role="radiogroup" aria-label="Display mode" className="display-settings__modes">
+            {DISPLAY_MODES.map((candidate) => (
+              <ModeOption
+                key={candidate}
+                mode={candidate}
+                selected={mode === candidate}
+                onSelect={setMode}
+              />
+            ))}
+          </div>
+        )}
       </section>
 
-      <section className="display-settings__section" aria-label="Sidebar">
-        <header>Sidebar</header>
-        <label className="display-settings__toggle">
-          <input
-            type="checkbox"
-            checked={sidebarPinned}
-            onChange={toggleSidebar}
-          />
-          <span>Pin the session sidebar open</span>
-        </label>
-      </section>
+      {!isMobile && (
+        <section className="display-settings__section" aria-label="Sidebar">
+          <header>Sidebar</header>
+          <label className="display-settings__toggle">
+            <input
+              type="checkbox"
+              checked={sidebarPinned}
+              onChange={toggleSidebar}
+            />
+            <span>Pin the session sidebar open</span>
+          </label>
+        </section>
+      )}
 
       <section className="display-settings__section" aria-label="Keyboard shortcuts">
         <header>Hotkeys</header>
         <dl className="display-settings__keys">
-          <div>
-            <dt>{MOD}⇧D</dt>
-            <dd>cycle display mode (split → terminal → timeline)</dd>
-          </div>
-          <div>
-            <dt>{MOD}⇧E</dt>
-            <dd>peek at the hidden projection (terminal/timeline modes)</dd>
-          </div>
-          <div>
-            <dt>{MOD}⇧B</dt>
-            <dd>collapse / pin the sidebar</dd>
-          </div>
+          {!isMobile && (
+            <>
+              <div>
+                <dt>{MOD}⇧D</dt>
+                <dd>cycle display mode (split → terminal → timeline)</dd>
+              </div>
+              <div>
+                <dt>{MOD}⇧E</dt>
+                <dd>peek at the hidden projection (terminal/timeline modes)</dd>
+              </div>
+              <div>
+                <dt>{MOD}⇧B</dt>
+                <dd>collapse / pin the sidebar</dd>
+              </div>
+            </>
+          )}
           <div>
             <dt>{MOD}K</dt>
             <dd>command palette</dd>

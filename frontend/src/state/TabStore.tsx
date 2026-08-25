@@ -70,6 +70,9 @@ export interface TabStore {
   tabs: Record<string, TabData>;
   panes: Record<PaneId, string[]>;
   activeByPane: Record<PaneId, string | null>;
+  /** Explicit selection for merged single-pane layouts. This is separate from
+   * pane ownership so activating a bottom-pane tab on mobile cannot move it. */
+  activeSinglePaneId: string | null;
   /** When a pane is sticky, activations in the other pane do not
    * propagate a paired session-swap into it. Toggled by the tab
    * context menu. */
@@ -78,6 +81,7 @@ export interface TabStore {
   openTab: (spec: Omit<TabData, "id">, pane?: PaneId) => string;
   closeTab: (id: string) => void;
   activateTab: (pane: PaneId, id: string) => void;
+  activateSinglePaneTab: (id: string) => void;
   moveTab: (id: string, toPane: PaneId, index?: number) => void;
   rebindSessionTabs: (fromSessionId: string, toSessionId: string) => void;
   setPaneSticky: (pane: PaneId, value: boolean) => void;
@@ -92,6 +96,7 @@ interface PersistedTabs {
   tabs: Record<string, TabData>;
   panes: Record<PaneId, string[]>;
   activeByPane: Record<PaneId, string | null>;
+  activeSinglePaneId: string | null;
   sticky: Record<PaneId, boolean>;
 }
 
@@ -100,6 +105,7 @@ function initialState(): PersistedTabs & Pick<TabStore, "hasAnyTab"> {
     tabs: {},
     panes: { top: [], bottom: [] },
     activeByPane: { top: null, bottom: null },
+    activeSinglePaneId: null,
     sticky: { top: false, bottom: false },
     hasAnyTab: false,
   };
@@ -161,6 +167,7 @@ export const useTabStore = create<TabStore>()(
                       }
                     : state.tabs,
               activeByPane: { ...state.activeByPane, [inPane]: existingId },
+              activeSinglePaneId: existingId,
             }));
           }
           return existingId;
@@ -173,6 +180,7 @@ export const useTabStore = create<TabStore>()(
             tabs: { ...state.tabs, [id]: data },
             panes: { ...state.panes, [pane]: [...state.panes[pane], id] },
             activeByPane: { ...state.activeByPane, [pane]: id },
+            activeSinglePaneId: id,
             sticky: state.sticky,
           }),
         );
@@ -180,44 +188,27 @@ export const useTabStore = create<TabStore>()(
       },
 
       closeTab: (id) => {
-        const { panes, activeByPane, tabs, sticky } = get();
+        const { panes, activeByPane, activeSinglePaneId, tabs, sticky } = get();
         set(
           withDerived(removeTabFromState({
             tabs,
             panes,
             activeByPane,
+            activeSinglePaneId,
             sticky,
           }, id)),
         );
       },
 
       activateTab: (pane, id) =>
+        set((state) => activatedState(state, pane, id)),
+
+      activateSinglePaneTab: (id) =>
         set((state) => {
-          const nextActive = { ...state.activeByPane, [pane]: id };
-          // Pair-link: activating a terminal (or timeline) for a
-          // session in one pane should swing the other pane to the
-          // same session's paired view — unless the other pane is
-          // sticky, in which case it's explicitly pinned.
-          const activated = state.tabs[id];
-          const other: PaneId = pane === "top" ? "bottom" : "top";
-          const paired = pairedKindOf(activated?.kind);
-          if (
-            activated?.sessionId &&
-            paired &&
-            !state.sticky[other]
-          ) {
-            const pairedId = state.panes[other].find((candidateId) => {
-              const candidate = state.tabs[candidateId];
-              return (
-                candidate?.kind === paired &&
-                candidate.sessionId === activated.sessionId
-              );
-            });
-            if (pairedId && pairedId !== state.activeByPane[other]) {
-              nextActive[other] = pairedId;
-            }
-          }
-          return { activeByPane: nextActive };
+          const pane = (["top", "bottom"] as PaneId[]).find((candidate) =>
+            state.panes[candidate].includes(id),
+          );
+          return pane ? activatedState(state, pane, id) : state;
         }),
 
       moveTab: (id, toPane, index) => {
@@ -246,6 +237,7 @@ export const useTabStore = create<TabStore>()(
             tabs,
             panes: nextPanes,
             activeByPane: { ...activeByPane, [toPane]: id },
+            activeSinglePaneId: id,
             sticky,
           }),
         );
@@ -279,11 +271,12 @@ export const useTabStore = create<TabStore>()(
 
       rebindSessionTabs: (fromSessionId, toSessionId) => {
         if (fromSessionId === toSessionId) return;
-        const { tabs, panes, activeByPane, sticky } = get();
+        const { tabs, panes, activeByPane, activeSinglePaneId, sticky } = get();
         let nextState: PersistedTabs = {
           tabs: { ...tabs },
           panes: { top: [...panes.top], bottom: [...panes.bottom] },
           activeByPane: { ...activeByPane },
+          activeSinglePaneId,
           sticky,
         };
         let changed = false;
@@ -318,6 +311,7 @@ export const useTabStore = create<TabStore>()(
         tabs: state.tabs,
         panes: state.panes,
         activeByPane: state.activeByPane,
+        activeSinglePaneId: state.activeSinglePaneId,
         sticky: state.sticky,
       }),
       merge: (persisted, current) => {
@@ -377,6 +371,10 @@ export const useTabStore = create<TabStore>()(
               top: pickActive("top"),
               bottom: pickActive("bottom"),
             },
+            activeSinglePaneId:
+              parsed.activeSinglePaneId && parsed.activeSinglePaneId in hydratedTabs
+                ? parsed.activeSinglePaneId
+                : null,
             sticky: hydratedSticky,
           }),
         };
@@ -441,12 +439,44 @@ function removeTabFromState(state: PersistedTabs, id: string): PersistedTabs {
 
   const nextTabs = { ...state.tabs };
   delete nextTabs[id];
+  const activeSinglePaneId =
+    state.activeSinglePaneId === id || !nextTabs[state.activeSinglePaneId ?? ""]
+      ? nextActive.top ?? nextActive.bottom
+      : state.activeSinglePaneId;
   return {
     tabs: nextTabs,
     panes: nextPanes,
     activeByPane: nextActive,
+    activeSinglePaneId,
     sticky: state.sticky,
   };
+}
+
+function activatedState(
+  state: TabStore,
+  pane: PaneId,
+  id: string,
+): Pick<TabStore, "activeByPane" | "activeSinglePaneId"> {
+  const nextActive = { ...state.activeByPane, [pane]: id };
+  // Pair-link: activating a terminal (or timeline) for a session in one
+  // pane swings the other pane to that session's paired view unless it is
+  // sticky. The single-pane selection remains the tab the user chose.
+  const activated = state.tabs[id];
+  const other: PaneId = pane === "top" ? "bottom" : "top";
+  const paired = pairedKindOf(activated?.kind);
+  if (activated?.sessionId && paired && !state.sticky[other]) {
+    const pairedId = state.panes[other].find((candidateId) => {
+      const candidate = state.tabs[candidateId];
+      return (
+        candidate?.kind === paired &&
+        candidate.sessionId === activated.sessionId
+      );
+    });
+    if (pairedId && pairedId !== state.activeByPane[other]) {
+      nextActive[other] = pairedId;
+    }
+  }
+  return { activeByPane: nextActive, activeSinglePaneId: id };
 }
 
 /** Canonical key that de-duplicates a tab spec. */

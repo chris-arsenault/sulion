@@ -15,6 +15,10 @@ import type {
 } from "../api/types";
 import type { IconName } from "../icons";
 import { isResumableSession, useResumeSession } from "../hooks/useResumeSession";
+import {
+  useIsMobileLayout,
+  useSessionNavigation,
+} from "../hooks/useSessionNavigation";
 import { appCommands } from "../state/AppCommands";
 import { useSessions } from "../state/SessionStore";
 import { type TabStore, useTabs } from "../state/TabStore";
@@ -672,9 +676,11 @@ function TerminalCard({
   onNavigate?: () => void;
 }) {
   const openTab = useTabs((store) => store.openTab);
-  const selectSession = useSessions((store) => store.selectSession);
+  const openSession = useSessionNavigation();
+  const isMobile = useIsMobileLayout();
   const openCtx = useContextMenu((store) => store.open);
   const label = session.label?.trim() || session.id.slice(0, 8);
+  const navigationCopy = monitorSessionNavigationCopy(isMobile, label);
   const assistant = item?.turn ? latestAssistantText(item.turn) : null;
   const prompt =
     item?.turn?.user_prompt_text?.trim() || item?.turn?.preview || "";
@@ -721,34 +727,15 @@ function TerminalCard({
     });
     onNavigate?.();
   }, [onNavigate, session.current_plan, session.repo]);
-  const goToTerminal = useCallback(() => {
-    selectSession(session.id);
-    openTab({ kind: "terminal", sessionId: session.id }, "top");
-    if (item?.turn) {
-      openTab(
-        {
-          kind: "timeline",
-          sessionId: session.id,
-          focusTurnId: item.turn.id,
-          focusKey: crypto.randomUUID(),
-        },
-        "bottom",
-      );
-    } else {
-      openTab({ kind: "timeline", sessionId: session.id }, "bottom");
-    }
+  const goToSession = useCallback(() => {
+    openSession(session.id, { focusTurnId: item?.turn?.id });
     onNavigate?.();
-  }, [item?.turn, onNavigate, openTab, selectSession, session.id]);
+  }, [item?.turn?.id, onNavigate, openSession, session.id]);
   const cardMenuTrigger = useMemo(
     () =>
       contextMenuTriggerProps(openCtx, () => {
         const items: MenuItem[] = [
-          {
-            kind: "item",
-            id: "go-to-terminal",
-            label: "Go to terminal",
-            onSelect: goToTerminal,
-          },
+          ...terminalNavigationMenuItems(isMobile, goToSession),
           {
             kind: "item",
             id: "open-timeline",
@@ -800,7 +787,7 @@ function TerminalCard({
         );
         return items;
       }),
-    [goToTerminal, onNavigate, openCtx, openPlan, openTab, openTimeline, session],
+    [goToSession, isMobile, onNavigate, openCtx, openPlan, openTab, openTimeline, session],
   );
 
   return (
@@ -819,16 +806,16 @@ function TerminalCard({
           label={[
             [agent, model].filter(Boolean).join(" · ") || "Open shell",
             `up ${uptime}`,
-            "Click to go to the terminal",
+            navigationCopy.tooltip,
           ].join("\n")}
         >
           <button
             type="button"
             className="monitor-card__identity"
-            onClick={goToTerminal}
+            onClick={goToSession}
             onContextMenu={cardMenuTrigger.onContextMenu}
             onKeyDown={cardMenuTrigger.onKeyDown}
-            aria-label={`Go to terminal for ${label}`}
+            aria-label={navigationCopy.ariaLabel}
           >
             {label}
           </button>
@@ -970,6 +957,34 @@ function TerminalCard({
       </div>
     </article>
   );
+}
+
+function terminalNavigationMenuItems(
+  isMobile: boolean,
+  onSelect: () => void,
+): MenuItem[] {
+  if (isMobile) return [];
+  return [
+    {
+      kind: "item",
+      id: "go-to-terminal",
+      label: "Go to terminal",
+      onSelect,
+    },
+  ];
+}
+
+function monitorSessionNavigationCopy(isMobile: boolean, label: string) {
+  if (isMobile) {
+    return {
+      tooltip: "Click to open the timeline",
+      ariaLabel: `Open timeline for ${label}`,
+    };
+  }
+  return {
+    tooltip: "Click to go to the terminal",
+    ariaLabel: `Go to terminal for ${label}`,
+  };
 }
 
 function TeamPlanChips({

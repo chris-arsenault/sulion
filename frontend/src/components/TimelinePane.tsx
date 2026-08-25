@@ -44,6 +44,7 @@ import type {
   TimelineSummaryResponse,
 } from "../api/types";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { MOBILE_LAYOUT_QUERY } from "../state/displayPolicy";
 import { useTimelineFontScale, useTurnNavMode } from "../state/paneTextScale";
 import { useSessions } from "../state/SessionStore";
 import { useTabs } from "../state/TabStore";
@@ -583,6 +584,7 @@ export function TimelinePane({
  * there for the current display mode. */
 function NeedsInputBanner({ session }: { session: SessionView }) {
   const activity = session.activity;
+  const isMobile = useMediaQuery(MOBILE_LAYOUT_QUERY);
   const displayMode = useDisplay((store) => store.mode);
   const openTab = useTabs((store) => store.openTab);
   const showTerminal = useCallback(() => {
@@ -610,13 +612,19 @@ function NeedsInputBanner({ session }: { session: SessionView }) {
       {activity.summary && (
         <span className="timeline-pane__attention-summary">{activity.summary}</span>
       )}
-      <button
-        type="button"
-        className="timeline-pane__attention-button"
-        onClick={showTerminal}
-      >
-        {displayMode === "timeline" ? "Peek terminal (⌘⇧E)" : "Go to terminal"}
-      </button>
+      {isMobile ? (
+        <span className="timeline-pane__attention-guidance">
+          Open this session on desktop to answer terminal prompts.
+        </span>
+      ) : (
+        <button
+          type="button"
+          className="timeline-pane__attention-button"
+          onClick={showTerminal}
+        >
+          {displayMode === "timeline" ? "Peek terminal (⌘⇧E)" : "Go to terminal"}
+        </button>
+      )}
     </div>
   );
 }

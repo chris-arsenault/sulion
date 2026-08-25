@@ -158,6 +158,12 @@
   border-color: var(--atn-mark);
 }
 
+.timeline-pane__attention-guidance {
+  margin-left: auto;
+  color: color-mix(in oklab, var(--atn-fg) 80%, transparent);
+  font-size: var(--timeline-t-meta);
+}
+
 /* Mid-turn vs idle marker in the prompt bar: whether input steers the
  * running turn or opens a new one. */
 .timeline-prompt__activity {
@@ -318,4 +324,82 @@
   color: var(--crit-fg);
   border-color: var(--crit-mark);
   background: var(--crit-bg);
+}
+
+@media (max-width: 767px) {
+  .timeline-pane__header {
+    gap: 8px;
+    padding: 7px 10px;
+  }
+
+  .timeline-pane__session,
+  .timeline-pane__scope {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .timeline-pane__count {
+    flex: 0 0 auto;
+    font-size: var(--timeline-t-meta);
+  }
+
+  .timeline-pane__attention {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 6px 8px;
+    padding: 8px 10px;
+  }
+
+  .timeline-pane__attention-summary,
+  .timeline-pane__attention-guidance {
+    flex: 1 0 100%;
+    margin-left: 22px;
+    white-space: normal;
+  }
+
+  .timeline-prompt {
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .timeline-prompt__status {
+    gap: 6px 8px;
+  }
+
+  .timeline-prompt__toolbar {
+    margin-left: auto;
+  }
+
+  .timeline-prompt__input-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px;
+  }
+
+  .timeline-prompt__textarea {
+    grid-column: 1 / -1;
+    min-height: 58px;
+  }
+
+  .timeline-prompt__button {
+    min-height: 44px;
+  }
+
+  .timeline-prompt__button--primary {
+    min-width: 0;
+  }
+
+  .timeline-prompt__button--icon {
+    width: 44px;
+  }
+
+  .timeline-prompt__launch-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .timeline-prompt__launch-row .timeline-prompt__button {
+    padding: 0 6px;
+  }
 }

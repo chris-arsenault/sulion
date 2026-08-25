@@ -55,17 +55,20 @@ exists and where it is:
 ```ts
 interface TabData {
   id: string;
-  kind: "terminal" | "timeline" | "monitor" | "plan" | "file" | "diff" | "ref" | "secrets";
+  kind: "terminal" | "timeline" | "monitor" | "metrics" | "file" | "diff" | "ref" | "secrets";
   sessionId?: string;
   repo?: string;
   workspaceId?: string;
   path?: string;
   slug?: string;
-  planId?: string;
 }
 ```
 
-Plus pane membership (`panes`) and active-per-pane (`activeByPane`).
+Plus pane membership (`panes`), active-per-pane (`activeByPane`), and the
+explicit merged-layout selection (`activeSinglePaneId`). A merged layout
+activates a tab through its actual owning pane; it never changes pane
+membership merely because the tab was selected on mobile or in a desktop
+single-pane mode.
 
 The registry does **not** hold:
 
@@ -80,10 +83,14 @@ File and diff tabs may carry `workspaceId`. That identifier is routing state,
 not fetched tab content: it decides whether the tab calls canonical repo routes
 or workspace-scoped routes.
 
-Plan tabs carry `repo` and optionally `planId`. Those identifiers are routing
-state. The open-plan summary list belongs in `SessionStore` because the sidebar,
+The open-plan summary list belongs in `SessionStore` because the sidebar,
 overview, command palette, and per-session current-plan projections all consume
-it; full plan detail stays inside `PlanPane`.
+it; full plan detail stays inside the plan modal.
+
+Session selection routes through `useSessionNavigation`. Desktop opens the
+paired terminal and timeline tabs. Mobile opens only the timeline, optionally
+focused on a requested turn. Display mode remains a desktop preference; the
+mobile projection derives timeline-only behavior without persisting a new mode.
 
 The excluded tab-internal state above lives inside its owning component and dies
 with the tab's mount lifecycle unless there is a concrete cross-surface need to

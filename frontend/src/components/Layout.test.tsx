@@ -21,7 +21,11 @@ vi.mock("./ui", async () => {
 import { ContextMenuHost } from "./common/ContextMenu";
 import { Layout } from "./Layout";
 import { appCommands } from "../state/AppCommands";
-import { useTabStore } from "../state/TabStore";
+import { resetTabStore, useTabStore } from "../state/TabStore";
+import {
+  resetDisplayStore,
+  useDisplay,
+} from "../state/DisplayStore";
 import { appStatePayload, jsonResponse } from "../test/appState";
 
 const mockState = {
@@ -63,6 +67,9 @@ async function rightClick(
 }
 
 beforeEach(() => {
+  window.localStorage.clear();
+  resetTabStore();
+  resetDisplayStore();
   resetMockState();
   vi.stubGlobal(
     "Worker",
@@ -267,6 +274,73 @@ describe("Layout", () => {
       </>,
     );
     expect(screen.getByText(/open the drawer to pick a session/i)).toBeDefined();
+  });
+
+  it("mobile session navigation opens only the timeline and hides terminal actions", async () => {
+    mockState.repos = [{ name: "alpha", path: "/tmp/alpha" }];
+    mockState.sessions = [
+      {
+        id: "mobile-session",
+        repo: "alpha",
+        working_dir: "/tmp/alpha",
+        state: "live",
+        created_at: "2026-05-02T00:00:00Z",
+        ended_at: null,
+        exit_code: null,
+        current_session_uuid: null,
+        current_session_agent: null,
+        last_event_at: null,
+        timeline_revision: 0,
+        label: "Mobile session",
+        pinned: false,
+        color: null,
+        future_prompts_pending_count: 0,
+        agent_runtime: {
+          agent: null,
+          state: "none",
+          started_at: null,
+          ended_at: null,
+          exit_code: null,
+        },
+        agent_metadata: null,
+      },
+    ];
+    act(() => useDisplay.getState().setMode("terminal"));
+    stubMatchMedia((q) => q.includes("max-width: 767px"));
+    render(
+      <>
+        <Layout />
+        <ContextMenuHost />
+      </>,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/open sessions drawer/i));
+    const row = await waitFor(() => {
+      const element = document.querySelector<HTMLElement>(
+        '[data-session-name="Mobile session"]',
+      );
+      expect(element).not.toBeNull();
+      return element!;
+    });
+
+    await rightClick(row, user);
+    expect(screen.queryByRole("menuitem", { name: "Open terminal" })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Open timeline" })).toBeDefined();
+    await user.keyboard("{Escape}");
+    await user.click(row);
+
+    await waitFor(() => {
+      expect(Object.values(useTabStore.getState().tabs).map((tab) => tab.kind)).toEqual([
+        "timeline",
+      ]);
+    });
+    expect(document.querySelector('[data-kind="terminal"]')).toBeNull();
+    expect(document.querySelector('[data-kind="timeline"]')).not.toBeNull();
+
+    await user.keyboard("{Control>}{Shift>}D{/Shift}{/Control}");
+    await user.keyboard("{Control>}{Shift>}E{/Shift}{/Control}");
+    expect(useDisplay.getState().mode).toBe("terminal");
+    expect(useDisplay.getState().peekOpen).toBe(false);
   });
 
   it("opens file and diff tabs from sidebar tree actions", async () => {

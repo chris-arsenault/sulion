@@ -85,6 +85,18 @@
   font-size: var(--t-meta);
 }
 
+.display-settings__mobile-policy {
+  max-width: 560px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-2);
+  background: var(--canvas-2);
+  color: var(--text-mid);
+  font-size: var(--t-ui);
+  line-height: var(--lh-prose);
+}
+
 .display-settings__toggle {
   display: inline-flex;
   align-items: center;

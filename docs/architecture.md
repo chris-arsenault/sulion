@@ -138,8 +138,8 @@ Three surfaces, one work area.
   resume/diff/delete actions. Collection sessions appear once at their
   meta-repository; repo sessions remain under the repo. See
   `frontend/src/components/Sidebar.tsx`.
-- **Work area** — tab-strip over two horizontal panes. Terminal, timeline, overview, plan, file, diff, reference, and secrets-management tabs all live here. Display modes (split / terminal-only / timeline-only) collapse the two panes to one; the hidden projection stays reachable through a peek overlay.
-- **Mobile** — single-pane with drawer below 768px.
+- **Work area** — tab-strip over two horizontal panes. Terminal, timeline, overview, metrics, file, diff, reference, and secrets-management tabs all live here. Display modes (split / terminal-only / timeline-only) collapse the two panes to one; the hidden projection stays reachable through a peek overlay on desktop.
+- **Mobile** — below 768px, the shell uses a drawer and a timeline-only single pane. Session navigation opens no terminal tab, terminal actions and peeking are unavailable, and auxiliary tabs such as files or references remain reachable. The effective mobile mode does not overwrite the persisted desktop display preference.
 
 State management rules live in [`state-management.md`](state-management.md). Visual framework is in [`design.md`](design.md).
 

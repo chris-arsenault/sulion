@@ -122,10 +122,16 @@
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   height: 100vh;
-  min-height: 100vh;
+  min-height: 0;
   min-width: 0;
   overflow: hidden;
   background: var(--canvas-0);
+}
+
+@supports (height: 100dvh) {
+  .auth-app {
+    height: 100dvh;
+  }
 }
 
 .auth-app__status {
@@ -135,7 +141,7 @@
   gap: 10px;
   min-width: 0;
   min-height: 32px;
-  padding: 4px 12px;
+  padding: max(4px, env(safe-area-inset-top, 0px)) 12px 4px;
   background: var(--canvas-2);
   border-bottom: 1px solid var(--hairline);
   font-family: var(--font-mono);

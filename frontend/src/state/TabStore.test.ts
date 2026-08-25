@@ -78,6 +78,30 @@ describe("TabStore pair-linked activation", () => {
     expect(useTabStore.getState().activeByPane.top).toBe(fileTab);
     expect(useTabStore.getState().activeByPane.bottom).toBe(timeA);
   });
+
+  it("activates a merged-pane tab through its owning pane", () => {
+    const terminal = openTerminal("session-a", "top");
+    const timeline = openTimeline("session-a", "bottom");
+
+    useTabStore.getState().activateSinglePaneTab(timeline);
+
+    const state = useTabStore.getState();
+    expect(state.activeSinglePaneId).toBe(timeline);
+    expect(state.activeByPane.bottom).toBe(timeline);
+    expect(state.activeByPane.top).toBe(terminal);
+    expect(state.panes.top).not.toContain(timeline);
+    expect(state.panes.bottom).toContain(timeline);
+  });
+
+  it("tracks new and closed tabs as the merged-pane selection", () => {
+    const terminal = openTerminal("session-a", "top");
+    const timeline = openTimeline("session-a", "bottom");
+    expect(useTabStore.getState().activeSinglePaneId).toBe(timeline);
+
+    useTabStore.getState().closeTab(timeline);
+
+    expect(useTabStore.getState().activeSinglePaneId).toBe(terminal);
+  });
 });
 
 describe("TabStore clearTimelineFocus", () => {

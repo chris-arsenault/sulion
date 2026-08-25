@@ -16,6 +16,7 @@ import { useTabs } from "../../state/TabStore";
 import { useSessions } from "../../state/SessionStore";
 import { useDisplay } from "../../state/DisplayStore";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { MOBILE_LAYOUT_QUERY } from "../../state/displayPolicy";
 import { computeShownTabIds, usePeekTabId } from "./shown";
 import {
   claimHost,
@@ -35,21 +36,27 @@ import { SecretsTab } from "../SecretsTab";
 import "./TabHost.css";
 
 export function TabHost() {
-  const { tabs, panes, activeByPane } = useTabs(
+  const { tabs, panes, activeByPane, activeSinglePaneId } = useTabs(
     useShallow((store) => ({
       tabs: store.tabs,
       panes: store.panes,
       activeByPane: store.activeByPane,
+      activeSinglePaneId: store.activeSinglePaneId,
     })),
   );
   const mode = useDisplay((store) => store.mode);
-  const isMobile = useMediaQuery("(max-width: 767px)");
+  const isMobile = useMediaQuery(MOBILE_LAYOUT_QUERY);
   const peekTabId = usePeekTabId();
 
   const shownIds = useMemo(
     () =>
-      computeShownTabIds({ tabs, panes, activeByPane }, mode, isMobile, peekTabId),
-    [tabs, panes, activeByPane, mode, isMobile, peekTabId],
+      computeShownTabIds(
+        { tabs, panes, activeByPane, activeSinglePaneId },
+        mode,
+        isMobile,
+        peekTabId,
+      ),
+    [tabs, panes, activeByPane, activeSinglePaneId, mode, isMobile, peekTabId],
   );
 
   // Closed tabs release their host here, against the live tab set —

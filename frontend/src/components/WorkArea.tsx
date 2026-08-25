@@ -3,8 +3,8 @@
 // CSS visibility (not display:none) so xterm and virtuoso keep their
 // state across tab switches.
 //
-// Mobile mode (viewport <768px) collapses to a single-pane strip
-// showing every open tab mixed together, no divider.
+// Mobile mode (viewport <768px) uses the timeline projection in a
+// single pane. Pane assignments remain untouched.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -19,6 +19,10 @@ import {
 import { useSessions } from "../state/SessionStore";
 import { useSecretStore } from "../state/SecretStore";
 import { useDisplay } from "../state/DisplayStore";
+import {
+  effectiveDisplayMode,
+  MOBILE_LAYOUT_QUERY,
+} from "../state/displayPolicy";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { Icon, type IconName } from "../icons";
 import { Tooltip } from "./ui";
@@ -36,22 +40,24 @@ const TAB_DRAG_MIME = "application/x-sulion-tab";
 const EMPTY_SECRET_GRANTS: SecretGrantMetadata[] = [];
 
 export function WorkArea() {
-  const { panes, activeByPane, tabs } = useTabs(
+  const { panes, activeByPane, activeSinglePaneId, tabs } = useTabs(
     useShallow((store) => ({
       panes: store.panes,
       activeByPane: store.activeByPane,
+      activeSinglePaneId: store.activeSinglePaneId,
       tabs: store.tabs,
     })),
   );
-  const isMobile = useMediaQuery("(max-width: 767px)");
-  const displayMode = useDisplay((store) => store.mode);
+  const isMobile = useMediaQuery(MOBILE_LAYOUT_QUERY);
+  const storedDisplayMode = useDisplay((store) => store.mode);
+  const displayMode = effectiveDisplayMode(storedDisplayMode, isMobile);
   const [topFraction, setTopFraction] = useState(0.55);
   // No more automatic prune: tabs survive their session's deletion and
   // show an orphan placeholder with a manual close. That keeps tab
   // state fully user-driven and avoids the "refresh wipes everything"
   // failure mode.
 
-  const mobileTabIds = useMemo(
+  const mergedTabIds = useMemo(
     () => [...panes.top, ...panes.bottom],
     [panes.top, panes.bottom],
   );
@@ -63,50 +69,33 @@ export function WorkArea() {
     [topFraction],
   );
 
-  if (isMobile) {
-    const activeId =
-      activeByPane.top ?? activeByPane.bottom ?? mobileTabIds[0] ?? null;
-    if (mobileTabIds.length === 0) {
-      return <EmptyWorkArea mobile />;
-    }
-    return (
-      <div className="wa wa--mobile">
-        <Pane
-          paneId="top"
-          tabIds={mobileTabIds}
-          activeId={activeId}
-          tabs={tabs}
-          mobile
-        />
-      </div>
-    );
-  }
-
   // Terminal-only / timeline-only: one merged pane (the mobile layout's
   // proven shape) with the other projection's tabs filtered out. The
   // pane split assignments in the store are untouched, so returning to
   // split mode restores the previous two-pane arrangement.
   if (displayMode !== "split") {
-    const visibleIds = mobileTabIds.filter((id) =>
+    const visibleIds = mergedTabIds.filter((id) =>
       tabVisibleInMode(tabs[id], displayMode),
     );
     if (visibleIds.length === 0) {
-      return <EmptyWorkArea />;
+      return <EmptyWorkArea mobile={isMobile} />;
     }
     const activeId = singlePaneActiveId(
       visibleIds,
+      activeSinglePaneId,
       [activeByPane.top, activeByPane.bottom],
       tabs,
       displayMode,
     );
     return (
-      <div className="wa wa--single">
+      <div className={`wa wa--single${isMobile ? " wa--mobile" : ""}`}>
         <Pane
           paneId="top"
           tabIds={visibleIds}
           activeId={activeId}
           tabs={tabs}
-          mobile
+          mobile={isMobile}
+          merged
         />
       </div>
     );
@@ -222,16 +211,19 @@ function Pane({
   activeId,
   tabs,
   mobile,
+  merged = false,
 }: {
   paneId: PaneId;
   tabIds: string[];
   activeId: string | null;
   tabs: Record<string, TabData>;
   mobile?: boolean;
+  merged?: boolean;
 }) {
-  const { activateTab, closeTab, moveTab } = useTabs(
+  const { activateTab, activateSinglePaneTab, closeTab, moveTab } = useTabs(
     useShallow((store) => ({
       activateTab: store.activateTab,
+      activateSinglePaneTab: store.activateSinglePaneTab,
       closeTab: store.closeTab,
       moveTab: store.moveTab,
     })),
@@ -239,8 +231,9 @@ function Pane({
   const [dragTargetActive, setDragTargetActive] = useState(false);
 
   const onActivate = useCallback(
-    (id: string) => activateTab(paneId, id),
-    [activateTab, paneId],
+    (id: string) =>
+      merged ? activateSinglePaneTab(id) : activateTab(paneId, id),
+    [activateSinglePaneTab, activateTab, merged, paneId],
   );
   const onDropTab = useCallback(
     (id: string, index: number) => moveTab(id, paneId, index),
@@ -280,7 +273,8 @@ function Pane({
         tabs={tabs}
         onActivate={onActivate}
         onClose={closeTab}
-        onDropTab={onDropTab}
+        onDropTab={merged ? undefined : onDropTab}
+        paneControls={!merged}
       />
       <div className="wa__content">
         {tabIds.length === 0 && <PaneSplash paneId={paneId} />}
@@ -302,14 +296,16 @@ function Pane({
             </div>
           );
         })}
-        <button
-          type="button"
-          className="wa__drop-zone"
-          aria-label={`Drop tab into ${paneId} pane`}
-          onDragOver={onDropZoneDragOver}
-          onDragLeave={onDropZoneDragLeave}
-          onDrop={onDropZoneDrop}
-        />
+        {!merged && (
+          <button
+            type="button"
+            className="wa__drop-zone"
+            aria-label={`Drop tab into ${paneId} pane`}
+            onDragOver={onDropZoneDragOver}
+            onDragLeave={onDropZoneDragLeave}
+            onDrop={onDropZoneDrop}
+          />
+        )}
       </div>
     </div>
   );
@@ -340,6 +336,7 @@ function TabStrip({
   onActivate,
   onClose,
   onDropTab,
+  paneControls,
 }: {
   paneId: PaneId;
   tabIds: string[];
@@ -347,7 +344,8 @@ function TabStrip({
   tabs: Record<string, TabData>;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
-  onDropTab: (id: string, index: number) => void;
+  onDropTab?: (id: string, index: number) => void;
+  paneControls: boolean;
 }) {
   const stripRef = useRef<HTMLDivElement>(null);
   const [dragHoverIndex, setDragHoverIndex] = useState<number | null>(null);
@@ -363,7 +361,7 @@ function TabStrip({
       const id = e.dataTransfer.getData(TAB_DRAG_MIME);
       if (!id) return;
       e.preventDefault();
-      onDropTab(id, dragHoverIndex ?? tabIds.length);
+      onDropTab?.(id, dragHoverIndex ?? tabIds.length);
       setDragHoverIndex(null);
     },
     [onDropTab, dragHoverIndex, tabIds.length],
@@ -380,8 +378,8 @@ function TabStrip({
       aria-label={`${paneId} pane tabs`}
       tabIndex={-1}
       className={`wa__tabs wa__tabs--${paneId}`}
-      onDragOver={onStripDragOver}
-      onDrop={onStripDrop}
+      onDragOver={onDropTab ? onStripDragOver : undefined}
+      onDrop={onDropTab ? onStripDrop : undefined}
     >
       {tabIds.map((id, i) => {
         const tab = tabs[id];
@@ -397,6 +395,8 @@ function TabStrip({
             onActivate={onActivate}
             onClose={onClose}
             onDragOverIndex={onDragOverIndex}
+            draggable={Boolean(onDropTab)}
+            paneControls={paneControls}
           />
         );
       })}
@@ -413,6 +413,8 @@ function TabHandle({
   onActivate,
   onClose,
   onDragOverIndex,
+  draggable,
+  paneControls,
 }: {
   tab: TabData;
   paneId: PaneId;
@@ -422,6 +424,8 @@ function TabHandle({
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
   onDragOverIndex: (index: number) => void;
+  draggable: boolean;
+  paneControls: boolean;
 }) {
   const activateThis = useCallback(
     () => onActivate(tab.id),
@@ -555,15 +559,17 @@ function TabHandle({
         onSelect: () =>
           unassociatedSessionTabIds.forEach((id) => closeTab(id)),
       },
-      { kind: "separator" },
-      {
+    ];
+    if (paneControls) {
+      items.push({ kind: "separator" });
+      items.push({
         kind: "item",
         id: "move-pane",
         label: `Move to ${otherPane} pane`,
         onSelect: () => moveTab(tab.id, otherPane),
-      },
-    ];
-    if (pairLinkable) {
+      });
+    }
+    if (pairLinkable && paneControls) {
       items.push({ kind: "separator" });
       items.push({
         kind: "item",
@@ -594,6 +600,7 @@ function TabHandle({
     setPaneSticky,
     tab.kind,
     tab.sessionId,
+    paneControls,
   ]);
   const onContextMenu = useMemo(
     () => contextMenuHandler(openCtx, buildMenuItems),
@@ -658,10 +665,10 @@ function TabHandle({
       "data-workspace-id": tab.workspaceId,
       "data-path": tab.path,
       "data-slug": tab.slug,
-      draggable: true,
-      onDragStart,
-      onDragEnd,
-      onDragOver,
+      draggable,
+      onDragStart: draggable ? onDragStart : undefined,
+      onDragEnd: draggable ? onDragEnd : undefined,
+      onDragOver: draggable ? onDragOver : undefined,
       onClick: activateThis,
       onKeyDown,
       onContextMenu,
@@ -669,6 +676,7 @@ function TabHandle({
     [
       active,
       activateThis,
+      draggable,
       onContextMenu,
       onDragEnd,
       onDragOver,
@@ -812,4 +820,3 @@ function tabTitle(tab: TabData, label: string): string {
   if (tab.path) bits.push(tab.path);
   return bits.join(" · ");
 }
-

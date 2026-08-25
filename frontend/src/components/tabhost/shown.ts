@@ -4,6 +4,11 @@
 
 import type { DisplayMode } from "../../state/DisplayStore";
 import { useDisplay } from "../../state/DisplayStore";
+import {
+  effectiveDisplayMode,
+  MOBILE_LAYOUT_QUERY,
+} from "../../state/displayPolicy";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import type { Maybe } from "../../lib/types";
 import type { PaneId, TabData } from "../../state/TabStore";
 import { useTabs } from "../../state/TabStore";
@@ -13,6 +18,7 @@ export interface TabLayoutState {
   tabs: Record<string, TabData>;
   panes: Record<PaneId, string[]>;
   activeByPane: Record<PaneId, string | null>;
+  activeSinglePaneId: string | null;
 }
 
 /** Whether a tab renders in the given display mode. Terminal-only hides
@@ -29,10 +35,12 @@ export function tabVisibleInMode(tab: Maybe<TabData>, mode: DisplayMode): boolea
  * mode, else the first visible tab. */
 export function singlePaneActiveId(
   visibleIds: string[],
+  preferredId: string | null,
   storedActives: Array<string | null>,
   tabs: Record<string, TabData>,
   mode: DisplayMode,
 ): string | null {
+  if (preferredId && visibleIds.includes(preferredId)) return preferredId;
   for (const candidate of storedActives) {
     if (candidate && visibleIds.includes(candidate)) return candidate;
   }
@@ -60,30 +68,28 @@ export function computeShownTabIds(
 ): Set<string> {
   const shown = new Set<string>();
   const merged = [...state.panes.top, ...state.panes.bottom];
+  const effectiveMode = effectiveDisplayMode(mode, isMobile);
 
-  if (isMobile) {
-    const active =
-      state.activeByPane.top ?? state.activeByPane.bottom ?? merged[0] ?? null;
-    if (active) shown.add(active);
-  } else if (mode === "split") {
+  if (effectiveMode === "split") {
     for (const paneId of ["top", "bottom"] as const) {
       const active = state.activeByPane[paneId];
       if (active) shown.add(active);
     }
   } else {
     const visibleIds = merged.filter((id) =>
-      tabVisibleInMode(state.tabs[id], mode),
+      tabVisibleInMode(state.tabs[id], effectiveMode),
     );
     const active = singlePaneActiveId(
       visibleIds,
+      state.activeSinglePaneId,
       [state.activeByPane.top, state.activeByPane.bottom],
       state.tabs,
-      mode,
+      effectiveMode,
     );
     if (active) shown.add(active);
   }
 
-  if (peekTabId) shown.add(peekTabId);
+  if (!isMobile && peekTabId) shown.add(peekTabId);
   return shown;
 }
 
@@ -94,9 +100,10 @@ export function computeShownTabIds(
 export function usePeekTabId(): string | null {
   const mode = useDisplay((store) => store.mode);
   const peekOpen = useDisplay((store) => store.peekOpen);
+  const isMobile = useMediaQuery(MOBILE_LAYOUT_QUERY);
   const selectedSessionId = useSessions((store) => store.selectedSessionId);
   return useTabs((store) => {
-    if (!peekOpen || mode === "split") return null;
+    if (isMobile || !peekOpen || mode === "split") return null;
     const wantedKind = mode === "terminal" ? "timeline" : "terminal";
     const sessionId = peekSessionIdFrom(store, selectedSessionId);
     if (!sessionId) return null;

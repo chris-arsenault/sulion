@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import * as apiClient from "../api/client";
@@ -12,6 +12,21 @@ const DEPLOY_PROMPT_NAME = "Deploy prompt";
 describe("LibraryPanel", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("starts the reference and prompt sections collapsed", () => {
+    vi.spyOn(apiClient, "listLibrary").mockImplementation(
+      () => new Promise<Awaited<ReturnType<typeof apiClient.listLibrary>>>(() => {}),
+    );
+
+    render(<LibraryPanel />);
+
+    expect(
+      screen.getByRole("button", { name: /References/ }).getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(
+      screen.getByRole("button", { name: /Prompts/ }).getAttribute("aria-expanded"),
+    ).toBe("false");
   });
 
   it("refreshes prompts when the matching library-changed command is emitted", async () => {
@@ -38,12 +53,14 @@ describe("LibraryPanel", () => {
       ]);
 
     render(<LibraryPanel />);
+    await waitFor(() => expect(listLibrary).toHaveBeenCalledTimes(2));
 
-    await waitFor(() => expect(screen.getByText(DEPLOY_PROMPT_NAME)).toBeDefined());
-
-    appCommands.libraryChanged({ kind: "prompts" });
+    act(() => appCommands.libraryChanged({ kind: "prompts" }));
 
     await waitFor(() => expect(screen.getByText("Ship prompt")).toBeDefined());
+    expect(
+      screen.getByRole("button", { name: /Prompts/ }).getAttribute("aria-expanded"),
+    ).toBe("true");
   });
 
   it("injects a prompt into the active terminal on click", async () => {
@@ -67,6 +84,7 @@ describe("LibraryPanel", () => {
 
     render(<LibraryPanel />);
     const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /Prompts/ }));
 
     await waitFor(() => expect(screen.getByText(DEPLOY_PROMPT_NAME)).toBeDefined());
     await user.click(screen.getByText(DEPLOY_PROMPT_NAME));
@@ -100,6 +118,7 @@ describe("LibraryPanel", () => {
 
     render(<LibraryPanel />);
     const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /Prompts/ }));
 
     await waitFor(() => expect(screen.getByText(DEPLOY_PROMPT_NAME)).toBeDefined());
     await user.click(screen.getByText(DEPLOY_PROMPT_NAME));
@@ -140,7 +159,7 @@ describe("LibraryPanel", () => {
     render(<LibraryPanel />);
     const user = userEvent.setup();
 
-    await waitFor(() => expect(screen.getByText(/save a past user prompt/)).toBeDefined());
+    await waitFor(() => expect(listLibrary).toHaveBeenCalledTimes(2));
     await user.click(screen.getByLabelText("New prompt"));
     await user.type(screen.getByLabelText("Prompt name"), "refactor");
     await user.type(screen.getByLabelText("Prompt body"), "Implement item $N.");
@@ -174,6 +193,7 @@ describe("LibraryPanel", () => {
 
     render(<LibraryPanel />);
     const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /References/ }));
 
     await waitFor(() => expect(screen.getByText("Ticket order")).toBeDefined());
     await user.click(screen.getByText("Ticket order"));

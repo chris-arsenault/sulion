@@ -62,7 +62,7 @@ When contributing, ask "which tier is this?" before picking a component.
   rail also houses the pin toggle and command palette trigger.
 - **Sidebar** is drag-resizable and persisted (`sulion.sidebar.width.v1`); pinned state persists in `sulion.sidebar.pinned.v1`.
 - **Work area** keeps its existing two-pane split + tab strip. Terminal pane gets a 2px accent border when focused — xterm swallows keys, the frame tells you it's live.
-- **Mobile** (<768px) hides the rail, keeps a hamburger top bar, and makes the sidebar a drawer.
+- **Mobile** (<768px) hides the rail, keeps a hamburger top bar, and makes the sidebar a drawer. The work area is timeline-only; terminal tabs, terminal actions, display-mode controls, and the projection peek are desktop-only. Dynamic viewport units and safe-area insets keep the top bar, drawer, and prompt controls inside the usable screen.
 
 No right-side inspector column. Reading surfaces (timeline TurnDetail, file body, diff hunks) stay embedded in their panes; overlays (ToolHoverCard, ThinkingFlyout, SubagentModal) stay transient.
 

@@ -34,8 +34,8 @@ export function LibraryPanel() {
   const [references, setReferences] = useState<LibraryEntry[] | null>(null);
   const [prompts, setPrompts] = useState<LibraryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [referencesOpen, setReferencesOpen] = useState(true);
-  const [promptsOpen, setPromptsOpen] = useState(true);
+  const [referencesOpen, setReferencesOpen] = useState(false);
+  const [promptsOpen, setPromptsOpen] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<PromptDraft | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{
     kind: LibraryKind;
@@ -72,6 +72,11 @@ export function LibraryPanel() {
   }, [refresh]);
 
   useAppCommand("library-changed", (command) => {
+    if (command.kind === "references") {
+      setReferencesOpen(true);
+    } else {
+      setPromptsOpen(true);
+    }
     void refresh(command.kind);
   });
 
@@ -231,7 +236,10 @@ export function LibraryPanel() {
   );
   const togglePrompts = useCallback(() => setPromptsOpen((v) => !v), []);
   const startNewPrompt = useCallback(
-    () => setEditingPrompt({ slug: undefined, name: "", body: "" }),
+    () => {
+      setPromptsOpen(true);
+      setEditingPrompt({ slug: undefined, name: "", body: "" });
+    },
     [],
   );
   const cancelEdit = useCallback(() => setEditingPrompt(null), []);
