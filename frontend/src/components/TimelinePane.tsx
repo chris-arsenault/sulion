@@ -1,8 +1,9 @@
 // Renders backend-projected timeline summaries and selected turn detail.
 // The unified app-state poll carries timeline revision markers; this
 // pane fetches summaries only when its active resource revision changes.
-// On narrow viewports the detail view becomes an overlay modal instead of
-// a side pane.
+// On mobile the detail replaces the list inline so prompt controls remain
+// available; intermediate-width viewports use an overlay instead of a side
+// pane.
 //
 // The inspector's TurnDetail is reused by the SubagentModal so drill-in
 // into sidechain logs renders the same way.
@@ -110,6 +111,7 @@ export function TimelinePane({
 
   const { filters, setFollowLatest } = useTimelineFilters();
   const narrow = useMediaQuery("(max-width: 999px)");
+  const isMobile = useMediaQuery(MOBILE_LAYOUT_QUERY);
   const [turnNavMode] = useTurnNavMode();
   const [timelineFontScale] = useTimelineFontScale();
   const resourceRevision = useSessions((store) => {
@@ -478,30 +480,57 @@ export function TimelinePane({
             : "No turns match current filters."}
         </div>
       ) : narrow ? (
-        <>
-          {turnNavMode === "list" && (
-            <div className="timeline-pane__list-narrow">
-              <TurnList
-                turns={turns}
-                selectedTurnKey={selectedTurnKey}
-                showThinking={filters.showThinking}
-                onSelect={handleTurnSelect}
-                virtuosoRef={virtuoso}
-              />
+        isMobile && selectedSummary ? (
+          <div className="timeline-pane__mobile-detail">
+            <div className="timeline-pane__mobile-detail-header">
+              <button
+                type="button"
+                className="timeline-pane__mobile-back"
+                onClick={clearSelectedTurn}
+              >
+                <Icon name="arrow-left" size={14} />
+                <span>Back to timeline</span>
+              </button>
             </div>
-          )}
-          <SessionInspectorPane
-            turn={selectedTurn}
-            loading={detailPending}
-            showThinking={filters.showThinking}
-            hideUserPrompt={filters.hiddenSpeakers.has("user")}
-            onOpenSubagent={handleSubagent}
-            asOverlay
-            onClose={clearSelectedTurn}
-            focusPairId={focusPairId ?? null}
-            focusKey={focusKey ?? null}
-          />
-        </>
+            <SessionInspectorPane
+              turn={selectedTurn}
+              loading={detailPending}
+              showThinking={filters.showThinking}
+              hideUserPrompt={filters.hiddenSpeakers.has("user")}
+              onOpenSubagent={handleSubagent}
+              asOverlay={false}
+              focusPairId={focusPairId ?? null}
+              focusKey={focusKey ?? null}
+            />
+          </div>
+        ) : (
+          <>
+            {turnNavMode === "list" && (
+              <div className="timeline-pane__list-narrow">
+                <TurnList
+                  turns={turns}
+                  selectedTurnKey={selectedTurnKey}
+                  showThinking={filters.showThinking}
+                  onSelect={handleTurnSelect}
+                  virtuosoRef={virtuoso}
+                />
+              </div>
+            )}
+            {!isMobile && (
+              <SessionInspectorPane
+                turn={selectedTurn}
+                loading={detailPending}
+                showThinking={filters.showThinking}
+                hideUserPrompt={filters.hiddenSpeakers.has("user")}
+                onOpenSubagent={handleSubagent}
+                asOverlay
+                onClose={clearSelectedTurn}
+                focusPairId={focusPairId ?? null}
+                focusKey={focusKey ?? null}
+              />
+            )}
+          </>
+        )
       ) : turnNavMode !== "list" ? (
         <div className="timeline-pane__solo">
           <SessionInspectorPane

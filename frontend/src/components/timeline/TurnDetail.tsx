@@ -10,7 +10,9 @@ import {
 
 import { saveLibraryEntry } from "../../api/client";
 import type { TimelineAssistantItem } from "../../api/types";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { appCommands } from "../../state/AppCommands";
+import { MOBILE_LAYOUT_QUERY } from "../../state/displayPolicy";
 import type { MenuItem } from "../common/contextMenuStore";
 import {
   contextMenuTriggerProps,
@@ -66,6 +68,7 @@ export function TurnDetail({
   focusPairId = null,
   focusKey = null,
 }: Props) {
+  const isMobile = useMediaQuery(MOBILE_LAYOUT_QUERY);
   const pairById = useMemo(
     () => new Map(turn.tool_pairs.map((pair) => [pair.id, pair] as const)),
     [turn.tool_pairs],
@@ -125,10 +128,11 @@ export function TurnDetail({
     (pair: ToolPair): boolean => {
       const manual = manualExpansion[pair.id];
       if (manual !== undefined) return manual;
+      if (isMobile) return false;
       if (focusActive) return pair.id === focusPairId;
       return pair.id === lastPairId || pair.is_error || pair.is_pending;
     },
-    [manualExpansion, focusActive, focusPairId, lastPairId],
+    [manualExpansion, isMobile, focusActive, focusPairId, lastPairId],
   );
   const toggleExpansion = useCallback(
     (pair: ToolPair, currentlyExpanded: boolean) => {
@@ -198,17 +202,21 @@ export function TurnDetail({
     [saveReference],
   );
 
-  const openHover = useCallback((el: HTMLElement, pair: ToolPair) => {
-    if (dismissTimer.current) clearTimeout(dismissTimer.current);
-    setHover((prev) => {
-      if (prev?.pinned && prev.pair.id === pair.id) return prev;
-      return {
-        el,
-        pair,
-        pinned: prev?.pinned && prev.pair.id === pair.id ? true : false,
-      };
-    });
-  }, []);
+  const openHover = useCallback(
+    (el: HTMLElement, pair: ToolPair) => {
+      if (isMobile) return;
+      if (dismissTimer.current) clearTimeout(dismissTimer.current);
+      setHover((prev) => {
+        if (prev?.pinned && prev.pair.id === pair.id) return prev;
+        return {
+          el,
+          pair,
+          pinned: prev?.pinned && prev.pair.id === pair.id ? true : false,
+        };
+      });
+    },
+    [isMobile],
+  );
   const scheduleDismiss = useCallback(() => {
     if (dismissTimer.current) clearTimeout(dismissTimer.current);
     dismissTimer.current = setTimeout(() => {
@@ -380,6 +388,7 @@ export function TurnDetail({
                 onOpenSubagent={onOpenSubagent}
                 onEnter={openHover}
                 onLeave={scheduleDismiss}
+                hoverEnabled={!isMobile}
                 isFocused={isFocused}
                 focusToken={focusKey}
               />
@@ -425,7 +434,7 @@ export function TurnDetail({
           onClose={onClearThinking}
         />
       )}
-      {hover && (
+      {hover && !isMobile && (
         <ToolHoverCard
           anchor={hover.el}
           pair={hover.pair}
@@ -588,6 +597,7 @@ function ToolPairRow({
   onOpenSubagent,
   onEnter,
   onLeave,
+  hoverEnabled,
   isFocused,
   focusToken,
 }: {
@@ -599,6 +609,7 @@ function ToolPairRow({
   onOpenSubagent?: (pair: ToolPair) => void;
   onEnter: (el: HTMLElement, pair: ToolPair) => void;
   onLeave: () => void;
+  hoverEnabled: boolean;
   isFocused: boolean;
   focusToken: string | null;
 }) {
@@ -617,12 +628,20 @@ function ToolPairRow({
     }
   }, [focusToken, isFocused]);
 
+  useEffect(
+    () => () => {
+      if (enterTimer.current) clearTimeout(enterTimer.current);
+    },
+    [],
+  );
+
   const handleEnter = useCallback(() => {
+    if (!hoverEnabled) return;
     if (enterTimer.current) clearTimeout(enterTimer.current);
     enterTimer.current = setTimeout(() => {
       if (rowRef.current) onEnter(rowRef.current, pair);
     }, 500);
-  }, [onEnter, pair]);
+  }, [hoverEnabled, onEnter, pair]);
   const handleLeave = useCallback(() => {
     if (enterTimer.current) {
       clearTimeout(enterTimer.current);
@@ -676,10 +695,10 @@ function ToolPairRow({
           type="button"
           className="td__tool-toggle"
           onClick={toggleExpanded}
-          onMouseEnter={handleEnter}
-          onMouseLeave={handleLeave}
-          onFocus={handleEnter}
-          onBlur={handleLeave}
+          onMouseEnter={hoverEnabled ? handleEnter : undefined}
+          onMouseLeave={hoverEnabled ? handleLeave : undefined}
+          onFocus={hoverEnabled ? handleEnter : undefined}
+          onBlur={hoverEnabled ? handleLeave : undefined}
           aria-label={expanded ? "Collapse tool details" : "Expand tool details"}
         >
           <span

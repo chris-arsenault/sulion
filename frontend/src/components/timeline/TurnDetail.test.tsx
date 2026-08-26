@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 
@@ -19,7 +19,25 @@ import {
 describe("TurnDetail", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
+
+  function stubMobileViewport() {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockImplementation((query: string) => ({
+        matches: query === "(max-width: 767px)",
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    );
+  }
 
   function renderWithContextMenu(ui: ReactNode) {
     return render(
@@ -197,6 +215,50 @@ describe("TurnDetail", () => {
     );
     expect(expandedIn("t1")).toBe(true);
     expect(expandedIn("t2")).toBe(true);
+  });
+
+  it("starts every mobile tool collapsed, permits tap expansion, and disables hover details", async () => {
+    stubMobileViewport();
+    const normal = makePair({ id: "t1", name: "read", input: { path: "one.txt" } });
+    const error = makePair({
+      id: "t2",
+      name: "bash",
+      input: { command: "false" },
+      result: { content: "failed", is_error: true },
+      is_error: true,
+    });
+    const pending = makePair({
+      id: "t3",
+      name: "edit",
+      input: { path: "two.txt" },
+      is_pending: true,
+    });
+    renderWithContextMenu(
+      <TurnDetail
+        turn={makeTurn({
+          tool_pairs: [normal, error, pending],
+          operation_count: 3,
+          chunks: [toolChunk("t1"), toolChunk("t2"), toolChunk("t3")],
+        })}
+        showThinking={true}
+        focusPairId="t1"
+        focusKey="mobile-focus"
+      />,
+    );
+
+    const collapsed = screen.getAllByLabelText("Expand tool details");
+    expect(collapsed).toHaveLength(3);
+    expect(document.querySelectorAll(".td__tool-body")).toHaveLength(0);
+
+    vi.useFakeTimers();
+    fireEvent.mouseEnter(collapsed[0]!);
+    vi.advanceTimersByTime(600);
+    expect(screen.queryByTestId("tool-hover-card")).toBeNull();
+    vi.useRealTimers();
+
+    const user = userEvent.setup();
+    await user.click(collapsed[0]!);
+    expect(document.querySelectorAll(".td__tool-body")).toHaveLength(1);
   });
 
   it("shows duration and token usage in the header", () => {

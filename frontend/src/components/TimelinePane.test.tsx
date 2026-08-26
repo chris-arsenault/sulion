@@ -98,6 +98,22 @@ function stubFetch(
   );
 }
 
+function stubMobileViewport() {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn().mockImplementation((query: string) => ({
+      matches: query.includes("max-width"),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  );
+}
+
 function timelineBody(overrides: Partial<Record<string, unknown>> = {}) {
   return JSON.stringify(timelinePayload(overrides));
 }
@@ -171,6 +187,50 @@ describe("TimelinePane", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /hello/ }));
     await waitFor(() => expect(screen.getByText("hi there")).toBeDefined());
+  });
+
+  it("keeps mobile inline detail above the prompt controls", async () => {
+    stubMobileViewport();
+    const payload = timelinePayload();
+    const turn = payload.turns[0] as Record<string, unknown>;
+    stubFetch(
+      (url) =>
+        new Response(
+          url.includes("/timeline/turns/")
+            ? timelineDetailBody(turn)
+            : JSON.stringify(payload),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      [
+        sessionView(0, {
+          agent_runtime: {
+            agent: "claude",
+            state: "running",
+            started_at: sessionStartedAt,
+            ended_at: null,
+            exit_code: null,
+          },
+        }),
+      ],
+    );
+
+    render(<TimelinePane sessionId="abc" />);
+    const user = userEvent.setup();
+    const turnButton = await screen.findByRole("button", { name: /hello/ });
+    expect(screen.getByLabelText("Prompt text")).toBeDefined();
+
+    await user.click(turnButton);
+    await waitFor(() => expect(screen.getByText("hi there")).toBeDefined());
+    expect(screen.getByTestId("inspector-pane")).toBeDefined();
+    expect(screen.queryByTestId("inspector-overlay")).toBeNull();
+    expect(screen.getByLabelText("Prompt text")).toBeDefined();
+
+    await user.click(screen.getByRole("button", { name: "Back to timeline" }));
+    expect(await screen.findByRole("button", { name: /hello/ })).toBeDefined();
+    expect(screen.queryByTestId("inspector-pane")).toBeNull();
   });
 
   it("opens the subagent modal, drills into a nested subagent, and returns", async () => {
