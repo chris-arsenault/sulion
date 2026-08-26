@@ -14,10 +14,15 @@ working climate) proven out on sulion-hosted sessions.
 
 ## Installing
 
-Copy the file for your agent to the install path above, or merge individual
-sections into an existing file. The two templates carry the same policies;
-only the file-edit section is phrased per-agent (Read/Edit/Write tools vs.
-apply-patch).
+These tracked templates are the maintained source. Copy the appropriate file
+to its install path after editing it, then require a byte-identical `diff`
+between the template and live file. The templates carry the same policies;
+only product-specific tool mappings differ: Claude names Artifact and
+Edit/Write, while Codex names its native patch/editor operation.
+
+These files guide agent behavior; they are not a client-side enforcement
+boundary. Restrictions that require a guarantee also belong in tool
+permissions, hooks, or the surrounding runtime.
 
 The templates are written in the first person — "I" and "me" refer to you, the
 adopting user, since these files speak to the agent in your voice. Adjust any
@@ -28,6 +33,8 @@ sections are the environment-load-bearing parts.
 
 - **File edits through agent tooling** — keeps every write visible to sulion's
   file-churn tracking; shell-based writes bypass it.
+- **No hosted presentation publishing** — keeps user data local unless the
+  current request explicitly authorizes external publication.
 - **Secrets via `with-cred`** — brokered, single-command secret injection; see
   [docs/secrets.md](../secrets.md) for the trust boundary.
 - **Credential boundaries** — auth failures are a stop-and-report boundary,
