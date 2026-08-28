@@ -467,7 +467,7 @@ fn codex_exec_code_yields_joined_command_and_source() {
     let code = concat!(
         "const results = await Promise.all([\n",
         "  tools.exec_command({\"cmd\":\"git status --short\",\"workdir\":\"/repo\"}),\n",
-        "  tools.exec_command({\"cmd\":\"rg -n \\\"foo \\\\\\\"bar\\\\\\\"\\\" src\",\"yield_time_ms\":10000}),\n",
+        "  tools.exec_command({cmd:\"rg -n \\\"foo \\\\\\\"bar\\\\\\\"\\\" src\",\"yield_time_ms\":10000}),\n",
         "]);\n",
         "text(results.map(r => r.output).join(\"\\n\"));",
     );
@@ -486,6 +486,96 @@ fn codex_exec_code_yields_joined_command_and_source() {
         Some("git status --short && rg -n \"foo \\\"bar\\\"\" src"),
     );
     assert_eq!(input["code"].as_str(), Some(code));
+    assert_eq!(
+        ev.blocks[0].tool_name_canonical.as_deref(),
+        Some("parallel"),
+    );
+}
+
+#[test]
+fn codex_exec_code_only_extracts_cmd_from_exec_command_calls() {
+    let code = concat!(
+        "const ignored = await tools.other({cmd:\"not a shell command\"});\n",
+        "const r = await tools.exec_command({workdir:\"/repo\",cmd:\"rg -n needle src\"});",
+    );
+    let ev = parse_codex(json!({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "call-3",
+            "input": code,
+        }
+    }));
+    let input = ev.blocks[0].tool_input.as_ref().expect("tool input");
+    assert_eq!(input["command"].as_str(), Some("rg -n needle src"));
+    assert_eq!(
+        ev.blocks[0].tool_name_canonical.as_deref(),
+        Some("parallel"),
+    );
+}
+
+#[test]
+fn codex_exec_code_projects_literal_shell_executable_as_the_operation() {
+    let code = concat!(
+        "const r = await tools.exec_command({cmd:\"rg -n needle src\",",
+        "workdir:\"/repo\",\"yield_time_ms\":10000,max_output_tokens:4000});\n",
+        "text(r.output);",
+    );
+    let ev = parse_codex(json!({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "call-rg",
+            "input": code,
+        }
+    }));
+    let input = ev.blocks[0].tool_input.as_ref().expect("tool input");
+    assert_eq!(ev.blocks[0].tool_name.as_deref(), Some("exec"));
+    assert_eq!(ev.blocks[0].tool_name_canonical.as_deref(), Some("rg"));
+    assert_eq!(input["cmd"].as_str(), Some("rg -n needle src"));
+    assert_eq!(input["workdir"].as_str(), Some("/repo"));
+    assert_eq!(input["code"].as_str(), Some(code));
+}
+
+#[test]
+fn codex_exec_code_projects_nested_tool_and_web_action_shapes() {
+    let update = parse_codex(json!({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "call-plan",
+            "input": "const r = await tools.update_plan({plan:[{step:\"Inspect\",status:\"in_progress\"}]}); text(r);",
+        }
+    }));
+    assert_eq!(
+        update.blocks[0].tool_name_canonical.as_deref(),
+        Some("update_plan"),
+    );
+    assert_eq!(
+        update.blocks[0].tool_input.as_ref().unwrap()["plan"][0]["step"].as_str(),
+        Some("Inspect"),
+    );
+
+    let web = parse_codex(json!({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "call-web",
+            "input": "const r = await tools.web__run({search_query:[{q:\"Rust tree-sitter\"}],response_length:\"short\"}); text(r);",
+        }
+    }));
+    assert_eq!(
+        web.blocks[0].tool_name_canonical.as_deref(),
+        Some("search_query"),
+    );
+    assert_eq!(
+        web.blocks[0].tool_input.as_ref().unwrap()["search_query"][0]["q"].as_str(),
+        Some("Rust tree-sitter"),
+    );
 }
 
 #[test]
@@ -519,6 +609,10 @@ fn codex_exec_code_extracts_embedded_patches_as_file_edits() {
     assert_eq!(edits[0]["operation"].as_str(), Some("add"));
     assert_eq!(edits[1]["path"].as_str(), Some("/repo/old.rb"));
     assert_eq!(edits[1]["operation"].as_str(), Some("update"));
+    assert_eq!(
+        ev.blocks[0].tool_name_canonical.as_deref(),
+        Some("apply_patch"),
+    );
     // No shell command in this snippet.
     assert!(input.get("command").is_none());
 }
@@ -538,7 +632,7 @@ fn codex_exec_decoded_nul_is_stripped() {
         }
     }));
     let input = ev.blocks[0].tool_input.as_ref().expect("tool input");
-    let command = input["command"].as_str().expect("command extracted");
+    let command = input["cmd"].as_str().expect("command extracted");
     assert!(!command.contains('\u{0}'), "NUL survived: {command:?}");
     assert_eq!(command, "printf 'ab'");
 }

@@ -7,7 +7,9 @@ const CANONICAL_BLOCKS_KEY: &str = "canonical_blocks";
 // the canonical {command, code} shape.
 // v3: the claude `Agent` tool canonicalizes to `task`; blocks that
 // predate the mapping get re-derived.
-const CANONICAL_BLOCKS_VERSION: i32 = 3;
+// v4: Codex Code Mode `exec` wrappers canonicalize to their nested tool
+// or shell executable; all historical wrapper blocks get re-derived.
+const CANONICAL_BLOCKS_VERSION: i32 = 4;
 const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // v3: sessions with codex `exec` operations reprojected after their
 // inputs were re-canonicalized into the {command, code} shape.
@@ -21,7 +23,9 @@ const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // v7: concurrent subagent turns are keyed by origin session instead of
 // byte offset (offset-0 collisions clobbered one another); sessions
 // with descendants get reprojected.
-const TIMELINE_PROJECTION_VERSION: i32 = 7;
+// v8: reproject Code Mode wrappers under their nested operation type
+// and reference-data category instead of the outer `exec` transport.
+const TIMELINE_PROJECTION_VERSION: i32 = 8;
 const USAGE_PROJECTION_KEY: &str = "usage_projection";
 const USAGE_PROJECTION_VERSION: i32 = 1;
 

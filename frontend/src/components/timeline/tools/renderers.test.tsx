@@ -25,6 +25,10 @@ const BASH_TOOL = {
   name: "bash",
   input: { command: "ls -la", description: "list files" },
 };
+const RG_TOOL = {
+  name: "rg",
+  input: { cmd: "rg -n needle src", workdir: "/repo" },
+};
 const READ_TOOL = {
   name: "read",
   input: { path: "/a/b.txt", offset: 10, limit: 50 },
@@ -174,6 +178,11 @@ describe("ToolCallRenderer", () => {
     render(<ToolCallRenderer tool={BASH_TOOL} />);
     expect(screen.getByText("list files")).toBeDefined();
     expect(screen.getByText(/\$ ls -la/)).toBeDefined();
+  });
+
+  it("renders a canonicalized shell executable through the command renderer", () => {
+    render(<ToolCallRenderer tool={RG_TOOL} />);
+    expect(screen.getByText(/\$ rg -n needle src/)).toBeDefined();
   });
 
   it("collapses unchanged edit context in the timeline renderer", () => {

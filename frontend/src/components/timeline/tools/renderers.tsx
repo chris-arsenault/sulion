@@ -30,6 +30,9 @@ export function ToolCallRenderer({ tool }: { tool: ToolUseSummary }) {
   if (Array.isArray(input.file_edits)) {
     return <FileEditRenderer input={input} fileTouches={fileTouches} />;
   }
+  if (typeof input.command === "string" || typeof input.cmd === "string") {
+    return <BashRenderer input={input} fileTouches={fileTouches} />;
+  }
 
   switch (operationType) {
     case "write":

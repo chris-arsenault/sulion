@@ -270,8 +270,15 @@ pub async fn backfill_timeline_projection(
              UNION \
              SELECT DISTINCT o.session_uuid \
                FROM timeline_operations o \
-              WHERE COALESCE(o.operation_type, o.name) = 'exec' \
-                AND jsonb_typeof(o.input) = 'string' \
+              WHERE COALESCE(o.raw_name, o.name) = 'exec' \
+                AND o.name = 'exec' \
+                AND ( \
+                    jsonb_typeof(o.input) = 'string' OR \
+                    ( \
+                        jsonb_typeof(o.input) = 'object' \
+                        AND COALESCE(o.input ->> 'code', '') LIKE '%tools.%' \
+                    ) \
+                ) \
              UNION \
              SELECT DISTINCT tt.session_uuid \
                FROM timeline_turns tt \

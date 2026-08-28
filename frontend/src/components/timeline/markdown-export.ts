@@ -52,6 +52,8 @@ function toolOneLine(pair: ToolPair): string {
   const input = (pair.input ?? {}) as Record<string, unknown>;
   const pick = (key: string) =>
     typeof input[key] === "string" ? (input[key] as string) : undefined;
+  const command = pick("command") ?? pick("cmd");
+  if (command) return ` \`${command.slice(0, 160)}\``;
   let summary = "";
   switch (toolType(pair)) {
     case "edit":
@@ -89,16 +91,13 @@ function formatToolInput(pair: ToolPair): string {
   if (toolType(pair) === "multi_edit") {
     return formatMultiEditInput(pair);
   }
-  if (toolType(pair) === "bash" || toolType(pair) === "exec_command") {
-    const cmd =
-      typeof (input as { command?: unknown })?.command === "string"
-        ? ((input as { command: string }).command)
-        : typeof (input as { cmd?: unknown })?.cmd === "string"
-          ? ((input as { cmd: string }).cmd)
-          : "";
-    if (!cmd) return "";
-    return fence("bash", cmd);
-  }
+  const cmd =
+    typeof (input as { command?: unknown })?.command === "string"
+      ? ((input as { command: string }).command)
+      : typeof (input as { cmd?: unknown })?.cmd === "string"
+        ? ((input as { cmd: string }).cmd)
+        : "";
+  if (cmd) return fence("bash", cmd);
   if (toolType(pair) === "todo_write") {
     const todos = (input as { todos?: Array<{ status?: string; content?: string }> })
       ?.todos;

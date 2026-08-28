@@ -69,6 +69,18 @@ describe("markdown-export", () => {
     expect(out).toContain("permission denied");
   });
 
+  it("formats a canonicalized shell executable as a command", () => {
+    const out = formatToolPair(
+      makePair({
+        name: "rg",
+        category: "inspect",
+        input: { cmd: "rg -n needle src", workdir: "/repo" },
+      }),
+    );
+    expect(out).toContain("**Tool:** `rg` `rg -n needle src`");
+    expect(out).toContain("```bash\nrg -n needle src\n```");
+  });
+
   it("formats edit diffs from canonical result payloads", () => {
     const out = formatToolPair(
       makePair({

@@ -12,6 +12,7 @@
 //! the block shape evolve.
 
 mod claude;
+mod code_mode;
 mod codex;
 #[cfg(test)]
 mod tests;

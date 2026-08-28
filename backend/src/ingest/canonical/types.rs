@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::tools::{canonicalize_tool_input, canonicalize_tool_name};
+use super::tools::canonicalize_tool_use;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -209,7 +209,7 @@ impl Block {
         input: Value,
     ) -> Self {
         let name = tool_name.into();
-        let canonical_name = canonicalize_tool_name(&name);
+        let (canonical_name, canonical_input) = canonicalize_tool_use(&name, input);
         Self {
             ord,
             kind: BlockKind::ToolUse,
@@ -219,7 +219,7 @@ impl Block {
             tool_name: Some(name),
             operation_type: None,
             operation_category: None,
-            tool_input: Some(canonicalize_tool_input(&canonical_name, input)),
+            tool_input: Some(canonical_input),
             tool_output: None,
             is_error: None,
             raw: None,

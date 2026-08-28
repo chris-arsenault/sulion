@@ -187,6 +187,9 @@ fn normalize_relative_candidate(repo_root: &Path, base: &Path, candidate: &str) 
 }
 
 fn touch_kind_for_pair(pair: &TimelineToolPair) -> &'static str {
+    if command_text(pair.input.as_ref()).is_some() {
+        return "command";
+    }
     match pair.operation_type.as_deref().unwrap_or(pair.name.as_str()) {
         "write" | "edit" | "multi_edit" | "apply_patch" | "create" | "update" | "delete"
         | "add" | "remove" => "write",
@@ -212,10 +215,11 @@ fn is_write_pair(pair: &TimelineToolPair) -> bool {
 }
 
 fn is_command_pair(pair: &TimelineToolPair) -> bool {
-    matches!(
-        pair.operation_type.as_deref().unwrap_or(pair.name.as_str()),
-        "bash" | "exec" | "exec_command"
-    )
+    command_text(pair.input.as_ref()).is_some()
+        || matches!(
+            pair.operation_type.as_deref().unwrap_or(pair.name.as_str()),
+            "bash" | "exec" | "exec_command"
+        )
 }
 
 fn command_text(input: Option<&Value>) -> Option<&str> {

@@ -1,5 +1,7 @@
 use serde_json::{Map, Value};
 
+use super::code_mode::{parse_tool_calls, shell_executable};
+
 pub fn canonicalize_tool_name(raw: &str) -> String {
     match raw {
         // Claude Code builtins
@@ -29,6 +31,21 @@ pub fn canonicalize_tool_name(raw: &str) -> String {
         }
     }
     .to_string()
+}
+
+pub(crate) fn canonicalize_tool_use(raw_name: &str, input: Value) -> (String, Value) {
+    let canonical_name = canonicalize_tool_name(raw_name);
+    let mut input = canonicalize_tool_input(&canonical_name, input);
+    let effective_name = if canonical_name == "exec" {
+        input
+            .as_object_mut()
+            .and_then(|object| object.remove("operation_name"))
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or(canonical_name)
+    } else {
+        canonical_name
+    };
+    (effective_name, input)
 }
 
 fn to_snake_case(s: &str) -> String {
@@ -63,11 +80,9 @@ pub(crate) fn canonicalize_tool_input(canonical_name: &str, input: Value) -> Val
             return parse_apply_patch(raw);
         }
     }
-    // Codex code-mode `exec` arrives as a JavaScript snippet that wraps
-    // one or more `tools.exec_command({"cmd": ...})` calls. Surface the
-    // shell commands under the bash-style `command` key so the timeline
-    // can summarize the row like the Codex TUI does, and keep the
-    // original snippet as `code`.
+    // Codex Code Mode `exec` is a JavaScript transport around one or
+    // more `tools.*` calls. Canonicalize those nested operations and
+    // keep the original snippet as `code`.
     if canonical_name == "exec" {
         if let Value::String(raw) = &input {
             return parse_exec_code(raw);
@@ -181,35 +196,42 @@ pub(crate) fn canonicalize_tool_result_payload(payload: Value) -> Value {
     normalize_result_value(payload)
 }
 
-/// Extract the operations a code-mode exec snippet performs: every
-/// `"cmd": "…"` shell command (joined `&&`-style under `command`) and
-/// every embedded `*** Begin Patch` V4A literal (parsed into the
-/// canonical `file_edits` shape). The snippet itself stays under
-/// `code`. The values are JSON-compatible string literals inside the
-/// JavaScript source, so a quote-aware scan plus serde unescaping
-/// recovers them exactly.
+/// Replace the outer Code Mode `exec` transport with the operations in
+/// its JavaScript body. A single call takes the same canonical input
+/// shape as its direct counterpart. Multiple calls retain an ordered
+/// `operations` list, while aggregate commands and file edits stay at
+/// the top level for existing renderers and file-touch extraction.
 pub(crate) fn parse_exec_code(code: &str) -> Value {
-    let mut commands: Vec<String> = Vec::new();
-    let mut search_from = 0usize;
-    while let Some(found) = code[search_from..].find("\"cmd\"") {
-        let mut idx = search_from + found + "\"cmd\"".len();
-        search_from = idx;
-        let bytes = code.as_bytes();
-        while idx < bytes.len() && (bytes[idx] as char).is_whitespace() {
-            idx += 1;
+    let calls = parse_tool_calls(code);
+    let mut commands = Vec::new();
+    let mut operation_names = Vec::new();
+    let mut operations = Vec::new();
+    let mut single_input = None;
+    for call in calls {
+        let tool_name = code_mode_tool_name(&call.raw_name);
+        let input = canonicalize_tool_input(&tool_name, call.input);
+        let operation_name = code_mode_operation_name(&call.raw_name, &tool_name, &input);
+        if tool_name == "exec_command" {
+            if let Some(command) = input
+                .as_object()
+                .and_then(|object| object.get("command").or_else(|| object.get("cmd")))
+                .and_then(Value::as_str)
+            {
+                commands.push(command.to_string());
+            }
         }
-        if idx >= bytes.len() || bytes[idx] != b':' {
-            continue;
+        operation_names.push(operation_name.clone());
+
+        let mut operation = Map::new();
+        operation.insert("name".into(), Value::String(operation_name));
+        operation.insert("raw_name".into(), Value::String(call.raw_name));
+        operation.insert("input".into(), input.clone());
+        operations.push(Value::Object(operation));
+        if operations.len() == 1 {
+            single_input = Some(input);
+        } else {
+            single_input = None;
         }
-        idx += 1;
-        while idx < bytes.len() && (bytes[idx] as char).is_whitespace() {
-            idx += 1;
-        }
-        let Some((cmd, end)) = js_string_literal_at(code, idx) else {
-            continue;
-        };
-        commands.push(cmd);
-        search_from = end;
     }
 
     let mut file_edits: Vec<Value> = Vec::new();
@@ -227,14 +249,72 @@ pub(crate) fn parse_exec_code(code: &str) -> Value {
     }
 
     let mut out = Map::new();
-    if !commands.is_empty() {
+    let has_single_input = single_input.is_some();
+    if let Some(Value::Object(input)) = single_input {
+        out.extend(input);
+    } else if !operations.is_empty() {
+        out.insert("operations".to_string(), Value::Array(operations));
+    }
+    if commands.len() > 1 || (!has_single_input && !commands.is_empty()) {
         out.insert("command".to_string(), Value::String(commands.join(" && ")));
     }
     if !file_edits.is_empty() {
         out.insert("file_edits".to_string(), Value::Array(file_edits));
     }
+    if !operation_names.is_empty() {
+        let first = &operation_names[0];
+        let operation_name = if !out.contains_key("file_edits")
+            && operation_names.iter().all(|name| name == first)
+        {
+            first.clone()
+        } else if out.contains_key("file_edits") {
+            "apply_patch".to_string()
+        } else {
+            "parallel".to_string()
+        };
+        out.insert("operation_name".to_string(), Value::String(operation_name));
+    }
     out.insert("code".to_string(), Value::String(code.to_string()));
     Value::Object(out)
+}
+
+fn code_mode_tool_name(raw_name: &str) -> String {
+    let unnamespaced = raw_name.rsplit("__").next().unwrap_or(raw_name);
+    canonicalize_tool_name(unnamespaced)
+}
+
+fn code_mode_operation_name(raw_name: &str, tool_name: &str, input: &Value) -> String {
+    if tool_name == "exec_command" {
+        return input
+            .as_object()
+            .and_then(|object| object.get("cmd").or_else(|| object.get("command")))
+            .and_then(Value::as_str)
+            .and_then(shell_executable)
+            .unwrap_or_else(|| tool_name.to_string());
+    }
+    if raw_name == "web__run" {
+        let actions: Vec<&str> = [
+            "search_query",
+            "image_query",
+            "open",
+            "click",
+            "find",
+            "screenshot",
+            "weather",
+            "finance",
+            "sports",
+            "time",
+        ]
+        .into_iter()
+        .filter(|key| input.get(*key).is_some_and(|value| !value.is_null()))
+        .collect();
+        return match actions.as_slice() {
+            [action] => (*action).to_string(),
+            [] => tool_name.to_string(),
+            _ => "parallel".to_string(),
+        };
+    }
+    tool_name.to_string()
 }
 
 /// Decode the double-quoted string literal starting at byte `start`.

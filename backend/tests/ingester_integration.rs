@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use ring::digest;
 use sulion::db;
 use sulion::ingest::{
-    backfill_timeline_projection, rebuild_ingest_derivatives, Ingester, IngesterConfig,
+    backfill_canonical_blocks, backfill_timeline_projection, rebuild_ingest_derivatives, Ingester,
+    IngesterConfig,
 };
 use uuid::Uuid;
 
@@ -576,6 +577,91 @@ async fn codex_exec_with_embedded_patch_projects_as_content_creation() {
     // Write-touch extraction for file_edits is covered by the
     // file_touches unit tests; this fixture session has no repo
     // binding, so no touch context exists here.
+}
+
+#[tokio::test]
+async fn codex_code_mode_command_projects_and_repairs_as_rg_inspection() {
+    let pool = fresh_pool().await;
+    let fx = CodexFixture::new();
+    let code = concat!(
+        "const r = await tools.exec_command({cmd:\"rg -n needle src\",",
+        "workdir:\"/repo\",\"yield_time_ms\":10000,max_output_tokens:4000});\n",
+        "text(r.output);",
+    );
+    let event = serde_json::json!({
+        "ts": "2026-04-19T01:53:43.100Z",
+        "kind": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "call-1",
+            "input": code,
+        }
+    });
+    fx.append(&serde_json::to_string(&event).unwrap());
+    fx.append("\n");
+
+    Ingester::new().tick(&pool, &fx.config()).await.unwrap();
+
+    let projected: (Option<String>, Option<String>, Option<serde_json::Value>) = sqlx::query_as(
+        "SELECT operation_type, operation_category, input \
+           FROM timeline_operations WHERE session_uuid = $1",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(projected.0.as_deref(), Some("rg"));
+    assert_eq!(projected.1.as_deref(), Some("inspect"));
+    assert_eq!(
+        projected.2.as_ref().and_then(|input| input["cmd"].as_str()),
+        Some("rg -n needle src"),
+    );
+
+    // Recreate the already-ingested shape produced before unquoted JS
+    // object keys were supported, then exercise both startup repair
+    // selectors against it.
+    sqlx::query(
+        "UPDATE event_blocks \
+            SET tool_name_canonical = 'exec', \
+                tool_input = jsonb_build_object('code', tool_input ->> 'code') \
+          WHERE session_uuid = $1 AND kind = 'tool_use'",
+    )
+    .bind(fx.session_uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE timeline_operations \
+            SET name = 'exec', raw_name = 'exec', \
+                operation_type = 'exec', operation_category = 'utility', \
+                input = jsonb_build_object('code', input ->> 'code') \
+          WHERE session_uuid = $1",
+    )
+    .bind(fx.session_uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let canonical = backfill_canonical_blocks(&pool, None).await.unwrap();
+    assert_eq!(canonical.repaired, 1);
+    assert_eq!(canonical.failed, 0);
+    assert_eq!(backfill_timeline_projection(&pool, None).await.unwrap(), 1);
+
+    let repaired: (Option<String>, Option<String>, Option<serde_json::Value>) = sqlx::query_as(
+        "SELECT operation_type, operation_category, input \
+           FROM timeline_operations WHERE session_uuid = $1",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(repaired.0.as_deref(), Some("rg"));
+    assert_eq!(repaired.1.as_deref(), Some("inspect"));
+    assert_eq!(
+        repaired.2.as_ref().and_then(|input| input["cmd"].as_str()),
+        Some("rg -n needle src"),
+    );
 }
 
 #[tokio::test]

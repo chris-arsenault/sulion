@@ -75,7 +75,13 @@ pub async fn backfill_canonical_blocks(
                     AND b.byte_offset = e.byte_offset \
                     AND b.kind = 'tool_use' \
                     AND COALESCE(b.tool_name_canonical, b.tool_name) = 'exec' \
-                    AND jsonb_typeof(b.tool_input) = 'string' \
+                    AND ( \
+                        jsonb_typeof(b.tool_input) = 'string' OR \
+                        ( \
+                            jsonb_typeof(b.tool_input) = 'object' \
+                            AND COALESCE(b.tool_input ->> 'code', '') LIKE '%tools.%' \
+                        ) \
+                    ) \
              ) \
          )",
     )
@@ -193,7 +199,13 @@ async fn repair_codex_session(pool: &Pool, session_uuid: Uuid) -> anyhow::Result
                            AND b.byte_offset = e.byte_offset \
                            AND b.kind = 'tool_use' \
                            AND COALESCE(b.tool_name_canonical, b.tool_name) = 'exec' \
-                           AND jsonb_typeof(b.tool_input) = 'string' \
+                           AND ( \
+                               jsonb_typeof(b.tool_input) = 'string' OR \
+                               ( \
+                                   jsonb_typeof(b.tool_input) = 'object' \
+                                   AND COALESCE(b.tool_input ->> 'code', '') LIKE '%tools.%' \
+                               ) \
+                           ) \
                     ) \
                 ) AS needs_backfill \
          FROM events e \

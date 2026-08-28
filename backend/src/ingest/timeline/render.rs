@@ -121,7 +121,7 @@ fn tool_one_line(pair: &TimelineToolPair) -> String {
             .unwrap_or_default(),
         "web_fetch" => pick("url").unwrap_or_default(),
         "web_search" => pick("query").unwrap_or_default(),
-        _ => "",
+        _ => pick("command").or_else(|| pick("cmd")).unwrap_or_default(),
     };
     // Pairs that canonicalised into `file_edits` (and nothing above
     // matched — e.g. a code-mode exec that only applies a patch)
@@ -152,20 +152,17 @@ fn format_tool_input(pair: &TimelineToolPair) -> Option<String> {
     if let Some(rendered) = format_file_edits_input(input) {
         return Some(rendered);
     }
+    if let Some(command) = input
+        .as_object()
+        .and_then(|obj| obj.get("command").or_else(|| obj.get("cmd")))
+        .and_then(Value::as_str)
+        .filter(|command| !command.is_empty())
+    {
+        return Some(fence("bash", command.to_string()));
+    }
     match pair_operation_type(pair) {
         "write" => format_write_input(input),
-        "bash" | "exec" | "exec_command" => {
-            let command = input
-                .as_object()
-                .and_then(|obj| obj.get("command").or_else(|| obj.get("cmd")))
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if command.is_empty() {
-                None
-            } else {
-                Some(fence("bash", command.to_string()))
-            }
-        }
+        "bash" | "exec" | "exec_command" => None,
         "todo_write" => {
             let todos = input
                 .as_object()

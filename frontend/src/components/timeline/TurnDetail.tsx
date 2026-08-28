@@ -806,7 +806,7 @@ function toolSummary(pair: ToolPair): string {
     case "web_search":
       return pick("query") ?? "";
     default:
-      return "";
+      return pick("description") ?? pick("command") ?? pick("cmd") ?? "";
   }
 }
 

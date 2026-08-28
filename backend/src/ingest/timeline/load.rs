@@ -254,6 +254,9 @@ async fn load_event_blocks(
                 CASE \
                     WHEN b.kind <> 'tool_use' THEN NULL \
                     WHEN b.tool_input ? 'file_edits' THEN 'create_content' \
+                    WHEN COALESCE(b.tool_name, '') = 'exec' \
+                         AND (b.tool_input ? 'cmd' OR b.tool_input ? 'command') \
+                         AND rule.operation_category IS NULL THEN 'utility' \
                     ELSE COALESCE(rule.operation_category, 'other') \
                 END AS operation_category, \
                 b.tool_input, b.tool_output, b.is_error \
