@@ -30,6 +30,7 @@ mod timeline_routes;
 mod workspace_routes;
 mod ws;
 
+pub use app_state_routes::AppStateCache;
 pub use routes::ApiError;
 #[cfg(feature = "integration-tests")]
 pub use stats::sample_runtime_stats_once_for_tests;

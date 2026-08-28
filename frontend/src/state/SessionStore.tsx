@@ -42,6 +42,8 @@ const META_REPO_EXPANSION_STORAGE_KEY = "sulion.sidebar.metaRepoExpansion.v1";
 
 type RepoExpansionMap = Record<string, boolean>;
 
+let appStateRequest: Promise<void> | null = null;
+
 export interface SaveMetaRepoInput {
   name: string;
   members: string[];
@@ -122,51 +124,62 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
   ...initialState(),
 
   async loadAppState() {
-    try {
-      const data = await getAppState();
-      const nodes = Array.isArray(data.nodes) ? data.nodes : [];
-      const sessions = Array.isArray(data.sessions) ? data.sessions : [];
-      const repos = Array.isArray(data.repos) ? data.repos : [];
-      const metaRepos = Array.isArray(data.meta_repos) ? data.meta_repos : [];
-      const workspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
-      const stats = data.stats ?? null;
-      const plans = Array.isArray(data.plans) ? data.plans : [];
-      set((state) => {
-        const sameNodes = sameJson(state.nodes, nodes);
-        const sameSessions = sameJson(state.sessions, sessions);
-        const sameRepos = sameJson(state.repos, repos);
-        const sameMetaRepos = sameJson(state.metaRepos, metaRepos);
-        const sameWorkspaces = sameJson(state.workspaces, workspaces);
-        const sameStats = sameJson(state.stats, stats);
-        const samePlans = sameJson(state.plans, plans);
-        if (
-          sameNodes &&
-          sameSessions &&
-          sameRepos &&
-          sameMetaRepos &&
-          sameWorkspaces &&
-          sameStats &&
-          samePlans &&
-          state.sessionsLoaded &&
-          state.lastError == null
-        ) {
-          return state;
+    if (!appStateRequest) {
+      appStateRequest = (async () => {
+        try {
+          const data = await getAppState();
+          const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+          const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+          const repos = Array.isArray(data.repos) ? data.repos : [];
+          const metaRepos = Array.isArray(data.meta_repos) ? data.meta_repos : [];
+          const workspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
+          const stats = data.stats ?? null;
+          const plans = Array.isArray(data.plans) ? data.plans : [];
+          set((state) => {
+            const sameNodes = sameJson(state.nodes, nodes);
+            const sameSessions = sameJson(state.sessions, sessions);
+            const sameRepos = sameJson(state.repos, repos);
+            const sameMetaRepos = sameJson(state.metaRepos, metaRepos);
+            const sameWorkspaces = sameJson(state.workspaces, workspaces);
+            const sameStats = sameJson(state.stats, stats);
+            const samePlans = sameJson(state.plans, plans);
+            if (
+              sameNodes &&
+              sameSessions &&
+              sameRepos &&
+              sameMetaRepos &&
+              sameWorkspaces &&
+              sameStats &&
+              samePlans &&
+              state.sessionsLoaded &&
+              state.lastError == null
+            ) {
+              return state;
+            }
+            return {
+              nodes: sameNodes ? state.nodes : nodes,
+              sessions: sameSessions ? state.sessions : sessions,
+              repos: sameRepos ? state.repos : repos,
+              metaRepos: sameMetaRepos ? state.metaRepos : metaRepos,
+              workspaces: sameWorkspaces ? state.workspaces : workspaces,
+              stats: sameStats ? state.stats : stats,
+              plans: samePlans ? state.plans : plans,
+              lastError: null,
+              sessionsLoaded: true,
+            };
+          });
+        } catch (err) {
+          console.error("getAppState failed", err);
+          if (err instanceof ApiError) set({ lastError: err.message });
         }
-        return {
-          nodes: sameNodes ? state.nodes : nodes,
-          sessions: sameSessions ? state.sessions : sessions,
-          repos: sameRepos ? state.repos : repos,
-          metaRepos: sameMetaRepos ? state.metaRepos : metaRepos,
-          workspaces: sameWorkspaces ? state.workspaces : workspaces,
-          stats: sameStats ? state.stats : stats,
-          plans: samePlans ? state.plans : plans,
-          lastError: null,
-          sessionsLoaded: true,
-        };
-      });
-    } catch (err) {
-      console.error("getAppState failed", err);
-      if (err instanceof ApiError) set({ lastError: err.message });
+      })();
+    }
+
+    const request = appStateRequest;
+    try {
+      await request;
+    } finally {
+      if (appStateRequest === request) appStateRequest = null;
     }
   },
 
@@ -427,7 +440,8 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
 }));
 
 let consumerCount = 0;
-let appStateTimer: ReturnType<typeof setInterval> | null = null;
+let appStateTimer: ReturnType<typeof setTimeout> | null = null;
+let pollingGeneration = 0;
 let popstateAttached = false;
 
 function syncSelectedSessionFromUrl() {
@@ -439,11 +453,16 @@ function startSessionStore() {
   consumerCount += 1;
   if (consumerCount > 1) return;
 
-  void useSessionStore.getState().loadAppState();
-  appStateTimer = window.setInterval(
-    () => void useSessionStore.getState().loadAppState(),
-    POLL_APP_STATE_MS,
-  );
+  const generation = ++pollingGeneration;
+  const poll = async () => {
+    await useSessionStore.getState().loadAppState();
+    if (consumerCount === 0 || pollingGeneration !== generation) return;
+    appStateTimer = window.setTimeout(() => {
+      appStateTimer = null;
+      void poll();
+    }, POLL_APP_STATE_MS);
+  };
+  void poll();
   if (!popstateAttached) {
     window.addEventListener("popstate", syncSelectedSessionFromUrl);
     popstateAttached = true;
@@ -455,8 +474,9 @@ function stopSessionStore() {
   consumerCount = Math.max(0, consumerCount - 1);
   if (consumerCount > 0) return;
 
+  pollingGeneration += 1;
   if (appStateTimer) {
-    clearInterval(appStateTimer);
+    clearTimeout(appStateTimer);
     appStateTimer = null;
   }
   if (popstateAttached) {
@@ -475,8 +495,10 @@ export function useSessions<T>(selector: (state: SessionStore) => T): T {
 
 export function resetSessionStore() {
   consumerCount = 0;
+  pollingGeneration += 1;
+  appStateRequest = null;
   if (appStateTimer) {
-    clearInterval(appStateTimer);
+    clearTimeout(appStateTimer);
     appStateTimer = null;
   }
   if (typeof window !== "undefined" && popstateAttached) {

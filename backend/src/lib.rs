@@ -82,6 +82,7 @@ pub struct AppState {
     pub ingester: Arc<ingest::Ingester>,
     /// Timestamp the app was constructed. Surfaced as `uptime_seconds`.
     pub start_time: Instant,
+    pub app_state_cache: Arc<api::AppStateCache>,
     pub stats_cache: Arc<api::StatsCache>,
     /// E2E-only hook that can ask active websocket attachers to close.
     pub ws_test_hooks: Arc<WsTestHooks>,
@@ -146,6 +147,7 @@ impl AppState {
             workspace_state,
             ingester,
             start_time: Instant::now(),
+            app_state_cache: Arc::new(api::AppStateCache::new()),
             stats_cache: Arc::new(api::StatsCache::new()),
             ws_test_hooks: Arc::new(WsTestHooks::default()),
             ws_tickets: Arc::new(api::WsTicketStore::default()),

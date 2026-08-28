@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use axum::extract::State;
@@ -7,6 +9,7 @@ use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::routes::{ApiError, ApiResult};
@@ -16,7 +19,74 @@ use crate::repo_state::RepoGitSummary;
 use crate::worktree::WorkspaceView;
 use crate::AppState;
 
-#[derive(Serialize)]
+const APP_STATE_CACHE_MAX_AGE: Duration = Duration::from_secs(1);
+
+struct CachedSnapshot<T> {
+    stored_at: Instant,
+    value: T,
+}
+
+struct CoalescedSnapshot<T> {
+    max_age: Duration,
+    inner: Mutex<Option<CachedSnapshot<T>>>,
+}
+
+impl<T: Clone> CoalescedSnapshot<T> {
+    fn new(max_age: Duration) -> Self {
+        Self {
+            max_age,
+            inner: Mutex::new(None),
+        }
+    }
+
+    async fn get_or_try_init<E, F, Fut>(&self, build: F) -> Result<T, E>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+    {
+        let mut cached = self.inner.lock().await;
+        if let Some(snapshot) = cached.as_ref() {
+            if snapshot.stored_at.elapsed() < self.max_age {
+                return Ok(snapshot.value.clone());
+            }
+        }
+
+        let value = build().await?;
+        *cached = Some(CachedSnapshot {
+            stored_at: Instant::now(),
+            value: value.clone(),
+        });
+        Ok(value)
+    }
+}
+
+pub struct AppStateCache {
+    snapshots: CoalescedSnapshot<AppStateResponse>,
+}
+
+impl AppStateCache {
+    pub fn new() -> Self {
+        Self {
+            snapshots: CoalescedSnapshot::new(APP_STATE_CACHE_MAX_AGE),
+        }
+    }
+
+    async fn get_or_build<F, Fut>(&self, build: F) -> ApiResult<AppStateResponse>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = ApiResult<AppStateResponse>>,
+    {
+        self.snapshots.get_or_try_init(build).await
+    }
+}
+
+impl Default for AppStateCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Serialize)]
 pub(super) struct AppStateResponse {
     generated_at: DateTime<Utc>,
     nodes: Vec<crate::node_protocol::NodeView>,
@@ -28,7 +98,7 @@ pub(super) struct AppStateResponse {
     stats: stats::StatsResponse,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct AppSessionView {
     id: Uuid,
     repo: String,
@@ -57,13 +127,13 @@ struct AppSessionView {
     future_prompts_pending_count: i32,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct AppSessionMetaRepoView {
     id: Uuid,
     name: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct AppSessionWorkspaceView {
     id: Uuid,
     repo_name: String,
@@ -75,7 +145,7 @@ struct AppSessionWorkspaceView {
     merge_target: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct AppAgentRuntimeView {
     agent: Option<String>,
     state: String,
@@ -84,7 +154,7 @@ struct AppAgentRuntimeView {
     exit_code: Option<i32>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct AppAgentSessionMetadataView {
     agent: String,
     model: Option<String>,
@@ -96,7 +166,7 @@ struct AppAgentSessionMetadataView {
     updated_at: DateTime<Utc>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct AppAgentUsageView {
     input_tokens: i64,
     cached_input_tokens: i64,
@@ -111,7 +181,7 @@ struct AppAgentUsageView {
     updated_at: DateTime<Utc>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct AppActivityView {
     state: String,
     summary: Option<String>,
@@ -121,7 +191,7 @@ struct AppActivityView {
     updated_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct AppCurrentPlanView {
     id: Uuid,
     title: String,
@@ -341,7 +411,7 @@ impl AppSessionRow {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct AppRepoView {
     name: String,
     path: String,
@@ -371,6 +441,14 @@ struct RepoStateRow {
 pub(super) async fn app_state(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Json<AppStateResponse>> {
+    let response = state
+        .app_state_cache
+        .get_or_build(|| build_app_state(&state))
+        .await?;
+    Ok(Json(response))
+}
+
+async fn build_app_state(state: &AppState) -> ApiResult<AppStateResponse> {
     let sessions = load_sessions(&state.pool).await?;
     let nodes = state
         .node_control
@@ -398,7 +476,7 @@ pub(super) async fn app_state(
         }
     };
 
-    Ok(Json(AppStateResponse {
+    Ok(AppStateResponse {
         generated_at: Utc::now(),
         nodes,
         sessions,
@@ -407,7 +485,7 @@ pub(super) async fn app_state(
         workspaces,
         plans,
         stats,
-    }))
+    })
 }
 
 async fn load_sessions(pool: &crate::db::Pool) -> ApiResult<Vec<AppSessionView>> {
@@ -569,4 +647,73 @@ fn repo_git_summary(row: &RepoStateRow) -> ApiResult<RepoGitSummary> {
         refreshing,
         status_error: row.status_error.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tokio::sync::Notify;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn coalesced_snapshot_runs_one_build_for_concurrent_callers() {
+        let cache = Arc::new(CoalescedSnapshot::new(Duration::from_secs(60)));
+        let builds = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+
+        let first = {
+            let cache = cache.clone();
+            let builds = builds.clone();
+            let started = started.clone();
+            let release = release.clone();
+            tokio::spawn(async move {
+                cache
+                    .get_or_try_init(|| async move {
+                        builds.fetch_add(1, Ordering::SeqCst);
+                        started.notify_one();
+                        release.notified().await;
+                        Ok::<_, ()>(42)
+                    })
+                    .await
+            })
+        };
+
+        started.notified().await;
+
+        let second = {
+            let cache = cache.clone();
+            let builds = builds.clone();
+            tokio::spawn(async move {
+                cache
+                    .get_or_try_init(|| async move {
+                        builds.fetch_add(1, Ordering::SeqCst);
+                        Ok::<_, ()>(99)
+                    })
+                    .await
+            })
+        };
+
+        tokio::task::yield_now().await;
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+
+        release.notify_one();
+        assert_eq!(
+            first
+                .await
+                .expect("first caller task")
+                .expect("first value"),
+            42
+        );
+        assert_eq!(
+            second
+                .await
+                .expect("second caller task")
+                .expect("second value"),
+            42
+        );
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+    }
 }
