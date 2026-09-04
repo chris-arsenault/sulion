@@ -17,10 +17,11 @@ The boundary is:
 - the **development node** launches PTYs and ships the wrapper tools
 - the **broker** stores encrypted secret bundles and redeems active grants
 
-The host's LAN-only SSH administration keys are outside this product secret
-flow. They authorize break-glass NixOS maintenance, live in a root-owned runtime
-file on `sulion-enclave`, and are never exposed to PTYs or used for node
-authentication.
+The host's SSH administration keys are outside this product secret flow. The
+public keys live in a root-owned runtime file on `sulion-enclave`; the private
+key used for administration lives as `devbox-ssh-key` in the trust appliance's
+secret store. It is never exposed to Sulion PTYs or used for node
+authentication, and the host firewall admits it only from that appliance.
 
 Terraform creates the metadata-only AWS Secrets Manager entry
 `sulion-enclave-admin-ssh-key` as an operator recovery backup for the matching

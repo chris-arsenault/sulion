@@ -63,7 +63,13 @@ in
     clientCidrs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ cfg.lanCidr ];
-      description = "IPv4 client networks admitted to SSH, SMB, and development ports.";
+      description = "IPv4 client networks admitted to SMB and development ports.";
+    };
+
+    sshAdminSource = lib.mkOption {
+      type = lib.types.str;
+      default = cfg.lanCidr;
+      description = "IPv4 address or CIDR admitted to the host's SSH service.";
     };
 
     devPortFrom = lib.mkOption {
@@ -119,6 +125,10 @@ in
         PermitRootLogin = "no";
       };
     };
+
+    networking.firewall.extraInputRules = ''
+      ip saddr ${cfg.sshAdminSource} tcp dport 22 accept comment "Sulion SSH admin"
+    '';
 
     virtualisation.docker = {
       enable = true;

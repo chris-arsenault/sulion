@@ -18,6 +18,7 @@ pkgs.testers.runNixOSTest {
       sulion = {
         enable = true;
         lanCidr = "192.168.0.0/16";
+        sshAdminSource = "192.168.67.2/32";
         samba.enable = true;
         deployer = {
           enable = true;
@@ -73,6 +74,12 @@ pkgs.testers.runNixOSTest {
     machine.succeed("sulion-admin-key list | grep -F SHA256:")
     machine.succeed("sudo -u sulion test -r /var/lib/sulion/config/ssh/authorized_keys")
     machine.wait_for_unit("sshd.service")
+    machine.succeed(
+      "nft list ruleset | grep -F 'Sulion SSH admin' | grep -qF 'ip saddr 192.168.67.2'"
+    )
+    machine.fail(
+      "nft list ruleset | grep -F 'Sulion SSH admin' | grep -qF '192.168.0.0/16'"
+    )
     machine.succeed(
       "ssh -o BatchMode=yes -o StrictHostKeyChecking=no "
       "-o UserKnownHostsFile=/dev/null -i /tmp/enclave-admin sulion@127.0.0.1 true"

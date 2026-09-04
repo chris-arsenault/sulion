@@ -28,19 +28,19 @@ bind paths sent to the host's Docker daemon resolve identically. The
 shared OCI image ships UID/GID 7321 as the `sulion` account with home
 `/home/sulion` — one identity in the image, on the host, and in every mounted
 path; no per-role aliasing and no second host user. Samba exports the repository directory as `repos`; workspaces,
-agent state, Docker state, and deployment secrets are not shared. SMB, SSH,
-and development ports are accepted only from `192.168.66.0/24`.
+agent state, Docker state, and deployment secrets are not shared. SMB and
+development ports accept the declared LAN client networks. SSH accepts only
+the trust management appliance at `192.168.67.2`.
 The node initiates its authenticated control connection outbound; this host
 exposes no Sulion API or frontend. All of its outbound Sulion traffic — control
 channel, secret broker, and retrieval — stays on the LAN. Nothing this host
 sends reaches the public hostname.
 
-SSH is a LAN-only break-glass administration path for rebuilding NixOS,
-rotating host keys, and recovering when the Sulion control plane is unavailable.
-It is not involved in normal browser terminals or node/control traffic. The
-administration key belongs on the Windows, macOS, or Linux workstation from
-which you will repair the host; only its public half is installed on the
-enclave.
+SSH is a trust-mediated administration path for rebuilding NixOS, rotating
+host keys, and recovering when the Sulion control plane is unavailable. It is
+not involved in normal Sulion browser terminals or node/control traffic. The
+private administration key is stored as `devbox-ssh-key` on the trust
+appliance; only its public half is installed on the enclave.
 
 ## Host contract
 
@@ -65,7 +65,7 @@ or improvise different storage choices during installation.
 | Time zone | UTC |
 | Console | US keymap, English UTF-8 environment, no graphical desktop |
 | Interactive identity | `sulion`, UID/GID 7321, wheel and NetworkManager member |
-| Remote login | SSH keys only; root SSH and SSH passwords disabled |
+| Remote login | SSH keys only from `192.168.67.2`; root SSH and SSH passwords disabled |
 | Node startup | enabled at boot; waits in the UI for one approval |
 
 No LUKS is an explicit availability choice: this node must recover from a
@@ -207,20 +207,10 @@ nmcli -f NAME,TYPE,DEVICE connection show --active
 Choose **Activate a connection** in `nmtui`. NetworkManager stores the selected
 profile outside the Nix store and reconnects automatically after reboot.
 
-From the client that owns the private key, verify SSH. On Linux or macOS:
-
-```bash
-ssh -i ~/.ssh/sulion-enclave sulion@sulion-enclave.local
-```
-
-On Windows PowerShell:
-
-```powershell
-ssh.exe -i "$env:USERPROFILE\.ssh\sulion-enclave" sulion@sulion-enclave
-```
-
-Use the machine's DHCP address if local hostname discovery is unavailable. Do
-not enable SSH password authentication as a shortcut.
+Before rebooting into the installed system, save the matching private key as
+`devbox-ssh-key` in the trust management console. After boot, open its
+**Terminal** tab and choose **devbox** to verify SSH. Direct workstation SSH is
+intentionally refused; do not enable SSH password authentication as a shortcut.
 
 ### First-boot acceptance
 
@@ -259,8 +249,9 @@ sudo nixos-rebuild test \
   --flake github:chris-arsenault/sulion/RELEASE_SHA#sulion-enclave
 ```
 
-Verify SSH, Docker, and Samba from another LAN machine while the test
-configuration is active. Then persist it:
+Verify SSH through the trust management console, and verify Docker and Samba
+from their normal LAN clients while the test configuration is active. Then
+persist it:
 
 ```bash
 sudo nixos-rebuild switch \

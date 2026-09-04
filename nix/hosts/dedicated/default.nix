@@ -1,6 +1,5 @@
 {
   config,
-  lib,
   pkgs,
   ...
 }:
@@ -15,9 +14,6 @@
 
   networking = {
     hostName = "sulion-enclave";
-    firewall.extraInputRules = ''
-      ip saddr { ${lib.concatStringsSep ", " config.sulion.clientCidrs} } tcp dport 22 accept comment "Sulion LAN SSH"
-    '';
     # The second 10G port sits in "connecting (getting IP configuration)"
     # forever — no DHCP answers there — which kept NetworkManager from
     # reaching startup-complete, failed NetworkManager-wait-online on
@@ -45,8 +41,10 @@
     group = "sulion";
     home = "/home/sulion";
     lanCidr = "192.168.66.0/24";
-    # Server subnet (this host's own) plus the home LAN, split from it at the
-    # VP2440 cutover; clients now connect from both.
+    # The management terminal on the trust appliance is the only SSH source.
+    sshAdminSource = "192.168.67.2/32";
+    # Server subnet (this host's own) plus the home LAN retain SMB and
+    # development-port access independently of the SSH administration path.
     clientCidrs = [
       "192.168.66.0/24"
       "192.168.65.0/24"

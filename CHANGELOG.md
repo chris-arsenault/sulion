@@ -4,6 +4,12 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Dedicated development node
+
+- Restricted host SSH to the trust management appliance at
+  `192.168.67.2/32`. Secure LAN and server-subnet clients retain SMB and
+  development-port access but can no longer open direct SSH sessions.
+
 ### Plans
 
 - Added branch plans: a published plan can now hang off one or more phases of
