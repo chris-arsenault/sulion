@@ -432,6 +432,30 @@ fn codex_world_state_records_hide_with_bookkeeping() {
     );
 }
 
+/// The 2026-09 Codex build writes a `token_usage_record` per model response.
+/// They are telemetry and arrive several times a turn, so they must not reach
+/// the timeline as generic rows.
+#[test]
+fn codex_token_usage_records_hide_with_bookkeeping() {
+    let mut usage_record = event(2, "token_usage_record", vec![]);
+    usage_record.is_meta = true;
+    let events = vec![
+        event(1, "user", vec![text(0, "prompt")]),
+        usage_record,
+        event(3, "assistant", vec![text(0, "reply")]),
+    ];
+
+    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
+    assert!(
+        projected.turns[0]
+            .chunks
+            .iter()
+            .all(|chunk| !matches!(chunk, TimelineChunk::Generic { .. })),
+        "token_usage_record leaked: {:?}",
+        projected.turns[0].chunks,
+    );
+}
+
 /// Newer Claude Code builds write bookkeeping record kinds (`mode`,
 /// `ai-title`, `file-history-delta`, …) that must not surface as generic
 /// timeline rows when bookkeeping is hidden.

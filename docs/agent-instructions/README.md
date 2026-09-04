@@ -40,6 +40,7 @@ sections are the environment-load-bearing parts.
 - **Credential boundaries** — auth failures are a stop-and-report boundary,
   never a prompt to hunt for substitute credentials.
 - **`sulion-retrieve` / `sulion-code` / `sulion plan`** — transcript search,
-  structural code navigation, and published phase summaries.
+  structural code navigation, and published phase summaries, including when to
+  branch a blocker into its own sub-plan rather than inline or abandon it.
 - **Git, planning, deployment-failure handling, working climate** — general
   practices; keep or adapt to taste.

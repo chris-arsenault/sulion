@@ -14,18 +14,20 @@ impl EventParser for CodexParser {
         match kind {
             "response_item" => parse_codex_response_item(value),
             "event_msg" => parse_codex_event_msg(value),
-            "session_meta" | "turn_context" | "compacted" => CanonicalEvent {
-                agent: self.agent_id(),
-                speaker: Speaker::System,
-                content_kind: ContentKind::None,
-                event_uuid: None,
-                parent_event_uuid: None,
-                related_tool_use_id: None,
-                is_sidechain: false,
-                is_meta: true,
-                subtype: Some(kind.to_string()),
-                blocks: Vec::new(),
-            },
+            "session_meta" | "turn_context" | "compacted" | "token_usage_record" => {
+                CanonicalEvent {
+                    agent: self.agent_id(),
+                    speaker: Speaker::System,
+                    content_kind: ContentKind::None,
+                    event_uuid: None,
+                    parent_event_uuid: None,
+                    related_tool_use_id: None,
+                    is_sidechain: false,
+                    is_meta: true,
+                    subtype: Some(kind.to_string()),
+                    blocks: Vec::new(),
+                }
+            }
             _ => CanonicalEvent {
                 agent: self.agent_id(),
                 speaker: Speaker::Other,

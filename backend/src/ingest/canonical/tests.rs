@@ -333,6 +333,33 @@ fn codex_reasoning_and_meta_records_are_preserved() {
     assert!(ev.blocks.is_empty());
 }
 
+/// The 2026-09 Codex build emits one `token_usage_record` per model response.
+/// It is plumbing like `turn_context`: no blocks, so it never reaches the
+/// timeline as an unknown record.
+#[test]
+fn codex_token_usage_record_is_plumbing_without_blocks() {
+    let ev = parse_codex(json!({
+        "type": "token_usage_record",
+        "payload": {
+            "thread_id": "01a06181-7d4a-70a0-806e-82ae542279a0",
+            "turn_id": "01a06b4f-dcfb-7091-853e-9ad2f7898713",
+            "response_id": "resp_000b84651c61066e016a9a72a8bac087d09481af20f46d3130",
+            "usage": {
+                "input_tokens": 73428,
+                "cached_input_tokens": 10880,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 122,
+                "reasoning_output_tokens": 25,
+                "total_tokens": 73550
+            }
+        }
+    }));
+    assert_eq!(ev.speaker, Speaker::System);
+    assert!(ev.is_meta);
+    assert_eq!(ev.subtype.as_deref(), Some("token_usage_record"));
+    assert!(ev.blocks.is_empty());
+}
+
 #[test]
 fn claude_edit_canonicalises_to_file_edits_inout_form() {
     let ev = parse_claude(json!({

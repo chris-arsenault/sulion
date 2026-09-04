@@ -50,6 +50,10 @@ pub(crate) const BOOKKEEPING_KINDS: &[&str] = &[
     "queue-operation",
     // Codex world-model snapshots ride along on most turns.
     "world_state",
+    // Per-response usage accounting, one record per model response since the
+    // 2026-09 Codex build. `token_count` still carries the session totals the
+    // usage projection reads; this is telemetry, not conversation.
+    "token_usage_record",
 ];
 
 #[derive(Debug, Clone)]

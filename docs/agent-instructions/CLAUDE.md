@@ -65,6 +65,32 @@ correct result in place, and continue natively.
   Keep phases current and close the plan when work lands. Single-step changes,
   pure questions, and read-only investigations without follow-on edits are
   exempt.
+- When a phase turns out to be blocked by work that is itself a multi-step job
+  — a prerequisite fix, an unrelated regression a gate surfaced, a repair that
+  has to land first — do not inline it into the phase and do not abandon the
+  plan. Mark the phase blocked with the reason, `sulion plan branch` a sub-plan
+  from it, do that work, then `sulion plan return --completed`. Branches nest,
+  so a blocker inside a blocker gets the same treatment. A one-line fix is not
+  a branch; inline it.
+
+## Read the thing, not the label
+
+Never state what something contains, means, or requires when you have only seen
+its label. A plan summary, a phase title, a file name, a status field, a
+one-line index entry, a search-result snippet, and a schema description are all
+labels. They tell you a thing exists. They do not tell you what is in it.
+
+Read the body before you assert, supersede, replace, or dismiss. This applies
+to plans and phases, entries and records, files and directories, tests, config,
+tickets, and prior agents' output. If reading it all is impractical, say which
+part you read and mark the rest as unverified.
+
+Two failures follow from breaking this, and both look like confident work:
+claiming a new thing covers an old one when it drops requirements the old body
+held, and judging a thing by a metadata field when the field describes its
+state rather than its substance. An empty placeholder for a settled decision
+and an empty placeholder that could never be filled carry the same status flag
+and are not the same object.
 
 ## Deployment failure handling
 
@@ -140,8 +166,25 @@ different credential is technically reachable.
 - Before re-deriving a past decision or asking me to repeat prior context, run
   `sulion-retrieve search "<question>"`. It searches transcripts, file history,
   and tool usage, scoped to the current repository by default.
+- **Add `--include user` to find something I said.** The default search returns
+  assistant text and tool operations only, so a question about what I asked for,
+  decided, or objected to comes back with your own past replies and none of my
+  instructions. Pair it with `--mode lexical` when you remember my actual
+  wording — semantic ranking buries a short instruction under long assistant
+  messages, while lexical puts it first. Never fall back to grepping
+  `~/.claude/projects/**/*.jsonl`; run `sulion-retrieve search "<my words>"
+  --include user --mode lexical` instead.
+- Run `sulion-retrieve help` before deciding the tool cannot answer something,
+  and `facets` or `index-status` before concluding a thing is not indexed.
 - Before structural code navigation, run `sulion-code help`, then use
   `sulion-code` for definitions, references, symbols, and structural searches.
+- Run `sulion plan help` before your first plan command in a session; it carries
+  the command surface, status vocabularies, and rules. `sulion plan branch
+  "<title>" --from <phase>` opens a sub-plan under one or more phases of the
+  current plan and moves this terminal onto it; repeat `--from` for a span
+  (`--from 4 --from 5 --from 6`). `sulion plan return` closes the sub-plan and
+  puts the terminal back on the parent, clearing any phase the branch was
+  blocked on. `sulion plan tree` shows where you are in a nested plan.
 - Use `sulion activity` to publish blocked or needs-input state. You may use
   `sulion name "<text>"` when a short terminal label helps distinguish sessions.
 - `$SULION_PTY_ID` identifies a managed PTY. The internal agent launcher is
