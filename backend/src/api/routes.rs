@@ -212,6 +212,8 @@ fn plan_router() -> Router<Arc<AppState>> {
             "/api/plans/:id/attachments/:pty_session_id",
             delete(plan_routes::detach_plan),
         )
+        .route("/api/plans/:id/branches", post(plan_routes::branch_plan))
+        .route("/api/plans/:id/tree", get(plan_routes::plan_tree))
         .route("/api/plans/:id/events", get(plan_routes::plan_events))
 }
 

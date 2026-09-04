@@ -12,7 +12,7 @@ use sulion::activity::ActivityState;
 use sulion::codex::{run_launcher, LauncherConfig};
 use sulion::correlate::{self, ControlRequest, CorrelateMsg, RuntimeEvent, RuntimeMsg};
 use sulion::db;
-use sulion::plans::{NewPhase, UpdatePhaseInput};
+use sulion::plans::{BranchPlanInput, NewPhase, UpdatePhaseInput, UpdatePlanInput};
 use sulion::pty::SpawnParams;
 
 mod common;
@@ -693,6 +693,250 @@ async fn control_socket_publishes_plans_and_preserves_explicit_attention() {
     .unwrap();
     assert!(history.ok, "{:?}", history.error);
     assert!(history.data.unwrap().as_array().unwrap().len() >= 4);
+
+    listener_task.abort();
+    let _ = std::fs::remove_file(&sock);
+}
+
+/// A branch covering several parent steps, nested one level deeper, then
+/// unwound. The PTY must follow the work down and back up, and the parent must
+/// refuse to close while anything is still open beneath it.
+#[tokio::test]
+async fn control_socket_branches_to_arbitrary_depth_and_returns_to_the_parent() {
+    let pool = fresh_pool().await;
+    let pty_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pty_sessions (id, repo, working_dir, state, created_at) \
+         VALUES ($1, 'r', '/tmp', 'live', NOW())",
+    )
+    .bind(pty_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let sock = tmp_sock();
+    let socket_path = sock.clone();
+    let listener_pool = pool.clone();
+    let listener_task = tokio::spawn(async move {
+        let _ = correlate::run(listener_pool, socket_path).await;
+    });
+    wait_for_socket(&sock).await;
+
+    let phase = |title: &str| NewPhase {
+        title: title.to_string(),
+        description: String::new(),
+        status: None,
+        size: None,
+    };
+    let root = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::PlanStart {
+            title: "Root plan".to_string(),
+            summary: String::new(),
+            phases: vec![
+                phase("One"),
+                phase("Two"),
+                phase("Three"),
+                phase("Four"),
+                phase("Five"),
+                phase("Six"),
+            ],
+            all_pending: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(root.ok, "{:?}", root.error);
+    let root_plan = root.data.unwrap();
+    let root_id = root_plan["id"].as_str().unwrap().parse::<Uuid>().unwrap();
+    assert_eq!(root_plan["depth"], 0);
+    assert_eq!(root_plan["root_plan_id"], root_plan["id"]);
+
+    // Phase 4 is where the agent gets stuck.
+    let blocked = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::PlanUpdatePhase {
+            plan_id: None,
+            phase_reference: "4".to_string(),
+            input: UpdatePhaseInput {
+                status: Some("blocked".to_string()),
+                status_note: Some("needs a prerequisite".to_string()),
+                title: None,
+                description: None,
+                position: None,
+                size: None,
+            },
+        },
+    )
+    .await
+    .unwrap();
+    assert!(blocked.ok, "{:?}", blocked.error);
+
+    let branched = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::PlanBranch {
+            plan_id: None,
+            input: BranchPlanInput {
+                title: "Cover four through six".to_string(),
+                summary: "Span branch".to_string(),
+                phases: vec![phase("Diagnose"), phase("Fix")],
+                all_pending: false,
+                parent_phase_refs: vec!["4".to_string(), "5".to_string(), "6".to_string()],
+                note: Some("prerequisite work".to_string()),
+            },
+        },
+    )
+    .await
+    .unwrap();
+    assert!(branched.ok, "{:?}", branched.error);
+    let branch = branched.data.unwrap();
+    let branch_id = branch["id"].as_str().unwrap().parse::<Uuid>().unwrap();
+    assert_eq!(branch["depth"], 1);
+    assert_eq!(branch["parent_plan_id"], root_plan["id"]);
+    assert_eq!(branch["root_plan_id"], root_plan["id"]);
+    assert_eq!(branch["anchor_phase_ids"].as_array().unwrap().len(), 3);
+    assert_eq!(branch["ancestors"].as_array().unwrap().len(), 1);
+    // The branch takes the PTY with it.
+    assert_eq!(
+        branch["attachments"][0]["pty_session_id"],
+        pty_id.to_string()
+    );
+
+    // Anchors that had not started are now under way; the blocked one is left
+    // exactly as the agent set it.
+    let parent = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::PlanShow {
+            plan_id: Some(root_id),
+        },
+    )
+    .await
+    .unwrap();
+    let parent_plan = parent.data.unwrap();
+    assert_eq!(parent_plan["phases"][3]["status"], "blocked");
+    assert_eq!(parent_plan["phases"][4]["status"], "in_progress");
+    assert_eq!(parent_plan["phases"][5]["status"], "in_progress");
+    assert_eq!(parent_plan["branches"].as_array().unwrap().len(), 1);
+
+    // Branch off the branch.
+    let deeper = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::PlanBranch {
+            plan_id: None,
+            input: BranchPlanInput {
+                title: "Sub-sub plan".to_string(),
+                phases: vec![phase("Dig")],
+                ..Default::default()
+            },
+        },
+    )
+    .await
+    .unwrap();
+    assert!(deeper.ok, "{:?}", deeper.error);
+    let deep = deeper.data.unwrap();
+    assert_eq!(deep["depth"], 2);
+    assert_eq!(deep["ancestors"].as_array().unwrap().len(), 2);
+    assert_eq!(deep["root_plan_id"], root_plan["id"]);
+
+    let tree = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::PlanTree {
+            plan_id: Some(root_id),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(tree.ok, "{:?}", tree.error);
+    assert_eq!(tree.data.unwrap().as_array().unwrap().len(), 3);
+
+    // The root cannot close out from under its open descendants.
+    let premature = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::PlanUpdate {
+            plan_id: Some(root_id),
+            input: UpdatePlanInput {
+                status: Some("completed".to_string()),
+                skip_remaining: true,
+                ..Default::default()
+            },
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!premature.ok);
+    assert!(premature.error.unwrap().contains("open branch"));
+
+    // Returning pops one level at a time.
+    let popped = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::PlanUpdate {
+            plan_id: None,
+            input: UpdatePlanInput {
+                status: Some("completed".to_string()),
+                skip_remaining: true,
+                require_branch: true,
+                ..Default::default()
+            },
+        },
+    )
+    .await
+    .unwrap();
+    assert!(popped.ok, "{:?}", popped.error);
+    let current = correlate::send_control(&sock, pty_id, ControlRequest::PlanCurrent)
+        .await
+        .unwrap();
+    assert_eq!(current.data.unwrap()["id"], branch_id.to_string());
+
+    let popped_again = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::PlanUpdate {
+            plan_id: None,
+            input: UpdatePlanInput {
+                status: Some("completed".to_string()),
+                skip_remaining: true,
+                require_branch: true,
+                ..Default::default()
+            },
+        },
+    )
+    .await
+    .unwrap();
+    assert!(popped_again.ok, "{:?}", popped_again.error);
+    let back_on_root = correlate::send_control(&sock, pty_id, ControlRequest::PlanCurrent)
+        .await
+        .unwrap();
+    let root_now = back_on_root.data.unwrap();
+    assert_eq!(root_now["id"], root_id.to_string());
+    // Completing the branch resolved what phase 4 was blocked on.
+    assert_eq!(root_now["phases"][3]["status"], "in_progress");
+
+    // `return` is for branches; a root has no parent to pop to.
+    let refused = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::PlanUpdate {
+            plan_id: None,
+            input: UpdatePlanInput {
+                status: Some("completed".to_string()),
+                skip_remaining: true,
+                require_branch: true,
+                ..Default::default()
+            },
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!refused.ok);
+    assert!(refused.error.unwrap().contains("not a branch"));
 
     listener_task.abort();
     let _ = std::fs::remove_file(&sock);

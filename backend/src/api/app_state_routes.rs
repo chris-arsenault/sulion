@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use axum::extract::State;
@@ -19,22 +19,30 @@ use crate::repo_state::RepoGitSummary;
 use crate::worktree::WorkspaceView;
 use crate::AppState;
 
-const APP_STATE_CACHE_MAX_AGE: Duration = Duration::from_secs(1);
-
 struct CachedSnapshot<T> {
-    stored_at: Instant,
+    /// How many builds had completed when this one finished.
+    completed_builds: u64,
     value: T,
 }
 
+/// Shares one build among the requests that are waiting for it, without ever
+/// handing a caller a snapshot older than its own request.
+///
+/// The lock is held across the build, so simultaneous pollers queue behind a
+/// single build and take its result — that is the polling pressure this bounds.
+/// A caller only accepts a stored snapshot when it was built *after* the caller
+/// arrived, which is what a time-based window cannot express: an agent or the
+/// browser that mutates state and immediately re-reads gets a fresh build,
+/// never its own pre-mutation view.
 struct CoalescedSnapshot<T> {
-    max_age: Duration,
+    completed_builds: AtomicU64,
     inner: Mutex<Option<CachedSnapshot<T>>>,
 }
 
 impl<T: Clone> CoalescedSnapshot<T> {
-    fn new(max_age: Duration) -> Self {
+    fn new() -> Self {
         Self {
-            max_age,
+            completed_builds: AtomicU64::new(0),
             inner: Mutex::new(None),
         }
     }
@@ -44,16 +52,18 @@ impl<T: Clone> CoalescedSnapshot<T> {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<T, E>>,
     {
+        let arrived_after = self.completed_builds.load(Ordering::SeqCst);
         let mut cached = self.inner.lock().await;
         if let Some(snapshot) = cached.as_ref() {
-            if snapshot.stored_at.elapsed() < self.max_age {
+            if snapshot.completed_builds > arrived_after {
                 return Ok(snapshot.value.clone());
             }
         }
 
         let value = build().await?;
+        let completed_builds = self.completed_builds.fetch_add(1, Ordering::SeqCst) + 1;
         *cached = Some(CachedSnapshot {
-            stored_at: Instant::now(),
+            completed_builds,
             value: value.clone(),
         });
         Ok(value)
@@ -67,7 +77,7 @@ pub struct AppStateCache {
 impl AppStateCache {
     pub fn new() -> Self {
         Self {
-            snapshots: CoalescedSnapshot::new(APP_STATE_CACHE_MAX_AGE),
+            snapshots: CoalescedSnapshot::new(),
         }
     }
 
@@ -197,6 +207,10 @@ struct AppCurrentPlanView {
     title: String,
     status: String,
     revision: i64,
+    /// 0 for a root plan; deeper values mean this PTY is on a branch.
+    depth: i32,
+    /// Title of the tree's root, present only when depth > 0.
+    root_title: Option<String>,
     total_phases: i32,
     completed_phases: i32,
     current_phase_id: Option<Uuid>,
@@ -266,6 +280,8 @@ struct AppSessionRow {
     plan_title: Option<String>,
     plan_status: Option<String>,
     plan_revision: Option<i64>,
+    plan_depth: Option<i32>,
+    plan_root_title: Option<String>,
     plan_total_phases: Option<i32>,
     plan_completed_phases: Option<i32>,
     plan_current_phase_id: Option<Uuid>,
@@ -402,6 +418,8 @@ impl AppSessionRow {
             title: self.plan_title.clone()?,
             status: self.plan_status.clone()?,
             revision: self.plan_revision?,
+            depth: self.plan_depth.unwrap_or_default(),
+            root_title: self.plan_root_title.clone(),
             total_phases: self.plan_total_phases.unwrap_or_default(),
             completed_phases: self.plan_completed_phases.unwrap_or_default(),
             current_phase_id: self.plan_current_phase_id,
@@ -467,7 +485,7 @@ async fn build_app_state(state: &AppState) -> ApiResult<AppStateResponse> {
     let stats = match state.stats_cache.get().await {
         Some(stats) => stats,
         None => {
-            stats::sample_stats_once(&state)
+            stats::sample_stats_once(state)
                 .await
                 .map_err(ApiError::Internal)?;
             state.stats_cache.get().await.ok_or_else(|| {
@@ -522,7 +540,8 @@ async fn load_sessions(pool: &crate::db::Pool) -> ApiResult<Vec<AppSessionView>>
                 sas.reason AS activity_reason, sas.source AS activity_source, \
                 sas.confidence AS activity_confidence, sas.updated_at AS activity_updated_at, \
                 plan.id AS plan_id, plan.title AS plan_title, plan.status AS plan_status, \
-                plan.revision AS plan_revision, \
+                plan.revision AS plan_revision, plan.depth AS plan_depth, \
+                plan_root.title AS plan_root_title, \
                 COALESCE(plan_stats.total_phases, 0)::INT AS plan_total_phases, \
                 COALESCE(plan_stats.completed_phases, 0)::INT AS plan_completed_phases, \
                 current_phase.id AS plan_current_phase_id, \
@@ -540,6 +559,8 @@ async fn load_sessions(pool: &crate::db::Pool) -> ApiResult<Vec<AppSessionView>>
            LEFT JOIN plan_attachments pa \
              ON pa.pty_session_id = ps.id AND pa.detached_at IS NULL \
            LEFT JOIN plans plan ON plan.id = pa.plan_id \
+           LEFT JOIN plans plan_root \
+             ON plan_root.id = plan.root_plan_id AND plan.depth > 0 \
            LEFT JOIN LATERAL ( \
                SELECT COUNT(*) AS total_phases, \
                       COUNT(*) FILTER (WHERE status = 'completed') AS completed_phases \
@@ -659,7 +680,7 @@ mod tests {
 
     #[tokio::test]
     async fn coalesced_snapshot_runs_one_build_for_concurrent_callers() {
-        let cache = Arc::new(CoalescedSnapshot::new(Duration::from_secs(60)));
+        let cache = Arc::new(CoalescedSnapshot::new());
         let builds = Arc::new(AtomicUsize::new(0));
         let started = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
@@ -715,5 +736,18 @@ mod tests {
             42
         );
         assert_eq!(builds.load(Ordering::SeqCst), 1);
+    }
+
+    /// The reason this is not a time-based cache: a caller that arrives after a
+    /// build finished may have changed something in between, so it rebuilds.
+    #[tokio::test]
+    async fn a_caller_arriving_after_a_build_never_gets_that_build() {
+        let cache = CoalescedSnapshot::new();
+        let builds = AtomicUsize::new(0);
+        let mut build = || async { Ok::<_, ()>(builds.fetch_add(1, Ordering::SeqCst) + 1) };
+
+        assert_eq!(cache.get_or_try_init(&mut build).await, Ok(1));
+        assert_eq!(cache.get_or_try_init(&mut build).await, Ok(2));
+        assert_eq!(builds.load(Ordering::SeqCst), 2);
     }
 }

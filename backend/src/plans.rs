@@ -3,18 +3,30 @@ use uuid::Uuid;
 
 use crate::db::Pool;
 
+mod branches;
 mod model;
+mod phases;
 
+use branches::{ancestors, anchor_phase_ids, branch_views, close_branch_into_parent};
+pub use branches::{branch, tree};
 use model::PlanRow;
 pub use model::{
-    CreatePlanInput, NewPhase, PlanActor, PlanAttachmentView, PlanEventView, PlanPhaseView,
-    PlanSummaryView, PlanView, UpdatePhaseInput, UpdatePlanInput,
+    BranchPlanInput, CreatePlanInput, NewPhase, PlanActor, PlanAncestorView, PlanAttachmentView,
+    PlanBranchView, PlanEventView, PlanPhaseView, PlanSummaryView, PlanTreeNodeView, PlanView,
+    UpdatePhaseInput, UpdatePlanInput,
 };
+pub use phases::{add_phase, resolve_phase_id, update_phase};
+use phases::{initial_phase_status, skip_remaining_phases, validate_phase_size};
 
 const MAX_TITLE_CHARS: usize = 160;
 const MAX_SUMMARY_CHARS: usize = 1_000;
 const MAX_DESCRIPTION_CHARS: usize = 1_000;
 const MAX_NOTE_CHARS: usize = 1_000;
+
+const PLAN_COLUMNS: &str = "id, repo_name, title, summary, status, revision, \
+     parent_plan_id, root_plan_id, depth, \
+     created_by_pty_id, created_by_agent_session_uuid, \
+     created_at, updated_at, closed_at";
 
 pub async fn create(
     pool: &Pool,
@@ -25,82 +37,15 @@ pub async fn create(
     let repo_name = required_text(&input.repo_name, "repo name", MAX_TITLE_CHARS)?;
     let title = required_text(&input.title, "plan title", MAX_TITLE_CHARS)?;
     let summary = limited_text(&input.summary, "plan summary", MAX_SUMMARY_CHARS)?;
-    if input.phases.is_empty() {
-        anyhow::bail!("a published plan requires at least one phase");
-    }
-    let mut phases = Vec::with_capacity(input.phases.len());
-    for (index, phase) in input.phases.iter().enumerate() {
-        phases.push((
-            required_text(&phase.title, "phase title", MAX_TITLE_CHARS)?,
-            limited_text(
-                &phase.description,
-                "phase description",
-                MAX_DESCRIPTION_CHARS,
-            )?,
-            initial_phase_status(phase.status.as_deref(), index, input.all_pending)?,
-            validate_phase_size(phase.size.as_deref())?,
-        ));
-    }
+    let phases = validate_new_phases(&input.phases, input.all_pending)?;
 
     let plan_id = Uuid::new_v4();
     let mut tx = pool.begin().await?;
-    sqlx::query(
-        "INSERT INTO plans \
-             (id, repo_name, title, summary, status, revision, created_by_pty_id, \
-              created_by_agent_session_uuid, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, 'active', 1, $5, $6, NOW(), NOW())",
-    )
-    .bind(plan_id)
-    .bind(&repo_name)
-    .bind(&title)
-    .bind(&summary)
-    .bind(actor.pty_session_id)
-    .bind(actor.agent_session_uuid)
-    .execute(&mut *tx)
-    .await?;
-
-    insert_event(
-        &mut tx,
-        plan_id,
-        None,
-        "plan_created",
-        actor,
-        None,
-        Some("active"),
-        None,
+    insert_plan(
+        &mut tx, plan_id, &repo_name, &title, &summary, None, plan_id, 0, actor,
     )
     .await?;
-
-    for (index, (phase_title, description, status, size)) in phases.into_iter().enumerate() {
-        let phase_id = Uuid::new_v4();
-        let started = status == "in_progress";
-        sqlx::query(
-            "INSERT INTO plan_phases \
-                 (id, plan_id, position, title, description, status, size, started_at, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $8, CASE WHEN $7 THEN NOW() ELSE NULL END, NOW(), NOW())",
-        )
-        .bind(phase_id)
-        .bind(plan_id)
-        .bind(index as i32 + 1)
-        .bind(phase_title)
-        .bind(description)
-        .bind(&status)
-        .bind(started)
-        .bind(size)
-        .execute(&mut *tx)
-        .await?;
-        insert_event(
-            &mut tx,
-            plan_id,
-            Some(phase_id),
-            "phase_added",
-            actor,
-            None,
-            Some(&status),
-            None,
-        )
-        .await?;
-    }
+    insert_phases(&mut tx, plan_id, phases, actor).await?;
 
     if input.attach_current_pty {
         if let Some(pty_id) = actor.pty_session_id {
@@ -112,16 +57,11 @@ pub async fn create(
 }
 
 pub async fn get(pool: &Pool, plan_id: Uuid) -> anyhow::Result<PlanView> {
-    let row: PlanRow = sqlx::query_as(
-        "SELECT id, repo_name, title, summary, status, revision, \
-                created_by_pty_id, created_by_agent_session_uuid, \
-                created_at, updated_at, closed_at \
-           FROM plans WHERE id = $1",
-    )
-    .bind(plan_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| anyhow::anyhow!("plan not found: {plan_id}"))?;
+    let row: PlanRow = sqlx::query_as(&format!("SELECT {PLAN_COLUMNS} FROM plans WHERE id = $1"))
+        .bind(plan_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("plan not found: {plan_id}"))?;
     hydrate(pool, row).await
 }
 
@@ -142,16 +82,14 @@ pub async fn list_for_repo(
     repo_name: &str,
     include_closed: bool,
 ) -> anyhow::Result<Vec<PlanView>> {
-    let rows: Vec<PlanRow> = sqlx::query_as(
-        "SELECT id, repo_name, title, summary, status, revision, \
-                created_by_pty_id, created_by_agent_session_uuid, \
-                created_at, updated_at, closed_at \
+    let rows: Vec<PlanRow> = sqlx::query_as(&format!(
+        "SELECT {PLAN_COLUMNS} \
            FROM plans \
           WHERE repo_name = $1 \
             AND ($2 OR status IN ('active', 'paused')) \
           ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 ELSE 2 END, \
                    updated_at DESC",
-    )
+    ))
     .bind(repo_name)
     .bind(include_closed)
     .fetch_all(pool)
@@ -173,6 +111,8 @@ pub async fn list_open_summaries(pool: &Pool) -> anyhow::Result<Vec<PlanSummaryV
                 current_phase.title AS current_phase_title, \
                 current_phase.status AS current_phase_status, \
                 COALESCE(attached.pty_ids, ARRAY[]::UUID[]) AS attached_pty_ids, \
+                p.parent_plan_id, p.root_plan_id, p.depth, \
+                COALESCE(branches.open_branches, 0)::INT AS open_branches, \
                 p.updated_at \
            FROM plans p \
            LEFT JOIN LATERAL ( \
@@ -194,6 +134,12 @@ pub async fn list_open_summaries(pool: &Pool) -> anyhow::Result<Vec<PlanSummaryV
                  FROM plan_attachments pa \
                 WHERE pa.plan_id = p.id AND pa.detached_at IS NULL \
            ) attached ON TRUE \
+           LEFT JOIN LATERAL ( \
+               SELECT COUNT(*) AS open_branches \
+                 FROM plans child \
+                WHERE child.parent_plan_id = p.id \
+                  AND child.status IN ('active', 'paused') \
+           ) branches ON TRUE \
           WHERE p.status IN ('active', 'paused') \
           ORDER BY p.repo_name, p.updated_at DESC",
     )
@@ -210,12 +156,14 @@ pub async fn update(
 ) -> anyhow::Result<PlanView> {
     validate_actor(actor)?;
     let mut tx = pool.begin().await?;
-    let current: (String, String, String) =
-        sqlx::query_as("SELECT title, summary, status FROM plans WHERE id = $1 FOR UPDATE")
-            .bind(plan_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("plan not found: {plan_id}"))?;
+    let current: (String, String, String, Option<Uuid>) = sqlx::query_as(
+        "SELECT title, summary, status, parent_plan_id FROM plans WHERE id = $1 FOR UPDATE",
+    )
+    .bind(plan_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("plan not found: {plan_id}"))?;
+    let parent_plan_id = current.3;
     let title = match input.title.as_deref() {
         Some(value) => required_text(value, "plan title", MAX_TITLE_CHARS)?,
         None => current.0,
@@ -227,6 +175,30 @@ pub async fn update(
     let status = input.status.as_deref().unwrap_or(&current.2);
     validate_plan_status(status)?;
     let note = clean_note(input.note.as_deref())?;
+
+    if input.require_branch && parent_plan_id.is_none() {
+        anyhow::bail!("this plan is not a branch; close it with plan close instead of plan return");
+    }
+
+    // A closed parent would strand its open branches: they stay attachable and
+    // reachable but can never pop back. Close the tree bottom-up instead.
+    if matches!(status, "completed" | "canceled") {
+        let open_branches: Vec<String> = sqlx::query_scalar(
+            "SELECT title FROM plans \
+              WHERE parent_plan_id = $1 AND status IN ('active', 'paused') \
+              ORDER BY created_at",
+        )
+        .bind(plan_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        if !open_branches.is_empty() {
+            anyhow::bail!(
+                "plan has {} open branch(es): {}; close them first",
+                open_branches.len(),
+                open_branches.join(", ")
+            );
+        }
+    }
 
     if status == "completed" {
         let unfinished: i64 = sqlx::query_scalar(
@@ -282,151 +254,16 @@ pub async fn update(
     .await?;
 
     if matches!(status, "completed" | "canceled") {
-        sqlx::query(
-            "UPDATE plan_attachments SET detached_at = NOW() \
-              WHERE plan_id = $1 AND detached_at IS NULL",
+        close_branch_into_parent(
+            &mut tx,
+            plan_id,
+            parent_plan_id,
+            status,
+            actor,
+            note.as_deref(),
         )
-        .bind(plan_id)
-        .execute(&mut *tx)
         .await?;
     }
-    tx.commit().await?;
-    get(pool, plan_id).await
-}
-
-pub async fn add_phase(
-    pool: &Pool,
-    plan_id: Uuid,
-    phase: NewPhase,
-    actor: &PlanActor,
-) -> anyhow::Result<PlanView> {
-    validate_actor(actor)?;
-    let title = required_text(&phase.title, "phase title", MAX_TITLE_CHARS)?;
-    let description = limited_text(
-        &phase.description,
-        "phase description",
-        MAX_DESCRIPTION_CHARS,
-    )?;
-    let status = phase.status.as_deref().unwrap_or("pending");
-    validate_phase_status(status)?;
-    let size = validate_phase_size(phase.size.as_deref())?;
-    let mut tx = pool.begin().await?;
-    ensure_plan_open(&mut tx, plan_id).await?;
-    let position: i32 = sqlx::query_scalar(
-        "SELECT COALESCE(MAX(position), 0)::INT + 1 FROM plan_phases WHERE plan_id = $1",
-    )
-    .bind(plan_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    let phase_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO plan_phases \
-             (id, plan_id, position, title, description, status, size, started_at, completed_at, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, \
-                 CASE WHEN $6 = 'in_progress' THEN NOW() ELSE NULL END, \
-                 CASE WHEN $6 IN ('completed', 'skipped') THEN NOW() ELSE NULL END, NOW(), NOW())",
-    )
-    .bind(phase_id)
-    .bind(plan_id)
-    .bind(position)
-    .bind(title)
-    .bind(description)
-    .bind(status)
-    .bind(size)
-    .execute(&mut *tx)
-    .await?;
-    bump_revision(&mut tx, plan_id).await?;
-    insert_event(
-        &mut tx,
-        plan_id,
-        Some(phase_id),
-        "phase_added",
-        actor,
-        None,
-        Some(status),
-        None,
-    )
-    .await?;
-    tx.commit().await?;
-    get(pool, plan_id).await
-}
-
-pub async fn update_phase(
-    pool: &Pool,
-    plan_id: Uuid,
-    phase_id: Uuid,
-    input: UpdatePhaseInput,
-    actor: &PlanActor,
-) -> anyhow::Result<PlanView> {
-    validate_actor(actor)?;
-    let mut tx = pool.begin().await?;
-    ensure_plan_open(&mut tx, plan_id).await?;
-    let current: PlanPhaseView = sqlx::query_as(
-        "SELECT id, plan_id, position, title, description, status, status_note, size, \
-                started_at, completed_at, created_at, updated_at \
-           FROM plan_phases WHERE id = $1 AND plan_id = $2 FOR UPDATE",
-    )
-    .bind(phase_id)
-    .bind(plan_id)
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or_else(|| anyhow::anyhow!("phase not found: {phase_id}"))?;
-    let title = match input.title.as_deref() {
-        Some(value) => required_text(value, "phase title", MAX_TITLE_CHARS)?,
-        None => current.title,
-    };
-    let description = match input.description.as_deref() {
-        Some(value) => limited_text(value, "phase description", MAX_DESCRIPTION_CHARS)?,
-        None => current.description,
-    };
-    let status = input.status.as_deref().unwrap_or(&current.status);
-    validate_phase_status(status)?;
-    let status_note = match input.status_note.as_deref() {
-        Some(value) => clean_note(Some(value))?,
-        None => current.status_note,
-    };
-    let size = match input.size.as_deref() {
-        Some(value) => validate_phase_size(Some(value))?,
-        None => current.size,
-    };
-    if let Some(position) = input.position {
-        move_phase(&mut tx, plan_id, phase_id, current.position, position).await?;
-    }
-    sqlx::query(
-        "UPDATE plan_phases \
-            SET title = $3, description = $4, status = $5, status_note = $6, size = $7, \
-                started_at = CASE \
-                    WHEN $5 IN ('in_progress', 'blocked') THEN COALESCE(started_at, NOW()) \
-                    WHEN $5 = 'pending' THEN NULL ELSE started_at END, \
-                completed_at = CASE WHEN $5 IN ('completed', 'skipped') THEN COALESCE(completed_at, NOW()) ELSE NULL END, \
-                updated_at = NOW() \
-          WHERE id = $1 AND plan_id = $2",
-    )
-    .bind(phase_id)
-    .bind(plan_id)
-    .bind(title)
-    .bind(description)
-    .bind(status)
-    .bind(status_note.as_deref())
-    .bind(size.as_deref())
-    .execute(&mut *tx)
-    .await?;
-    bump_revision(&mut tx, plan_id).await?;
-    insert_event(
-        &mut tx,
-        plan_id,
-        Some(phase_id),
-        if status == current.status {
-            "phase_updated"
-        } else {
-            "phase_status_changed"
-        },
-        actor,
-        Some(&current.status),
-        Some(status),
-        status_note.as_deref(),
-    )
-    .await?;
     tx.commit().await?;
     get(pool, plan_id).await
 }
@@ -522,27 +359,6 @@ pub async fn resolve_plan_id(
     Ok(id)
 }
 
-pub async fn resolve_phase_id(pool: &Pool, plan_id: Uuid, reference: &str) -> anyhow::Result<Uuid> {
-    if let Ok(id) = Uuid::parse_str(reference) {
-        let found: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM plan_phases WHERE plan_id = $1 AND id = $2")
-                .bind(plan_id)
-                .bind(id)
-                .fetch_optional(pool)
-                .await?;
-        return found.ok_or_else(|| anyhow::anyhow!("phase not found: {reference}"));
-    }
-    let position: i32 = reference
-        .parse()
-        .map_err(|_| anyhow::anyhow!("phase must be a UUID or 1-based position"))?;
-    sqlx::query_scalar("SELECT id FROM plan_phases WHERE plan_id = $1 AND position = $2")
-        .bind(plan_id)
-        .bind(position)
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("phase not found at position {position}"))
-}
-
 async fn hydrate(pool: &Pool, row: PlanRow) -> anyhow::Result<PlanView> {
     let phases = sqlx::query_as(
         "SELECT id, plan_id, position, title, description, status, status_note, size, \
@@ -561,6 +377,13 @@ async fn hydrate(pool: &Pool, row: PlanRow) -> anyhow::Result<PlanView> {
     .bind(row.id)
     .fetch_all(pool)
     .await?;
+    let anchor_phase_ids = anchor_phase_ids(pool, row.id).await?;
+    let ancestors = if row.parent_plan_id.is_some() {
+        ancestors(pool, row.id).await?
+    } else {
+        Vec::new()
+    };
+    let branches = branch_views(pool, row.id).await?;
     Ok(PlanView {
         id: row.id,
         repo_name: row.repo_name,
@@ -568,6 +391,9 @@ async fn hydrate(pool: &Pool, row: PlanRow) -> anyhow::Result<PlanView> {
         summary: row.summary,
         status: row.status,
         revision: row.revision,
+        parent_plan_id: row.parent_plan_id,
+        root_plan_id: row.root_plan_id,
+        depth: row.depth,
         created_by_pty_id: row.created_by_pty_id,
         created_by_agent_session_uuid: row.created_by_agent_session_uuid,
         created_at: row.created_at,
@@ -575,7 +401,124 @@ async fn hydrate(pool: &Pool, row: PlanRow) -> anyhow::Result<PlanView> {
         closed_at: row.closed_at,
         phases,
         attachments,
+        anchor_phase_ids,
+        ancestors,
+        branches,
     })
+}
+
+/// Title, description, initial status, and optional size — validated and ready
+/// to insert.
+type CheckedPhase = (String, String, String, Option<String>);
+
+fn validate_new_phases(
+    phases: &[NewPhase],
+    all_pending: bool,
+) -> anyhow::Result<Vec<CheckedPhase>> {
+    if phases.is_empty() {
+        anyhow::bail!("a published plan requires at least one phase");
+    }
+    let mut out = Vec::with_capacity(phases.len());
+    for (index, phase) in phases.iter().enumerate() {
+        out.push((
+            required_text(&phase.title, "phase title", MAX_TITLE_CHARS)?,
+            limited_text(
+                &phase.description,
+                "phase description",
+                MAX_DESCRIPTION_CHARS,
+            )?,
+            initial_phase_status(phase.status.as_deref(), index, all_pending)?,
+            validate_phase_size(phase.size.as_deref())?,
+        ));
+    }
+    Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_plan(
+    tx: &mut Transaction<'_, Postgres>,
+    plan_id: Uuid,
+    repo_name: &str,
+    title: &str,
+    summary: &str,
+    parent_plan_id: Option<Uuid>,
+    root_plan_id: Uuid,
+    depth: i32,
+    actor: &PlanActor,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO plans \
+             (id, repo_name, title, summary, status, revision, parent_plan_id, \
+              root_plan_id, depth, created_by_pty_id, created_by_agent_session_uuid, \
+              created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, 'active', 1, $5, $6, $7, $8, $9, NOW(), NOW())",
+    )
+    .bind(plan_id)
+    .bind(repo_name)
+    .bind(title)
+    .bind(summary)
+    .bind(parent_plan_id)
+    .bind(root_plan_id)
+    .bind(depth)
+    .bind(actor.pty_session_id)
+    .bind(actor.agent_session_uuid)
+    .execute(&mut **tx)
+    .await?;
+    insert_event(
+        tx,
+        plan_id,
+        None,
+        if parent_plan_id.is_some() {
+            "branch_created"
+        } else {
+            "plan_created"
+        },
+        actor,
+        None,
+        Some("active"),
+        None,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn insert_phases(
+    tx: &mut Transaction<'_, Postgres>,
+    plan_id: Uuid,
+    phases: Vec<CheckedPhase>,
+    actor: &PlanActor,
+) -> anyhow::Result<()> {
+    for (index, (title, description, status, size)) in phases.into_iter().enumerate() {
+        let phase_id = Uuid::new_v4();
+        let started = status == "in_progress";
+        sqlx::query(
+            "INSERT INTO plan_phases \
+                 (id, plan_id, position, title, description, status, size, started_at, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $8, CASE WHEN $7 THEN NOW() ELSE NULL END, NOW(), NOW())",
+        )
+        .bind(phase_id)
+        .bind(plan_id)
+        .bind(index as i32 + 1)
+        .bind(title)
+        .bind(description)
+        .bind(&status)
+        .bind(started)
+        .bind(size)
+        .execute(&mut **tx)
+        .await?;
+        insert_event(
+            tx,
+            plan_id,
+            Some(phase_id),
+            "phase_added",
+            actor,
+            None,
+            Some(&status),
+            None,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 async fn attach_in_tx(
@@ -671,97 +614,6 @@ async fn ensure_plan_open(tx: &mut Transaction<'_, Postgres>, plan_id: Uuid) -> 
     Ok(())
 }
 
-async fn move_phase(
-    tx: &mut Transaction<'_, Postgres>,
-    plan_id: Uuid,
-    phase_id: Uuid,
-    old_position: i32,
-    requested_position: i32,
-) -> anyhow::Result<()> {
-    let count: i32 = sqlx::query_scalar("SELECT COUNT(*)::INT FROM plan_phases WHERE plan_id = $1")
-        .bind(plan_id)
-        .fetch_one(&mut **tx)
-        .await?;
-    let new_position = requested_position.clamp(1, count);
-    if new_position == old_position {
-        return Ok(());
-    }
-    sqlx::query("SET CONSTRAINTS plan_phases_plan_position_key DEFERRED")
-        .execute(&mut **tx)
-        .await?;
-    if new_position < old_position {
-        sqlx::query(
-            "UPDATE plan_phases SET position = position + 1, updated_at = NOW() \
-              WHERE plan_id = $1 AND position >= $2 AND position < $3 AND id <> $4",
-        )
-        .bind(plan_id)
-        .bind(new_position)
-        .bind(old_position)
-        .bind(phase_id)
-        .execute(&mut **tx)
-        .await?;
-    } else {
-        sqlx::query(
-            "UPDATE plan_phases SET position = position - 1, updated_at = NOW() \
-              WHERE plan_id = $1 AND position > $2 AND position <= $3 AND id <> $4",
-        )
-        .bind(plan_id)
-        .bind(old_position)
-        .bind(new_position)
-        .bind(phase_id)
-        .execute(&mut **tx)
-        .await?;
-    }
-    sqlx::query("UPDATE plan_phases SET position = $3 WHERE plan_id = $1 AND id = $2")
-        .bind(plan_id)
-        .bind(phase_id)
-        .bind(new_position)
-        .execute(&mut **tx)
-        .await?;
-    Ok(())
-}
-
-async fn skip_remaining_phases(
-    tx: &mut Transaction<'_, Postgres>,
-    plan_id: Uuid,
-    actor: &PlanActor,
-    note: Option<&str>,
-) -> anyhow::Result<()> {
-    let rows: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT id, status FROM plan_phases \
-          WHERE plan_id = $1 AND status NOT IN ('completed', 'skipped') \
-          ORDER BY position FOR UPDATE",
-    )
-    .bind(plan_id)
-    .fetch_all(&mut **tx)
-    .await?;
-    for (phase_id, from_status) in rows {
-        sqlx::query(
-            "UPDATE plan_phases \
-                SET status = 'skipped', status_note = COALESCE($3, status_note), \
-                    completed_at = NOW(), updated_at = NOW() \
-              WHERE plan_id = $1 AND id = $2",
-        )
-        .bind(plan_id)
-        .bind(phase_id)
-        .bind(note)
-        .execute(&mut **tx)
-        .await?;
-        insert_event(
-            tx,
-            plan_id,
-            Some(phase_id),
-            "phase_status_changed",
-            actor,
-            Some(&from_status),
-            Some("skipped"),
-            note,
-        )
-        .await?;
-    }
-    Ok(())
-}
-
 async fn bump_revision(tx: &mut Transaction<'_, Postgres>, plan_id: Uuid) -> anyhow::Result<()> {
     sqlx::query("UPDATE plans SET revision = revision + 1, updated_at = NOW() WHERE id = $1")
         .bind(plan_id)
@@ -801,22 +653,6 @@ async fn insert_event(
     Ok(())
 }
 
-fn initial_phase_status(
-    requested: Option<&str>,
-    index: usize,
-    all_pending: bool,
-) -> anyhow::Result<String> {
-    let status = requested.unwrap_or({
-        if index == 0 && !all_pending {
-            "in_progress"
-        } else {
-            "pending"
-        }
-    });
-    validate_phase_status(status)?;
-    Ok(status.to_string())
-}
-
 fn required_text(value: &str, label: &str, max_chars: usize) -> anyhow::Result<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -845,31 +681,6 @@ fn validate_plan_status(status: &str) -> anyhow::Result<()> {
         Ok(())
     } else {
         anyhow::bail!("invalid plan status: {status}")
-    }
-}
-
-fn validate_phase_status(status: &str) -> anyhow::Result<()> {
-    if matches!(
-        status,
-        "pending" | "in_progress" | "blocked" | "completed" | "skipped"
-    ) {
-        Ok(())
-    } else {
-        anyhow::bail!("invalid phase status: {status}")
-    }
-}
-
-/// Normalize an optional phase size. Case-insensitive; empty clears it.
-fn validate_phase_size(size: Option<&str>) -> anyhow::Result<Option<String>> {
-    let Some(raw) = size else { return Ok(None) };
-    let normalized = raw.trim().to_ascii_lowercase();
-    if normalized.is_empty() {
-        return Ok(None);
-    }
-    if matches!(normalized.as_str(), "s" | "m" | "l") {
-        Ok(Some(normalized))
-    } else {
-        anyhow::bail!("invalid phase size: {raw} (expected s, m, or l)")
     }
 }
 

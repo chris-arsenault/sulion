@@ -61,6 +61,10 @@ export interface CurrentPlanView {
   title: string;
   status: PlanStatus;
   revision: number;
+  /** 0 for a root plan; higher means this PTY is working a branch. */
+  depth: number;
+  /** Title of the tree's root, present only when depth > 0. */
+  root_title: string | null;
   total_phases: number;
   completed_phases: number;
   current_phase_id: string | null;
@@ -260,6 +264,37 @@ export interface PlanAttachmentView {
   attached_at: string;
 }
 
+export interface PlanAncestorView {
+  id: string;
+  title: string;
+  status: PlanStatus;
+  depth: number;
+}
+
+/** A direct sub-plan, with the parent phases it covers. */
+export interface PlanBranchView {
+  id: string;
+  title: string;
+  summary: string;
+  status: PlanStatus;
+  depth: number;
+  total_phases: number;
+  completed_phases: number;
+  anchor_phase_ids: string[];
+}
+
+export interface PlanTreeNodeView {
+  id: string;
+  title: string;
+  status: PlanStatus;
+  depth: number;
+  parent_plan_id: string | null;
+  total_phases: number;
+  completed_phases: number;
+  blocked_phases: number;
+  attached_pty_ids: string[];
+}
+
 export interface PlanView {
   id: string;
   repo_name: string;
@@ -267,6 +302,9 @@ export interface PlanView {
   summary: string;
   status: PlanStatus;
   revision: number;
+  parent_plan_id: string | null;
+  root_plan_id: string;
+  depth: number;
   created_by_pty_id: string | null;
   created_by_agent_session_uuid: string | null;
   created_at: string;
@@ -274,6 +312,21 @@ export interface PlanView {
   closed_at: string | null;
   phases: PlanPhaseView[];
   attachments: PlanAttachmentView[];
+  /** Phases in the parent plan this plan covers; empty for a root. */
+  anchor_phase_ids: string[];
+  /** Root first, immediate parent last; empty for a root. */
+  ancestors: PlanAncestorView[];
+  /** Direct sub-plans, open ones first. */
+  branches: PlanBranchView[];
+}
+
+export interface BranchPlanRequest {
+  title: string;
+  summary?: string;
+  phases: NewPlanPhaseInput[];
+  all_pending?: boolean;
+  parent_phase_refs?: string[];
+  note?: string;
 }
 
 export interface PlanSummaryView {
@@ -290,6 +343,10 @@ export interface PlanSummaryView {
   current_phase_title: string | null;
   current_phase_status: PlanPhaseStatus | null;
   attached_pty_ids: string[];
+  parent_plan_id: string | null;
+  root_plan_id: string;
+  depth: number;
+  open_branches: number;
   updated_at: string;
 }
 

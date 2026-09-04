@@ -11,6 +11,7 @@ import { useShallow } from "zustand/react/shallow";
 import {
   addPlanPhase,
   attachPlan,
+  branchPlan,
   createPlan,
   detachPlan,
   getPlan,
@@ -21,6 +22,8 @@ import {
 } from "../api/client";
 import type {
   NewPlanPhaseInput,
+  PlanAncestorView,
+  PlanBranchView,
   PlanEventView,
   PlanPhaseStatus,
   PlanPhaseView,
@@ -104,6 +107,7 @@ export function PlanModal({ open, repo, planId, onClose }: PlanModalProps) {
           repo={repo}
           planId={selectedPlanId}
           onTitle={setDetailTitle}
+          onOpenPlan={openDetail}
         />
       ) : (
         <PlanIndex repo={repo} onOpenPlan={openDetail} />
@@ -143,6 +147,7 @@ function PlanIndex({
     () => sessions.filter((session) => session.repo === repo && session.state === "live"),
     [repo, sessions],
   );
+  const orderedPlans = useMemo(() => nestPlans(plans), [plans]);
   const onShowClosedChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => setShowClosed(event.target.checked),
     [],
@@ -301,7 +306,7 @@ function PlanIndex({
         {!loading && plans.length === 0 ? (
           <div className="plan-modal__empty">No published plans in this repo yet.</div>
         ) : null}
-        {plans.map((plan) => (
+        {orderedPlans.map((plan) => (
           <PlanRow key={plan.id} plan={plan} onOpen={onOpenPlan} />
         ))}
       </div>
@@ -313,10 +318,12 @@ function PlanDetail({
   repo,
   planId,
   onTitle,
+  onOpenPlan,
 }: {
   repo: string;
   planId: string;
   onTitle: (title: string) => void;
+  onOpenPlan: (planId: string) => void;
 }) {
   const [plan, setPlan] = useState<PlanView | null>(null);
   const [events, setEvents] = useState<PlanEventView[]>([]);
@@ -328,6 +335,11 @@ function PlanDetail({
   const [editMeta, setEditMeta] = useState(false);
   const [title, setTitle] = useState("");
   const [summary, setSummary] = useState("");
+  // Position of the phase whose branch form is open, or null for none.
+  const [branchAnchor, setBranchAnchor] = useState<number | null>(null);
+  const [branchTitle, setBranchTitle] = useState("");
+  const [branchCovers, setBranchCovers] = useState("");
+  const [branchPhaseText, setBranchPhaseText] = useState("");
   const { sessions, refresh, ambientRevision } = useSessions(
     useShallow((store) => ({
       sessions: store.sessions,
@@ -438,6 +450,83 @@ function PlanDetail({
     await mutate(() => attachPlan(plan.id, attachPty));
     setAttachPty("");
   }, [attachPty, mutate, plan]);
+  const openBranchForm = useCallback((position: number) => {
+    setBranchAnchor(position);
+    setBranchCovers(String(position));
+    setBranchTitle("");
+    setBranchPhaseText("");
+  }, []);
+  const closeBranchForm = useCallback(() => setBranchAnchor(null), []);
+  // Creating a branch opens it: the branch is where the work continues.
+  const createBranch = useCallback(
+    async (event: FormEvent) => {
+      event.preventDefault();
+      if (!plan || !branchTitle.trim()) return;
+      const covers = branchCovers
+        .split(/[,\s]+/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+      setBusy(true);
+      try {
+        const branch = await branchPlan(plan.id, {
+          title: branchTitle.trim(),
+          phases: parsePhases(branchPhaseText),
+          parent_phase_refs: covers,
+        });
+        setBranchAnchor(null);
+        setError(null);
+        await refresh();
+        onOpenPlan(branch.id);
+      } catch (err) {
+        setError(messageOf(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [branchCovers, branchPhaseText, branchTitle, onOpenPlan, plan, refresh],
+  );
+  const returnToParent = useCallback(
+    async (status: PlanStatus) => {
+      if (!plan?.parent_plan_id) return;
+      const parentId = plan.parent_plan_id;
+      setBusy(true);
+      try {
+        await updatePlan(plan.id, {
+          status,
+          skip_remaining: status === "completed" && unfinishedPhaseCount > 0,
+        });
+        setError(null);
+        await refresh();
+        onOpenPlan(parentId);
+      } catch (err) {
+        setError(messageOf(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [onOpenPlan, plan, refresh, unfinishedPhaseCount],
+  );
+  const returnCompleted = useCallback(
+    () => void returnToParent("completed"),
+    [returnToParent],
+  );
+  const returnCanceled = useCallback(
+    () => void returnToParent("canceled"),
+    [returnToParent],
+  );
+  const onBranchTitleChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => setBranchTitle(event.target.value),
+    [],
+  );
+  const onBranchCoversChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => setBranchCovers(event.target.value),
+    [],
+  );
+  const onBranchPhaseTextChange = useCallback(
+    (event: ChangeEvent<HTMLTextAreaElement>) =>
+      setBranchPhaseText(event.target.value),
+    [],
+  );
   const onTitleChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => setTitle(event.target.value),
     [],
@@ -475,6 +564,17 @@ function PlanDetail({
   return (
     <div className="plan-modal__detail">
       {error ? <div className="plan-modal__error">{error}</div> : null}
+
+      {plan.ancestors.length > 0 ? (
+        <nav className="plan-modal__breadcrumb" aria-label="Plan ancestry">
+          {plan.ancestors.map((ancestor) => (
+            <PlanCrumb key={ancestor.id} plan={ancestor} onOpen={onOpenPlan} />
+          ))}
+          <span className="plan-modal__crumb plan-modal__crumb--current">
+            {plan.title}
+          </span>
+        </nav>
+      ) : null}
 
       <div className="plan-modal__meta">
         {editMeta ? (
@@ -528,7 +628,28 @@ function PlanDetail({
                 Resume
               </button>
             ) : null}
-            {editable ? (
+            {editable && plan.parent_plan_id ? (
+              <>
+                <button
+                  type="button"
+                  className="plan-modal__primary"
+                  disabled={busy}
+                  onClick={returnCompleted}
+                >
+                  {unfinishedPhaseCount > 0
+                    ? `Return & skip ${unfinishedPhaseCount}`
+                    : "Return to parent"}
+                </button>
+                <button
+                  type="button"
+                  className="plan-modal__danger"
+                  disabled={busy}
+                  onClick={returnCanceled}
+                >
+                  Abandon branch
+                </button>
+              </>
+            ) : editable ? (
               <>
                 <button type="button" disabled={busy} onClick={completePlan}>
                   {unfinishedPhaseCount > 0
@@ -559,7 +680,50 @@ function PlanDetail({
               repo={repo}
               disabled={busy || locked}
               onMutate={mutate}
+              canBranch={editable}
+              onBranch={openBranchForm}
             />
+            {plan.branches
+              .filter((branch) => branch.anchor_phase_ids.includes(phase.id))
+              .map((branch) => (
+                <BranchChip key={branch.id} branch={branch} onOpen={onOpenPlan} />
+              ))}
+            {branchAnchor === phase.position ? (
+              <form className="plan-modal__branch-form" onSubmit={createBranch}>
+                <input
+                  value={branchTitle}
+                  onChange={onBranchTitleChange}
+                  placeholder="Sub-plan title"
+                  aria-label="Sub-plan title"
+                  maxLength={160}
+                />
+                <input
+                  value={branchCovers}
+                  onChange={onBranchCoversChange}
+                  placeholder="Covers phases, e.g. 4,5,6"
+                  aria-label="Parent phases covered"
+                />
+                <textarea
+                  value={branchPhaseText}
+                  onChange={onBranchPhaseTextChange}
+                  placeholder={"One phase per line\nTitle|Description|size"}
+                  aria-label="Sub-plan phases"
+                  rows={3}
+                />
+                <div className="plan-modal__actions">
+                  <button
+                    type="submit"
+                    className="plan-modal__primary"
+                    disabled={busy || !branchTitle.trim() || !branchPhaseText.trim()}
+                  >
+                    Branch
+                  </button>
+                  <button type="button" onClick={closeBranchForm}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : null}
           </li>
         ))}
       </ol>
@@ -644,6 +808,66 @@ function PlanDetail({
   );
 }
 
+function PlanCrumb({
+  plan,
+  onOpen,
+}: {
+  plan: PlanAncestorView;
+  onOpen: (planId: string) => void;
+}) {
+  const open = useCallback(() => onOpen(plan.id), [onOpen, plan.id]);
+  return (
+    <button type="button" className="plan-modal__crumb" onClick={open}>
+      {plan.title}
+    </button>
+  );
+}
+
+function BranchChip({
+  branch,
+  onOpen,
+}: {
+  branch: PlanBranchView;
+  onOpen: (planId: string) => void;
+}) {
+  const open = useCallback(() => onOpen(branch.id), [branch.id, onOpen]);
+  return (
+    <button type="button" className="plan-modal__branch-chip" onClick={open}>
+      <Icon name="git-branch" size={12} />
+      <span className={`plan-status plan-status--${branch.status}`}>
+        {branch.status}
+      </span>
+      <strong>{branch.title}</strong>
+      <span className="plan-modal__muted">
+        {branch.completed_phases}/{branch.total_phases}
+      </span>
+    </button>
+  );
+}
+
+/** Roots in server order, each followed by its own subtree depth-first, so a
+ * branch reads as belonging to the plan above it rather than as a peer. */
+function nestPlans(plans: PlanView[]): PlanView[] {
+  const children = new Map<string, PlanView[]>();
+  for (const plan of plans) {
+    if (!plan.parent_plan_id) continue;
+    const siblings = children.get(plan.parent_plan_id);
+    if (siblings) siblings.push(plan);
+    else children.set(plan.parent_plan_id, [plan]);
+  }
+  const out: PlanView[] = [];
+  const visit = (plan: PlanView) => {
+    out.push(plan);
+    for (const child of children.get(plan.id) ?? []) visit(child);
+  };
+  const known = new Set(plans.map((plan) => plan.id));
+  for (const plan of plans) {
+    // A branch whose parent is filtered out of this list still needs a home.
+    if (!plan.parent_plan_id || !known.has(plan.parent_plan_id)) visit(plan);
+  }
+  return out;
+}
+
 function PlanRow({
   plan,
   onOpen,
@@ -653,8 +877,15 @@ function PlanRow({
 }) {
   const open = useCallback(() => onOpen(plan.id), [onOpen, plan.id]);
   return (
-    <button type="button" className="plan-modal__plan-row" onClick={open}>
+    <button
+      type="button"
+      // Depth is unbounded; indentation stops at 4 so a deep tree stays legible
+      // in a 620px modal.
+      className={`plan-modal__plan-row plan-modal__plan-row--depth-${Math.min(plan.depth, 4)}`}
+      onClick={open}
+    >
       <span className="plan-modal__plan-main">
+        {plan.depth > 0 ? <Icon name="git-branch" size={12} /> : null}
         <span className={`plan-status plan-status--${plan.status}`}>{plan.status}</span>
         <strong>{plan.title}</strong>
       </span>
@@ -705,12 +936,16 @@ function PhaseRow({
   repo,
   disabled,
   onMutate,
+  canBranch,
+  onBranch,
 }: {
   phase: PlanPhaseView;
   planId: string;
   repo: string;
   disabled: boolean;
   onMutate: PlanMutation;
+  canBranch: boolean;
+  onBranch: (position: number) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(phase.title);
@@ -742,6 +977,7 @@ function PhaseRow({
     [description, note, onMutate, phase, planId, position, status, title],
   );
   const beginEdit = useCallback(() => setEditing(true), []);
+  const branch = useCallback(() => onBranch(phase.position), [onBranch, phase.position]);
   const cancelEdit = useCallback(() => {
     setTitle(phase.title);
     setDescription(phase.description);
@@ -798,6 +1034,17 @@ function PhaseRow({
         </div>
         <span className="plan-phase__tail">
           <span className="plan-phase__status">{phase.status.replace("_", " ")}</span>
+          {canBranch && !disabled ? (
+            <button
+              type="button"
+              className="plan-phase__edit"
+              aria-label={`Branch from phase ${phase.position}`}
+              title="Open a sub-plan under this phase"
+              onClick={branch}
+            >
+              <Icon name="git-branch" size={12} />
+            </button>
+          ) : null}
           {!disabled ? (
             <button
               type="button"

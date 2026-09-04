@@ -2,6 +2,24 @@
 
 All notable user-visible changes to Sulion are recorded here.
 
+## Unreleased
+
+### Plans
+
+- Added branch plans: a published plan can now hang off one or more phases of
+  another plan, to arbitrary depth. `sulion plan branch` opens a sub-plan under
+  the phases it covers and moves the terminal onto it; `sulion plan return`
+  closes the sub-plan, puts the terminal back on the parent, and clears any
+  anchor phase the branch was opened to unblock. `sulion plan tree` prints a
+  whole plan tree. A plan refuses to close while a branch under it is open.
+- Changed the plan browser to nest branches under the plan they hang off, lead
+  a branch with a clickable trail back to its root, list sub-plans beneath the
+  phase they cover, and offer Return/Abandon in place of Complete/Cancel. Each
+  phase gained a control that opens a sub-plan under it.
+- Changed plan flow metrics to read leaf phases only and to draw one burndown
+  per plan tree rather than one per plan, so a sub-plan no longer double-counts
+  the phase it sits under or displaces its own parent from the chart.
+
 ## v2.1.0 - 2026-08-03
 
 ### Timeline

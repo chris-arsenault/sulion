@@ -79,6 +79,13 @@ pub enum ControlRequest {
         phases: Vec<crate::plans::NewPhase>,
         all_pending: bool,
     },
+    PlanBranch {
+        plan_id: Option<Uuid>,
+        input: crate::plans::BranchPlanInput,
+    },
+    PlanTree {
+        plan_id: Option<Uuid>,
+    },
     PlanCurrent,
     PlanList {
         include_closed: bool,
@@ -260,6 +267,16 @@ async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value>
             )
             .await?,
         )?),
+        ControlRequest::PlanBranch { plan_id, input } => {
+            let parent_id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
+            Ok(serde_json::to_value(
+                plans::branch(pool, parent_id, input, &actor).await?,
+            )?)
+        }
+        ControlRequest::PlanTree { plan_id } => {
+            let id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
+            Ok(serde_json::to_value(plans::tree(pool, id).await?)?)
+        }
         ControlRequest::PlanCurrent => Ok(serde_json::to_value(
             plans::current_for_pty(pool, msg.pty_id).await?,
         )?),

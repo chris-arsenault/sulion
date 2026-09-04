@@ -8,8 +8,8 @@ use uuid::Uuid;
 
 use super::routes::{validate_repo_name, ApiError, ApiResult};
 use crate::plans::{
-    self, CreatePlanInput, NewPhase, PlanActor, PlanEventView, PlanView, UpdatePhaseInput,
-    UpdatePlanInput,
+    self, BranchPlanInput, CreatePlanInput, NewPhase, PlanActor, PlanEventView, PlanTreeNodeView,
+    PlanView, UpdatePhaseInput, UpdatePlanInput,
 };
 use crate::AppState;
 
@@ -144,6 +144,27 @@ pub(super) async fn detach_plan(
     Path((plan_id, pty_session_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<PlanView>> {
     plans::detach(&state.pool, plan_id, pty_session_id, &PlanActor::user())
+        .await
+        .map(Json)
+        .map_err(plan_api_error)
+}
+
+pub(super) async fn branch_plan(
+    State(state): State<Arc<AppState>>,
+    Path(plan_id): Path<Uuid>,
+    Json(request): Json<BranchPlanInput>,
+) -> ApiResult<(StatusCode, Json<PlanView>)> {
+    let plan = plans::branch(&state.pool, plan_id, request, &PlanActor::user())
+        .await
+        .map_err(plan_api_error)?;
+    Ok((StatusCode::CREATED, Json(plan)))
+}
+
+pub(super) async fn plan_tree(
+    State(state): State<Arc<AppState>>,
+    Path(plan_id): Path<Uuid>,
+) -> ApiResult<Json<Vec<PlanTreeNodeView>>> {
+    plans::tree(&state.pool, plan_id)
         .await
         .map(Json)
         .map_err(plan_api_error)

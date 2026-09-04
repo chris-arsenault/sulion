@@ -7,7 +7,11 @@ use uuid::Uuid;
 
 use crate::activity::ActivityState;
 use crate::correlate::{ControlRequest, ControlResponse};
-use crate::plans::{NewPhase, UpdatePhaseInput, UpdatePlanInput};
+use crate::plans::{BranchPlanInput, NewPhase, UpdatePhaseInput, UpdatePlanInput};
+
+mod usage;
+
+use usage::{print_activity_usage, print_name_usage, print_plan_usage};
 
 pub async fn run_plan(args: &[OsString]) -> anyhow::Result<i32> {
     let mut args = utf8_args(args, "plan")?;
@@ -150,6 +154,12 @@ fn parse_plan_request(command: &str, args: &mut Vec<String>) -> anyhow::Result<C
                 all_pending,
             })
         }
+        "branch" | "return" => parse_branch_request(command, args),
+        "tree" => {
+            let plan_id = optional_plan_id(args)?;
+            reject_unknown_options(args)?;
+            Ok(ControlRequest::PlanTree { plan_id })
+        }
         "current" => {
             reject_unknown_options(args)?;
             Ok(ControlRequest::PlanCurrent)
@@ -234,6 +244,60 @@ fn parse_plan_request(command: &str, args: &mut Vec<String>) -> anyhow::Result<C
         }
         other => bail!("unknown plan command: {other}"),
     }
+}
+
+/// `branch` opens a sub-plan; `return` closes one and pops this PTY back to the
+/// parent. `return` defaults to completed — abandoning a branch is the case
+/// worth spelling out — and sets `require_branch` so it can never close a root.
+fn parse_branch_request(command: &str, args: &mut Vec<String>) -> anyhow::Result<ControlRequest> {
+    let plan_id = take_uuid_option(args, "--plan")?;
+    if command == "return" {
+        let canceled = take_flag(args, "--canceled");
+        let completed = take_flag(args, "--completed");
+        if completed && canceled {
+            bail!("return takes at most one of --completed or --canceled");
+        }
+        let note = take_option(args, "--note")?;
+        let skip_remaining = take_flag(args, "--skip-remaining");
+        reject_unknown_options(args)?;
+        return Ok(ControlRequest::PlanUpdate {
+            plan_id,
+            input: UpdatePlanInput {
+                status: Some(if canceled { "canceled" } else { "completed" }.to_string()),
+                note,
+                skip_remaining,
+                require_branch: true,
+                ..Default::default()
+            },
+        });
+    }
+    let title_option = take_option(args, "--title")?;
+    let summary = take_option(args, "--summary")?.unwrap_or_default();
+    let note = take_option(args, "--note")?;
+    let all_pending = take_flag(args, "--all-pending");
+    let mut phases = Vec::new();
+    while let Some(raw) = take_option(args, "--phase")? {
+        phases.push(parse_phase(&raw));
+    }
+    let mut parent_phase_refs = Vec::new();
+    while let Some(raw) = take_option(args, "--from")? {
+        parent_phase_refs.push(raw);
+    }
+    let title = title_option
+        .or_else(|| take_positional(args))
+        .ok_or_else(|| anyhow!("branch title is required"))?;
+    reject_unknown_options(args)?;
+    Ok(ControlRequest::PlanBranch {
+        plan_id,
+        input: BranchPlanInput {
+            title,
+            summary,
+            phases,
+            all_pending,
+            parent_phase_refs,
+            note,
+        },
+    })
 }
 
 fn parse_phase_request(args: &mut Vec<String>) -> anyhow::Result<ControlRequest> {
@@ -403,6 +467,31 @@ fn print_plan_data(data: &Value) {
             }
             return;
         }
+        // `plan tree` nodes carry a depth but no summary; indent them instead.
+        if items[0].get("depth").is_some() && items[0].get("summary").is_none() {
+            for node in items {
+                let depth = node["depth"].as_i64().unwrap_or_default().max(0) as usize;
+                let attached = node["attached_pty_ids"]
+                    .as_array()
+                    .map(|ids| ids.len())
+                    .unwrap_or_default();
+                println!(
+                    "{}{} [{}] {} ({}/{} phases{}{})",
+                    "  ".repeat(depth),
+                    node["id"].as_str().unwrap_or(""),
+                    node["status"].as_str().unwrap_or("unknown"),
+                    node["title"].as_str().unwrap_or(""),
+                    node["completed_phases"].as_i64().unwrap_or_default(),
+                    node["total_phases"].as_i64().unwrap_or_default(),
+                    match node["blocked_phases"].as_i64().unwrap_or_default() {
+                        0 => String::new(),
+                        n => format!(", {n} blocked"),
+                    },
+                    if attached > 0 { ", attached" } else { "" },
+                );
+            }
+            return;
+        }
         for item in items {
             print_plan_header(item);
         }
@@ -416,6 +505,11 @@ fn print_plan_data(data: &Value) {
         return;
     }
     print_plan_header(data);
+    let branches = data
+        .get("branches")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     if let Some(phases) = data.get("phases").and_then(Value::as_array) {
         for phase in phases {
             println!(
@@ -428,11 +522,44 @@ fn print_plan_data(data: &Value) {
                     .map(|note| format!(" — {note}"))
                     .unwrap_or_default()
             );
+            let phase_id = phase["id"].as_str().unwrap_or("");
+            for branch in branches.iter().filter(|branch| {
+                branch["anchor_phase_ids"]
+                    .as_array()
+                    .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(phase_id)))
+            }) {
+                println!(
+                    "     ↳ {} [{}] {} ({}/{} phases)",
+                    branch["id"].as_str().unwrap_or(""),
+                    branch["status"].as_str().unwrap_or("unknown"),
+                    branch["title"].as_str().unwrap_or(""),
+                    branch["completed_phases"].as_i64().unwrap_or_default(),
+                    branch["total_phases"].as_i64().unwrap_or_default(),
+                );
+            }
         }
     }
 }
 
 fn print_plan_header(plan: &Value) {
+    // A branch leads with where it sits, so a resumed session sees the trail
+    // back to the root before it sees this plan's own phases.
+    if let Some(ancestors) = plan
+        .get("ancestors")
+        .and_then(Value::as_array)
+        .filter(|value| !value.is_empty())
+    {
+        let trail: Vec<&str> = ancestors
+            .iter()
+            .map(|node| node["title"].as_str().unwrap_or(""))
+            .chain(std::iter::once(plan["title"].as_str().unwrap_or("")))
+            .collect();
+        println!(
+            "branch depth {}: {}",
+            plan["depth"].as_i64().unwrap_or(0),
+            trail.join(" › ")
+        );
+    }
     println!(
         "{} [{}] {}",
         plan["id"].as_str().unwrap_or(""),
@@ -543,106 +670,6 @@ fn reject_unknown_options(args: &[String]) -> anyhow::Result<()> {
         bail!("unexpected argument: {value}");
     }
     Ok(())
-}
-
-fn print_plan_usage() {
-    println!(
-        "\
-Sulion published plans — durable, repo-scoped phase summaries
-
-Usage:
-  sulion plan [--json] <command> ...
-
-Commands:
-  help
-  start <title> --summary <text> --phase <title[|description[|size]]>... [--all-pending]
-  current
-  list [--all]
-  show [plan-id]
-  update [--plan uuid] [--title text] [--summary text]
-  status <active|paused> [--plan uuid] [--note text]
-  close (--completed|--canceled) [--skip-remaining] [--note text]
-  phase add <title> [--description text] [--status status] [--size s|m|l]
-  phase set <id|position> <status> [--note text] [--position n] [--size s|m|l]
-  attach <plan-uuid>
-  detach [plan-uuid]
-  history [plan-id]
-
-Statuses:
-  plan   active | paused (close sets completed or canceled)
-  phase  pending | in_progress | blocked | completed | skipped
-  size   optional t-shirt weight s | m | l for weighted burndown
-
-Rules:
-  repo and acting PTY are inferred from the current terminal
-  a plan is the compact user-facing projection; keep detailed reasoning in
-    your native plan tool
-  start requires at least one --phase; the first begins in_progress unless
-    --all-pending
-  close --completed rejects unfinished phases unless --skip-remaining
-  most commands target this PTY's current plan; --plan <uuid> overrides
-  `step` is an alias for `phase`
-
-Start:
-  sulion plan current
-  sulion plan start \"<title>\" --summary \"<text>\" --phase \"Title|Description\"
-  sulion plan phase set 1 completed --note \"...\"
-  sulion plan close --completed"
-    );
-}
-
-fn print_name_usage() {
-    println!(
-        "\
-Sulion terminal name — an agent-chosen name shown beside the user's label
-
-Usage:
-  sulion name [--json] <text> | show | clear
-
-Commands:
-  <text>   set this terminal's agent name (words join; quoting optional)
-  show     print the current agent name
-  clear    remove it
-
-Rules:
-  complements the user's label; never overwrites it
-  keep it short (max 100 chars); shown in the sidebar and team overview,
-    never in tab headers
-  set it when it helps the user tell terminals apart — no permission needed
-
-Start:
-  sulion name \"ingest batcher refactor\""
-    );
-}
-
-fn print_activity_usage() {
-    println!(
-        "\
-Sulion terminal activity — what this terminal is doing right now
-
-Usage:
-  sulion activity [--json] <command>
-
-Commands:
-  help
-  working [summary]
-  waiting [reason]      (alias: needs-input)
-  blocked [reason]
-  awaiting [summary]    (alias: awaiting-prompt)
-  status
-  clear
-
-Rules:
-  routine working/idle transitions are reported automatically by the agent
-    lifecycle; publish explicit states only when they say more
-  use waiting only when a user decision or permission is actually required
-  an explicit waiting/blocked state persists until an explicit working or
-    clear releases it
-
-Start:
-  sulion activity status
-  sulion activity waiting --reason \"Choose the migration policy\""
-    );
 }
 
 #[cfg(test)]

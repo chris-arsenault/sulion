@@ -17,11 +17,48 @@ A plan has:
   note
 - zero or more attached live PTYs; each PTY can have only one current plan
 - an append-only event history for meaningful mutations
+- an optional parent plan plus the parent phases it covers, giving plan trees
+  of arbitrary depth
 
 Plan statuses are `active`, `paused`, `completed`, and `canceled`. Phase
 statuses are `pending`, `in_progress`, `blocked`, `completed`, and `skipped`.
 Closing a plan detaches all PTYs. Plans survive terminal exit and remain in the
 repo's closed-plan history.
+
+## Branch plans
+
+A plan can hang off phases of another plan, to arbitrary depth. Work that turns
+out to need its own multi-step job — a blocker discovered mid-phase, or a
+milestone that has to be expanded before it can be executed — becomes a
+sub-plan instead of being wedged into the parent's phase list or tracked in a
+side file.
+
+Nesting is at the plan level, so a branch is an ordinary plan: it carries its
+own title, status, revision, history, and PTY attachment, and every plan
+command works on it unchanged. What a branch adds is a parent and a set of
+anchor phases:
+
+- `parent_plan_id` is set at creation and never changes. `root_plan_id` and
+  `depth` are derived from the parent at the same moment, so hierarchy reads
+  never need a recursive query and cycles cannot occur.
+- `plan_branch_anchors` records which parent phases the branch covers. One row
+  is the common case; several rows let a branch cover a span, such as parent
+  steps 4 through 6. Every anchor must belong to the branch's parent — anchors
+  never span two plans, which is what keeps the return path unambiguous.
+- Branching moves the acting PTY onto the branch. Any anchor still `pending`
+  becomes `in_progress`; anchors the agent already marked `in_progress` or
+  `blocked` keep the status it chose.
+- Closing a branch puts the PTY back on the parent. Completing one also clears
+  any anchor left `blocked`, since the branch existed to resolve that blocker.
+  Canceling leaves anchor statuses untouched.
+- A plan cannot close while a branch under it is open, and trees are capped at
+  depth 8 as a runaway guard rather than a product limit.
+
+Flow metrics read leaf phases only. A phase with a branch beneath it is a
+container whose span and weight already cover the branch's phases, so counting
+both would double-count the same work; burndown rolls a whole tree into one
+line per root, which is what makes scope discovered mid-flight visible as a
+line that rises.
 
 ## Agent CLI
 
@@ -46,11 +83,29 @@ sulion plan phase set 1 completed --note "API and CLI complete"
 sulion plan phase set 2 blocked --note "Needs a product decision"
 sulion plan phase set 2 in_progress
 
+sulion plan branch "Unblock the checkpoint gate" \
+  --from 4 \
+  --summary "Prerequisite for phase 4" \
+  --phase "Instrument the divergence probe" \
+  --phase "Fix the gate"
+sulion plan branch "Expand M2" --from 4 --from 5 --from 6 --phase "Step one"
+sulion plan return --completed --note "Gate is green"
+sulion plan return --canceled --note "Wrong approach"
+sulion plan tree
+
 sulion plan close --completed
 sulion plan close --completed --skip-remaining
 sulion plan close --canceled --note "Superseded"
 sulion plan history
 ```
+
+`branch` opens a sub-plan under the current plan and moves the PTY onto it.
+`--from` takes a 1-based phase position or a phase UUID and repeats for a span;
+omitting it anchors to the parent's current phase. `return` closes the branch
+and puts the PTY back on the parent — it refuses on a root plan, so the verb
+can never quietly close the plan you branched from. `plan show` and `plan
+current` print a branch's trail back to the root and list any sub-plans under
+the phase they cover; `plan tree` prints the whole tree indented by depth.
 
 `step` is accepted as an alias for `phase`. Most commands operate on the
 current PTY's attached plan; `--plan <uuid>` or an explicit plan id targets
@@ -114,7 +169,11 @@ headers.
 
 Each repo has a **Plans** subsection in the sidebar. Its plan tab supports
 creation, metadata edits, phase status/notes, phase addition, PTY attachment,
-closure, and history.
+closure, and history. The plan index nests branches under the plan they hang
+off; a branch's detail leads with a clickable trail back to the root, shows
+sub-plans beneath the phase they cover, and replaces Complete/Cancel with
+Return/Abandon. Each phase carries a branch control that opens a sub-plan under
+it.
 
 The **Metrics** tab (`/api/metrics`) aggregates the portfolio: non-overlapping
 input, cached-input, and output rollups; a reconciled 14-day series from

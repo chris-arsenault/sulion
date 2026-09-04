@@ -505,9 +505,102 @@
   color: var(--text-dis);
 }
 
+/* ---- Branches ---- */
+
+.plan-modal__plan-row--depth-1 {
+  padding-left: 26px !important;
+}
+
+.plan-modal__plan-row--depth-2 {
+  padding-left: 42px !important;
+}
+
+.plan-modal__plan-row--depth-3 {
+  padding-left: 58px !important;
+}
+
+.plan-modal__plan-row--depth-4 {
+  padding-left: 74px !important;
+}
+
+.plan-modal__breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px 0;
+  font-size: var(--t-meta);
+}
+
+.plan-modal__crumb {
+  padding: 1px 4px;
+  color: var(--text-lo);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-modal__crumb:hover {
+  color: var(--text-hi);
+}
+
+.plan-modal__crumb::after {
+  content: "›";
+  margin-left: 6px;
+  color: var(--text-dis);
+}
+
+.plan-modal__crumb--current {
+  color: var(--text-hi);
+  cursor: default;
+}
+
+.plan-modal__crumb--current::after {
+  content: "";
+  margin-left: 0;
+}
+
+.plan-modal__branch-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: calc(100% - 26px);
+  margin: 3px 0 3px 26px;
+  padding: 5px 8px;
+  text-align: left;
+  font-size: var(--t-meta);
+  border-left: 2px solid var(--line);
+}
+
+.plan-modal__branch-chip strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--w-600);
+}
+
+.plan-modal__branch-form {
+  display: grid;
+  gap: 6px;
+  margin: 4px 0 8px 26px;
+  padding: 8px;
+  border-left: 2px solid var(--line);
+}
+
 @media (max-width: 560px) {
   .plan-phase__controls,
   .plan-modal__add-phase {
     grid-template-columns: 1fr;
+  }
+
+  .plan-modal__branch-chip,
+  .plan-modal__branch-form {
+    width: auto;
+    margin-left: 12px;
   }
 }

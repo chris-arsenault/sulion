@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import type { PlanSummaryView } from "../api/types";
 import { Icon } from "../icons";
 import { Rail } from "./Rail";
 import { Sidebar } from "./Sidebar";
@@ -481,6 +482,25 @@ function MobileTopBar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
   );
 }
 
+/** A branch is only meaningful next to the plan it hangs off, so its palette
+ * entry leads with the root title and sorts just under its own root. */
+function planCommand(
+  plan: PlanSummaryView,
+  planTitles: Map<string, string>,
+): PaletteCommand {
+  const root = plan.depth > 0 ? planTitles.get(plan.root_plan_id) : undefined;
+  const trail = root ? `${root} › ${plan.title}` : plan.title;
+  return {
+    id: `plan.${plan.id}`,
+    label: `Open plan · ${plan.repo_name} / ${trail}`,
+    icon: plan.depth > 0 ? "git-branch" : "list",
+    group: "plan",
+    searchOnly: true,
+    rank: plan.depth > 0 ? 9 : 10,
+    run: () => appCommands.openPlan({ repo: plan.repo_name, planId: plan.id }),
+  };
+}
+
 function usePaletteCommands({
   onOpenPalette,
 }: {
@@ -583,17 +603,9 @@ function usePaletteCommands({
         run: () => appCommands.openPlan({ repo: r.name }),
       });
     }
+    const planTitles = new Map(plans.map((plan) => [plan.id, plan.title]));
     for (const plan of plans) {
-      out.push({
-        id: `plan.${plan.id}`,
-        label: `Open plan · ${plan.repo_name} / ${plan.title}`,
-        icon: "list",
-        group: "plan",
-        searchOnly: true,
-        rank: 10,
-        run: () =>
-          appCommands.openPlan({ repo: plan.repo_name, planId: plan.id }),
-      });
+      out.push(planCommand(plan, planTitles));
     }
     const liveSessions = sessions
       .filter((s) => s.state === "live")

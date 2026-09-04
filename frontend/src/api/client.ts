@@ -22,9 +22,11 @@ import type {
   MetricsResponse,
   MonitorTimelineResponse,
   MetaRepoView,
+  BranchPlanRequest,
   CreatePlanInput,
   NewPlanPhaseInput,
   PlanEventView,
+  PlanTreeNodeView,
   PlanView,
   RenameRepoRequest,
   RepoDirtyPathsResponse,
@@ -385,6 +387,25 @@ export function detachPlan(
   return request<PlanView>(
     `/api/plans/${encodeURIComponent(planId)}/attachments/${encodeURIComponent(ptySessionId)}`,
     { method: "DELETE" },
+  );
+}
+
+export function branchPlan(
+  parentPlanId: string,
+  body: BranchPlanRequest,
+): Promise<PlanView> {
+  return request<PlanView>(
+    `/api/plans/${encodeURIComponent(parentPlanId)}/branches`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export function getPlanTree(id: string): Promise<PlanTreeNodeView[]> {
+  return request<PlanTreeNodeView[]>(
+    `/api/plans/${encodeURIComponent(id)}/tree`,
   );
 }
 

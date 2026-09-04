@@ -68,6 +68,25 @@ pub struct CreatePlanInput {
     pub attach_current_pty: bool,
 }
 
+/// Open a sub-plan under `parent_phase_refs` of the acting PTY's current plan
+/// (or `parent_plan_id` when given). Anchors accept 1-based positions or phase
+/// UUIDs; an empty list anchors to the parent's current phase.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct BranchPlanInput {
+    pub title: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub phases: Vec<NewPhase>,
+    #[serde(default)]
+    pub all_pending: bool,
+    #[serde(default)]
+    pub parent_phase_refs: Vec<String>,
+    /// Note recorded on the parent phases and the branch event.
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct UpdatePlanInput {
     pub title: Option<String>,
@@ -76,6 +95,10 @@ pub struct UpdatePlanInput {
     pub note: Option<String>,
     #[serde(default)]
     pub skip_remaining: bool,
+    /// Set by `plan return`: refuse unless this plan is a branch, so the verb
+    /// can never quietly close a root plan.
+    #[serde(default)]
+    pub require_branch: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -111,6 +134,42 @@ pub struct PlanAttachmentView {
     pub attached_at: DateTime<Utc>,
 }
 
+/// One step of the root-to-plan breadcrumb, ordered root first.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct PlanAncestorView {
+    pub id: Uuid,
+    pub title: String,
+    pub status: String,
+    pub depth: i32,
+}
+
+/// A direct sub-plan, with the parent phases it covers.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanBranchView {
+    pub id: Uuid,
+    pub title: String,
+    pub summary: String,
+    pub status: String,
+    pub depth: i32,
+    pub total_phases: i32,
+    pub completed_phases: i32,
+    pub anchor_phase_ids: Vec<Uuid>,
+}
+
+/// One plan in a whole tree, root first then depth-ordered.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct PlanTreeNodeView {
+    pub id: Uuid,
+    pub title: String,
+    pub status: String,
+    pub depth: i32,
+    pub parent_plan_id: Option<Uuid>,
+    pub total_phases: i32,
+    pub completed_phases: i32,
+    pub blocked_phases: i32,
+    pub attached_pty_ids: Vec<Uuid>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanView {
     pub id: Uuid,
@@ -119,6 +178,9 @@ pub struct PlanView {
     pub summary: String,
     pub status: String,
     pub revision: i64,
+    pub parent_plan_id: Option<Uuid>,
+    pub root_plan_id: Uuid,
+    pub depth: i32,
     pub created_by_pty_id: Option<Uuid>,
     pub created_by_agent_session_uuid: Option<Uuid>,
     pub created_at: DateTime<Utc>,
@@ -126,6 +188,12 @@ pub struct PlanView {
     pub closed_at: Option<DateTime<Utc>>,
     pub phases: Vec<PlanPhaseView>,
     pub attachments: Vec<PlanAttachmentView>,
+    /// Phases in the parent plan that this plan covers. Empty for a root.
+    pub anchor_phase_ids: Vec<Uuid>,
+    /// Root first, immediate parent last. Empty for a root.
+    pub ancestors: Vec<PlanAncestorView>,
+    /// Direct sub-plans, open ones first.
+    pub branches: Vec<PlanBranchView>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -158,6 +226,10 @@ pub struct PlanSummaryView {
     pub current_phase_title: Option<String>,
     pub current_phase_status: Option<String>,
     pub attached_pty_ids: Vec<Uuid>,
+    pub parent_plan_id: Option<Uuid>,
+    pub root_plan_id: Uuid,
+    pub depth: i32,
+    pub open_branches: i32,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -169,6 +241,9 @@ pub(super) struct PlanRow {
     pub(super) summary: String,
     pub(super) status: String,
     pub(super) revision: i64,
+    pub(super) parent_plan_id: Option<Uuid>,
+    pub(super) root_plan_id: Uuid,
+    pub(super) depth: i32,
     pub(super) created_by_pty_id: Option<Uuid>,
     pub(super) created_by_agent_session_uuid: Option<Uuid>,
     pub(super) created_at: DateTime<Utc>,

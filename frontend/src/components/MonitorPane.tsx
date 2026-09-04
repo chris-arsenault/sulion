@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { getMonitorTimeline } from "../api/client";
 import type {
+  CurrentPlanView,
   MonitorSessionTurn,
   MonitorTimelineRequest,
   MonitorTimelineResponse,
@@ -664,6 +665,21 @@ function AbandonedCard({
   );
 }
 
+/** A branch leads with its root, so the card says which plan the work belongs
+ * to rather than showing a sub-plan title with no context. */
+function planChip(plan: CurrentPlanView): { label: string; icon: IconName } {
+  const trail = plan.root_title
+    ? `${plan.root_title} › ${plan.title}`
+    : plan.title;
+  const phase = plan.current_phase_title ?? "No current phase";
+  const progress = `${plan.completed_phases}/${plan.total_phases} phases`;
+  const branch = plan.depth > 0 ? `\nbranch, depth ${plan.depth}` : "";
+  return {
+    label: `${trail}\n${phase} · ${progress}${branch}`,
+    icon: plan.depth > 0 ? "git-branch" : "list-checks",
+  };
+}
+
 function TerminalCard({
   session,
   item,
@@ -923,11 +939,7 @@ function TerminalCard({
           </span>
         </Tooltip>
         {session.current_plan ? (
-          <Tooltip
-            label={`${session.current_plan.title}\n${
-              session.current_plan.current_phase_title ?? "No current phase"
-            } · ${session.current_plan.completed_phases}/${session.current_plan.total_phases} phases`}
-          >
+          <Tooltip label={planChip(session.current_plan).label}>
             <button
               type="button"
               className={`monitor-card__plan${
@@ -938,7 +950,7 @@ function TerminalCard({
               onClick={openPlan}
               aria-label={`Plan · ${session.current_plan.title}`}
             >
-              <Sigil icon="list-checks" size={12} />
+              <Sigil icon={planChip(session.current_plan).icon} size={12} />
               <span className="tabular">
                 {session.current_plan.completed_phases}/
                 {session.current_plan.total_phases}
