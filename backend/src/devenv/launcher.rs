@@ -299,7 +299,9 @@ fn should_reap(running: bool, is_current: bool, connected: bool, hosted: usize) 
 /// identity. Per decision 5 the identity is the image ID: the `:sha` tag
 /// changes every release, while the ID changes exactly when toolset content
 /// does — so a backend-only release resolves to the already-running
-/// container and rolls nothing.
+/// container and rolls nothing. The CLI is still delivered on that path: it
+/// ships per commit, so leaving it behind with the container would strand
+/// every shell on the last toolset change.
 async fn ensure_current_container(
     socket_path: &std::path::Path,
     image: &str,
@@ -308,6 +310,19 @@ async fn ensure_current_container(
 ) -> anyhow::Result<String> {
     let image_id = resolve_image_id(image).await?;
     let name = container_name_for(&image_id);
+
+    // The CLI is per-commit but the container it runs in is not, so its
+    // delivery cannot be gated on a container roll: a Rust-only release
+    // deliberately resolves to the already-running container, and gating here
+    // left `/run/sulion/bin/sulion` pinned to whatever commit last changed the
+    // toolset image. Deliver first, every start. The symlink is swapped by
+    // rename, and running processes keep the inode they opened, so this is
+    // safe underneath live shells — they pick the new binary up on the next
+    // invocation, without their container being replaced.
+    if let Err(error) = deliver_cli_binary(socket_path).await {
+        tracing::warn!(%error, "sulion CLI delivery failed; PTY wrappers may not resolve");
+    }
+
     if let Some(state) = inspect_container(&name).await? {
         if !state.owned {
             anyhow::bail!(
@@ -322,10 +337,8 @@ async fn ensure_current_container(
         tracing::warn!(%name, "devenv container exists but is not running; replacing it");
         run_docker(&["rm", "-f", &name]).await?;
     }
-    // Deliver this node's per-commit binaries through the shared run
-    // volume; the image itself carries only the toolset. The server binary
-    // is exec'd at its versioned path; the CLI additionally gets a stable
-    // symlink because the image's /usr/local/bin/sulion points at it.
+    // The server binary is exec'd at its versioned path, so it is only needed
+    // when this node actually creates the container.
     let exec_path = match deliver_versioned_binary(socket_path, "sulion-devenv").await {
         Ok(path) => path,
         Err(error) => {
@@ -333,9 +346,6 @@ async fn ensure_current_container(
             PathBuf::from("/usr/local/bin/sulion-devenv")
         }
     };
-    if let Err(error) = deliver_cli_binary(socket_path).await {
-        tracing::warn!(%error, "sulion CLI delivery failed; PTY wrappers may not resolve");
-    }
     let docker_socket_gid = docker_socket_gid(std::path::Path::new(DOCKER_SOCKET_PATH))?;
     let args = container_run_args(
         socket_path,
@@ -426,11 +436,21 @@ async fn deliver_cli_binary(socket_path: &std::path::Path) -> anyhow::Result<()>
     let run_root = socket_path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("devenv socket path has no parent"))?;
+    point_cli_symlink(run_root, &target).await
+}
+
+/// Repoints `<run>/bin/sulion` at `target`. Staging plus rename so the link is
+/// never briefly absent, and so a shell resolving it mid-swap gets either the
+/// old binary or the new one.
+async fn point_cli_symlink(
+    run_root: &std::path::Path,
+    target: &std::path::Path,
+) -> anyhow::Result<()> {
     let bin_dir = run_root.join("bin");
     tokio::fs::create_dir_all(&bin_dir).await?;
     let staging = bin_dir.join(".sulion.next");
     let _ = tokio::fs::remove_file(&staging).await;
-    tokio::fs::symlink(&target, &staging).await?;
+    tokio::fs::symlink(target, &staging).await?;
     tokio::fs::rename(&staging, bin_dir.join("sulion")).await?;
     Ok(())
 }
@@ -639,6 +659,34 @@ mod tests {
             delivered_binary_path(std::path::Path::new("/run/sulion"), "0011aabb", "sulion"),
             std::path::PathBuf::from("/run/sulion/devenv-bin/0011aabb/sulion")
         );
+    }
+
+    /// A shell resolves `sulion` through this link, so a release that leaves it
+    /// pointing at the previous commit's binary is invisible until someone runs
+    /// a command that does not exist yet. Repointing must overwrite.
+    #[tokio::test]
+    async fn cli_symlink_repoints_at_the_newest_delivered_binary() {
+        let run_root = std::env::temp_dir().join(format!(
+            "sulion-cli-link-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&run_root);
+        let old = delivered_binary_path(&run_root, "aaaaaaaa", "sulion");
+        let new = delivered_binary_path(&run_root, "bbbbbbbb", "sulion");
+        for path in [&old, &new] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"binary").unwrap();
+        }
+
+        point_cli_symlink(&run_root, &old).await.unwrap();
+        let link = run_root.join("bin").join("sulion");
+        assert_eq!(std::fs::read_link(&link).unwrap(), old);
+
+        point_cli_symlink(&run_root, &new).await.unwrap();
+        assert_eq!(std::fs::read_link(&link).unwrap(), new);
+
+        std::fs::remove_dir_all(&run_root).unwrap();
     }
 
     #[test]
