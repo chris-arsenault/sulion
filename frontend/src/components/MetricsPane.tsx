@@ -237,6 +237,7 @@ function formatElapsed(fromIso: string, toIso: string): string {
 function TokensSection({ data }: { data: MetricsResponse }) {
   const { usage } = data;
   const maxDay = Math.max(0.01, ...usage.daily.map((d) => d.estimated_cost_usd));
+  const incompleteDays = usage.daily.some((day) => day.unpriced_tokens > 0);
   return (
     <section className="metrics-section" aria-label="Token spend">
       <header>Tokens</header>
@@ -247,6 +248,12 @@ function TokensSection({ data }: { data: MetricsResponse }) {
       </div>
       <figure className="metrics-chart">
         <figcaption>API list-price estimate per day</figcaption>
+        {incompleteDays ? (
+          <p className="metrics-cost-warning">
+            Hatched days have unpriced usage. Bars show only the priced portion;
+            missing prices do not mean zero cost.
+          </p>
+        ) : null}
         {usage.daily.length === 0 ? (
           <div className="metrics-chart__empty">No usage recorded yet.</div>
         ) : (
@@ -260,7 +267,11 @@ function TokensSection({ data }: { data: MetricsResponse }) {
                 key={d.day}
                 label={usageTooltip(dayLabel(d.day), d)}
               >
-                <div className="metrics-bars__slot">
+                <div
+                  className="metrics-bars__slot"
+                  data-cost-incomplete={d.unpriced_tokens > 0 || undefined}
+                  aria-label={usageTooltip(dayLabel(d.day), d)}
+                >
                   <div
                     className="metrics-bars__fill"
                     data-h={barStep(d.estimated_cost_usd, maxDay)}
@@ -317,8 +328,7 @@ function TokensSection({ data }: { data: MetricsResponse }) {
       </table>
       <p className="metrics-note">
         Input excludes cache reads and includes cache writes. Cost is a standard-tier
-        API-list-price estimate as of {usage.pricing.as_of}; subscriptions and
-        long-context multipliers are excluded. Rates: {" "}
+        API-list-price estimate as of {usage.pricing.as_of}. {usage.pricing.note} Rates: {" "}
         <a href={usage.pricing.openai_source_url} target="_blank" rel="noreferrer">
           OpenAI
         </a>{" "}
@@ -342,7 +352,7 @@ function UsagePeriod({
   return (
     <div className="metrics-usage-window">
       <span>{label}</span>
-      <strong className="tabular">~{formatUsd(usage.estimated_cost_usd)}</strong>
+      <strong className="tabular">{costLabel(usage)}</strong>
       <dl>
         <div>
           <dt>in</dt>
@@ -358,12 +368,21 @@ function UsagePeriod({
         </div>
       </dl>
       {usage.unpriced_tokens > 0 ? (
-        <small>{formatTokens(usage.unpriced_tokens)} tokens unpriced</small>
+        <small className="metrics-cost-warning">Incomplete · {formatTokens(usage.unpriced_tokens)} tokens unpriced</small>
       ) : usage.cache_write_input_tokens > 0 ? (
         <small>{formatTokens(usage.cache_write_input_tokens)} input tokens were cache writes</small>
       ) : null}
     </div>
   );
+}
+
+function costLabel(usage: Pick<UsageWindowView, "estimated_cost_usd" | "unpriced_tokens">): string {
+  if (usage.unpriced_tokens > 0) {
+    return usage.estimated_cost_usd > 0
+      ? `~${formatUsd(usage.estimated_cost_usd)} + unpriced`
+      : "Cost unavailable";
+  }
+  return `~${formatUsd(usage.estimated_cost_usd)}`;
 }
 
 function usageTooltip(
@@ -379,7 +398,7 @@ function usageTooltip(
   >,
 ): string {
   return [
-    `${label} · ~${formatUsd(usage.estimated_cost_usd)}`,
+    `${label} · ${costLabel(usage)}`,
     `${formatTokens(usage.input_tokens)} input (${formatTokens(usage.cache_write_input_tokens)} cache writes)`,
     `${formatTokens(usage.cached_input_tokens)} cached input`,
     `${formatTokens(usage.output_tokens)} output`,

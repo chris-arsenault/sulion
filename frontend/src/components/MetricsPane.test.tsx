@@ -45,13 +45,13 @@ function jobsFixture(): JobsResponse {
   };
 }
 
-function stubFetch() {
+function stubFetch(data = fixture()) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) =>
       String(input).includes("/api/jobs")
         ? jsonResponse(jobsFixture())
-        : jsonResponse(fixture()),
+        : jsonResponse(data),
     ),
   );
 }
@@ -203,6 +203,41 @@ describe("MetricsPane", () => {
         screen.getByText(/500K input \(100K cache writes\).*20M cached input.*100K output/s),
       ).toBeDefined(),
     );
+  });
+
+  it("distinguishes unpriced days and partial estimates from zero usage", async () => {
+    const data = fixture();
+    data.usage.today.estimated_cost_usd = 0;
+    data.usage.today.unpriced_tokens = 9_350_000;
+    data.usage.last_7d.unpriced_tokens = 9_350_000;
+    data.usage.daily[1].estimated_cost_usd = 0;
+    data.usage.daily[1].unpriced_tokens = 9_350_000;
+    stubFetch(data);
+    render(<MetricsPane />);
+    const tokens = await screen.findByRole("region", { name: "Token spend" });
+    expect(within(tokens).getByText("Cost unavailable")).toBeDefined();
+    expect(within(tokens).getByText("~$34.75 + unpriced")).toBeDefined();
+    expect(within(tokens).queryByText("~$0.00")).toBeNull();
+    expect(within(tokens).getByText(/missing prices do not mean zero cost/)).toBeDefined();
+    const unknownDay = tokens.querySelector('[data-cost-incomplete="true"]')!;
+    expect(unknownDay.getAttribute("aria-label")).toContain("Cost unavailable");
+    const user = userEvent.setup();
+    await user.hover(unknownDay);
+    await waitFor(() => expect(screen.getByRole("tooltip").textContent).toContain("tokens unpriced"));
+  });
+
+  it("shows a genuine zero-cost day without a missing-price warning", async () => {
+    const data = fixture();
+    data.usage.today = {
+      input_tokens: 0, cached_input_tokens: 0, cache_write_input_tokens: 0,
+      output_tokens: 0, estimated_cost_usd: 0, unpriced_tokens: 0,
+    };
+    data.usage.daily[1] = { day: data.usage.daily[1].day, ...data.usage.today };
+    stubFetch(data);
+    render(<MetricsPane />);
+    const tokens = await screen.findByRole("region", { name: "Token spend" });
+    expect(within(tokens).getByText("~$0.00")).toBeDefined();
+    expect(tokens.querySelector('[data-cost-incomplete="true"]')).toBeNull();
   });
 
   it("surfaces fetch errors", async () => {

@@ -247,8 +247,14 @@ fn price(
 
 fn catalog_price(model: &str) -> Option<CatalogPrice> {
     match model {
-        "gpt-5.6-sol" => Some(price(5.0, 0.5, 6.25, 6.25, 30.0)),
-        "claude-opus-5" => Some(price(5.0, 0.5, 6.25, 10.0, 25.0)),
+        // https://developers.openai.com/api/docs/models/<model>, checked 2026-09-11.
+        // OpenAI cache writes cost 1.25 times standard input.
+        "gpt-6-astra" => Some(price(10.0, 1.0, 12.5, 12.5, 50.0)),
+        "gpt-5.6-sol" | "gpt-5.6" => Some(price(4.0, 0.4, 5.0, 5.0, 20.0)),
+        "gpt-5.6-terra" => Some(price(2.0, 0.2, 2.5, 2.5, 12.0)),
+        "gpt-5.6-luna" => Some(price(0.2, 0.02, 0.25, 0.25, 1.2)),
+        // https://platform.claude.com/docs/en/about-claude/pricing, checked 2026-09-11.
+        "claude-opus-5" | "claude-opus-4-8" => Some(price(5.0, 0.5, 6.25, 10.0, 25.0)),
         "claude-fable-5" => Some(price(10.0, 1.0, 12.5, 20.0, 50.0)),
         _ => None,
     }
@@ -293,51 +299,9 @@ fn repo_name(repo: Option<&str>) -> String {
 async fn usage_metrics(pool: &Pool) -> anyhow::Result<UsageMetrics> {
     // Repo attribution, most direct first: correlated PTY, compaction-parent
     // lineage, a reverse PTY pointer, then the transcript project hash.
-    let rows: Vec<DailyUsageRow> = sqlx::query_as(
-        "WITH RECURSIVE lineage AS ( \
-            SELECT cs.session_uuid AS origin, cs.pty_session_id, \
-                   cs.parent_session_uuid, 0 AS depth \
-            FROM claude_sessions cs \
-          UNION ALL \
-            SELECT l.origin, parent.pty_session_id, parent.parent_session_uuid, \
-                   l.depth + 1 \
-            FROM lineage l \
-            JOIN claude_sessions parent ON parent.session_uuid = l.parent_session_uuid \
-            WHERE l.pty_session_id IS NULL AND l.depth < 16 \
-         ), lineage_pty AS ( \
-            SELECT DISTINCT ON (origin) origin, pty_session_id \
-            FROM lineage WHERE pty_session_id IS NOT NULL ORDER BY origin, depth \
-         ), dimensions AS ( \
-            SELECT cs.session_uuid, metadata.model, \
-                COALESCE(p_direct.repo, p_reverse.repo, hash_repo.repo_name) AS repo \
-            FROM claude_sessions cs \
-            LEFT JOIN agent_session_metadata metadata ON metadata.session_uuid = cs.session_uuid \
-            LEFT JOIN lineage_pty lp ON lp.origin = cs.session_uuid \
-            LEFT JOIN pty_sessions p_direct ON p_direct.id = lp.pty_session_id \
-            LEFT JOIN LATERAL ( \
-                SELECT pr.repo FROM pty_sessions pr \
-                WHERE pr.current_session_uuid = cs.session_uuid LIMIT 1 \
-            ) p_reverse ON TRUE \
-            LEFT JOIN LATERAL ( \
-                SELECT r.repo_name FROM repo_runtime_state r \
-                WHERE cs.project_hash IS NOT NULL \
-                  AND regexp_replace(r.path, '[^A-Za-z0-9]', '-', 'g') = cs.project_hash \
-                LIMIT 1 \
-            ) hash_repo ON TRUE \
-         ) \
-         SELECT d.day, dimensions.repo, d.agent, d.model, \
-            COALESCE(SUM(d.input_tokens), 0)::BIGINT AS standard_input, \
-            COALESCE(SUM(d.cached_input_tokens), 0)::BIGINT AS cache_read, \
-            COALESCE(SUM(d.cache_write_input_tokens), 0)::BIGINT AS cache_write, \
-            COALESCE(SUM(d.cache_write_1h_input_tokens), 0)::BIGINT AS cache_write_1h, \
-            COALESCE(SUM(d.output_tokens), 0)::BIGINT AS output \
-         FROM agent_model_usage_daily d \
-         LEFT JOIN dimensions ON dimensions.session_uuid = d.session_uuid \
-         GROUP BY d.day, dimensions.repo, d.agent, d.model \
-         ORDER BY d.day",
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows: Vec<DailyUsageRow> = sqlx::query_as(include_str!("metrics/usage.sql"))
+        .fetch_all(pool)
+        .await?;
 
     let now = Utc::now().date_naive();
     let week_start = now.checked_sub_days(chrono::Days::new(6)).unwrap_or(now);
@@ -461,10 +425,10 @@ async fn usage_metrics(pool: &Pool) -> anyhow::Result<UsageMetrics> {
         daily,
         pricing: UsagePricingMetadata {
             basis: "API list price (standard tier)",
-            as_of: NaiveDate::from_ymd_opt(2026, 8, 19).unwrap_or(now),
-            openai_source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
-            anthropic_source_url: "https://claude.com/pricing",
-            note: "Subscription fees and long-context multipliers are not included. Unknown models are excluded from the estimate.",
+            as_of: NaiveDate::from_ymd_opt(2026, 9, 11).unwrap_or(now),
+            openai_source_url: "https://developers.openai.com/api/docs/pricing",
+            anthropic_source_url: "https://platform.claude.com/docs/en/about-claude/pricing",
+            note: "Current catalog rates apply to all dates, not historical invoices. Subscription fees, service-tier and long-context multipliers are excluded. Unknown models make estimates incomplete.",
         },
     })
 }
@@ -561,5 +525,30 @@ mod tests {
 
         assert_eq!(window.estimated_cost_usd, 0.0);
         assert_eq!(window.unpriced_tokens, 1_000);
+    }
+
+    #[test]
+    fn current_models_price_every_token_category() {
+        let usage = UsageComponents {
+            standard_input: 1_000_000,
+            cache_read: 2_000_000,
+            cache_write: 1_000_000,
+            cache_write_1h: 0,
+            output: 1_000_000,
+        };
+        for (model, expected) in [
+            ("gpt-6-astra", 74.5),
+            ("gpt-5.6-sol", 29.8),
+            ("gpt-5.6", 29.8),
+            ("gpt-5.6-terra", 16.9),
+            ("gpt-5.6-luna", 1.69),
+            ("claude-opus-4-8", 37.25),
+        ] {
+            let mut total = UsageAccumulator::default();
+            total.add(usage, Some(model));
+            let window = total.window();
+            assert_eq!(window.estimated_cost_usd, expected, "{model}");
+            assert_eq!(window.unpriced_tokens, 0, "{model}");
+        }
     }
 }

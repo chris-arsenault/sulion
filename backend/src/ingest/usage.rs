@@ -5,6 +5,10 @@ use uuid::Uuid;
 
 use super::ingester::TranscriptSource;
 
+mod rebuild;
+mod records;
+pub(super) use rebuild::rebuild_usage_projection;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UsageMode {
     Cumulative,
@@ -40,6 +44,8 @@ struct StoredUsage {
     cache_write_1h_input_tokens: i64,
     output_tokens: i64,
     last_usage_message_id: Option<String>,
+    last_byte_offset: i64,
+    codex_response_records: bool,
 }
 
 pub(super) async fn upsert_from_event(
@@ -55,34 +61,94 @@ pub(super) async fn upsert_from_event(
     };
     let previous: Option<StoredUsage> = sqlx::query_as(
         "SELECT input_tokens, cached_input_tokens, cache_write_input_tokens, \
-                cache_write_1h_input_tokens, output_tokens, last_usage_message_id \
+                cache_write_1h_input_tokens, output_tokens, last_usage_message_id, \
+                last_byte_offset, codex_response_records \
            FROM agent_session_usage WHERE session_uuid = $1 FOR UPDATE",
     )
     .bind(session_uuid)
     .fetch_optional(&mut **tx)
     .await?;
+    if previous
+        .as_ref()
+        .is_some_and(|row| byte_offset <= row.last_byte_offset)
+    {
+        return Ok(());
+    }
+    let response_record = source == TranscriptSource::Codex && usage.mode == UsageMode::Delta;
+    if source == TranscriptSource::Codex
+        && !response_record
+        && previous
+            .as_ref()
+            .is_some_and(|row| row.codex_response_records)
+    {
+        return records::update_context(tx, session_uuid, byte_offset, observed_at, &usage).await;
+    }
+    if response_record
+        && !records::claim_response(tx, session_uuid, usage.message_id.as_deref().unwrap()).await?
+    {
+        return Ok(());
+    }
     let daily_delta = usage.daily_delta(previous.as_ref());
-    let metadata_model: Option<(Option<String>,)> =
-        sqlx::query_as("SELECT model FROM agent_session_metadata WHERE session_uuid = $1")
+    let recorded_model: Option<String> =
+        if source == TranscriptSource::Codex && usage.model.is_none() {
+            sqlx::query_scalar(
+                "SELECT payload #>> '{payload,model}' FROM events \
+             WHERE session_uuid = $1 AND byte_offset <= $2 AND kind = 'turn_context' \
+               AND payload #>> '{payload,model}' IS NOT NULL \
+             ORDER BY byte_offset DESC LIMIT 1",
+            )
             .bind(session_uuid)
+            .bind(byte_offset)
             .fetch_optional(&mut **tx)
-            .await?;
+            .await?
+        } else {
+            None
+        };
     let model = usage
         .model
         .as_deref()
-        .or_else(|| match source {
-            TranscriptSource::Codex => metadata_model.as_ref().and_then(|row| row.0.as_deref()),
-            TranscriptSource::ClaudeCode => None,
-        })
+        .or(recorded_model.as_deref())
         .unwrap_or("(unknown model)");
+    store_usage(
+        tx,
+        session_uuid,
+        source,
+        byte_offset,
+        observed_at,
+        &usage,
+        response_record,
+    )
+    .await?;
+    add_model_daily(
+        tx,
+        session_uuid,
+        source.agent_id(),
+        model,
+        observed_at,
+        daily_delta,
+        usage.message_id.as_deref(),
+    )
+    .await?;
+    snapshot_daily(tx, session_uuid, observed_at).await
+}
+
+async fn store_usage(
+    tx: &mut Transaction<'_, Postgres>,
+    session_uuid: Uuid,
+    source: TranscriptSource,
+    byte_offset: i64,
+    observed_at: DateTime<Utc>,
+    usage: &UsageUpdate,
+    response_record: bool,
+) -> Result<(), sqlx::Error> {
     let is_delta = usage.mode == UsageMode::Delta;
     sqlx::query(
         "INSERT INTO agent_session_usage \
             (session_uuid, agent, input_tokens, cached_input_tokens, \
              cache_write_input_tokens, cache_write_1h_input_tokens, output_tokens, \
              reasoning_output_tokens, total_tokens, context_tokens, model_context_window, \
-             last_byte_offset, observed_at, last_usage_message_id, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $15, NOW()) \
+             last_byte_offset, observed_at, last_usage_message_id, codex_response_records, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $15, $16, NOW()) \
          ON CONFLICT (session_uuid) DO UPDATE SET \
             agent = EXCLUDED.agent, \
             input_tokens = CASE \
@@ -135,6 +201,7 @@ pub(super) async fn upsert_from_event(
                 EXCLUDED.model_context_window, agent_session_usage.model_context_window \
             ), \
             last_byte_offset = EXCLUDED.last_byte_offset, \
+            codex_response_records = agent_session_usage.codex_response_records OR $16, \
             observed_at = EXCLUDED.observed_at, \
             last_usage_message_id = COALESCE( \
                 EXCLUDED.last_usage_message_id, agent_session_usage.last_usage_message_id \
@@ -157,19 +224,10 @@ pub(super) async fn upsert_from_event(
     .bind(observed_at)
     .bind(is_delta)
     .bind(usage.message_id.as_deref())
+    .bind(response_record)
     .execute(&mut **tx)
     .await?;
-    add_model_daily(
-        tx,
-        session_uuid,
-        source.agent_id(),
-        model,
-        observed_at,
-        daily_delta,
-        usage.message_id.as_deref(),
-    )
-    .await?;
-    snapshot_daily(tx, session_uuid, observed_at).await
+    Ok(())
 }
 
 impl UsageUpdate {
@@ -316,6 +374,9 @@ fn extract_usage(source: TranscriptSource, value: &Value) -> Option<UsageUpdate>
 
 fn extract_codex_usage(value: &Value) -> Option<UsageUpdate> {
     let payload = value.get("payload")?;
+    if super::canonical::codex_record_kind(value) == Some("token_usage_record") {
+        return records::extract_response(payload);
+    }
     if super::canonical::codex_record_kind(value) != Some("event_msg")
         || string_at(payload, &["type"]) != Some("token_count")
     {
@@ -439,340 +500,6 @@ fn total_token_count(value: &Value) -> i64 {
     })
 }
 
-/// Rebuild the derived usage tables from canonical event payloads. The usage
-/// tables are locked before the event snapshot is read: an ingester transaction
-/// that has inserted a newer event will then apply its usage update after this
-/// transaction commits, so the rebuild cannot erase concurrent usage.
-pub(super) async fn rebuild_usage_projection(pool: &crate::db::Pool) -> anyhow::Result<u64> {
-    let mut tx = pool.begin().await?;
-    sqlx::query(
-        "LOCK TABLE agent_session_usage, agent_usage_daily, agent_model_usage_daily \
-         IN ACCESS EXCLUSIVE MODE",
-    )
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query("DELETE FROM agent_model_usage_daily")
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM agent_usage_daily")
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM agent_session_usage")
-        .execute(&mut *tx)
-        .await?;
-
-    let codex_sessions = sqlx::query(
-        "WITH raw AS ( \
-            SELECT DISTINCT ON (e.session_uuid) \
-                e.session_uuid, e.agent, e.byte_offset, e.timestamp, \
-                e.payload #> '{payload,info,total_token_usage}' AS total_usage, \
-                e.payload #> '{payload,info,last_token_usage}' AS last_usage, \
-                e.payload #> '{payload,info,model_context_window}' AS context_window \
-            FROM events e \
-            WHERE e.agent = 'codex' \
-              AND e.payload #>> '{payload,type}' = 'token_count' \
-              AND jsonb_typeof(e.payload #> '{payload,info,total_token_usage}') = 'object' \
-            ORDER BY e.session_uuid, e.byte_offset DESC \
-         ), parsed AS ( \
-            SELECT *, \
-                CASE WHEN jsonb_typeof(total_usage -> 'input_tokens') = 'number' \
-                    THEN (total_usage ->> 'input_tokens')::NUMERIC::BIGINT ELSE 0 END AS reported_input, \
-                CASE WHEN jsonb_typeof(total_usage -> 'cached_input_tokens') = 'number' \
-                    THEN (total_usage ->> 'cached_input_tokens')::NUMERIC::BIGINT ELSE 0 END AS cache_read, \
-                CASE WHEN jsonb_typeof(total_usage -> 'cache_write_input_tokens') = 'number' \
-                    THEN (total_usage ->> 'cache_write_input_tokens')::NUMERIC::BIGINT ELSE 0 END AS cache_write, \
-                CASE WHEN jsonb_typeof(total_usage -> 'output_tokens') = 'number' \
-                    THEN (total_usage ->> 'output_tokens')::NUMERIC::BIGINT ELSE 0 END AS output, \
-                CASE WHEN jsonb_typeof(total_usage -> 'reasoning_output_tokens') = 'number' \
-                    THEN (total_usage ->> 'reasoning_output_tokens')::NUMERIC::BIGINT ELSE 0 END AS reasoning, \
-                CASE WHEN jsonb_typeof(total_usage -> 'total_tokens') = 'number' \
-                    THEN (total_usage ->> 'total_tokens')::NUMERIC::BIGINT ELSE NULL END AS reported_total, \
-                CASE WHEN jsonb_typeof(last_usage -> 'total_tokens') = 'number' \
-                    THEN (last_usage ->> 'total_tokens')::NUMERIC::BIGINT ELSE NULL END AS last_total, \
-                CASE WHEN jsonb_typeof(last_usage -> 'reasoning_output_tokens') = 'number' \
-                    THEN (last_usage ->> 'reasoning_output_tokens')::NUMERIC::BIGINT ELSE 0 END AS last_reasoning, \
-                CASE WHEN jsonb_typeof(context_window) = 'number' \
-                    THEN (context_window #>> '{}')::NUMERIC::BIGINT ELSE NULL END AS reported_window \
-            FROM raw \
-         ) \
-         INSERT INTO agent_session_usage ( \
-            session_uuid, agent, input_tokens, cached_input_tokens, \
-            cache_write_input_tokens, cache_write_1h_input_tokens, output_tokens, \
-            reasoning_output_tokens, total_tokens, context_tokens, model_context_window, \
-            last_byte_offset, observed_at, last_usage_message_id, updated_at) \
-         SELECT session_uuid, agent, \
-            GREATEST(reported_input - cache_read - cache_write, 0), \
-            GREATEST(cache_read, 0), GREATEST(cache_write, 0), 0, \
-            GREATEST(output, 0), GREATEST(reasoning, 0), \
-            GREATEST(COALESCE(reported_total, reported_input + output), 0), \
-            CASE WHEN last_total IS NULL THEN NULL \
-                 ELSE GREATEST(last_total - last_reasoning, 0) END, \
-            CASE WHEN reported_window > 0 THEN reported_window ELSE NULL END, \
-            byte_offset, timestamp, NULL, NOW() \
-         FROM parsed",
-    )
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
-
-    let claude_sessions = sqlx::query(
-        "WITH raw AS ( \
-            SELECT e.session_uuid, e.agent, e.byte_offset, e.timestamp, \
-                COALESCE(e.payload #>> '{message,id}', e.byte_offset::TEXT) AS response_key, \
-                e.payload #>> '{message,id}' AS message_id, \
-                COALESCE(e.payload #> '{message,usage}', e.payload -> 'usage') AS usage \
-            FROM events e \
-            WHERE e.agent = 'claude-code' AND e.payload ->> 'type' = 'assistant' \
-         ), responses AS ( \
-            SELECT DISTINCT ON (session_uuid, response_key) * \
-            FROM raw WHERE jsonb_typeof(usage) = 'object' \
-            ORDER BY session_uuid, response_key, byte_offset DESC \
-         ), parsed AS ( \
-            SELECT *, \
-                CASE WHEN jsonb_typeof(usage -> 'input_tokens') = 'number' \
-                    THEN (usage ->> 'input_tokens')::NUMERIC::BIGINT ELSE 0 END AS input, \
-                CASE WHEN jsonb_typeof(usage -> 'cache_read_input_tokens') = 'number' \
-                    THEN (usage ->> 'cache_read_input_tokens')::NUMERIC::BIGINT ELSE 0 END AS cache_read, \
-                CASE WHEN jsonb_typeof(usage -> 'cache_creation_input_tokens') = 'number' \
-                    THEN (usage ->> 'cache_creation_input_tokens')::NUMERIC::BIGINT ELSE 0 END AS cache_total, \
-                CASE WHEN jsonb_typeof(usage #> '{cache_creation,ephemeral_5m_input_tokens}') = 'number' \
-                    THEN (usage #>> '{cache_creation,ephemeral_5m_input_tokens}')::NUMERIC::BIGINT ELSE 0 END AS cache_5m, \
-                CASE WHEN jsonb_typeof(usage #> '{cache_creation,ephemeral_1h_input_tokens}') = 'number' \
-                    THEN (usage #>> '{cache_creation,ephemeral_1h_input_tokens}')::NUMERIC::BIGINT ELSE 0 END AS cache_1h, \
-                CASE WHEN jsonb_typeof(usage -> 'output_tokens') = 'number' \
-                    THEN (usage ->> 'output_tokens')::NUMERIC::BIGINT ELSE 0 END AS output, \
-                CASE WHEN jsonb_typeof(usage -> 'model_context_window') = 'number' \
-                    THEN (usage ->> 'model_context_window')::NUMERIC::BIGINT ELSE NULL END AS reported_window \
-            FROM responses \
-         ), normalized AS ( \
-            SELECT *, GREATEST(cache_total - cache_1h, cache_5m, 0) AS cache_write \
-            FROM parsed \
-         ), totals AS ( \
-            SELECT session_uuid, MIN(agent) AS agent, \
-                SUM(GREATEST(input, 0))::BIGINT AS input, \
-                SUM(GREATEST(cache_read, 0))::BIGINT AS cache_read, \
-                SUM(GREATEST(cache_write, 0))::BIGINT AS cache_write, \
-                SUM(GREATEST(cache_1h, 0))::BIGINT AS cache_write_1h, \
-                SUM(GREATEST(output, 0))::BIGINT AS output, \
-                MAX(byte_offset) AS last_byte_offset, \
-                (ARRAY_AGG(timestamp ORDER BY byte_offset DESC))[1] AS observed_at, \
-                (ARRAY_AGG(message_id ORDER BY byte_offset DESC))[1] AS last_message_id, \
-                (ARRAY_AGG( \
-                    GREATEST(input, 0) + GREATEST(cache_read, 0) \
-                    + GREATEST(cache_write, 0) + GREATEST(cache_1h, 0) \
-                    + GREATEST(output, 0) ORDER BY byte_offset DESC))[1]::BIGINT AS context_tokens, \
-                (ARRAY_AGG(reported_window ORDER BY byte_offset DESC) \
-                    FILTER (WHERE reported_window > 0))[1] AS model_context_window \
-            FROM normalized GROUP BY session_uuid \
-         ) \
-         INSERT INTO agent_session_usage ( \
-            session_uuid, agent, input_tokens, cached_input_tokens, \
-            cache_write_input_tokens, cache_write_1h_input_tokens, output_tokens, \
-            reasoning_output_tokens, total_tokens, context_tokens, model_context_window, \
-            last_byte_offset, observed_at, last_usage_message_id, updated_at) \
-         SELECT session_uuid, agent, input, cache_read, cache_write, cache_write_1h, \
-            output, 0, input + cache_read + cache_write + cache_write_1h + output, \
-            context_tokens, model_context_window, last_byte_offset, observed_at, \
-            last_message_id, NOW() \
-         FROM totals",
-    )
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
-
-    sqlx::query(
-        "WITH codex_raw AS ( \
-            SELECT DISTINCT ON (e.session_uuid, (e.timestamp AT TIME ZONE 'UTC')::DATE) \
-                (e.timestamp AT TIME ZONE 'UTC')::DATE AS day, \
-                e.session_uuid, e.agent, \
-                e.payload #> '{payload,info,total_token_usage}' AS usage \
-            FROM events e \
-            WHERE e.agent = 'codex' \
-              AND e.payload #>> '{payload,type}' = 'token_count' \
-              AND jsonb_typeof(e.payload #> '{payload,info,total_token_usage}') = 'object' \
-            ORDER BY e.session_uuid, (e.timestamp AT TIME ZONE 'UTC')::DATE, e.byte_offset DESC \
-         ), codex AS ( \
-            SELECT day, session_uuid, agent, \
-                CASE WHEN jsonb_typeof(usage -> 'input_tokens') = 'number' \
-                    THEN (usage ->> 'input_tokens')::NUMERIC::BIGINT ELSE 0 END AS reported_input, \
-                CASE WHEN jsonb_typeof(usage -> 'cached_input_tokens') = 'number' \
-                    THEN (usage ->> 'cached_input_tokens')::NUMERIC::BIGINT ELSE 0 END AS cache_read, \
-                CASE WHEN jsonb_typeof(usage -> 'cache_write_input_tokens') = 'number' \
-                    THEN (usage ->> 'cache_write_input_tokens')::NUMERIC::BIGINT ELSE 0 END AS cache_write, \
-                CASE WHEN jsonb_typeof(usage -> 'output_tokens') = 'number' \
-                    THEN (usage ->> 'output_tokens')::NUMERIC::BIGINT ELSE 0 END AS output, \
-                CASE WHEN jsonb_typeof(usage -> 'reasoning_output_tokens') = 'number' \
-                    THEN (usage ->> 'reasoning_output_tokens')::NUMERIC::BIGINT ELSE 0 END AS reasoning, \
-                CASE WHEN jsonb_typeof(usage -> 'total_tokens') = 'number' \
-                    THEN (usage ->> 'total_tokens')::NUMERIC::BIGINT ELSE NULL END AS reported_total \
-            FROM codex_raw \
-         ), claude_raw AS ( \
-            SELECT e.session_uuid, e.agent, e.byte_offset, \
-                (e.timestamp AT TIME ZONE 'UTC')::DATE AS day, \
-                COALESCE(e.payload #>> '{message,id}', e.byte_offset::TEXT) AS response_key, \
-                COALESCE(e.payload #> '{message,usage}', e.payload -> 'usage') AS usage \
-            FROM events e \
-            WHERE e.agent = 'claude-code' AND e.payload ->> 'type' = 'assistant' \
-         ), claude_responses AS ( \
-            SELECT DISTINCT ON (session_uuid, response_key) * \
-            FROM claude_raw WHERE jsonb_typeof(usage) = 'object' \
-            ORDER BY session_uuid, response_key, byte_offset DESC \
-         ), claude_parsed AS ( \
-            SELECT *, \
-                CASE WHEN jsonb_typeof(usage -> 'input_tokens') = 'number' \
-                    THEN (usage ->> 'input_tokens')::NUMERIC::BIGINT ELSE 0 END AS input, \
-                CASE WHEN jsonb_typeof(usage -> 'cache_read_input_tokens') = 'number' \
-                    THEN (usage ->> 'cache_read_input_tokens')::NUMERIC::BIGINT ELSE 0 END AS cache_read, \
-                CASE WHEN jsonb_typeof(usage -> 'cache_creation_input_tokens') = 'number' \
-                    THEN (usage ->> 'cache_creation_input_tokens')::NUMERIC::BIGINT ELSE 0 END AS cache_total, \
-                CASE WHEN jsonb_typeof(usage #> '{cache_creation,ephemeral_5m_input_tokens}') = 'number' \
-                    THEN (usage #>> '{cache_creation,ephemeral_5m_input_tokens}')::NUMERIC::BIGINT ELSE 0 END AS cache_5m, \
-                CASE WHEN jsonb_typeof(usage #> '{cache_creation,ephemeral_1h_input_tokens}') = 'number' \
-                    THEN (usage #>> '{cache_creation,ephemeral_1h_input_tokens}')::NUMERIC::BIGINT ELSE 0 END AS cache_1h, \
-                CASE WHEN jsonb_typeof(usage -> 'output_tokens') = 'number' \
-                    THEN (usage ->> 'output_tokens')::NUMERIC::BIGINT ELSE 0 END AS output \
-            FROM claude_responses \
-         ), claude_by_day AS ( \
-            SELECT day, session_uuid, MIN(agent) AS agent, \
-                SUM(GREATEST(input, 0))::BIGINT AS input, \
-                SUM(GREATEST(cache_read, 0))::BIGINT AS cache_read, \
-                SUM(GREATEST(cache_total - cache_1h, cache_5m, 0))::BIGINT AS cache_write, \
-                SUM(GREATEST(cache_1h, 0))::BIGINT AS cache_write_1h, \
-                SUM(GREATEST(output, 0))::BIGINT AS output \
-            FROM claude_parsed GROUP BY day, session_uuid \
-         ), claude AS ( \
-            SELECT day, session_uuid, agent, \
-                SUM(input) OVER w AS input, SUM(cache_read) OVER w AS cache_read, \
-                SUM(cache_write) OVER w AS cache_write, \
-                SUM(cache_write_1h) OVER w AS cache_write_1h, \
-                SUM(output) OVER w AS output \
-            FROM claude_by_day \
-            WINDOW w AS (PARTITION BY session_uuid ORDER BY day ROWS UNBOUNDED PRECEDING) \
-         ), snapshots AS ( \
-            SELECT day, session_uuid, agent, \
-                GREATEST(reported_input - cache_read - cache_write, 0)::BIGINT AS input, \
-                GREATEST(cache_read, 0)::BIGINT AS cache_read, \
-                GREATEST(cache_write, 0)::BIGINT AS cache_write, 0::BIGINT AS cache_write_1h, \
-                GREATEST(output, 0)::BIGINT AS output, GREATEST(reasoning, 0)::BIGINT AS reasoning, \
-                GREATEST(COALESCE(reported_total, reported_input + output), 0)::BIGINT AS total \
-            FROM codex \
-            UNION ALL \
-            SELECT day, session_uuid, agent, input, cache_read, cache_write, cache_write_1h, \
-                output, 0, input + cache_read + cache_write + cache_write_1h + output \
-            FROM claude \
-         ) \
-         INSERT INTO agent_usage_daily ( \
-            day, session_uuid, agent, input_tokens, cached_input_tokens, \
-            cache_write_input_tokens, cache_write_1h_input_tokens, output_tokens, \
-            reasoning_output_tokens, total_tokens, updated_at) \
-         SELECT day, session_uuid, agent, input, cache_read, cache_write, cache_write_1h, \
-            output, reasoning, total, NOW() FROM snapshots",
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query(
-        "WITH codex_raw AS ( \
-            SELECT e.session_uuid, e.agent, e.byte_offset, \
-                (e.timestamp AT TIME ZONE 'UTC')::DATE AS day, \
-                COALESCE( \
-                    (SELECT prior.payload #>> '{payload,model}' \
-                       FROM events prior \
-                      WHERE prior.session_uuid = e.session_uuid \
-                        AND prior.byte_offset <= e.byte_offset \
-                        AND prior.payload ->> 'type' = 'turn_context' \
-                        AND prior.payload #>> '{payload,model}' IS NOT NULL \
-                      ORDER BY prior.byte_offset DESC LIMIT 1), \
-                    '(unknown model)') AS model, \
-                e.payload #> '{payload,info,total_token_usage}' AS usage \
-            FROM events e \
-            WHERE e.agent = 'codex' \
-              AND e.payload #>> '{payload,type}' = 'token_count' \
-              AND jsonb_typeof(e.payload #> '{payload,info,total_token_usage}') = 'object' \
-         ), codex_parsed AS ( \
-            SELECT *, \
-                CASE WHEN jsonb_typeof(usage -> 'input_tokens') = 'number' \
-                    THEN (usage ->> 'input_tokens')::NUMERIC::BIGINT ELSE 0 END AS reported_input, \
-                CASE WHEN jsonb_typeof(usage -> 'cached_input_tokens') = 'number' \
-                    THEN (usage ->> 'cached_input_tokens')::NUMERIC::BIGINT ELSE 0 END AS cache_read, \
-                CASE WHEN jsonb_typeof(usage -> 'cache_write_input_tokens') = 'number' \
-                    THEN (usage ->> 'cache_write_input_tokens')::NUMERIC::BIGINT ELSE 0 END AS cache_write, \
-                CASE WHEN jsonb_typeof(usage -> 'output_tokens') = 'number' \
-                    THEN (usage ->> 'output_tokens')::NUMERIC::BIGINT ELSE 0 END AS output \
-            FROM codex_raw \
-         ), codex_normalized AS ( \
-            SELECT *, GREATEST(reported_input - cache_read - cache_write, 0) AS input \
-            FROM codex_parsed \
-         ), codex_seq AS ( \
-            SELECT *, LAG(input) OVER w AS prev_input, \
-                LAG(cache_read) OVER w AS prev_cache_read, \
-                LAG(cache_write) OVER w AS prev_cache_write, \
-                LAG(output) OVER w AS prev_output \
-            FROM codex_normalized \
-            WINDOW w AS (PARTITION BY session_uuid ORDER BY byte_offset) \
-         ), codex_daily AS ( \
-            SELECT day, session_uuid, MIN(agent) AS agent, model, \
-                SUM(GREATEST(input - COALESCE(prev_input, 0), 0))::BIGINT AS input, \
-                SUM(GREATEST(cache_read - COALESCE(prev_cache_read, 0), 0))::BIGINT AS cache_read, \
-                SUM(GREATEST(cache_write - COALESCE(prev_cache_write, 0), 0))::BIGINT AS cache_write, \
-                0::BIGINT AS cache_write_1h, \
-                SUM(GREATEST(output - COALESCE(prev_output, 0), 0))::BIGINT AS output, \
-                NULL::TEXT AS last_message_id \
-            FROM codex_seq GROUP BY day, session_uuid, model \
-         ), claude_raw AS ( \
-            SELECT e.session_uuid, e.agent, e.byte_offset, \
-                (e.timestamp AT TIME ZONE 'UTC')::DATE AS day, \
-                COALESCE(e.payload #>> '{message,id}', e.byte_offset::TEXT) AS response_key, \
-                e.payload #>> '{message,id}' AS message_id, \
-                COALESCE(e.payload #>> '{message,model}', '(unknown model)') AS model, \
-                COALESCE(e.payload #> '{message,usage}', e.payload -> 'usage') AS usage \
-            FROM events e \
-            WHERE e.agent = 'claude-code' AND e.payload ->> 'type' = 'assistant' \
-         ), claude_responses AS ( \
-            SELECT DISTINCT ON (session_uuid, response_key) * \
-            FROM claude_raw WHERE jsonb_typeof(usage) = 'object' \
-            ORDER BY session_uuid, response_key, byte_offset DESC \
-         ), claude_parsed AS ( \
-            SELECT *, \
-                CASE WHEN jsonb_typeof(usage -> 'input_tokens') = 'number' \
-                    THEN (usage ->> 'input_tokens')::NUMERIC::BIGINT ELSE 0 END AS input, \
-                CASE WHEN jsonb_typeof(usage -> 'cache_read_input_tokens') = 'number' \
-                    THEN (usage ->> 'cache_read_input_tokens')::NUMERIC::BIGINT ELSE 0 END AS cache_read, \
-                CASE WHEN jsonb_typeof(usage -> 'cache_creation_input_tokens') = 'number' \
-                    THEN (usage ->> 'cache_creation_input_tokens')::NUMERIC::BIGINT ELSE 0 END AS cache_total, \
-                CASE WHEN jsonb_typeof(usage #> '{cache_creation,ephemeral_5m_input_tokens}') = 'number' \
-                    THEN (usage #>> '{cache_creation,ephemeral_5m_input_tokens}')::NUMERIC::BIGINT ELSE 0 END AS cache_5m, \
-                CASE WHEN jsonb_typeof(usage #> '{cache_creation,ephemeral_1h_input_tokens}') = 'number' \
-                    THEN (usage #>> '{cache_creation,ephemeral_1h_input_tokens}')::NUMERIC::BIGINT ELSE 0 END AS cache_1h, \
-                CASE WHEN jsonb_typeof(usage -> 'output_tokens') = 'number' \
-                    THEN (usage ->> 'output_tokens')::NUMERIC::BIGINT ELSE 0 END AS output \
-            FROM claude_responses \
-         ), claude_daily AS ( \
-            SELECT day, session_uuid, MIN(agent) AS agent, model, \
-                SUM(GREATEST(input, 0))::BIGINT AS input, \
-                SUM(GREATEST(cache_read, 0))::BIGINT AS cache_read, \
-                SUM(GREATEST(cache_total - cache_1h, cache_5m, 0))::BIGINT AS cache_write, \
-                SUM(GREATEST(cache_1h, 0))::BIGINT AS cache_write_1h, \
-                SUM(GREATEST(output, 0))::BIGINT AS output, \
-                (ARRAY_AGG(message_id ORDER BY byte_offset DESC))[1] AS last_message_id \
-            FROM claude_parsed GROUP BY day, session_uuid, model \
-         ), model_days AS ( \
-            SELECT * FROM codex_daily UNION ALL SELECT * FROM claude_daily \
-         ) \
-         INSERT INTO agent_model_usage_daily ( \
-            day, session_uuid, agent, model, input_tokens, cached_input_tokens, \
-            cache_write_input_tokens, cache_write_1h_input_tokens, output_tokens, \
-            last_usage_message_id, updated_at) \
-         SELECT day, session_uuid, agent, model, input, cache_read, cache_write, \
-            cache_write_1h, output, last_message_id, NOW() FROM model_days",
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    tx.commit().await?;
-    Ok(codex_sessions.saturating_add(claude_sessions))
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -845,6 +572,8 @@ mod tests {
             cache_write_1h_input_tokens: 0,
             output_tokens: 9_000,
             last_usage_message_id: None,
+            last_byte_offset: 0,
+            codex_response_records: false,
         };
         let delta = update.daily_delta(Some(&previous));
         assert_eq!(delta.input_tokens, 0);

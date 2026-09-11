@@ -118,6 +118,21 @@
   margin-bottom: 10px;
 }
 
+.metrics-cost-warning,
+.metrics-usage-window > .metrics-cost-warning {
+  color: var(--warn-fg);
+  font-size: var(--t-meta);
+}
+
+.metrics-bars__slot[data-cost-incomplete] {
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0 5px,
+    var(--warn-bg) 5px 8px
+  );
+  border-top: 2px solid var(--warn-mark);
+}
+
 .metrics-usage-window {
   min-width: 0;
   border: 1px solid var(--hairline);

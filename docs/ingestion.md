@@ -19,6 +19,29 @@ Claude and Codex write into the same canonical event model, share
 one ingester receives both read-only transcript roots. Splitting by agent
 family would duplicate ownership without buying failure isolation.
 
+## Usage accounting
+
+Codex spend uses deduplicated `token_usage_record.payload.usage` responses,
+including compaction. A session retains its legacy `token_count` prefix until
+the first valid response record; subsequent counts update context pressure
+without adding spend. Response IDs are persisted in `agent_usage_responses`
+so duplicates at new byte offsets remain harmless after restarts. Missing
+response IDs or usage objects do not switch the accounting source.
+
+Usage projection version 2 repairs response-record sessions from stored events
+during control startup. Upgrades preserve existing legacy-only and Claude
+projections; databases without version 1 rebuild those first. Repair replays
+model changes in event
+order for Codex response sessions, and replaces daily projections and response
+identities in the same transaction. The projection tables remain locked until
+the replacement is complete, so concurrent ingestion continues afterward.
+
+Metrics apply the catalog rates dated in the response to all historical dates;
+they estimate API-equivalent usage rather than historical invoices. Unpriced
+usage is marked as incomplete in totals and on the chart. Repository hash
+fallbacks use a mapping computed once per query to avoid repeated scans of the
+frequently updated runtime-state table.
+
 ## Process ownership
 
 - Control owns SQLx migrations and Postgres-only startup maintenance.

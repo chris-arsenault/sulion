@@ -27,7 +27,9 @@ const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // and reference-data category instead of the outer `exec` transport.
 const TIMELINE_PROJECTION_VERSION: i32 = 8;
 const USAGE_PROJECTION_KEY: &str = "usage_projection";
-const USAGE_PROJECTION_VERSION: i32 = 1;
+// v2: include Codex per-response usage, including compaction, and retain the
+// legacy prefix before a session first supplies response records.
+const USAGE_PROJECTION_VERSION: i32 = 2;
 
 #[derive(Debug, Default, Clone, Copy, serde::Serialize)]
 pub struct StartupMaintenanceStats {
@@ -191,7 +193,7 @@ async fn repair_usage_projection_if_behind(
     )
     .await
     .ok();
-    match super::usage::rebuild_usage_projection(pool).await {
+    match super::usage::rebuild_usage_projection(pool, current).await {
         Ok(rebuilt) => {
             if let Some(job) = &job {
                 job.complete().await;

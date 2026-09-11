@@ -17,6 +17,9 @@ use uuid::Uuid;
 const CODEX_RICH_LINEAGE_PARENT: &str = include_str!("fixtures/codex-rich-lineage-parent.jsonl");
 const CODEX_RICH_LINEAGE_CHILD: &str = include_str!("fixtures/codex-rich-lineage-child.jsonl");
 
+#[path = "ingester_integration/usage_records.rs"]
+mod usage_records;
+
 fn test_db_url() -> Option<String> {
     std::env::var("SULION_TEST_DB").ok()
 }
