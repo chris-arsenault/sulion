@@ -256,6 +256,9 @@ fn catalog_price(model: &str) -> Option<CatalogPrice> {
         // https://platform.claude.com/docs/en/about-claude/pricing, checked 2026-09-11.
         "claude-opus-5" | "claude-opus-4-8" => Some(price(5.0, 0.5, 6.25, 10.0, 25.0)),
         "claude-fable-5" => Some(price(10.0, 1.0, 12.5, 20.0, 50.0)),
+        // Fable 5.1 cache reads are 0.025x base input, not the usual 0.1x.
+        "claude-fable-5-1" => Some(price(10.0, 0.25, 12.5, 20.0, 50.0)),
+        "claude-haiku-4-5" | "claude-haiku-4-5-20251001" => Some(price(1.0, 0.1, 1.25, 2.0, 5.0)),
         _ => None,
     }
 }
@@ -543,6 +546,8 @@ mod tests {
             ("gpt-5.6-terra", 16.9),
             ("gpt-5.6-luna", 1.69),
             ("claude-opus-4-8", 37.25),
+            ("claude-fable-5-1", 73.0),
+            ("claude-haiku-4-5-20251001", 7.45),
         ] {
             let mut total = UsageAccumulator::default();
             total.add(usage, Some(model));
