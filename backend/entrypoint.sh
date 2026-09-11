@@ -31,12 +31,45 @@ mkdir -p \
 chmod 0700 "${HOME_DIR}/.ssh"
 
 # Persistent npm config: user-scope global installs land in ~/.local
-# rather than /usr/local (which the non-root dev user can't write).
-# Write once, then leave alone.
-if [[ ! -f "${HOME_DIR}/.npmrc" ]]; then
-  cat > "${HOME_DIR}/.npmrc" <<EOF
-prefix=${HOME_DIR}/.local
-EOF
+# rather than /usr/local (which the non-root dev user can't write). The
+# prefix is re-asserted on every start rather than written once: a home
+# that has moved keeps a prefix pointing at the old path, and npm then
+# refuses every global install as "not writable". Other lines are kept.
+NPMRC="${HOME_DIR}/.npmrc"
+NPM_PREFIX_LINE="prefix=${HOME_DIR}/.local"
+if [[ ! -f "${NPMRC}" ]]; then
+  printf '%s\n' "${NPM_PREFIX_LINE}" > "${NPMRC}"
+elif ! grep -qxF "${NPM_PREFIX_LINE}" "${NPMRC}"; then
+  TMP="$(mktemp)"
+  { grep -v '^prefix=' "${NPMRC}" || true; printf '%s\n' "${NPM_PREFIX_LINE}"; } > "${TMP}"
+  cat "${TMP}" > "${NPMRC}"
+  rm -f "${TMP}"
+fi
+
+# Claude Code lives in the home, not the image. Its native updater rewrites
+# ~/.local/bin/claude and ~/.local/share/claude/versions as this user, which
+# is what lets a PTY session upgrade without sudo and keeps the upgraded
+# copy across image rolls. The image only carries a seed binary under
+# /opt/sulion/seed. Seed when ~/.local/bin holds no working `claude` — a
+# fresh home, or a symlink left dangling by a home move — and otherwise
+# leave whatever the updater or the user put there alone.
+CLAUDE_SEED_DIR="/opt/sulion/seed/claude/versions"
+CLAUDE_VERSIONS_DIR="${HOME_DIR}/.local/share/claude/versions"
+CLAUDE_LAUNCHER="${HOME_DIR}/.local/bin/claude"
+if [[ -d "${CLAUDE_SEED_DIR}" && ! -x "${CLAUDE_LAUNCHER}" ]]; then
+  mkdir -p "${CLAUDE_VERSIONS_DIR}"
+  for seed in "${CLAUDE_SEED_DIR}"/*; do
+    if [[ -f "${seed}" && ! -e "${CLAUDE_VERSIONS_DIR}/$(basename "${seed}")" ]]; then
+      install -m 0755 "${seed}" "${CLAUDE_VERSIONS_DIR}/$(basename "${seed}")"
+    fi
+  done
+  # Highest version wins, whether it came from the seed or from an earlier
+  # native install whose launcher went missing.
+  newest="$(find "${CLAUDE_VERSIONS_DIR}" -mindepth 1 -maxdepth 1 -type f -perm -u+x -printf '%f\n' \
+    | sort -V | tail -n 1)"
+  if [[ -n "${newest}" ]]; then
+    ln -sfn "${CLAUDE_VERSIONS_DIR}/${newest}" "${CLAUDE_LAUNCHER}"
+  fi
 fi
 
 # Minimal bashrc seed: PATH for user-local installs, enough aliases

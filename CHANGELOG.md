@@ -4,6 +4,15 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### PTY toolset
+
+- Changed Claude Code to run from a native install in the persistent home,
+  seeded from the image on first start, instead of the root-owned npm tree.
+  Its built-in updater now upgrades PTY sessions without `sudo`, and the
+  upgraded copy survives image rolls. The entrypoint also repairs a stale
+  `~/.npmrc` prefix and a dangling `~/.local/bin/claude` link left behind by
+  a home-directory move.
+
 ### Dedicated development node
 
 - Restricted host SSH to the trust management appliance at

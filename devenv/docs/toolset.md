@@ -13,7 +13,7 @@ Useful defaults:
 
 - `/opt/sulion/bin` is on `PATH`.
 - `~/.local/bin` is on `PATH` before system paths.
-- `sudo` is installed for the `dev` user without a password.
+- `sudo` is installed for the `sulion` user without a password.
 
 Use `sudo` only for container-local package or file work. Host resources are not
 available unless compose explicitly mounts them.
@@ -47,6 +47,19 @@ They expand to Sulion-managed agent launchers:
 
 Use the wrappers instead of invoking raw `claude` or `codex` when you want the
 session to appear correctly in Sulion timelines.
+
+## Agent CLI Updates
+
+`claude` resolves to `~/.local/bin/claude`, a symlink into
+`~/.local/share/claude/versions/`. Both sit on the workspace dataset and belong
+to `sulion`, so Claude Code's own updater upgrades in place: it runs in the
+background during sessions and on `claude update`, and never needs `sudo`. The
+image only seeds a first version into an empty home. Do not
+`npm install -g @anthropic-ai/claude-code`: a root-owned npm copy cannot
+upgrade itself from a PTY and shadows the self-updating one.
+
+Codex upgrades itself the same way, into `~/.codex/packages` with a
+`~/.local/bin/codex` link. The npm copy in the image is the first-run fallback.
 
 ## Workspaces
 

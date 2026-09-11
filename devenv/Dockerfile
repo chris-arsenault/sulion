@@ -256,11 +256,34 @@ RUN dnf install -y --setopt=install_weak_deps=False \
      done \
   && chmod -R g+rwX /usr/local/rvm
 
-# Agent CLIs pre-installed system-wide so a fresh PTY can
-# `claude login` / `codex login` without any bootstrap. Users who
-# want a different version override locally via `npm i -g …` (prefix
-# is set to ~/.local in the entrypoint, so user installs shadow these).
-RUN npm install -g @anthropic-ai/claude-code @openai/codex typescript typescript-language-server
+# Codex and the TypeScript tooling stay in the root-owned npm tree so a
+# fresh PTY can `codex login` without any bootstrap. Codex upgrades itself
+# under ~/.codex/packages and links the result into ~/.local/bin, which is
+# ahead of the system paths, so the image copy only serves the first run.
+RUN npm install -g @openai/codex typescript typescript-language-server
+
+# Claude Code is deliberately absent from the image's PATH. Its updater only
+# works for the native layout — a versioned binary under
+# ~/.local/share/claude/versions with ~/.local/bin/claude pointing at it —
+# and only when the running user owns those paths. A root-owned npm copy can
+# never upgrade itself from a PTY, and a native copy baked into the image
+# would be discarded on the next image roll. The image therefore carries one
+# native binary as a seed under /opt/sulion/seed; the entrypoint links it
+# into the persistent home on first start, and from then on Claude's own
+# updater owns the versions directory. Run from /tmp: the installer scans
+# its working directory, and from `/` that scan hangs.
+RUN cd /tmp \
+  && curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh \
+  && bash /tmp/claude-install.sh latest </dev/null \
+  && rm -f /tmp/claude-install.sh \
+  && install -d -m 0755 /opt/sulion/seed/claude \
+  && mv /root/.local/share/claude/versions /opt/sulion/seed/claude/versions \
+  && chmod -R a+rX /opt/sulion/seed \
+  && rm -rf /root/.local/bin/claude /root/.local/share/claude /root/.local/state/claude \
+       /root/.claude /root/.claude.json \
+  && seed="$(find /opt/sulion/seed/claude/versions -mindepth 1 -maxdepth 1 -type f | head -n 1)" \
+  && test -n "${seed}" \
+  && "${seed}" --version
 
 # 7321 is a deliberately unusual UID/GID to avoid colliding with the
 # ~1000 range that most consumer apps claim. Must match the ownership of the
