@@ -54,6 +54,9 @@ pub(crate) const BOOKKEEPING_KINDS: &[&str] = &[
     // 2026-09 Codex build. `token_count` still carries the session totals the
     // usage projection reads; this is telemetry, not conversation.
     "token_usage_record",
+    // Claude Code 2.1.268+ writes `{"type":"atis-latch","atis":"",...}` on most
+    // turns: session-scoped state with no content of its own.
+    "atis-latch",
 ];
 
 #[derive(Debug, Clone)]

@@ -466,7 +466,9 @@ fn newer_bookkeeping_kinds_stay_hidden_by_default() {
         event(2, "mode", vec![]),
         event(3, "ai-title", vec![]),
         event(4, "file-history-delta", vec![]),
-        event(5, "assistant", vec![text(0, "reply")]),
+        // Claude Code 2.1.268+ session-state latch, no content of its own.
+        event(5, "atis-latch", vec![]),
+        event(6, "assistant", vec![text(0, "reply")]),
     ];
 
     let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
