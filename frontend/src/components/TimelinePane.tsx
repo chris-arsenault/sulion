@@ -47,10 +47,12 @@ import type {
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { MOBILE_LAYOUT_QUERY } from "../state/displayPolicy";
 import { useTimelineFontScale, useTurnNavMode } from "../state/paneTextScale";
+import { appCommands } from "../state/AppCommands";
 import { useSessions } from "../state/SessionStore";
 import { useTabs } from "../state/TabStore";
 import { useDisplay } from "../state/DisplayStore";
 import { useTimelineFilters } from "./timeline/filters";
+import { gateText, promptGateFor } from "./timeline/promptGate";
 import { type ToolPair, type Turn, type TurnSummary } from "./timeline/grouping";
 import { SessionInspectorPane } from "./timeline/SessionInspectorPane";
 import { SubagentModal } from "./timeline/SubagentModal";
@@ -624,21 +626,27 @@ function NeedsInputBanner({ session }: { session: SessionView }) {
     openTab({ kind: "terminal", sessionId: session.id }, "top");
   }, [displayMode, openTab, session.id]);
 
+  // A running harness projected as "starting" has not reported a session
+  // for this launch: it is on its startup screens, which only the terminal
+  // can answer.
+  const startingGate =
+    session.agent_runtime?.state === "running" && activity?.state === "starting";
   if (
     session.state !== "live" ||
-    (activity?.state !== "needs_input" && activity?.state !== "blocked")
+    (!startingGate && activity?.state !== "needs_input" && activity?.state !== "blocked")
   ) {
     return null;
   }
-  const label =
-    activity.state === "blocked"
+  const label = startingGate
+    ? "Agent is starting — answer any startup prompt in the terminal"
+    : activity?.state === "blocked"
       ? "Agent reports it is blocked"
       : "Agent needs your input in the terminal";
   return (
     <div className="timeline-pane__attention" role="alert" data-testid="needs-input-banner">
       <Icon name="alert-triangle" size={14} />
       <span className="timeline-pane__attention-label">{label}</span>
-      {activity.summary && (
+      {activity?.summary && (
         <span className="timeline-pane__attention-summary">{activity.summary}</span>
       )}
       {isMobile ? (
@@ -697,10 +705,26 @@ function TimelinePromptBar({
   const idle = running && activityState === "awaiting_prompt";
   const starting = live && runtime.state === "starting";
   const canLaunch = live && !starting && runtime.state !== "running";
-  const canSend = running && text.trim().length > 0 && pending == null;
+  // The gate closes the box while a prompt would be typed into a screen
+  // that cannot take it: a harness still on its startup dialogs, or one
+  // waiting on a terminal question. "Type anyway" reopens it for the case
+  // where the session hook silently failed; the send is still recorded.
+  const gate = running ? promptGateFor(activityState) : null;
+  const [override, setOverride] = useState(false);
+  useEffect(() => {
+    if (gate == null) setOverride(false);
+  }, [gate]);
+  const gated = gate != null && !override;
+  const canSend = running && !gated && text.trim().length > 0 && pending == null;
   const canInterrupt = running && pending == null;
   const status = promptStatusText(session ?? null, runtime);
   const meta = promptMetadataText(metadata);
+  const unmatchedCount = session?.unmatched_prompt_count ?? 0;
+  const openSubmitted = useCallback(
+    () => appCommands.openSubmittedPrompts({ sessionId }),
+    [sessionId],
+  );
+  const enableOverride = useCallback(() => setOverride(true), []);
 
   const startAgent = useCallback(
     async (agent: AgentLaunchType) => {
@@ -725,7 +749,7 @@ function TimelinePromptBar({
     setPending("send");
     setError(null);
     try {
-      await sendSessionPrompt(sessionId, prompt);
+      await sendSessionPrompt(sessionId, prompt, override ? { force: true } : undefined);
       setText("");
       await onRefresh();
     } catch (err) {
@@ -733,7 +757,7 @@ function TimelinePromptBar({
     } finally {
       setPending(null);
     }
-  }, [canSend, onRefresh, sessionId, text]);
+  }, [canSend, onRefresh, override, sessionId, text]);
 
   const interruptAgent = useCallback(async () => {
     if (!canInterrupt) return;
@@ -886,8 +910,41 @@ function TimelinePromptBar({
         {meta && <span className="timeline-prompt__meta">{meta}</span>}
         {error && <span className="timeline-prompt__error">{error}</span>}
         {pasteError && <span className="timeline-prompt__error">{pasteError}</span>}
+        {live && (
+          <Tooltip label="Prompts sent from this box, matched against the transcript">
+            <button
+              type="button"
+              className={`timeline-prompt__submitted${unmatchedCount > 0 ? " timeline-prompt__submitted--open" : ""}`}
+              onClick={openSubmitted}
+              aria-label="Submitted prompts"
+              data-testid="submitted-prompts-button"
+            >
+              <Icon name="file-text" size={12} />
+              {unmatchedCount > 0 ? `${unmatchedCount} unmatched` : "sent"}
+            </button>
+          </Tooltip>
+        )}
         <PromptBarToolbar turns={turns} selectedTurnKey={selectedTurnKey} onSelectTurn={onSelectTurn} />
       </div>
+      {running && gate && (
+        <div className="timeline-prompt__gate" role="status" data-testid="prompt-gate">
+          <Icon name="alert-triangle" size={12} />
+          <span>
+            {override
+              ? "Sending past the gate; the terminal may swallow this text, but it stays in Submitted Prompts."
+              : gateText(gate)}
+          </span>
+          {!override && (
+            <button
+              type="button"
+              className="timeline-prompt__button timeline-prompt__button--gate"
+              onClick={enableOverride}
+            >
+              Type anyway
+            </button>
+          )}
+        </div>
+      )}
       {running ? (
         <div className="timeline-prompt__input-row">
           <textarea
@@ -896,15 +953,11 @@ function TimelinePromptBar({
             onChange={onTextChange}
             onKeyDown={onTextKeyDown}
             onPaste={onTextPaste}
-            placeholder={
-              midTurn
-                ? "Type a steering message. Ctrl+Enter sends into the running turn."
-                : "Type a prompt. Ctrl+Enter sends to the running agent."
-            }
+            placeholder={promptPlaceholder(gated, midTurn)}
             rows={2}
             className="timeline-prompt__textarea"
             aria-label="Prompt text"
-            disabled={pending != null}
+            disabled={pending != null || gated}
           />
           <button
             type="button"
@@ -912,7 +965,7 @@ function TimelinePromptBar({
             onClick={onSendClick}
             disabled={!canSend}
           >
-            {pending === "send" ? "Sending…" : midTurn ? "Steer" : "Send"}
+            {sendLabel(pending === "send", override, midTurn)}
           </button>
           <Tooltip label="Interrupt running agent (Esc)">
             <button
@@ -972,6 +1025,18 @@ function TimelinePromptBar({
       )}
     </div>
   );
+}
+
+function promptPlaceholder(gated: boolean, midTurn: boolean): string {
+  if (gated) return "Input closed until the agent is ready. See the terminal view.";
+  if (midTurn) return "Type a steering message. Ctrl+Enter sends into the running turn.";
+  return "Type a prompt. Ctrl+Enter sends to the running agent.";
+}
+
+function sendLabel(sending: boolean, override: boolean, midTurn: boolean): string {
+  if (sending) return "Sending…";
+  if (override) return "Send anyway";
+  return midTurn ? "Steer" : "Send";
 }
 
 /** Trigger row for the two flyouts relocated out of the timeline header:

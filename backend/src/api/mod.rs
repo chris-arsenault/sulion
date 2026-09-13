@@ -26,6 +26,7 @@ mod routes;
 mod session_launch;
 mod session_routes;
 mod stats;
+mod submitted_prompt_routes;
 mod timeline_routes;
 mod workspace_routes;
 mod ws;

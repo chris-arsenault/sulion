@@ -398,6 +398,11 @@ pub(super) async fn interrupt_session_agent(
 #[derive(Deserialize)]
 pub(super) struct PromptReq {
     text: String,
+    /// Send even though the prompt gate says the harness cannot take a
+    /// prompt right now. The UI offers this for a launch whose session
+    /// hook silently failed; the submission is still recorded.
+    #[serde(default)]
+    force: bool,
 }
 
 pub(super) async fn send_session_prompt(
@@ -417,22 +422,37 @@ pub(super) async fn send_session_prompt(
     if meta.agent_runtime.state != "running" {
         return Err(ApiError::BadRequest("agent is not running".into()));
     }
-    let node_id = node_proxy::session_node(&state, id).await?;
-    for (index, chunk) in prompt_input_chunks(&req.text).into_iter().enumerate() {
-        if index > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(
-                AGENT_PROMPT_SUBMIT_DELAY_MS,
-            ))
-            .await;
+    let gate = crate::submitted_prompts::prompt_gate(&state.pool, id)
+        .await
+        .map_err(ApiError::Internal)?;
+    if let Some(gate) = gate.filter(|_| !req.force) {
+        return Err(ApiError::BadRequest(format!(
+            "prompt not sent: {}",
+            gate.describe()
+        )));
+    }
+    // The row exists before any byte reaches the PTY: if the harness eats
+    // the text, this is the only copy.
+    let record_id = crate::submitted_prompts::record(
+        &state.pool,
+        id,
+        meta.agent_runtime.agent.as_deref(),
+        &req.text,
+        req.force,
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+    if let Err(err) = deliver_prompt(&state, id, &req.text).await {
+        let message = err.to_string();
+        if let Err(mark_err) =
+            crate::submitted_prompts::mark_delivery_error(&state.pool, record_id, &message).await
+        {
+            tracing::warn!(
+                error = format!("{mark_err:#}"),
+                "could not record prompt delivery error"
+            );
         }
-        node_proxy::request(
-            &state,
-            node_id,
-            NodeRequestKind::SessionInput,
-            serde_json::to_value(SessionInputRequest::from_bytes(id, &chunk))
-                .map_err(anyhow::Error::from)?,
-        )
-        .await?;
+        return Err(err);
     }
     crate::activity::set(
         &state.pool,
@@ -684,6 +704,27 @@ pub(super) fn parse_launch_agent(raw: &str) -> ApiResult<AgentType> {
 }
 
 const AGENT_PROMPT_SUBMIT_DELAY_MS: u64 = 50;
+
+async fn deliver_prompt(state: &AppState, id: Uuid, text: &str) -> ApiResult<()> {
+    let node_id = node_proxy::session_node(state, id).await?;
+    for (index, chunk) in prompt_input_chunks(text).into_iter().enumerate() {
+        if index > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(
+                AGENT_PROMPT_SUBMIT_DELAY_MS,
+            ))
+            .await;
+        }
+        node_proxy::request(
+            state,
+            node_id,
+            NodeRequestKind::SessionInput,
+            serde_json::to_value(SessionInputRequest::from_bytes(id, &chunk))
+                .map_err(anyhow::Error::from)?,
+        )
+        .await?;
+    }
+    Ok(())
+}
 
 fn prompt_input_chunks(text: &str) -> Vec<Vec<u8>> {
     let normalized = text

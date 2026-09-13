@@ -4,6 +4,18 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Timeline
+
+- Added a record of every prompt sent from the timeline input, written
+  before the text reaches the terminal and matched to the transcript turn it
+  becomes. A new Submitted Prompts window, opened from the prompt bar, lists
+  recent sends with their matched or unmatched state and offers copy, retry,
+  and dismiss, so a prompt a harness startup dialog swallowed is not lost.
+- Changed the timeline prompt box to close while a freshly launched harness
+  has not yet reported its session, or while the agent waits on a terminal
+  question, with a pointer to the terminal view and a "Type anyway" escape
+  hatch. The prompt route refuses the same cases unless the send is forced.
+
 ### PTY toolset
 
 - Changed Claude Code to run from a native install in the persistent home,

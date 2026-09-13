@@ -135,6 +135,8 @@ struct AppSessionView {
     activity: AppActivityView,
     current_plan: Option<AppCurrentPlanView>,
     future_prompts_pending_count: i32,
+    /// Timeline-submitted prompts with no matching transcript turn yet.
+    unmatched_prompt_count: i32,
 }
 
 #[derive(Clone, Serialize)]
@@ -239,6 +241,7 @@ struct AppSessionRow {
     exit_code: Option<i32>,
     current_session_uuid: Option<Uuid>,
     current_session_agent: Option<String>,
+    current_session_correlated_at: Option<DateTime<Utc>>,
     last_event_at: Option<DateTime<Utc>>,
     timeline_revision: i64,
     label: Option<String>,
@@ -288,6 +291,7 @@ struct AppSessionRow {
     plan_current_phase_title: Option<String>,
     plan_current_phase_status: Option<String>,
     future_prompts_pending_count: i32,
+    unmatched_prompt_count: i32,
 }
 
 impl From<AppSessionRow> for AppSessionView {
@@ -353,6 +357,7 @@ impl From<AppSessionRow> for AppSessionView {
             activity,
             current_plan,
             future_prompts_pending_count: row.future_prompts_pending_count,
+            unmatched_prompt_count: row.unmatched_prompt_count,
         }
     }
 }
@@ -390,6 +395,26 @@ impl AppSessionRow {
                 reason: None,
                 source: "launcher".to_string(),
                 confidence: "explicit".to_string(),
+                updated_at: self.agent_runtime_started_at,
+            };
+        }
+        // Running, but nothing from the harness yet: no session reported for
+        // this launch and no self-reported activity. It is still on its
+        // startup screens, where a prompt would be typed into a dialog. Same
+        // projected state as a pending launch, so every consumer treats the
+        // two alike.
+        if !crate::submitted_prompts::harness_ready(
+            self.current_session_uuid,
+            self.current_session_correlated_at,
+            self.agent_runtime_started_at,
+            self.activity_source.as_deref(),
+        ) {
+            return AppActivityView {
+                state: "starting".to_string(),
+                summary: Some("Agent has not reported a session for this launch yet".to_string()),
+                reason: None,
+                source: "launcher".to_string(),
+                confidence: "derived".to_string(),
                 updated_at: self.agent_runtime_started_at,
             };
         }
@@ -510,6 +535,7 @@ async fn load_sessions(pool: &crate::db::Pool) -> ApiResult<Vec<AppSessionView>>
     let rows: Vec<AppSessionRow> = sqlx::query_as(
         "SELECT ps.id, ps.repo, ps.working_dir, ps.state, ps.created_at, \
                 ps.ended_at, ps.exit_code, ps.current_session_uuid, ps.current_session_agent, \
+                ps.current_session_correlated_at, \
                 ws.id AS workspace_id, ws.repo_name AS workspace_repo_name, \
                 ws.kind AS workspace_kind, ws.path AS workspace_path, \
                 ws.branch_name AS workspace_branch_name, ws.base_ref AS workspace_base_ref, \
@@ -547,7 +573,8 @@ async fn load_sessions(pool: &crate::db::Pool) -> ApiResult<Vec<AppSessionView>>
                 current_phase.id AS plan_current_phase_id, \
                 current_phase.title AS plan_current_phase_title, \
                 current_phase.status AS plan_current_phase_status, \
-                COALESCE(fps.pending_count, 0)::INT AS future_prompts_pending_count \
+                COALESCE(fps.pending_count, 0)::INT AS future_prompts_pending_count, \
+                COALESCE(spc.open_count, 0)::INT AS unmatched_prompt_count \
            FROM pty_sessions ps \
            LEFT JOIN workspaces ws ON ws.id = ps.workspace_id \
            LEFT JOIN meta_repos mr ON mr.id = ps.meta_repo_id \
@@ -574,6 +601,12 @@ async fn load_sessions(pool: &crate::db::Pool) -> ApiResult<Vec<AppSessionView>>
                 ORDER BY CASE pp.status WHEN 'blocked' THEN 0 ELSE 1 END, pp.position \
                 LIMIT 1 \
            ) current_phase ON TRUE \
+           LEFT JOIN LATERAL ( \
+               SELECT COUNT(*) AS open_count \
+                 FROM submitted_prompts sp \
+                WHERE sp.pty_session_id = ps.id \
+                  AND sp.matched_at IS NULL AND sp.dismissed_at IS NULL \
+           ) spc ON TRUE \
           WHERE ps.state <> 'deleted' \
           ORDER BY ps.pinned DESC, ps.created_at DESC",
     )

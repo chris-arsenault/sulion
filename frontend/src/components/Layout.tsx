@@ -6,6 +6,7 @@ import { Rail } from "./Rail";
 import { Sidebar } from "./Sidebar";
 import { WorkArea } from "./WorkArea";
 import { FuturePromptsModal } from "./FuturePromptsModal";
+import { SubmittedPromptsModal } from "./SubmittedPromptsModal";
 import { PlanModal } from "./PlanModal";
 import { MetricsPane } from "./MetricsPane";
 import { MonitorPane } from "./MonitorPane";
@@ -60,6 +61,9 @@ export function Layout() {
   const [monitorOverlayOpen, setMonitorOverlayOpen] = useState(false);
   const [monitorView, setMonitorView] = useState<MonitorOverlayView>("overview");
   const [futurePromptsSessionId, setFuturePromptsSessionId] = useState<string | null>(null);
+  const [submittedPromptsSessionId, setSubmittedPromptsSessionId] = useState<string | null>(
+    null,
+  );
   const [planTarget, setPlanTarget] = useState<{
     repo: string;
     planId?: string;
@@ -130,6 +134,10 @@ export function Layout() {
     setFuturePromptsSessionId(sessionId);
     setDrawerOpen(false);
   });
+  useAppCommand("open-submitted-prompts", ({ sessionId }) => {
+    setSubmittedPromptsSessionId(sessionId);
+    setDrawerOpen(false);
+  });
   useAppCommand("open-plan", ({ repo, planId }) => {
     setPlanTarget({ repo, planId });
     setDrawerOpen(false);
@@ -188,6 +196,7 @@ export function Layout() {
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   const closeMonitorOverlay = useCallback(() => setMonitorOverlayOpen(false), []);
   const closeFuturePrompts = useCallback(() => setFuturePromptsSessionId(null), []);
+  const closeSubmittedPrompts = useCallback(() => setSubmittedPromptsSessionId(null), []);
   const closePlan = useCallback(() => setPlanTarget(null), []);
   const openDrawer = useCallback(() => setDrawerOpen(true), []);
   const closeDrawerLocal = useCallback(() => setDrawerOpen(false), []);
@@ -239,6 +248,11 @@ export function Layout() {
           open={futurePromptsSessionId !== null}
           sessionId={futurePromptsSessionId}
           onClose={closeFuturePrompts}
+        />
+        <SubmittedPromptsModal
+          open={submittedPromptsSessionId !== null}
+          sessionId={submittedPromptsSessionId}
+          onClose={closeSubmittedPrompts}
         />
         <PlanModal
           open={planTarget !== null}
@@ -298,6 +312,11 @@ export function Layout() {
         open={futurePromptsSessionId !== null}
         sessionId={futurePromptsSessionId}
         onClose={closeFuturePrompts}
+      />
+      <SubmittedPromptsModal
+        open={submittedPromptsSessionId !== null}
+        sessionId={submittedPromptsSessionId}
+        onClose={closeSubmittedPrompts}
       />
       <PlanModal
         open={planTarget !== null}

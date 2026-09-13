@@ -42,6 +42,7 @@ pub mod secret_broker;
 pub mod secret_protocol;
 pub mod secret_pty;
 pub mod service;
+pub mod submitted_prompts;
 pub mod workspace;
 pub mod worktree;
 

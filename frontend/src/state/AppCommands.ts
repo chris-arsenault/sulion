@@ -13,6 +13,7 @@ export type AppCommand =
     }
   | { type: "open-diff"; repo: string; path?: string; workspaceId?: string }
   | { type: "open-future-prompts"; sessionId: string }
+  | { type: "open-submitted-prompts"; sessionId: string }
   | { type: "open-plan"; repo: string; planId?: string }
   | { type: "reveal-file"; repo: string; path: string }
   | { type: "reveal-repo"; repo: string }
@@ -46,6 +47,10 @@ export const appCommands = {
 
   openFuturePrompts(detail: Omit<AppCommandOf<"open-future-prompts">, "type">) {
     dispatchAppCommand({ type: "open-future-prompts", ...detail });
+  },
+
+  openSubmittedPrompts(detail: Omit<AppCommandOf<"open-submitted-prompts">, "type">) {
+    dispatchAppCommand({ type: "open-submitted-prompts", ...detail });
   },
 
   openPlan(detail: Omit<AppCommandOf<"open-plan">, "type">) {

@@ -18,7 +18,8 @@ use axum::{Json, Router};
 
 use super::{
     admin_routes, future_prompt_routes, library_routes, meta_repo_routes, plan_routes,
-    repo_lifecycle_routes, repo_routes, session_routes, timeline_routes, workspace_routes,
+    repo_lifecycle_routes, repo_routes, session_routes, submitted_prompt_routes, timeline_routes,
+    workspace_routes,
 };
 use crate::AppState;
 
@@ -71,6 +72,14 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/sessions/:id/future-prompts/:item_id",
             delete(future_prompt_routes::delete_future_prompt)
                 .patch(future_prompt_routes::update_future_prompt),
+        )
+        .route(
+            "/api/sessions/:id/submitted-prompts",
+            get(submitted_prompt_routes::list_submitted_prompts),
+        )
+        .route(
+            "/api/sessions/:id/submitted-prompts/:item_id",
+            delete(submitted_prompt_routes::dismiss_submitted_prompt),
         )
         .route("/api/repos", post(repo_routes::create_repo))
         .route("/api/meta-repos", post(meta_repo_routes::create_meta_repo))

@@ -422,7 +422,8 @@ pub async fn apply(pool: &Pool, msg: &CorrelateMsg) -> anyhow::Result<()> {
     sqlx::query(
         "UPDATE pty_sessions \
          SET current_session_uuid = $2, \
-             current_session_agent = $3 \
+             current_session_agent = $3, \
+             current_session_correlated_at = NOW() \
          WHERE id = $1",
     )
     .bind(msg.pty_id)

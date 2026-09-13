@@ -35,7 +35,8 @@ async fn fresh_pool() -> db::Pool {
          plan_events, plan_attachments, plan_phases, plans, session_activity_state, \
          events, ingester_state, claude_sessions, pty_sessions, repos, \
          repo_runtime_state, repo_dirty_paths, timeline_session_state, library_entries, \
-         future_prompt_session_state, future_prompts, workspaces, workspace_dirty_paths \
+         future_prompt_session_state, future_prompts, submitted_prompts, \
+         workspaces, workspace_dirty_paths \
          RESTART IDENTITY CASCADE",
     )
     .execute(&pool)
@@ -2132,4 +2133,190 @@ async fn library_entries_roundtrip_in_the_database() {
         .unwrap()
         .status();
     assert_eq!(missing, 404);
+}
+
+/// A timeline-submitted prompt is stored before delivery and resolves to the
+/// projected turn carrying the same text; an identical second submission
+/// waits for its own turn rather than sharing the first one.
+#[tokio::test]
+async fn submitted_prompts_reconcile_against_timeline_turns() {
+    use sulion::submitted_prompts;
+
+    let h = Harness::new().await;
+    let repo_path = h._tmp_repos.path().join("prompt-repo");
+    std::fs::create_dir_all(&repo_path).unwrap();
+    let pty = insert_test_pty(&h.state.pool, "prompt-repo", &repo_path).await;
+    let session = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO claude_sessions (session_uuid, agent, pty_session_id) \
+         VALUES ($1, 'claude-code', $2)",
+    )
+    .bind(session)
+    .bind(pty)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+
+    let first =
+        submitted_prompts::record(&h.state.pool, pty, Some("claude"), "fix the\nbuild", false)
+            .await
+            .unwrap();
+    let second =
+        submitted_prompts::record(&h.state.pool, pty, Some("claude"), "fix the build", false)
+            .await
+            .unwrap();
+    assert_eq!(
+        submitted_prompts::reconcile(&h.state.pool).await.unwrap(),
+        0
+    );
+
+    let listed: serde_json::Value = h
+        .client
+        .get(format!("{}/api/sessions/{pty}/submitted-prompts", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed["prompts"].as_array().unwrap().len(), 2);
+    assert_eq!(listed["prompts"][0]["state"], "unmatched");
+
+    // One projected turn with the same text, whitespace aside.
+    sqlx::query(
+        "INSERT INTO timeline_turns \
+            (session_uuid, turn_id, turn_ord, preview, user_prompt_text, start_timestamp, \
+             end_timestamp, duration_ms, event_count, operation_count, thinking_count, \
+             markdown, turn_json) \
+         VALUES ($1, 100, 0, 'fix the build', 'fix the  build', NOW(), NOW(), 0, 1, 0, 0, '', '{}')",
+    )
+    .bind(session)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        submitted_prompts::reconcile(&h.state.pool).await.unwrap(),
+        1
+    );
+    assert_eq!(
+        submitted_prompts::reconcile(&h.state.pool).await.unwrap(),
+        0
+    );
+
+    let prompts = submitted_prompts::list(&h.state.pool, pty).await.unwrap();
+    let by_id = |id: Uuid| prompts.iter().find(|p| p.id == id).unwrap();
+    assert_eq!(by_id(first).state, "matched");
+    assert_eq!(
+        by_id(first).matched_turn_key.as_deref(),
+        Some(format!("{session}:100").as_str())
+    );
+    assert_eq!(by_id(second).state, "unmatched");
+
+    // The leftover one can be dismissed, and dismissal is idempotent-404.
+    let dismissed = h
+        .client
+        .delete(format!(
+            "{}/api/sessions/{pty}/submitted-prompts/{second}",
+            h.base
+        ))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(dismissed, 204);
+    let again = h
+        .client
+        .delete(format!(
+            "{}/api/sessions/{pty}/submitted-prompts/{second}",
+            h.base
+        ))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(again, 404);
+    let prompts = submitted_prompts::list(&h.state.pool, pty).await.unwrap();
+    assert_eq!(by_id_in(&prompts, second).state, "dismissed");
+
+    let app_state: serde_json::Value = h
+        .client
+        .get(format!("{}/api/app-state", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let view = app_state["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == pty.to_string())
+        .unwrap();
+    assert_eq!(view["unmatched_prompt_count"], 0);
+}
+
+fn by_id_in(
+    prompts: &[sulion::submitted_prompts::SubmittedPrompt],
+    id: Uuid,
+) -> &sulion::submitted_prompts::SubmittedPrompt {
+    prompts.iter().find(|p| p.id == id).unwrap()
+}
+
+/// The prompt route refuses a running harness that has not reported a
+/// session for this launch, and accepts once correlation lands after the
+/// launch timestamp. A stale correlation from the previous agent in the
+/// same PTY does not count.
+#[tokio::test]
+async fn prompt_gate_tracks_launch_scoped_correlation() {
+    use sulion::submitted_prompts::{prompt_gate, PromptGate};
+
+    let h = Harness::new().await;
+    let repo_path = h._tmp_repos.path().join("gate-repo");
+    std::fs::create_dir_all(&repo_path).unwrap();
+    let pty = insert_test_pty(&h.state.pool, "gate-repo", &repo_path).await;
+    let old_session = Uuid::new_v4();
+    sqlx::query(
+        "UPDATE pty_sessions \
+            SET current_session_uuid = $2, current_session_agent = 'claude-code', \
+                current_session_correlated_at = NOW() - INTERVAL '1 hour', \
+                agent_runtime_agent = 'claude', agent_runtime_state = 'running', \
+                agent_runtime_started_at = NOW() - INTERVAL '1 minute' \
+          WHERE id = $1",
+    )
+    .bind(pty)
+    .bind(old_session)
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        prompt_gate(&h.state.pool, pty).await.unwrap(),
+        Some(PromptGate::Starting)
+    );
+
+    let rejected = h
+        .client
+        .post(format!("{}/api/sessions/{pty}/prompt", h.base))
+        .json(&serde_json::json!({ "text": "hello" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 400);
+    let body: serde_json::Value = rejected.json().await.unwrap();
+    assert!(
+        body["error"].as_str().unwrap().contains("startup prompt"),
+        "{body}"
+    );
+
+    sulion::correlate::apply(
+        &h.state.pool,
+        &sulion::correlate::CorrelateMsg {
+            pty_id: pty,
+            session_uuid: Uuid::new_v4(),
+            agent: "claude-code".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(prompt_gate(&h.state.pool, pty).await.unwrap(), None);
 }

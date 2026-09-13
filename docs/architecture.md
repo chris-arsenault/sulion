@@ -223,6 +223,28 @@ session, and they disappear from the UI when that session is no longer current.
 Routes are `GET`/`PUT` on `/api/sessions/:id/future-prompts` and
 `DELETE`/`PATCH` on an individual entry. See `backend/src/future_prompts.rs`.
 
+### Submitted prompts
+
+Every prompt sent from the timeline input is written to `submitted_prompts`
+before its bytes go to the PTY, because a harness sitting on a startup dialog
+swallows typed text without a transcript trace. A control-process reconciler
+matches open rows against `timeline_turns` in the PTY's transcript sessions by
+whitespace-normalized text within a time window, storing the turn's
+`(session_uuid, turn_id)`; unmatched rows stay listed until dismissed. The
+per-session Submitted Prompts window (`GET`/`DELETE` under
+`/api/sessions/:id/submitted-prompts`) is deliberately outside the timeline,
+which only knows turns that exist.
+
+The same module gates the prompt route and the timeline input: a running
+harness counts as ready once its correlation landed after the launch started
+(`pty_sessions.current_session_correlated_at` against
+`agent_runtime_started_at`), which is when Claude's SessionStart hook or
+Codex's rollout file open has fired, both downstream of the startup dialogs,
+or once the harness has reported activity of its own through a hook, the
+`sulion activity` CLI, or its transcript. Until then, and while the agent waits
+on a terminal question, the input closes with a `force` escape hatch. See
+`backend/src/submitted_prompts.rs`.
+
 ### Device pairing
 
 An auth surface, distinct from the Cognito login the browser uses. It exists so

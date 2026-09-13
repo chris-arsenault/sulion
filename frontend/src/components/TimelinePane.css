@@ -274,6 +274,50 @@
   padding: 1px 6px;
 }
 
+/* Opens the out-of-band Submitted Prompts window. Lights up while a sent
+ * prompt has no transcript turn yet. */
+.timeline-prompt__submitted {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--text-lo);
+  font: inherit;
+  font-size: var(--timeline-t-meta);
+  cursor: pointer;
+}
+
+.timeline-prompt__submitted--open {
+  border-color: color-mix(in oklab, var(--warn-mark) 45%, transparent);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+
+/* Reason the box is closed, with the escape hatch. */
+.timeline-prompt__gate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in oklab, var(--atn-mark) 35%, transparent);
+  border-radius: var(--r-1);
+  background: var(--atn-bg);
+  color: var(--atn-fg);
+  font-size: var(--timeline-t-meta);
+}
+
+.timeline-prompt__gate span {
+  flex: 1 1 auto;
+}
+
+.timeline-prompt__button--gate {
+  flex: 0 0 auto;
+}
+
 .timeline-prompt__toolbar {
   display: flex;
   align-items: center;

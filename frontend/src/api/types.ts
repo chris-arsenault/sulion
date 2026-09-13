@@ -114,6 +114,9 @@ export interface SessionView {
    * currently correlated transcript session. Drives the sidebar
    * future-prompts badge. 0 when there's no correlated session. */
   future_prompts_pending_count: number;
+  /** Timeline-submitted prompts that no transcript turn has claimed yet.
+   * Drives the prompt-bar badge that opens the submitted-prompts window. */
+  unmatched_prompt_count?: number;
 }
 
 export interface SessionMetaRepoView {
@@ -844,6 +847,32 @@ export interface FuturePromptListResponse {
 
 export interface CreateFuturePromptInput {
   text: string;
+}
+
+/** Why the timeline input is closed for a PTY. */
+export type PromptGate = "starting" | "needs_input" | "blocked";
+
+export type SubmittedPromptState = "matched" | "unmatched" | "failed" | "dismissed";
+
+/** A prompt sent from the timeline input, recorded before it reached the
+ * PTY. `matched` once the ingester projected a turn with the same text. */
+export interface SubmittedPrompt {
+  id: string;
+  agent: string | null;
+  text: string;
+  forced: boolean;
+  submitted_at: string;
+  state: SubmittedPromptState;
+  delivery_error: string | null;
+  /** `<session_uuid>:<turn_id>` of the turn this prompt became. */
+  matched_turn_key: string | null;
+  matched_at: string | null;
+  dismissed_at: string | null;
+}
+
+export interface SubmittedPromptListResponse {
+  gate: PromptGate | null;
+  prompts: SubmittedPrompt[];
 }
 
 export interface UpdateFuturePromptInput {

@@ -57,6 +57,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move {
         run_control_maintenance(maintenance_pool).await;
     });
+    tokio::spawn(sulion::submitted_prompts::run_reconciler(pool.clone()));
 
     if cfg.standalone_node.is_some() {
         let correlate_pool = pool.clone();

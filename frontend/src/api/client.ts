@@ -13,6 +13,7 @@ import type {
   FileResponse,
   FuturePromptEntry,
   FuturePromptListResponse,
+  SubmittedPromptListResponse,
   HistoryQuery,
   HistoryResponse,
   JobsResponse,
@@ -186,10 +187,16 @@ export function interruptSessionAgent(id: string): Promise<void> {
   });
 }
 
-export function sendSessionPrompt(id: string, text: string): Promise<void> {
+/** `force` sends past the prompt gate (harness still starting, or waiting
+ * in the terminal). The backend records the submission either way. */
+export function sendSessionPrompt(
+  id: string,
+  text: string,
+  options?: { force?: boolean },
+): Promise<void> {
   return request<void>(`/api/sessions/${id}/prompt`, {
     method: "POST",
-    body: JSON.stringify({ text }),
+    body: JSON.stringify(options?.force ? { text, force: true } : { text }),
   });
 }
 
@@ -805,6 +812,26 @@ export function deleteLibraryEntry(
   return request<void>(`/api/library/${kind}/${encodeURIComponent(slug)}`, {
     method: "DELETE",
   });
+}
+
+// ─── submitted prompts ───────────────────────────────────────────────
+
+export function listSubmittedPrompts(
+  sessionId: string,
+): Promise<SubmittedPromptListResponse> {
+  return request<SubmittedPromptListResponse>(
+    `/api/sessions/${sessionId}/submitted-prompts`,
+  );
+}
+
+export function dismissSubmittedPrompt(
+  sessionId: string,
+  id: string,
+): Promise<void> {
+  return request<void>(
+    `/api/sessions/${sessionId}/submitted-prompts/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
 }
 
 // ─── future prompts ──────────────────────────────────────────────────

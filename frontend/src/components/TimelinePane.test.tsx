@@ -625,6 +625,58 @@ describe("TimelinePane", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeDefined();
   });
 
+  it("closes the prompt box while a running harness has not reported its session", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    stubFetch(
+      (url, init) => {
+        if (url === "/api/sessions/abc/prompt") {
+          calls.push(JSON.parse(init?.body as string));
+          return new Response("", { status: 202 });
+        }
+        return new Response(timelineBody(), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+      [
+        sessionView(0, {
+          unmatched_prompt_count: 2,
+          agent_runtime: {
+            agent: "claude",
+            state: "running",
+            started_at: sessionStartedAt,
+            ended_at: null,
+            exit_code: null,
+          },
+          activity: {
+            state: "starting",
+            summary: "Agent has not reported a session for this launch yet",
+            reason: null,
+            source: "launcher",
+            confidence: "derived",
+            updated_at: null,
+          },
+        }),
+      ],
+    );
+
+    render(<TimelinePane sessionId="abc" />);
+    const gate = await screen.findByTestId("prompt-gate");
+    expect(gate.textContent).toContain("startup prompt in the terminal");
+    const input = screen.getByLabelText("Prompt text") as HTMLTextAreaElement;
+    expect(input.disabled).toBe(true);
+    expect(screen.getByTestId("needs-input-banner").textContent).toContain("starting");
+    expect(screen.getByTestId("submitted-prompts-button").textContent).toContain("2 unmatched");
+
+    // The escape hatch reopens the box and flags the send.
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Type anyway" }));
+    expect(input.disabled).toBe(false);
+    await user.type(input, "hello");
+    await user.click(screen.getByRole("button", { name: "Send anyway" }));
+    await waitFor(() => expect(calls).toEqual([{ text: "hello", force: true }]));
+  });
+
   it("strips textarea-only trailing newlines before sending a prompt", async () => {
     const calls: Array<Record<string, unknown>> = [];
     stubFetch(
