@@ -15,6 +15,10 @@ All notable user-visible changes to Sulion are recorded here.
   has not yet reported its session, or while the agent waits on a terminal
   question, with a pointer to the terminal view and a "Type anyway" escape
   hatch. The prompt route refuses the same cases unless the send is forced.
+- Fixed Codex correlation on Codex 0.154, which holds its rollout file open
+  only from the first turn. The launcher now also reads the per-session
+  thread-writer lock Codex opens at startup, so a Codex launch is recognised
+  before any prompt is sent instead of after it.
 
 ### PTY toolset
 

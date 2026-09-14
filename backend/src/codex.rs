@@ -180,14 +180,30 @@ pub fn detect_rollout_session_uuid_in_launched_process(
     None
 }
 
+/// `<codex_home>/thread-writer-locks/<session-uuid>.lock`: Codex 0.154+
+/// opens this the moment it creates a session and holds it for the whole
+/// run, while the rollout file itself is only held open once the first turn
+/// is written. Since the timeline input waits for correlation before it
+/// accepts a prompt, the rollout alone would never arrive; the lock is the
+/// signal that exists at startup.
+fn thread_writer_lock_dir(sessions_dir: &Path) -> Option<PathBuf> {
+    sessions_dir
+        .parent()
+        .map(|home| home.join("thread-writer-locks"))
+}
+
 fn detect_rollout_session_uuid_in_pid(pid: u32, sessions_dir: &Path) -> Option<Uuid> {
     let fd_dir = PathBuf::from(format!("/proc/{pid}/fd"));
     let entries = std::fs::read_dir(fd_dir).ok()?;
+    let lock_dir = thread_writer_lock_dir(sessions_dir);
     for entry in entries.flatten() {
         let Ok(target) = std::fs::read_link(entry.path()) else {
             continue;
         };
-        if !target.starts_with(sessions_dir) {
+        let in_lock_dir = lock_dir
+            .as_deref()
+            .is_some_and(|dir| target.starts_with(dir));
+        if !target.starts_with(sessions_dir) && !in_lock_dir {
             continue;
         }
         // Codex opens *its own* session's rollout for writing (append), but its
@@ -352,6 +368,58 @@ wait "$child"
         assert_eq!(detected, Some(session_uuid));
 
         kill_children(child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// Codex 0.154 holds the rollout open only from the first turn; at
+    /// startup the only session-identifying descriptor is the thread-writer
+    /// lock beside the sessions dir.
+    #[test]
+    fn detects_thread_writer_lock_fd_before_any_rollout_is_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let codex_home = tmp.path().join("codex-home");
+        let sessions_dir = codex_home.join("sessions");
+        let lock_dir = codex_home.join("thread-writer-locks");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        std::fs::create_dir_all(&lock_dir).unwrap();
+        let launch_id = Uuid::new_v4();
+
+        let session_uuid = Uuid::new_v4();
+        let lock_path = lock_dir.join(format!("{session_uuid}.lock"));
+        std::fs::write(&lock_path, "").unwrap();
+
+        let codex_script = tmp.path().join("codex");
+        std::fs::write(
+            &codex_script,
+            r#"#!/bin/sh
+exec 4<>"$1"
+printf "ready\n"
+sleep 5
+"#,
+        )
+        .unwrap();
+        make_executable(&codex_script);
+
+        let mut child = StdCommand::new(&codex_script)
+            .arg(&lock_path)
+            .env(LAUNCH_ID_ENV, launch_id.to_string())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let mut stdout = child.stdout.take().unwrap();
+        let mut buf = [0u8; 6];
+        std::io::Read::read_exact(&mut stdout, &mut buf).unwrap();
+
+        let detected = detect_rollout_session_uuid_in_launched_process(
+            child.id(),
+            &sessions_dir,
+            launch_id,
+            Duration::ZERO,
+        );
+        assert_eq!(detected, Some(session_uuid));
+
         let _ = child.kill();
         let _ = child.wait();
     }

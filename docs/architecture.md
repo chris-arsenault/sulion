@@ -238,8 +238,9 @@ which only knows turns that exist.
 The same module gates the prompt route and the timeline input: a running
 harness counts as ready once its correlation landed after the launch started
 (`pty_sessions.current_session_correlated_at` against
-`agent_runtime_started_at`), which is when Claude's SessionStart hook or
-Codex's rollout file open has fired, both downstream of the startup dialogs,
+`agent_runtime_started_at`), which is when Claude's SessionStart hook has
+fired or Codex has opened its per-session thread-writer lock, both downstream
+of the startup dialogs,
 or once the harness has reported activity of its own through a hook, the
 `sulion activity` CLI, or its transcript. Until then, and while the agent waits
 on a terminal question, the input closes with a `force` escape hatch. See
