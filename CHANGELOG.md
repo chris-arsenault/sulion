@@ -6,6 +6,12 @@ All notable user-visible changes to Sulion are recorded here.
 
 ### Timeline
 
+- Added TeX math rendering in turn detail through KaTeX. Codex and ChatGPT
+  emit formulas with the LaTeX `\[ … \]` and `\( … \)` delimiters, which
+  markdown previously reduced to a bare `[` and mangled source; those and
+  the `$$ … $$` form now render as display or inline math. Single-dollar
+  `$x$` is left as text so `$HOME`-style prose is never paired into a
+  formula, and delimiters inside code spans and fences stay literal.
 - Added a record of every prompt sent from the timeline input, written
   before the text reaches the terminal and matched to the transcript turn it
   becomes. A new Submitted Prompts window, opened from the prompt bar, lists

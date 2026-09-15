@@ -147,3 +147,28 @@
   margin-right: 6px;
   accent-color: var(--accent);
 }
+
+/* KaTeX math. Display blocks scroll sideways rather than widening the
+ * pane; the error branch (malformed TeX rendered as source) inherits the
+ * warn colour instead of KaTeX's default red so it reads as ours. */
+.md .katex {
+  font-size: 1.1em;
+  color: var(--text-hi);
+}
+
+.md .katex-display {
+  margin: 4px 0 10px;
+  padding: 2px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.md--compact .katex-display {
+  margin: 2px 0 6px;
+}
+
+.md .katex-error {
+  color: var(--warn-fg);
+  font-family: var(--font-mono);
+  font-size: var(--timeline-t-ui);
+}

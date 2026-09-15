@@ -75,6 +75,12 @@ that touched a given path.
 
 ![Timeline turn](screenshots/03-timeline-turn.png)
 
+Prompt and assistant text render as GitHub-flavoured markdown. TeX math
+renders through KaTeX: `$$ … $$` on its own lines or the LaTeX `\[ … \]`
+form for a display block, `$$ … $$` within a line or `\( … \)` for inline
+math. Single-dollar `$x$` is deliberately not math, so shell variables and
+prices in prose stay as written.
+
 When you are mostly reading the structured timeline, the prompt bar can
 send text into the running Claude/Codex terminal without expanding the
 full terminal pane.
