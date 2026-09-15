@@ -6,6 +6,13 @@ All notable user-visible changes to Sulion are recorded here.
 
 ### Timeline
 
+- Fixed library prompts and queued future prompts vanishing in timeline-only
+  mode. The terminal pane stays mounted but hidden there, and injected text
+  was pasted into it unseen. Injection now lands in the timeline prompt box
+  whenever the timeline is the only projection on screen, including mobile,
+  and in the terminal in split and terminal-only modes. The library also
+  resolves the target session from an active timeline tab, so a session
+  with no terminal tab open can still receive a prompt.
 - Added TeX math rendering in turn detail through KaTeX. Codex and ChatGPT
   emit formulas with the LaTeX `\[ … \]` and `\( … \)` delimiters, which
   markdown previously reduced to a bare `[` and mangled source; those and

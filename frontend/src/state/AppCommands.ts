@@ -20,7 +20,10 @@ export type AppCommand =
   | { type: "reveal-meta-repo"; metaRepoId: string }
   | { type: "new-meta-repo-session"; metaRepoId: string }
   | { type: "close-drawer" }
-  | { type: "inject-terminal"; sessionId: string; text: string }
+  /** Prompt text handed to a session's visible input: the timeline
+   * prompt box in timeline-only mode, the terminal otherwise. The panes
+   * decide which of them takes it via `promptInjectionTarget`. */
+  | { type: "inject-prompt"; sessionId: string; text: string }
   | { type: "library-changed"; kind: LibraryKind }
   | { type: "open-display-settings" };
 
@@ -79,8 +82,8 @@ export const appCommands = {
     dispatchAppCommand({ type: "close-drawer" });
   },
 
-  injectTerminal(detail: Omit<AppCommandOf<"inject-terminal">, "type">) {
-    dispatchAppCommand({ type: "inject-terminal", ...detail });
+  injectPrompt(detail: Omit<AppCommandOf<"inject-prompt">, "type">) {
+    dispatchAppCommand({ type: "inject-prompt", ...detail });
   },
 
   libraryChanged(detail: Omit<AppCommandOf<"library-changed">, "type">) {

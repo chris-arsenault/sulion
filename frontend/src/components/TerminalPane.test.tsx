@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { useDisplay } from "../state/DisplayStore";
+
 // xterm.js depends on canvas/layout APIs that happy-dom doesn't fully
 // implement. We mock just enough to verify the component wires up the
 // WebSocket + clipboard hooks.
@@ -98,6 +100,7 @@ describe("TerminalPane", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    useDisplay.setState({ mode: "split" });
   });
 
   it("wires WebSocket bytes into term.write", async () => {
@@ -245,14 +248,24 @@ describe("TerminalPane", () => {
     expect(mockTerm.focus).toHaveBeenCalled();
   });
 
-  it("pastes injected terminal text from the app command layer", async () => {
+  it("pastes injected prompt text from the app command layer", async () => {
     render(<TerminalPane sessionId="abc" />);
     await waitFor(() => expect(connectPtyMock).toHaveBeenCalled());
 
-    appCommands.injectTerminal({ sessionId: "abc", text: "hello\u200Bworld\r\nend" });
+    appCommands.injectPrompt({ sessionId: "abc", text: "hello\u200Bworld\r\nend" });
 
     expect(mockTerm.paste).toHaveBeenCalledWith("helloworld\nend");
     expect(mockTerm.focus).toHaveBeenCalled();
+  });
+
+  it("leaves injected prompt text to the timeline box in timeline-only mode", async () => {
+    useDisplay.setState({ mode: "timeline" });
+    render(<TerminalPane sessionId="abc" />);
+    await waitFor(() => expect(connectPtyMock).toHaveBeenCalled());
+
+    appCommands.injectPrompt({ sessionId: "abc", text: "hello" });
+
+    expect(mockTerm.paste).not.toHaveBeenCalled();
   });
 
   it("right-click with selection copies and cancels context menu", async () => {

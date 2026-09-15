@@ -80,31 +80,36 @@ export function LibraryPanel() {
     void refresh(command.kind);
   });
 
-  const activeTerminalSessionId = (() => {
+  // The session whose input takes the prompt: the active terminal or
+  // timeline tab (top pane first). In timeline-only mode the active tab
+  // is a timeline tab, and the session may have no terminal tab open.
+  const activeSessionId = (() => {
     const topId = activeByPane.top;
     const bottomId = activeByPane.bottom;
-    const candidate =
-      (topId && tabs[topId]?.kind === "terminal" ? tabs[topId] : null) ??
-      (bottomId && tabs[bottomId]?.kind === "terminal" ? tabs[bottomId] : null);
+    const isSessionTab = (id: string | null) => {
+      const tab = id ? tabs[id] : undefined;
+      return tab && (tab.kind === "terminal" || tab.kind === "timeline") ? tab : null;
+    };
+    const candidate = isSessionTab(topId) ?? isSessionTab(bottomId);
     return candidate?.sessionId ?? null;
   })();
 
   const injectPrompt = (entry: LibraryEntry) => {
-    if (!activeTerminalSessionId) {
-      setError("No active terminal tab to inject into.");
+    if (!activeSessionId) {
+      setError("No active session tab to inject into.");
       return;
     }
     const variables = extractPromptTemplateVariables(entry.body);
     if (variables.length > 0) {
       setPendingTemplate({
         entry,
-        sessionId: activeTerminalSessionId,
+        sessionId: activeSessionId,
         variables,
       });
       setError(null);
       return;
     }
-    appCommands.injectTerminal({ sessionId: activeTerminalSessionId, text: entry.body });
+    appCommands.injectPrompt({ sessionId: activeSessionId, text: entry.body });
     setError(null);
   };
 
@@ -113,7 +118,7 @@ export function LibraryPanel() {
   const sendTemplate = useCallback(
     (text: string) => {
       if (!pendingTemplate) return;
-      appCommands.injectTerminal({
+      appCommands.injectPrompt({
         sessionId: pendingTemplate.sessionId,
         text,
       });
@@ -186,7 +191,7 @@ export function LibraryPanel() {
         {
           kind: "item",
           id: "inject",
-          label: "Inject into terminal",
+          label: "Inject into prompt",
           onSelect: () => injectPrompt(entry),
         },
         {

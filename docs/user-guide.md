@@ -27,7 +27,9 @@ status. Ungrouped repos remain first-class. The **Library**
 section at the bottom lists saved prompts and references. Just above the
 command palette entry, the rail also exposes the **Secrets** manager tab.
 Saved prompts can include `$name` placeholders; `$$` sends a literal
-`$`.
+`$`. Clicking a saved prompt, or sending a queued future prompt, inserts
+its text into the active session's visible input: the timeline prompt
+box in timeline-only mode (and on mobile), the terminal otherwise.
 
 ![Sidebar](screenshots/01-sidebar.png)
 

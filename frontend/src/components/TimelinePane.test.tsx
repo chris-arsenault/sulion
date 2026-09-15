@@ -21,6 +21,8 @@ vi.mock("react-virtuoso", () => ({
 import { TimelinePane as TimelinePaneRaw } from "./TimelinePane";
 import { ContextMenuHost } from "./common/ContextMenu";
 import type { RepoView, SessionView } from "../api/types";
+import { appCommands } from "../state/AppCommands";
+import { useDisplay } from "../state/DisplayStore";
 import { useSessionStore } from "../state/SessionStore";
 import { resetTimelineControlsStore } from "../state/TimelineControlsStore";
 import { appStatePayload, jsonResponse } from "../test/appState";
@@ -165,6 +167,7 @@ describe("TimelinePane", () => {
     vi.unstubAllGlobals();
     window.localStorage.clear();
     resetTimelineControlsStore();
+    useDisplay.setState({ mode: "split" });
   });
 
   it("renders projected turns and opens the inspector on click", async () => {
@@ -458,6 +461,68 @@ describe("TimelinePane", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => expect(calls).toEqual([{ text: "inspect this" }]));
+  });
+
+  it("takes injected prompt text into the box in timeline-only mode", async () => {
+    useDisplay.setState({ mode: "timeline" });
+    stubFetch(
+      () =>
+        new Response(timelineBody(), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      [
+        sessionView(0, {
+          agent_runtime: {
+            agent: "claude",
+            state: "running",
+            started_at: sessionStartedAt,
+            ended_at: null,
+            exit_code: null,
+          },
+        }),
+      ],
+    );
+
+    render(<TimelinePane sessionId="abc" />);
+    await screen.findByRole("button", { name: /hello/ });
+    const input = screen.getByLabelText("Prompt text") as HTMLTextAreaElement;
+
+    act(() => appCommands.injectPrompt({ sessionId: "abc", text: "from the library" }));
+    expect(input.value).toBe("from the library");
+    expect(document.activeElement).toBe(input);
+
+    // Another session's injection is not ours.
+    act(() => appCommands.injectPrompt({ sessionId: "other", text: "nope" }));
+    expect(input.value).toBe("from the library");
+  });
+
+  it("leaves injected prompt text to the terminal in split mode", async () => {
+    stubFetch(
+      () =>
+        new Response(timelineBody(), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      [
+        sessionView(0, {
+          agent_runtime: {
+            agent: "claude",
+            state: "running",
+            started_at: sessionStartedAt,
+            ended_at: null,
+            exit_code: null,
+          },
+        }),
+      ],
+    );
+
+    render(<TimelinePane sessionId="abc" />);
+    await screen.findByRole("button", { name: /hello/ });
+    const input = screen.getByLabelText("Prompt text") as HTMLTextAreaElement;
+
+    act(() => appCommands.injectPrompt({ sessionId: "abc", text: "from the library" }));
+    expect(input.value).toBe("");
   });
 
   it("offers save-as-file for large pastes and inserts the uploaded path", async () => {

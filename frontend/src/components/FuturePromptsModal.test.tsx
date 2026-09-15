@@ -175,7 +175,7 @@ describe("FuturePromptsModal", () => {
 
     const injected = waitFor(() =>
       expect(seen).toContainEqual({
-        type: "inject-terminal",
+        type: "inject-prompt",
         sessionId: SESSION_ID,
         text: "follow up after this run",
       }),

@@ -25,6 +25,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { connectPty, type ConnectionState } from "../api/ws";
 import { uploadRepoFile } from "../api/client";
 import { useAppCommand } from "../state/AppCommands";
+import { usePromptInjectionTarget } from "../hooks/usePromptInjectionTarget";
 import {
   clampTerminalFontSize,
   TERMINAL_FONT_SIZE_DEFAULT,
@@ -361,8 +362,11 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
     });
   }, [terminalFontSize]);
 
-  useAppCommand("inject-terminal", ({ sessionId: targetSessionId, text }) => {
-    if (targetSessionId !== sessionId) return;
+  // In timeline-only mode this pane is mounted but hidden, and the
+  // timeline prompt box takes the text instead.
+  const injectionTarget = usePromptInjectionTarget();
+  useAppCommand("inject-prompt", ({ sessionId: targetSessionId, text }) => {
+    if (targetSessionId !== sessionId || injectionTarget !== "terminal") return;
     const sanitized = sanitizePaste(text);
     termRef.current?.paste(sanitized);
     appendToMirror(sanitized);

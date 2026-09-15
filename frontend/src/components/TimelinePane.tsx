@@ -47,7 +47,8 @@ import type {
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { MOBILE_LAYOUT_QUERY } from "../state/displayPolicy";
 import { useTimelineFontScale, useTurnNavMode } from "../state/paneTextScale";
-import { appCommands } from "../state/AppCommands";
+import { appCommands, useAppCommand } from "../state/AppCommands";
+import { usePromptInjectionTarget } from "../hooks/usePromptInjectionTarget";
 import { useSessions } from "../state/SessionStore";
 import { useTabs } from "../state/TabStore";
 import { useDisplay } from "../state/DisplayStore";
@@ -791,6 +792,15 @@ function TimelinePromptBar({
     });
     textareaRef.current?.focus();
   }, []);
+
+  // Library snippets and queued future prompts land here when the
+  // timeline is the only projection on screen; otherwise the terminal
+  // pane takes them and this box ignores the command.
+  const injectionTarget = usePromptInjectionTarget();
+  useAppCommand("inject-prompt", ({ sessionId: targetSessionId, text: snippet }) => {
+    if (targetSessionId !== sessionId || injectionTarget !== "timeline") return;
+    insertText(snippet);
+  });
 
   const onTextPaste = useCallback(
     (e: React.ClipboardEvent<HTMLTextAreaElement>) => {

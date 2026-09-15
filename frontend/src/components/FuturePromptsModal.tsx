@@ -127,7 +127,7 @@ export function FuturePromptsModal({
       if (!sessionId || session?.state !== "live") return;
       setBusyId(entry.id);
       try {
-        appCommands.injectTerminal({ sessionId, text: entry.text });
+        appCommands.injectPrompt({ sessionId, text: entry.text });
         const updated = await updateFuturePrompt(sessionId, entry.id, {
           state: "sent",
         });
@@ -135,9 +135,9 @@ export function FuturePromptsModal({
           sortPrompts(prev.map((item) => (item.id === updated.id ? updated : item))),
         );
         setError(null);
-        // Hand the caret off to the terminal: close the modal so the
-        // focus that `inject-terminal` placed on the xterm input isn't
-        // fighting the overlay's focus trap.
+        // Hand the caret off to the receiving input: close the modal so
+        // the focus that `inject-prompt` placed on the terminal or the
+        // timeline prompt box isn't fighting the overlay's focus trap.
         onClose();
       } catch (err) {
         setError(err instanceof Error ? err.message : "future prompt send failed");

@@ -90,9 +90,43 @@ describe("LibraryPanel", () => {
     await user.click(screen.getByText(DEPLOY_PROMPT_NAME));
 
     expect(seen).toContainEqual({
-      type: "inject-terminal",
+      type: "inject-prompt",
       sessionId: "sess-1",
       text: "echo deploy\r\nnow",
+    });
+    unsubscribe();
+  });
+
+  it("resolves the session from an active timeline tab when no terminal tab is open", async () => {
+    vi.spyOn(apiClient, "listLibrary")
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          slug: "deploy",
+          name: DEPLOY_PROMPT_NAME,
+          created_at: null,
+          updated_at: null,
+          body: "echo deploy",
+        },
+      ]);
+    useTabStore.getState().openTab({ kind: "timeline", sessionId: "sess-2" }, "top");
+
+    const seen: Array<unknown> = [];
+    const unsubscribe = subscribeToAppCommands((command) => {
+      seen.push(command);
+    });
+
+    render(<LibraryPanel />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /Prompts/ }));
+
+    await waitFor(() => expect(screen.getByText(DEPLOY_PROMPT_NAME)).toBeDefined());
+    await user.click(screen.getByText(DEPLOY_PROMPT_NAME));
+
+    expect(seen).toContainEqual({
+      type: "inject-prompt",
+      sessionId: "sess-2",
+      text: "echo deploy",
     });
     unsubscribe();
   });
@@ -131,7 +165,7 @@ describe("LibraryPanel", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
 
     expect(seen).toContainEqual({
-      type: "inject-terminal",
+      type: "inject-prompt",
       sessionId: "sess-1",
       text: "do item 42 in sulion. cost $5. repeat 42",
     });
