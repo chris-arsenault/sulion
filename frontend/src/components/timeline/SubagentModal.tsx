@@ -2,6 +2,7 @@ import type { TimelineSubagent } from "../../api/types";
 import { Icon } from "../../icons";
 import { Overlay } from "../ui";
 import type { ToolPair } from "./grouping";
+import type { FileLinkTarget } from "./markdownLinks";
 import { TurnDetail } from "./TurnDetail";
 import "./SubagentModal.css";
 
@@ -14,6 +15,8 @@ interface Props {
   onOpenSubagent?: (pair: ToolPair) => void;
   /** Present when a nested subagent is shown; returns to its parent. */
   onBack?: () => void;
+  /** Repo the subagent's relative markdown links open files from. */
+  fileTarget?: FileLinkTarget | null;
 }
 
 export function SubagentModal({
@@ -23,6 +26,7 @@ export function SubagentModal({
   onClose,
   onOpenSubagent,
   onBack,
+  fileTarget = null,
 }: Props) {
   const subtitle =
     `${subagent.event_count} events · ` +
@@ -59,6 +63,7 @@ export function SubagentModal({
             showThinking={showThinking}
             hideUserPrompt={hideUserPrompt}
             onOpenSubagent={onOpenSubagent}
+            fileTarget={fileTarget}
           />
         </div>
       ))}

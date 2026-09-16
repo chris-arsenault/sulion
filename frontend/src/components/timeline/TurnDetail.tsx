@@ -22,6 +22,7 @@ import { copyToClipboard } from "../terminal/clipboard";
 import { Icon } from "../../icons";
 import type { ToolPair, Turn } from "./grouping";
 import { Markdown } from "./Markdown";
+import type { FileLinkTarget } from "./markdownLinks";
 import {
   formatAssistantItems,
   formatAssistantText,
@@ -47,6 +48,9 @@ interface Props {
    * re-click on the same pair can re-trigger. */
   focusPairId?: string | null;
   focusKey?: string | null;
+  /** Repo (and workspace) that relative markdown links open files
+   * from. Null when the timeline has no repo context. */
+  fileTarget?: FileLinkTarget | null;
 }
 
 interface ThinkingAnchor {
@@ -67,6 +71,7 @@ export function TurnDetail({
   onOpenSubagent,
   focusPairId = null,
   focusKey = null,
+  fileTarget = null,
 }: Props) {
   const isMobile = useMediaQuery(MOBILE_LAYOUT_QUERY);
   const pairById = useMemo(
@@ -304,7 +309,7 @@ export function TurnDetail({
             ) : hideUserPrompt ? (
               <span className="td__muted">(user prompt hidden by filter)</span>
             ) : (
-              <Markdown source={turn.user_prompt_text} />
+              <Markdown source={turn.user_prompt_text} fileTarget={fileTarget} />
             )}
           </div>
         </div>
@@ -370,6 +375,7 @@ export function TurnDetail({
                 showThinking={showThinking}
                 onSaveReference={saveReferenceFireAndForget}
                 onThinkingChip={onThinkingChip}
+                fileTarget={fileTarget}
               />
             );
           }
@@ -456,6 +462,7 @@ function AssistantBlock({
   showThinking,
   onSaveReference,
   onThinkingChip,
+  fileTarget,
 }: {
   items: TimelineAssistantItem[];
   thinking: string[];
@@ -463,6 +470,7 @@ function AssistantBlock({
   showThinking: boolean;
   onSaveReference: (body: string, name: string) => void;
   onThinkingChip: (el: HTMLElement, text: string) => void;
+  fileTarget: FileLinkTarget | null;
 }) {
   const texts = useMemo(
     () =>
@@ -524,7 +532,7 @@ function AssistantBlock({
     >
       {texts.map((text, idx) => (
         <div key={`t-${idx}`} className="td__text">
-          <Markdown source={text} />
+          <Markdown source={text} fileTarget={fileTarget} />
         </div>
       ))}
       {showThinking && thinking.length > 0 && (

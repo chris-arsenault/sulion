@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 
 import type { ToolPair, Turn } from "./grouping";
 import { Icon } from "../../icons";
+import type { FileLinkTarget } from "./markdownLinks";
 import { TurnDetail } from "./TurnDetail";
 import "./SessionInspectorPane.css";
 
@@ -29,6 +30,8 @@ interface Props {
   focusPairId?: string | null;
   /** Changes on every focus request so rebases can fire. */
   focusKey?: string | null;
+  /** Repo the turn's relative markdown links open files from. */
+  fileTarget?: FileLinkTarget | null;
 }
 
 export function SessionInspectorPane({
@@ -41,6 +44,7 @@ export function SessionInspectorPane({
   onClose,
   focusPairId,
   focusKey,
+  fileTarget = null,
 }: Props) {
   useEffect(() => {
     if (!asOverlay) return;
@@ -59,6 +63,7 @@ export function SessionInspectorPane({
       onOpenSubagent={onOpenSubagent}
       focusPairId={focusPairId ?? null}
       focusKey={focusKey ?? null}
+      fileTarget={fileTarget}
     />
   ) : loading ? (
     <div className="sip__empty">

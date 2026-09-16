@@ -55,6 +55,7 @@ import { useDisplay } from "../state/DisplayStore";
 import { useTimelineFilters } from "./timeline/filters";
 import { gateText, promptGateFor } from "./timeline/promptGate";
 import { type ToolPair, type Turn, type TurnSummary } from "./timeline/grouping";
+import type { FileLinkTarget } from "./timeline/markdownLinks";
 import { SessionInspectorPane } from "./timeline/SessionInspectorPane";
 import { SubagentModal } from "./timeline/SubagentModal";
 import { TimelineControlsFlyout } from "./timeline/TimelineControlsFlyout";
@@ -130,6 +131,19 @@ export function TimelinePane({
     sessionId ? store.sessions.find((candidate) => candidate.id === sessionId) : undefined,
   );
   const refreshSessions = useSessions((store) => store.refresh);
+
+  // Relative links in turn markdown open files from the session's repo
+  // (and its isolated workspace when it has one); a repo timeline uses
+  // the repo itself.
+  const fileTargetRepo = session?.repo ?? repo ?? null;
+  const fileTargetWorkspaceId = session?.workspace?.id;
+  const fileTarget = useMemo<FileLinkTarget | null>(
+    () =>
+      fileTargetRepo
+        ? { repo: fileTargetRepo, workspaceId: fileTargetWorkspaceId }
+        : null,
+    [fileTargetRepo, fileTargetWorkspaceId],
+  );
 
   const [inspectorFraction, setInspectorFraction] = useState<number>(() => {
     if (typeof window === "undefined") return DEFAULT_INSPECTOR_FRACTION;
@@ -504,6 +518,7 @@ export function TimelinePane({
               asOverlay={false}
               focusPairId={focusPairId ?? null}
               focusKey={focusKey ?? null}
+              fileTarget={fileTarget}
             />
           </div>
         ) : (
@@ -530,6 +545,7 @@ export function TimelinePane({
                 onClose={clearSelectedTurn}
                 focusPairId={focusPairId ?? null}
                 focusKey={focusKey ?? null}
+                fileTarget={fileTarget}
               />
             )}
           </>
@@ -545,6 +561,7 @@ export function TimelinePane({
             asOverlay={false}
             focusPairId={focusPairId ?? null}
             focusKey={focusKey ?? null}
+            fileTarget={fileTarget}
           />
         </div>
       ) : (
@@ -583,6 +600,7 @@ export function TimelinePane({
             asOverlay={false}
             focusPairId={focusPairId ?? null}
             focusKey={focusKey ?? null}
+            fileTarget={fileTarget}
           />
         </div>
       )}
@@ -604,6 +622,7 @@ export function TimelinePane({
           onClose={closeSubagent}
           onOpenSubagent={handleSubagent}
           onBack={subagentPath.length > 1 ? backSubagent : undefined}
+          fileTarget={fileTarget}
         />
       )}
     </div>

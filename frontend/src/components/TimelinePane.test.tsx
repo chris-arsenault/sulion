@@ -21,7 +21,7 @@ vi.mock("react-virtuoso", () => ({
 import { TimelinePane as TimelinePaneRaw } from "./TimelinePane";
 import { ContextMenuHost } from "./common/ContextMenu";
 import type { RepoView, SessionView } from "../api/types";
-import { appCommands } from "../state/AppCommands";
+import { appCommands, subscribeToAppCommands } from "../state/AppCommands";
 import { useDisplay } from "../state/DisplayStore";
 import { useSessionStore } from "../state/SessionStore";
 import { resetTimelineControlsStore } from "../state/TimelineControlsStore";
@@ -190,6 +190,41 @@ describe("TimelinePane", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /hello/ }));
     await waitFor(() => expect(screen.getByText("hi there")).toBeDefined());
+  });
+
+  it("opens a relative markdown link in turn detail as a file tab for the session repo", async () => {
+    const payload = timelinePayload();
+    const turn = payload.turns[0] as Record<string, unknown>;
+    turn.chunks = [
+      {
+        kind: "assistant",
+        items: [{ kind: "text", text: "Start with the [brief](docs/BRIEF.md)." }],
+        thinking: [],
+      },
+    ];
+    stubFetch((url) =>
+      new Response(
+        url.includes("/timeline/turns/") ? timelineDetailBody(turn) : JSON.stringify(payload),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+    const seen: unknown[] = [];
+    const unsubscribe = subscribeToAppCommands((command) => seen.push(command));
+
+    render(<TimelinePane sessionId="abc" />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /hello/ }));
+    const link = await screen.findByRole("link", { name: "brief" });
+    await user.click(link);
+
+    expect(seen).toEqual([
+      { type: "open-file", repo: "alpha", workspaceId: undefined, path: "docs/BRIEF.md", line: undefined },
+    ]);
+    expect(window.location.pathname).toBe("/");
+    unsubscribe();
   });
 
   it("keeps mobile inline detail above the prompt controls", async () => {

@@ -104,6 +104,18 @@
   color: var(--info-fg);
 }
 
+/* Repo-relative link: opens a Sulion file tab, never the browser. */
+.md a.md__file-link {
+  cursor: pointer;
+  text-decoration-style: dotted;
+}
+
+/* Link with nowhere safe to go (no repo context, unsupported scheme). */
+.md .md__dead-link {
+  color: var(--text);
+  text-decoration: underline dotted var(--text-lo);
+}
+
 .md strong {
   color: var(--text-hi);
   font-weight: 600;

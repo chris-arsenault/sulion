@@ -81,7 +81,10 @@ Prompt and assistant text render as GitHub-flavoured markdown. TeX math
 renders through KaTeX: `$$ … $$` on its own lines or the LaTeX `\[ … \]`
 form for a display block, `$$ … $$` within a line or `\( … \)` for inline
 math. Single-dollar `$x$` is deliberately not math, so shell variables and
-prices in prose stay as written.
+prices in prose stay as written. A link to a repo-relative path, with an
+optional `:line` suffix, opens that file in a Sulion file tab for the
+session's repo and workspace; `http(s)` links open in a new browser tab.
+Nothing in turn detail navigates the app itself.
 
 When you are mostly reading the structured timeline, the prompt bar can
 send text into the running Claude/Codex terminal without expanding the

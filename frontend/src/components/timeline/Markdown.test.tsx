@@ -1,7 +1,57 @@
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { subscribeToAppCommands } from "../../state/AppCommands";
 import { Markdown } from "./Markdown";
+
+const FILE_TARGET = { repo: "tsonu", workspaceId: "ws-1" };
+
+describe("Markdown links", () => {
+  it("opens a repo-relative link as a file tab without navigating", () => {
+    const seen: unknown[] = [];
+    const unsubscribe = subscribeToAppCommands((command) => seen.push(command));
+    const { container } = render(
+      <Markdown
+        source={"Start with the [review brief](worlds/research/BRIEF.md:12)."}
+        fileTarget={FILE_TARGET}
+      />,
+    );
+    const anchor = container.querySelector("a.md__file-link") as HTMLAnchorElement;
+    expect(anchor.textContent).toBe("review brief");
+    expect(anchor.title).toBe("Open worlds/research/BRIEF.md:12");
+
+    const click = fireEvent.click(anchor);
+    expect(click).toBe(false); // default prevented: no browser navigation
+    expect(seen).toEqual([
+      {
+        type: "open-file",
+        repo: "tsonu",
+        workspaceId: "ws-1",
+        path: "worlds/research/BRIEF.md",
+        line: 12,
+      },
+    ]);
+    unsubscribe();
+  });
+
+  it("opens absolute URLs in a new browser tab", () => {
+    const { container } = render(
+      <Markdown source={"see https://example.com/x and [y](http://y.test)"} />,
+    );
+    const anchors = Array.from(container.querySelectorAll("a"));
+    expect(anchors).toHaveLength(2);
+    for (const a of anchors) {
+      expect(a.getAttribute("target")).toBe("_blank");
+      expect(a.getAttribute("rel")).toContain("noopener");
+    }
+  });
+
+  it("renders a relative link as text when no repo context exists", () => {
+    const { container } = render(<Markdown source={"[brief](docs/brief.md)"} />);
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector(".md__dead-link")?.textContent).toBe("brief");
+  });
+});
 
 describe("Markdown math", () => {
   it("renders LaTeX display math as a KaTeX display block", () => {

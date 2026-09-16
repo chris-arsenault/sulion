@@ -6,6 +6,13 @@ All notable user-visible changes to Sulion are recorded here.
 
 ### Timeline
 
+- Fixed markdown links in turn detail navigating the browser. A relative
+  link such as `[brief](docs/BRIEF.md)` resolved against the page origin,
+  which Sulion does not serve, and unloaded the app. Such links now open a
+  Sulion file tab for the session's repo and workspace, honouring a
+  trailing `:line` or `#L12` reference; absolute checkout paths are trimmed
+  to the repo. External `http(s)` links open in a new browser tab, and a
+  link with no repo context or an unsafe scheme renders as plain text.
 - Fixed library prompts and queued future prompts vanishing in timeline-only
   mode. The terminal pane stays mounted but hidden there, and injected text
   was pasted into it unseen. Injection now lands in the timeline prompt box
