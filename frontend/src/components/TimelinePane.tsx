@@ -56,6 +56,7 @@ import { useTimelineFilters } from "./timeline/filters";
 import { gateText, promptGateFor } from "./timeline/promptGate";
 import { type ToolPair, type Turn, type TurnSummary } from "./timeline/grouping";
 import type { FileLinkTarget } from "./timeline/markdownLinks";
+import { ModelSwitchGuard } from "./timeline/ModelSwitchModal";
 import { SessionInspectorPane } from "./timeline/SessionInspectorPane";
 import { SubagentModal } from "./timeline/SubagentModal";
 import { TimelineControlsFlyout } from "./timeline/TimelineControlsFlyout";
@@ -485,7 +486,17 @@ export function TimelinePane({
           </Tooltip>
         )}
       </div>
-      {sessionId && session && <NeedsInputBanner session={session} />}
+      {sessionId && session && (
+        <>
+          <NeedsInputBanner session={session} />
+          <ModelSwitchGuard
+            sessionId={sessionId}
+            session={session}
+            active={active}
+            onRefresh={refreshSessions}
+          />
+        </>
+      )}
       {empty ? (
         <div className="timeline-pane__empty">
           {(timeline?.total_event_count ?? 0) === 0

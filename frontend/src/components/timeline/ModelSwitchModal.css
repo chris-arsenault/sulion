@@ -1,0 +1,170 @@
+.msw {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.msw__headline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklab, var(--atn-mark) 35%, transparent);
+  border-radius: var(--r-2);
+  background: var(--atn-bg);
+  color: var(--atn-fg);
+  font-family: var(--font-mono);
+  font-size: var(--t-head);
+  font-weight: 600;
+}
+
+.msw__model--from {
+  color: var(--text-mid);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklab, var(--atn-mark) 60%, transparent);
+}
+
+.msw__model--to {
+  color: var(--text-hi);
+}
+
+.msw__facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: var(--t-ui);
+}
+
+.msw__fact {
+  display: contents;
+}
+
+.msw__facts dt {
+  color: var(--text-lo);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: var(--t-meta);
+  line-height: 18px;
+}
+
+.msw__facts dd {
+  margin: 0;
+  color: var(--text);
+  line-height: 18px;
+}
+
+.msw__status {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-1);
+  background: var(--canvas-1);
+  color: var(--text);
+  font-size: var(--t-ui);
+  line-height: var(--lh-prose);
+}
+
+.msw__reason {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.msw__reason-title {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: var(--t-meta);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.msw__reason-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text);
+  font-size: var(--t-ui);
+  line-height: var(--lh-prose);
+}
+
+.msw__reason-body p {
+  margin: 0;
+}
+
+.msw__iterations {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+}
+
+.msw__iterations li {
+  display: flex;
+  gap: 10px;
+}
+
+.msw__iteration-type {
+  min-width: 128px;
+  color: var(--text-lo);
+}
+
+.msw__hint {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: var(--t-meta);
+  line-height: var(--lh-prose);
+}
+
+.msw__error {
+  color: var(--crit-fg);
+  background: var(--crit-bg);
+  border: 1px solid color-mix(in oklab, var(--crit-mark) 35%, transparent);
+  border-radius: var(--r-1);
+  padding: 8px 10px;
+  font-size: var(--t-ui);
+}
+
+.msw__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.msw__button {
+  height: var(--lane-sm);
+  padding: 0 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-1);
+  background: var(--canvas-2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--t-ui);
+  cursor: pointer;
+}
+
+.msw__button:hover:not(:disabled) {
+  background: var(--canvas-3);
+}
+
+.msw__button:disabled {
+  color: var(--text-dis);
+  cursor: default;
+}
+
+.msw__button--primary {
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 18%, var(--canvas-2));
+  color: var(--text-hi);
+}
+
+.msw__button--primary:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--accent) 28%, var(--canvas-2));
+}

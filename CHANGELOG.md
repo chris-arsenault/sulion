@@ -6,6 +6,24 @@ All notable user-visible changes to Sulion are recorded here.
 
 ### Timeline
 
+- Added a model-switch guard. Codex and Claude Code can move a session onto
+  a different model on their own — Codex by applying new thread settings
+  between turns, Claude Code by falling back mid-turn — and the timeline
+  showed it only as a metadata line. The ingester now records every model
+  change against the model the session launched with or the user last
+  accepted; a change away from it stops the turn running under the new
+  model and opens a confirmation dialog in the timeline pane. The dialog
+  shows the models, effort, when the change was observed, whether a turn
+  was interrupted, and the evidence the transcript holds near the switch:
+  Codex's last rate-limit snapshot, or Claude's fallback block and request
+  iterations, since neither harness writes a reason. *Continue* accepts the
+  new model; *Dismiss* keeps the previous one expected, so restoring it by
+  hand is recorded without being enforced.
+- Fixed an interrupted Codex turn leaving the session reported as working.
+  The `turn_aborted` record now resolves activity to awaiting-prompt like a
+  completed turn does.
+- Fixed synthetic API-error records overwriting a Claude session's reported
+  model with the `<synthetic>` placeholder.
 - Fixed markdown links in turn detail navigating the browser. A relative
   link such as `[brief](docs/BRIEF.md)` resolved against the page origin,
   which Sulion does not serve, and unloaded the app. Such links now open a

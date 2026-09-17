@@ -375,6 +375,13 @@ pub(super) async fn interrupt_session_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
+    interrupt_agent(&state, id).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Send the harness in a live PTY its interrupt key. Shared by the prompt
+/// bar's Interrupt button and the model-switch guard.
+pub(super) async fn interrupt_agent(state: &AppState, id: Uuid) -> ApiResult<()> {
     let meta = pty::read_meta(&state.pool, id)
         .await?
         .ok_or(ApiError::NotFound)?;
@@ -384,15 +391,15 @@ pub(super) async fn interrupt_session_agent(
     if !matches!(meta.agent_runtime.state.as_str(), "starting" | "running") {
         return Err(ApiError::BadRequest("agent is not running".into()));
     }
-    let node_id = node_proxy::session_node(&state, id).await?;
+    let node_id = node_proxy::session_node(state, id).await?;
     node_proxy::request(
-        &state,
+        state,
         node_id,
         NodeRequestKind::SessionAgentInterrupt,
         serde_json::to_value(ResourceRequest { id }).map_err(anyhow::Error::from)?,
     )
     .await?;
-    Ok(StatusCode::ACCEPTED)
+    Ok(())
 }
 
 #[derive(Deserialize)]

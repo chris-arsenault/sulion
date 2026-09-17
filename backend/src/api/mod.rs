@@ -18,6 +18,7 @@ mod file_content;
 mod future_prompt_routes;
 mod library_routes;
 mod meta_repo_routes;
+mod model_switch_routes;
 mod node_proxy;
 mod plan_routes;
 mod repo_lifecycle_routes;
@@ -32,6 +33,9 @@ mod workspace_routes;
 mod ws;
 
 pub use app_state_routes::AppStateCache;
+pub use model_switch_routes::{
+    enforce_once as enforce_model_switches_once, run_model_switch_enforcer,
+};
 pub use routes::ApiError;
 #[cfg(feature = "integration-tests")]
 pub use stats::sample_runtime_stats_once_for_tests;

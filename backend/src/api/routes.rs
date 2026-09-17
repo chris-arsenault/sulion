@@ -17,9 +17,9 @@ use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 
 use super::{
-    admin_routes, future_prompt_routes, library_routes, meta_repo_routes, plan_routes,
-    repo_lifecycle_routes, repo_routes, session_routes, submitted_prompt_routes, timeline_routes,
-    workspace_routes,
+    admin_routes, future_prompt_routes, library_routes, meta_repo_routes, model_switch_routes,
+    plan_routes, repo_lifecycle_routes, repo_routes, session_routes, submitted_prompt_routes,
+    timeline_routes, workspace_routes,
 };
 use crate::AppState;
 
@@ -80,6 +80,14 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/sessions/:id/submitted-prompts/:item_id",
             delete(submitted_prompt_routes::dismiss_submitted_prompt),
+        )
+        .route(
+            "/api/sessions/:id/model-switches",
+            get(model_switch_routes::list_model_switches),
+        )
+        .route(
+            "/api/sessions/:id/model-switches/:switch_id/acknowledge",
+            post(model_switch_routes::acknowledge_model_switch),
         )
         .route("/api/repos", post(repo_routes::create_repo))
         .route("/api/meta-repos", post(meta_repo_routes::create_meta_repo))

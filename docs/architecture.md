@@ -246,6 +246,36 @@ or once the harness has reported activity of its own through a hook, the
 on a terminal question, the input closes with a `force` escape hatch. See
 `backend/src/submitted_prompts.rs`.
 
+### Model switches
+
+Both harnesses can move a session onto a different model without being asked.
+Codex applies new thread settings between turns (`thread_settings_applied`)
+and starts the next turn on the new model with a `<model_switch>` developer
+note; Claude Code writes a `fallback` content block mid-turn when the primary
+model's request is retried on the fallback model. Neither records a reason,
+and in the timeline the model is only a metadata line.
+
+The ingester compares every model-bearing record against two baselines on
+`agent_session_metadata`: `observed_model`, the model the last record ran on,
+and `confirmed_model`, the model the session launched with or the user later
+accepted. A change from the observed model writes an `agent_model_switches`
+row; a change away from the confirmed model is `enforced`. The row carries
+the evidence the transcript held near the switch — Codex's last rate-limit
+snapshot, Claude's fallback block and request iterations — because that is
+all either harness leaves behind.
+
+Enforcement is a control-process loop (`backend/src/api/model_switch_routes.rs`)
+that sends the interrupt key to any live PTY whose running turn belongs to
+an enforced, unacknowledged switch, through the same node request as the
+prompt bar's Interrupt button. The app-state poll carries the oldest such
+switch per PTY as `pending_model_switch`, and the timeline pane opens a
+confirmation dialog on it. *Continue* adopts the new model as confirmed;
+*Dismiss* keeps the previous one expected, so switching back by hand is
+recorded without being enforced. Routes are `GET` on
+`/api/sessions/:id/model-switches` and `POST` on
+`/api/sessions/:id/model-switches/:switch_id/acknowledge`. Detection lives in
+`backend/src/model_switches.rs`.
+
 ### Device pairing
 
 An auth surface, distinct from the Cognito login the browser uses. It exists so

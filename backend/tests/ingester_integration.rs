@@ -20,6 +20,9 @@ const CODEX_RICH_LINEAGE_CHILD: &str = include_str!("fixtures/codex-rich-lineage
 #[path = "ingester_integration/usage_records.rs"]
 mod usage_records;
 
+#[path = "ingester_integration/model_switches.rs"]
+mod model_switches;
+
 fn test_db_url() -> Option<String> {
     std::env::var("SULION_TEST_DB").ok()
 }

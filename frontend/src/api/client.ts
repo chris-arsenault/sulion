@@ -13,6 +13,7 @@ import type {
   FileResponse,
   FuturePromptEntry,
   FuturePromptListResponse,
+  ModelSwitchListResponse,
   SubmittedPromptListResponse,
   HistoryQuery,
   HistoryResponse,
@@ -831,6 +832,31 @@ export function dismissSubmittedPrompt(
   return request<void>(
     `/api/sessions/${sessionId}/submitted-prompts/${encodeURIComponent(id)}`,
     { method: "DELETE" },
+  );
+}
+
+export function listModelSwitches(
+  sessionId: string,
+): Promise<ModelSwitchListResponse> {
+  return request<ModelSwitchListResponse>(
+    `/api/sessions/${sessionId}/model-switches`,
+  );
+}
+
+/** Close a model-switch dialog. `adopt` accepts the new model as the one
+ * the session should run on; without it the previous model stays the
+ * expected one, for a user about to switch back in the terminal. */
+export function acknowledgeModelSwitch(
+  sessionId: string,
+  switchId: string,
+  adopt: boolean,
+): Promise<void> {
+  return request<void>(
+    `/api/sessions/${sessionId}/model-switches/${encodeURIComponent(switchId)}/acknowledge`,
+    {
+      method: "POST",
+      body: JSON.stringify({ adopt }),
+    },
   );
 }
 

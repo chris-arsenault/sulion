@@ -137,6 +137,7 @@ struct AppSessionView {
     future_prompts_pending_count: i32,
     /// Timeline-submitted prompts with no matching transcript turn yet.
     unmatched_prompt_count: i32,
+    pending_model_switch: Option<AppModelSwitchView>,
 }
 
 #[derive(Clone, Serialize)]
@@ -201,6 +202,25 @@ struct AppActivityView {
     source: String,
     confidence: String,
     updated_at: Option<DateTime<Utc>>,
+}
+
+/// The oldest enforced, unacknowledged model switch in the PTY's current
+/// transcript session: the timeline opens its confirmation dialog on it.
+#[derive(Clone, Serialize)]
+struct AppModelSwitchView {
+    id: Uuid,
+    agent: String,
+    source: String,
+    from_model: Option<String>,
+    to_model: String,
+    from_effort: Option<String>,
+    to_effort: Option<String>,
+    turn_id: Option<String>,
+    turn_in_flight: bool,
+    context: serde_json::Value,
+    observed_at: DateTime<Utc>,
+    interrupted_at: Option<DateTime<Utc>>,
+    interrupt_error: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -292,6 +312,19 @@ struct AppSessionRow {
     plan_current_phase_status: Option<String>,
     future_prompts_pending_count: i32,
     unmatched_prompt_count: i32,
+    switch_id: Option<Uuid>,
+    switch_agent: Option<String>,
+    switch_source: Option<String>,
+    switch_from_model: Option<String>,
+    switch_to_model: Option<String>,
+    switch_from_effort: Option<String>,
+    switch_to_effort: Option<String>,
+    switch_turn_id: Option<String>,
+    switch_turn_in_flight: Option<bool>,
+    switch_context: Option<serde_json::Value>,
+    switch_observed_at: Option<DateTime<Utc>>,
+    switch_interrupted_at: Option<DateTime<Utc>>,
+    switch_interrupt_error: Option<String>,
 }
 
 impl From<AppSessionRow> for AppSessionView {
@@ -358,6 +391,23 @@ impl From<AppSessionRow> for AppSessionView {
             current_plan,
             future_prompts_pending_count: row.future_prompts_pending_count,
             unmatched_prompt_count: row.unmatched_prompt_count,
+            pending_model_switch: row.switch_id.map(|id| AppModelSwitchView {
+                id,
+                agent: row.switch_agent.unwrap_or_default(),
+                source: row.switch_source.unwrap_or_default(),
+                from_model: row.switch_from_model,
+                to_model: row.switch_to_model.unwrap_or_default(),
+                from_effort: row.switch_from_effort,
+                to_effort: row.switch_to_effort,
+                turn_id: row.switch_turn_id,
+                turn_in_flight: row.switch_turn_in_flight.unwrap_or(false),
+                context: row
+                    .switch_context
+                    .unwrap_or(serde_json::Value::Object(Default::default())),
+                observed_at: row.switch_observed_at.unwrap_or_else(Utc::now),
+                interrupted_at: row.switch_interrupted_at,
+                interrupt_error: row.switch_interrupt_error,
+            }),
         }
     }
 }
@@ -574,7 +624,14 @@ async fn load_sessions(pool: &crate::db::Pool) -> ApiResult<Vec<AppSessionView>>
                 current_phase.title AS plan_current_phase_title, \
                 current_phase.status AS plan_current_phase_status, \
                 COALESCE(fps.pending_count, 0)::INT AS future_prompts_pending_count, \
-                COALESCE(spc.open_count, 0)::INT AS unmatched_prompt_count \
+                COALESCE(spc.open_count, 0)::INT AS unmatched_prompt_count, \
+                ms.id AS switch_id, ms.agent AS switch_agent, ms.source AS switch_source, \
+                ms.from_model AS switch_from_model, ms.to_model AS switch_to_model, \
+                ms.from_effort AS switch_from_effort, ms.to_effort AS switch_to_effort, \
+                ms.turn_id AS switch_turn_id, ms.turn_in_flight AS switch_turn_in_flight, \
+                ms.context AS switch_context, ms.observed_at AS switch_observed_at, \
+                ms.interrupted_at AS switch_interrupted_at, \
+                ms.interrupt_error AS switch_interrupt_error \
            FROM pty_sessions ps \
            LEFT JOIN workspaces ws ON ws.id = ps.workspace_id \
            LEFT JOIN meta_repos mr ON mr.id = ps.meta_repo_id \
@@ -607,6 +664,16 @@ async fn load_sessions(pool: &crate::db::Pool) -> ApiResult<Vec<AppSessionView>>
                 WHERE sp.pty_session_id = ps.id \
                   AND sp.matched_at IS NULL AND sp.dismissed_at IS NULL \
            ) spc ON TRUE \
+           LEFT JOIN LATERAL ( \
+               SELECT s.id, s.agent, s.source, s.from_model, s.to_model, s.from_effort, \
+                      s.to_effort, s.turn_id, s.turn_in_flight, s.context, s.observed_at, \
+                      s.interrupted_at, s.interrupt_error \
+                 FROM agent_model_switches s \
+                WHERE s.session_uuid = ps.current_session_uuid \
+                  AND s.enforced AND s.acknowledged_at IS NULL \
+                ORDER BY s.observed_at ASC, s.byte_offset ASC \
+                LIMIT 1 \
+           ) ms ON TRUE \
           WHERE ps.state <> 'deleted' \
           ORDER BY ps.pinned DESC, ps.created_at DESC",
     )

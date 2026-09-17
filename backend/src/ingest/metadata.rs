@@ -137,7 +137,11 @@ fn extract_codex_metadata(value: &Value) -> MetadataPatch {
 
 fn extract_claude_metadata(value: &Value) -> MetadataPatch {
     let mut patch = MetadataPatch {
-        model: string_at(value, &["message", "model"]).or_else(|| string_at(value, &["model"])),
+        // Synthetic (API error) records carry a placeholder model name,
+        // not the one the session runs on.
+        model: string_at(value, &["message", "model"])
+            .or_else(|| string_at(value, &["model"]))
+            .filter(|model| model != "<synthetic>"),
         cli_version: string_at(value, &["version"]).or_else(|| string_at(value, &["cli_version"])),
         cwd: string_at(value, &["cwd"]),
         ..MetadataPatch::default()
@@ -217,5 +221,16 @@ mod tests {
             "message": { "model": "claude-sonnet-4" }
         }));
         assert_eq!(patch.model.as_deref(), Some("claude-sonnet-4"));
+    }
+
+    #[test]
+    fn synthetic_claude_records_do_not_replace_the_model() {
+        let patch = extract_claude_metadata(&json!({
+            "type": "assistant",
+            "message": { "model": "<synthetic>" },
+            "version": "2.1.224"
+        }));
+        assert_eq!(patch.model, None);
+        assert_eq!(patch.cli_version.as_deref(), Some("2.1.224"));
     }
 }

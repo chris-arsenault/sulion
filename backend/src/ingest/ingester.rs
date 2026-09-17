@@ -837,18 +837,7 @@ async fn insert_event(
     tx.commit().await.map_err(InsertError::Db)?;
 
     if inserted {
-        if let Err(err) =
-            super::metadata::upsert_from_event(pool, session_uuid, source.agent_id(), &value).await
-        {
-            tracing::warn!(
-                %err,
-                session = %session_uuid,
-                agent = source.agent_id(),
-                byte_offset,
-                "agent session metadata upsert failed",
-            );
-        }
-        project_from_event_best_effort(pool, session_uuid, source, &value, byte_offset).await;
+        project_after_insert(pool, session_uuid, source, &value, byte_offset, timestamp).await;
     }
 
     if let Some(ctx) = codex_ctx {
@@ -874,6 +863,52 @@ async fn insert_event(
     }
 
     Ok(inserted)
+}
+
+/// Projections that follow a committed event row and must not fail the
+/// ingest: session metadata, model-switch detection, and activity state.
+/// Each is best-effort and logged on failure.
+async fn project_after_insert(
+    pool: &Pool,
+    session_uuid: Uuid,
+    source: TranscriptSource,
+    value: &Value,
+    byte_offset: i64,
+    timestamp: DateTime<Utc>,
+) {
+    if let Err(err) =
+        super::metadata::upsert_from_event(pool, session_uuid, source.agent_id(), value).await
+    {
+        tracing::warn!(
+            %err,
+            session = %session_uuid,
+            agent = source.agent_id(),
+            byte_offset,
+            "agent session metadata upsert failed",
+        );
+    }
+    // After the metadata upsert: the switch detector keeps its own
+    // baselines on the same row and reads the record's model only through
+    // its own extraction.
+    if let Err(err) = crate::model_switches::observe_event(
+        pool,
+        session_uuid,
+        source.agent_id(),
+        value,
+        byte_offset,
+        timestamp,
+    )
+    .await
+    {
+        tracing::warn!(
+            %err,
+            session = %session_uuid,
+            agent = source.agent_id(),
+            byte_offset,
+            "model switch observation failed",
+        );
+    }
+    project_from_event_best_effort(pool, session_uuid, source, value, byte_offset).await;
 }
 
 async fn insert_event_derivatives(

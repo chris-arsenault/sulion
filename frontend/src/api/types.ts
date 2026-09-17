@@ -117,6 +117,82 @@ export interface SessionView {
   /** Timeline-submitted prompts that no transcript turn has claimed yet.
    * Drives the prompt-bar badge that opens the submitted-prompts window. */
   unmatched_prompt_count?: number;
+  /** Oldest model change the user has not confirmed in the current
+   * transcript session. The timeline opens its confirmation dialog on it. */
+  pending_model_switch?: ModelSwitchView | null;
+}
+
+/** Which transcript record revealed a model change. */
+export type ModelSwitchSource =
+  | "codex_thread_settings"
+  | "codex_turn_context"
+  | "claude_fallback"
+  | "claude_message"
+  | string;
+
+/** Codex's rate-limit snapshot, as it appears in `token_count` records. */
+export interface CodexRateLimitWindow {
+  used_percent: number;
+  window_minutes: number;
+  /** Unix seconds. */
+  resets_at: number;
+}
+
+export interface CodexRateLimits {
+  limit_id?: string | null;
+  plan_type?: string | null;
+  rate_limit_reached_type?: string | null;
+  primary?: CodexRateLimitWindow | null;
+  secondary?: CodexRateLimitWindow | null;
+  credits?: {
+    has_credits?: boolean;
+    unlimited?: boolean;
+    balance?: string | null;
+  } | null;
+}
+
+/** Whatever the transcript held near a switch that may explain it. The
+ * harnesses record no reason; this is the surrounding evidence. */
+export interface ModelSwitchContext {
+  /** Codex: the last rate-limit snapshot before the switch. */
+  rate_limits?: CodexRateLimits | null;
+  /** Claude: the `fallback` content block's models. */
+  fallback?: { from: string | null; to: string | null } | null;
+  /** Claude: per-request iterations, showing the primary attempt and the
+   * fallback retry. */
+  iterations?: Array<{ type: string | null; model: string | null }> | null;
+  service_tier?: string | null;
+  model_provider_id?: string | null;
+}
+
+export interface ModelSwitchView {
+  id: string;
+  agent: string;
+  source: ModelSwitchSource;
+  from_model: string | null;
+  to_model: string;
+  from_effort: string | null;
+  to_effort: string | null;
+  turn_id: string | null;
+  /** A turn was underway when the change was observed. */
+  turn_in_flight: boolean;
+  context: ModelSwitchContext;
+  observed_at: string;
+  /** When the guard's interrupt reached the harness. */
+  interrupted_at: string | null;
+  interrupt_error: string | null;
+}
+
+export interface ModelSwitchRecord extends ModelSwitchView {
+  session_uuid: string;
+  enforced: boolean;
+  detected_at: string;
+  acknowledged_at: string | null;
+  adopted: boolean | null;
+}
+
+export interface ModelSwitchListResponse {
+  switches: ModelSwitchRecord[];
 }
 
 export interface SessionMetaRepoView {

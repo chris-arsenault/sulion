@@ -394,6 +394,57 @@ describe("TimelinePane", () => {
     ).toBe(true);
   });
 
+  it("opens the model-switch dialog from app-state and acknowledges it", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    stubFetch(
+      (url, init) => {
+        if (url === "/api/sessions/abc/model-switches/sw-1/acknowledge") {
+          calls.push({ url, body: JSON.parse(String(init?.body)) });
+          return new Response(null, { status: 204 });
+        }
+        return new Response(timelineBody(), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+      [
+        sessionView(0, {
+          pending_model_switch: {
+            id: "sw-1",
+            agent: "codex",
+            source: "codex_thread_settings",
+            from_model: "gpt-6-astra",
+            to_model: "gpt-5.6-luna",
+            from_effort: "high",
+            to_effort: "medium",
+            turn_id: null,
+            turn_in_flight: false,
+            context: {},
+            observed_at: "2026-09-17T07:50:36Z",
+            interrupted_at: null,
+            interrupt_error: null,
+          },
+        }),
+      ],
+    );
+
+    render(<TimelinePane sessionId="abc" />);
+    const dialog = await screen.findByTestId("model-switch-modal");
+    expect(dialog.textContent).toContain("gpt-5.6-luna");
+    expect(screen.queryByTestId("model-switch-banner")).toBeNull();
+
+    const user = userEvent.setup();
+    // Closing without deciding leaves a banner that reopens the dialog.
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("model-switch-modal")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Review" }));
+    expect(screen.getByTestId("model-switch-modal")).toBeDefined();
+
+    await user.click(screen.getByRole("button", { name: "Continue with gpt-5.6-luna" }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0].body).toEqual({ adopt: true });
+  });
+
   it("hides the banner while the agent is simply working", async () => {
     stubFetch(
       () =>

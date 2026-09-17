@@ -115,7 +115,10 @@ fn codex_transition(value: &Value) -> Option<(ActivityState, Option<String>, &'s
         ("event_msg", "task_started" | "turn_started") => {
             Some((ActivityState::Working, None, "explicit"))
         }
-        ("event_msg", "task_complete" | "turn_complete") => {
+        // An aborted turn (Esc, or the model-switch guard's interrupt)
+        // ends the same way a completed one does: the harness is idle at
+        // its prompt.
+        ("event_msg", "task_complete" | "turn_complete" | "turn_aborted") => {
             Some((ActivityState::AwaitingPrompt, None, "explicit"))
         }
         // A user-input request blocks on a terminal selection. In
@@ -258,6 +261,19 @@ mod tests {
         });
         let (state, _, _) = codex_transition(&output).expect("transition");
         assert_eq!(state, ActivityState::Working);
+    }
+
+    #[test]
+    fn codex_turn_lifecycle_resolves_to_awaiting_prompt() {
+        for subtype in ["task_complete", "turn_complete", "turn_aborted"] {
+            let value = json!({
+                "type": "event_msg",
+                "payload": { "type": subtype, "turn_id": "t1", "reason": "interrupted" }
+            });
+            let (state, _, confidence) = codex_transition(&value).expect("transition");
+            assert_eq!(state, ActivityState::AwaitingPrompt);
+            assert_eq!(confidence, "explicit");
+        }
     }
 
     #[test]
