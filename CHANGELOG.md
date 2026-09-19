@@ -19,6 +19,16 @@ All notable user-visible changes to Sulion are recorded here.
   iterations, since neither harness writes a reason. *Continue* accepts the
   new model; *Dismiss* keeps the previous one expected, so restoring it by
   hand is recorded without being enforced.
+- Fixed shell and script tokens being recorded as touched files. The
+  file-touch extractor split a tool's command text on whitespace and kept
+  any token containing a dot or slash, so `2>/dev/null`, `*.cs`,
+  `PYTHONPATH=.`, and every line of an inline Python script became a file
+  row, and a code-mode exec that applied a patch flagged them all as
+  writes. Roughly 60% of the stored touch rows were such noise, padding
+  turn detail, retrieval evidence, and the Metrics churn hotspots. A
+  command snippet is no longer tokenised once the canonicaliser has
+  produced its structured edit list, and a bare token must be path-shaped.
+  Existing sessions are reprojected on the next control start.
 - Fixed an interrupted Codex turn leaving the session reported as working.
   The `turn_aborted` record now resolves activity to awaiting-prompt like a
   completed turn does.

@@ -301,6 +301,18 @@ pub async fn backfill_timeline_projection(
              SELECT DISTINCT cs.parent_session_uuid \
                FROM claude_sessions cs \
               WHERE cs.parent_session_uuid IS NOT NULL \
+             UNION \
+             SELECT DISTINCT tf.session_uuid \
+               FROM timeline_file_touches tf \
+              WHERE tf.repo_rel_path !~ '^[A-Za-z0-9_./+@-]+$' \
+                 OR (tf.repo_rel_path !~ '/' \
+                     AND tf.repo_rel_path !~ '^[A-Za-z0-9_.-]*[A-Za-z][A-Za-z0-9_.-]*\\.[A-Za-z0-9]{1,5}$') \
+             UNION \
+             SELECT DISTINCT o.session_uuid \
+               FROM timeline_operations o \
+              WHERE jsonb_typeof(o.input) = 'object' \
+                AND o.input ? 'file_edits' \
+                AND (o.input ? 'command' OR o.input ? 'cmd') \
          ) \
          SELECT session_uuid \
            FROM sessions_to_rebuild \

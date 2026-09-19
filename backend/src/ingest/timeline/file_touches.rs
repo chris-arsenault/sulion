@@ -74,7 +74,15 @@ pub fn extract_file_touches(
         }
     }
 
-    if is_command_pair(pair) {
+    // Command text is tokenised only when the canonicaliser produced no
+    // structured edit list. A code-mode exec that applied a patch already
+    // named its files exactly; its snippet is program text, and every
+    // `np.random(31)` in it would otherwise read as a path.
+    let has_structured_edits = matches!(
+        pair.input.as_ref().and_then(|input| input.get("file_edits")),
+        Some(Value::Array(entries)) if !entries.is_empty()
+    );
+    if is_command_pair(pair) && !has_structured_edits {
         if let Some(command) = command_text(pair.input.as_ref()) {
             for token in command
                 .split_whitespace()
@@ -246,12 +254,29 @@ fn clean_command_token(token: &str) -> Option<&str> {
     }
 }
 
+/// Whether a shell token has the shape of a file path. Shell operators,
+/// globs, assignments, and program text are excluded outright; the rest
+/// must either carry a directory separator or look like a bare file name
+/// with a short extension. The ingester has no repo mount, so shape is
+/// the only test available here.
 fn is_path_like_token(token: &str) -> bool {
-    token.starts_with('/')
-        || token.starts_with("./")
-        || token.starts_with("../")
-        || token.contains('/')
-        || token.contains('.')
+    if token.is_empty()
+        || !token
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | '+' | '@'))
+    {
+        return false;
+    }
+    if token.contains('/') {
+        return token != "." && token != "..";
+    }
+    let Some((stem, ext)) = token.rsplit_once('.') else {
+        return false;
+    };
+    !stem.is_empty()
+        && stem.chars().any(|ch| ch.is_ascii_alphabetic())
+        && (1..=5).contains(&ext.len())
+        && ext.chars().all(|ch| ch.is_ascii_alphanumeric())
 }
 
 #[cfg(test)]
@@ -314,29 +339,79 @@ mod tests {
     }
 
     /// Code-mode exec: embedded patch edits touch as writes even though
-    /// the pair itself is a command pair, and its command tokens still
-    /// touch as commands.
+    /// the pair itself is a command pair. Once the canonicaliser has
+    /// named the edited files, the snippet itself is not tokenised — it
+    /// is program text, not a shell line.
     #[test]
-    fn exec_file_edits_touch_as_writes() {
+    fn exec_file_edits_touch_as_writes_and_silence_the_snippet() {
         let pair = pair(
-            "exec",
+            "apply_patch",
             json!({
-                "command": "cat /tmp/alpha/src/lib.rs",
+                "command": "text(await tools.apply_patch(\"...\")); rng=np.random.default_rng(101); W=rng.random((31,11)); cat /tmp/alpha/src/lib.rs",
                 "file_edits": [{ "path": "/tmp/alpha/src/main.rs", "operation": "update" }],
             }),
         );
         let touches = extract_file_touches(&pair, Some(&context()));
-        let write = touches
-            .iter()
-            .find(|touch| touch.path == "src/main.rs")
-            .expect("edit touch present");
-        assert_eq!(write.touch_kind, "write");
-        assert!(write.is_write);
-        let command = touches
-            .iter()
-            .find(|touch| touch.path == "src/lib.rs")
-            .expect("command touch present");
-        assert_eq!(command.touch_kind, "command");
-        assert!(!command.is_write);
+        assert_eq!(
+            touches,
+            vec![TimelineFileTouch {
+                repo: "alpha".to_string(),
+                path: "src/main.rs".to_string(),
+                touch_kind: "write".to_string(),
+                is_write: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn program_text_and_shell_operators_are_not_paths() {
+        for token in [
+            "2>/dev/null",
+            ">/dev/null",
+            "*.cs",
+            "!**/bin/**",
+            "PYTHONPATH=.",
+            "s=open(p).read",
+            "open(p,'w').write(s",
+            "<noreply@anthropic.com>",
+            "xml.etree.ElementTree",
+            "ge.run_id",
+            "e.plane_code=1",
+            "pass.",
+            "1.2",
+            "3.",
+            "np.random.default_rng(101",
+            ".",
+            "..",
+        ] {
+            assert!(!is_path_like_token(token), "{token:?} read as a path");
+        }
+        for token in [
+            "src/lib.rs",
+            "./run.sh",
+            "../Cargo.toml",
+            "/tmp/alpha/src/lib.rs",
+            "README.md",
+            "Cargo.toml",
+            "docs/architecture.md",
+            "frontend/src",
+            "@scope/pkg/index.js",
+            "file-name_v2.tsx",
+        ] {
+            assert!(is_path_like_token(token), "{token:?} not read as a path");
+        }
+    }
+
+    #[test]
+    fn bash_script_lines_yield_only_real_paths() {
+        let pair = pair(
+            "bash",
+            json!({
+                "command": "PYTHONPATH=. python3 - <<'EOF' 2>/dev/null\nimport numpy as np\nrng=np.random.default_rng(101)\ns=open('src/lib.rs').read()\nEOF\ncat README.md src/main.rs",
+            }),
+        );
+        let touches = extract_file_touches(&pair, Some(&context()));
+        let paths: Vec<&str> = touches.iter().map(|touch| touch.path.as_str()).collect();
+        assert_eq!(paths, vec!["README.md", "src/main.rs"]);
     }
 }
