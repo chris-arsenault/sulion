@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::json;
 use sulion::{app, db, AppState};
@@ -522,6 +523,165 @@ async fn isolated_collection_is_rejected_before_worktree_creation() {
     .await
     .unwrap();
     assert_eq!(active_worktrees, 0);
+}
+
+/// Row identities of a table's dirty-path rows: a rewrite gives every row
+/// a new xmin even when the content is identical, so unchanged xmins
+/// prove the poller left the rows alone. The harness node runs its own
+/// reconcile loop, which can process the same row alongside the test's
+/// explicit call, so the identities are read twice and only returned once
+/// stable.
+async fn dirty_path_xmins(pool: &db::Pool, table: &str, key: &str, id: &str) -> Vec<(String, i64)> {
+    let read = || async {
+        sqlx::query_as::<_, (String, i64)>(&format!(
+            "SELECT path, xmin::text::bigint FROM {table} WHERE {key} = $1::text::{} ORDER BY path",
+            if table == "workspace_dirty_paths" {
+                "uuid"
+            } else {
+                "text"
+            }
+        ))
+        .bind(id)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut last = read().await;
+    loop {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let next = read().await;
+        if next == last {
+            return next;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "dirty-path rows never settled"
+        );
+        last = next;
+    }
+}
+
+#[tokio::test]
+async fn repo_poller_writes_only_when_git_status_changes() {
+    let h = Harness::new().await;
+    let repo_path = h.state.repos_root.join("quiet");
+    init_git_repo(&repo_path);
+    std::fs::write(repo_path.join("scratch.txt"), "draft\n").unwrap();
+    h.state.repo_state.sync_repos_once().await.unwrap();
+    h.state.repo_state.reconcile_due_once(4).await.unwrap();
+
+    let before = dirty_path_xmins(&h.state.pool, "repo_dirty_paths", "repo_name", "quiet").await;
+    assert_eq!(before.len(), 1, "scratch.txt is untracked: {before:?}");
+    let (started_before, revision_before): (Option<chrono::DateTime<chrono::Utc>>, i64) =
+        sqlx::query_as(
+            "SELECT status_started_at, git_revision FROM repo_runtime_state WHERE repo_name = 'quiet'",
+        )
+        .fetch_one(&h.state.pool)
+        .await
+        .unwrap();
+
+    // Nothing changed: the cycle reschedules and leaves every row alone.
+    h.state.repo_state.request_refresh("quiet").await.unwrap();
+    h.state.repo_state.reconcile_due_once(4).await.unwrap();
+    let after = dirty_path_xmins(&h.state.pool, "repo_dirty_paths", "repo_name", "quiet").await;
+    assert_eq!(after, before, "unchanged status rewrote dirty-path rows");
+    let (started_after, revision_after, next_due_in_future): (
+        Option<chrono::DateTime<chrono::Utc>>,
+        i64,
+        bool,
+    ) = sqlx::query_as(
+        "SELECT status_started_at, git_revision, next_status_at > NOW() \
+           FROM repo_runtime_state WHERE repo_name = 'quiet'",
+    )
+    .fetch_one(&h.state.pool)
+    .await
+    .unwrap();
+    assert_eq!(started_after, started_before);
+    assert_eq!(revision_after, revision_before);
+    assert!(next_due_in_future, "unchanged repo was not rescheduled");
+
+    // A change rewrites the rows and bumps the revision.
+    std::fs::write(repo_path.join("scratch.txt"), "draft two\n").unwrap();
+    std::fs::write(repo_path.join("more.txt"), "x\n").unwrap();
+    h.state.repo_state.request_refresh("quiet").await.unwrap();
+    h.state.repo_state.reconcile_due_once(4).await.unwrap();
+    let changed = dirty_path_xmins(&h.state.pool, "repo_dirty_paths", "repo_name", "quiet").await;
+    assert_eq!(changed.len(), 2);
+    assert!(changed
+        .iter()
+        .all(|(_, xmin)| before.iter().all(|(_, b)| b != xmin)));
+    let (revision_changed,): (i64,) =
+        sqlx::query_as("SELECT git_revision FROM repo_runtime_state WHERE repo_name = 'quiet'")
+            .fetch_one(&h.state.pool)
+            .await
+            .unwrap();
+    assert_eq!(revision_changed, revision_before + 1);
+}
+
+#[tokio::test]
+async fn workspace_poller_writes_only_when_git_status_changes() {
+    let h = Harness::new().await;
+    let repo_path = h.state.repos_root.join("app");
+    init_git_repo(&repo_path);
+    let created = common::create_session(
+        &h.client,
+        &h.base,
+        json!({ "repo": "app", "workspace_mode": "isolated" }),
+    )
+    .await;
+    let session_id = created["id"].as_str().unwrap().parse::<Uuid>().unwrap();
+    let workspace_id = created["workspace"]["id"].as_str().unwrap().to_string();
+    let workspace_path = PathBuf::from(created["workspace"]["path"].as_str().unwrap());
+    std::fs::write(workspace_path.join("agent.txt"), "changed\n").unwrap();
+    let id: Uuid = workspace_id.parse().unwrap();
+    h.state.workspace_state.request_refresh(id).await.unwrap();
+    h.state.workspace_state.reconcile_due_once(4).await.unwrap();
+
+    let before = dirty_path_xmins(
+        &h.state.pool,
+        "workspace_dirty_paths",
+        "workspace_id",
+        &workspace_id,
+    )
+    .await;
+    assert_eq!(before.len(), 1, "{before:?}");
+    h.state.workspace_state.request_refresh(id).await.unwrap();
+    h.state.workspace_state.reconcile_due_once(4).await.unwrap();
+    let after = dirty_path_xmins(
+        &h.state.pool,
+        "workspace_dirty_paths",
+        "workspace_id",
+        &workspace_id,
+    )
+    .await;
+    assert_eq!(after, before, "unchanged status rewrote dirty-path rows");
+    let (rescheduled,): (bool,) =
+        sqlx::query_as("SELECT next_status_at > NOW() FROM workspaces WHERE id = $1")
+            .bind(id)
+            .fetch_one(&h.state.pool)
+            .await
+            .unwrap();
+    assert!(rescheduled);
+
+    // An untracked file's content is not part of the status fingerprint;
+    // a new path is.
+    std::fs::write(workspace_path.join("second.txt"), "x\n").unwrap();
+    h.state.workspace_state.request_refresh(id).await.unwrap();
+    h.state.workspace_state.reconcile_due_once(4).await.unwrap();
+    let changed = dirty_path_xmins(
+        &h.state.pool,
+        "workspace_dirty_paths",
+        "workspace_id",
+        &workspace_id,
+    )
+    .await;
+    assert_ne!(
+        changed, before,
+        "changed status did not rewrite dirty-path rows"
+    );
+
+    common::delete_node_session(&h.state, session_id).await;
 }
 
 fn init_git_repo(path: &Path) {

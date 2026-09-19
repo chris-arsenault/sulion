@@ -73,26 +73,34 @@ impl RepoStateManager {
     pub async fn sync_repos_once(&self) -> anyhow::Result<()> {
         let _lifecycle_guard = self.lifecycle_gate.read().await;
         let repos = discover_repo_dirs(&self.repos_root).await?;
+        let names: Vec<&str> = repos.iter().map(|(name, _)| name.as_str()).collect();
         let mut tx = self.pool.begin().await.context("begin repo state sync")?;
-        sqlx::query("UPDATE repo_runtime_state SET exists = FALSE, updated_at = NOW()")
-            .execute(&mut *tx)
-            .await
-            .context("mark repos absent")?;
-        for (name, path) in repos {
+        // This runs every 30 seconds for every repo; a row is written only
+        // when the scan disagrees with it. A repo that vanished is marked
+        // absent, a new or moved one is upserted, and a known one in place
+        // is left untouched.
+        sqlx::query(
+            "UPDATE repo_runtime_state SET exists = FALSE, updated_at = NOW() \
+              WHERE exists = TRUE AND repo_name <> ALL($1)",
+        )
+        .bind(&names)
+        .execute(&mut *tx)
+        .await
+        .context("mark repos absent")?;
+        for (name, path) in &repos {
             sqlx::query(
                 "INSERT INTO repo_runtime_state (repo_name, path, exists, next_status_at, updated_at) \
                  VALUES ($1, $2, TRUE, NOW(), NOW()) \
                  ON CONFLICT (repo_name) DO UPDATE SET \
                    path = EXCLUDED.path, \
                    exists = TRUE, \
-                   next_status_at = LEAST(repo_runtime_state.next_status_at, NOW()), \
-                   next_git_activity_at = CASE \
-                     WHEN repo_runtime_state.path IS DISTINCT FROM EXCLUDED.path THEN NOW() \
-                     ELSE repo_runtime_state.next_git_activity_at \
-                   END, \
-                   updated_at = NOW()",
+                   next_status_at = NOW(), \
+                   next_git_activity_at = NOW(), \
+                   updated_at = NOW() \
+                 WHERE repo_runtime_state.exists = FALSE \
+                    OR repo_runtime_state.path IS DISTINCT FROM EXCLUDED.path",
             )
-            .bind(&name)
+            .bind(name)
             .bind(path.to_string_lossy().as_ref())
             .execute(&mut *tx)
             .await
@@ -216,19 +224,37 @@ impl RepoStateManager {
         Ok(())
     }
 
+    /// Refresh one repo's status. `git status` runs every cycle, but the
+    /// database is written in proportion to what changed: an unchanged
+    /// fingerprint costs one update of the schedule columns, and only a
+    /// change rewrites the dirty-path rows and the status row. The
+    /// pollers are the steadiest writers in the system, so a quiet repo
+    /// must be nearly free.
     async fn reconcile_repo_inner(&self, name: &str, path: &Path) -> anyhow::Result<()> {
-        sqlx::query(
-            "UPDATE repo_runtime_state \
-                SET status_started_at = NOW(), status_error = NULL, updated_at = NOW() \
-              WHERE repo_name = $1",
-        )
-        .bind(name)
-        .execute(&self.pool)
-        .await
-        .with_context(|| format!("mark repo reconcile started for {name}"))?;
-
         let status = git::read_status(path.to_path_buf()).await?;
         let fingerprint = status_fingerprint(&status);
+        let stored: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT dirty_fingerprint FROM repo_runtime_state WHERE repo_name = $1")
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await
+                .with_context(|| format!("load stored fingerprint for {name}"))?;
+        if stored.and_then(|(stored,)| stored).as_deref() == Some(fingerprint.as_str()) {
+            sqlx::query(
+                "UPDATE repo_runtime_state \
+                    SET status_finished_at = NOW(), \
+                        next_status_at = NOW() + make_interval(secs => $2), \
+                        status_error = NULL \
+                  WHERE repo_name = $1",
+            )
+            .bind(name)
+            .bind(REPO_STATUS_CADENCE_SECS)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("reschedule unchanged repo {name}"))?;
+            return Ok(());
+        }
+
         let recent_commits_json =
             serde_json::to_value(&status.recent_commits).context("serialize recent commits")?;
         let last = status.last_commit.as_ref();
@@ -274,6 +300,7 @@ impl RepoStateManager {
                     dirty_count = $8, \
                     untracked_count = $9, \
                     dirty_fingerprint = $2, \
+                    status_started_at = NOW(), \
                     status_finished_at = NOW(), \
                     next_status_at = NOW() + make_interval(secs => $10), \
                     status_error = NULL, \

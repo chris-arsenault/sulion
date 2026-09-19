@@ -19,6 +19,16 @@ All notable user-visible changes to Sulion are recorded here.
   iterations, since neither harness writes a reason. *Continue* accepts the
   new model; *Dismiss* keeps the previous one expected, so restoring it by
   hand is recorded without being enforced.
+- Fixed the repo and workspace status pollers rewriting the database every
+  30 seconds whether or not anything changed. Each cycle deleted and
+  reinserted the dirty-path rows and updated the status row two or three
+  times through an indexed column, which on a quiet system produced tens
+  of gigabytes of write-ahead log a day, bloated a 55-row table to 184 MB,
+  and kept autovacuum running continuously. A cycle whose `git status`
+  fingerprint matches the stored one now writes only its next due time,
+  and the schedule indexes are dropped so that write stays heap-only.
+  Reclaiming the existing bloat needs a one-time `VACUUM FULL` on
+  `repo_runtime_state` and `workspaces`.
 - Fixed shell and script tokens being recorded as touched files. The
   file-touch extractor split a tool's command text on whitespace and kept
   any token containing a dot or slash, so `2>/dev/null`, `*.cs`,

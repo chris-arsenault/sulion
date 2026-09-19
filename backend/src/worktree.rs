@@ -150,12 +150,20 @@ impl WorkspaceManager {
 
         match existing {
             Some((id,)) => {
+                // The node re-ensures every main workspace every 30
+                // seconds. Only a change to what this call knows — path,
+                // branch, head, state, or an unset owner — earns a write;
+                // an unchanged workspace keeps its regular status cadence.
                 sqlx::query(
                     "UPDATE workspaces \
                         SET path = $2, branch_name = $3, base_ref = $3, base_sha = $4, \
                             merge_target = $3, state = 'active', next_status_at = NOW(), \
                             node_id = COALESCE(node_id, $5), updated_at = NOW() \
-                      WHERE id = $1",
+                      WHERE id = $1 \
+                        AND ROW(path, branch_name, base_ref, base_sha, merge_target, state, \
+                                node_id) \
+                            IS DISTINCT FROM \
+                            ROW($2, $3, $3, $4, $3, 'active', COALESCE(node_id, $5))",
                 )
                 .bind(id)
                 .bind(repo_path.to_string_lossy().as_ref())
@@ -515,18 +523,32 @@ impl WorkspaceManager {
             return Ok(());
         }
 
-        sqlx::query(
-            "UPDATE workspaces \
-                SET status_started_at = NOW(), status_error = NULL, updated_at = NOW() \
-              WHERE id = $1",
-        )
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .with_context(|| format!("mark workspace reconcile started for {id}"))?;
-
+        // Same shape as the repo poller: `git status` every cycle, a
+        // database write only in proportion to what changed.
         let status = git::read_status(path.to_path_buf()).await?;
         let fingerprint = status_fingerprint(&status);
+        let stored: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT dirty_fingerprint FROM workspaces WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await
+                .with_context(|| format!("load stored fingerprint for workspace {id}"))?;
+        if stored.and_then(|(stored,)| stored).as_deref() == Some(fingerprint.as_str()) {
+            sqlx::query(
+                "UPDATE workspaces \
+                    SET status_finished_at = NOW(), \
+                        next_status_at = NOW() + make_interval(secs => $2), \
+                        status_error = NULL \
+                  WHERE id = $1",
+            )
+            .bind(id)
+            .bind(WORKSPACE_STATUS_CADENCE_SECS)
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("reschedule unchanged workspace {id}"))?;
+            return Ok(());
+        }
+
         let recent_commits_json =
             serde_json::to_value(&status.recent_commits).context("serialize recent commits")?;
         let last = status.last_commit.as_ref();
@@ -576,6 +598,7 @@ impl WorkspaceManager {
                     dirty_count = $8, \
                     untracked_count = $9, \
                     dirty_fingerprint = $2, \
+                    status_started_at = NOW(), \
                     status_finished_at = NOW(), \
                     next_status_at = NOW() + make_interval(secs => $10), \
                     status_error = NULL, \
