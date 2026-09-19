@@ -401,12 +401,12 @@ sleep 5
         .unwrap();
         make_executable(&codex_script);
 
-        let mut child = StdCommand::new(&codex_script)
-            .arg(&lock_path)
-            .env(LAUNCH_ID_ENV, launch_id.to_string())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
+        let mut child = spawn_script(
+            StdCommand::new(&codex_script)
+                .arg(&lock_path)
+                .env(LAUNCH_ID_ENV, launch_id.to_string())
+                .stdout(std::process::Stdio::piped()),
+        );
 
         let mut stdout = child.stdout.take().unwrap();
         let mut buf = [0u8; 6];
@@ -471,14 +471,14 @@ sleep 5
         make_executable(&middle_script);
         make_executable(&writer_script);
 
-        let mut child = StdCommand::new(&root_script)
-            .arg(&middle_script)
-            .arg(&writer_script)
-            .arg(&rollout_path)
-            .env(LAUNCH_ID_ENV, launch_id.to_string())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
+        let mut child = spawn_script(
+            StdCommand::new(&root_script)
+                .arg(&middle_script)
+                .arg(&writer_script)
+                .arg(&rollout_path)
+                .env(LAUNCH_ID_ENV, launch_id.to_string())
+                .stdout(std::process::Stdio::piped()),
+        );
 
         let mut stdout = child.stdout.take().unwrap();
         let mut buf = [0u8; 6];
@@ -534,6 +534,24 @@ sleep 5
         let mut perms = std::fs::metadata(path).unwrap().permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(path, perms).unwrap();
+    }
+
+    /// Spawn a script this test just wrote. Tests run in parallel threads,
+    /// and a fork on another thread inherits our write handle until its
+    /// exec, so an immediate exec of the file can fail with ETXTBSY. The
+    /// window is microseconds; retry rather than serialise the suite.
+    fn spawn_script(cmd: &mut StdCommand) -> std::process::Child {
+        let mut attempts = 0;
+        loop {
+            match cmd.spawn() {
+                Ok(child) => return child,
+                Err(err) if err.raw_os_error() == Some(libc::ETXTBSY) && attempts < 50 => {
+                    attempts += 1;
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("spawn test script: {err}"),
+            }
+        }
     }
 
     fn kill_children(pid: u32) {
