@@ -19,6 +19,14 @@ All notable user-visible changes to Sulion are recorded here.
   iterations, since neither harness writes a reason. *Continue* accepts the
   new model; *Dismiss* keeps the previous one expected, so restoring it by
   hand is recorded without being enforced.
+- Fixed a long-running turn rewriting megabytes per event. The ingester
+  re-upserts a live turn's row on every tick that appends to it, and the
+  row carried a whole-turn JSON copy that nothing read, next to the
+  regenerated markdown. A 2 MB turn rewrote about 3.5 MB of TOAST per
+  event, the largest write-ahead-log source in the system. The unread
+  column is dropped, and a session that keeps growing is now projected at
+  most once every 5 seconds; a session that stops growing is projected on
+  the next tick, so a finished turn still shows within a second.
 - Fixed the repo and workspace status pollers rewriting the database every
   30 seconds whether or not anything changed. Each cycle deleted and
   reinserted the dirty-path rows and updated the status row two or three

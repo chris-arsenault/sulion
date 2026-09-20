@@ -19,6 +19,22 @@ Claude and Codex write into the same canonical event model, share
 one ingester receives both read-only transcript roots. Splitting by agent
 family would duplicate ownership without buying failure isolation.
 
+## Live projection cadence
+
+The ingester polls transcripts every 500 ms and re-derives a session's
+timeline projection from the turn that grew. A live turn is re-upserted
+whole, and a long turn's markdown and chunks run to megabytes, so projecting
+on every tick would rewrite that payload once per appended event. While a
+session keeps growing it is therefore projected at most once every 5 seconds
+(`LIVE_PROJECTION_DEBOUNCE`); the first tick after it stops growing projects
+it regardless, so a finished turn shows within a tick. The debounce is a
+config value that defaults to zero, which the tests rely on; the ingester
+and standalone binaries pass the 5-second interval.
+
+`timeline_turns` stores no whole-turn JSON. Turn detail is served from
+`chunks_json` and `timeline_operations`; retrieval reads `markdown`; every
+rebuild derives from `events.payload`.
+
 ## Usage accounting
 
 Codex spend uses deduplicated `token_usage_record.payload.usage` responses,

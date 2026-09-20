@@ -23,6 +23,9 @@ mod usage_records;
 #[path = "ingester_integration/model_switches.rs"]
 mod model_switches;
 
+#[path = "ingester_integration/projection_debounce.rs"]
+mod projection_debounce;
+
 fn test_db_url() -> Option<String> {
     std::env::var("SULION_TEST_DB").ok()
 }

@@ -1079,31 +1079,6 @@ async fn timeline_returns_projected_turns() {
         .await
         .unwrap();
 
-    sqlx::query(
-        "UPDATE timeline_turns \
-            SET turn_json = $2 \
-          WHERE session_uuid = $1",
-    )
-    .bind(session_uuid)
-    .bind(json!({
-        "id": 999,
-        "preview": "stale turn json",
-        "user_prompt_text": "wrong prompt",
-        "start_timestamp": "2025-01-01T00:00:00Z",
-        "end_timestamp": "2025-01-01T00:00:00Z",
-        "duration_ms": 0,
-        "event_count": 0,
-        "operation_count": 0,
-        "tool_pairs": [],
-        "thinking_count": 0,
-        "has_errors": false,
-        "markdown": "wrong",
-        "chunks": [],
-    }))
-    .execute(&h.state.pool)
-    .await
-    .unwrap();
-
     let response = h
         .client
         .get(format!("{}/api/sessions/{}/timeline", h.base, pty_id))
@@ -2187,8 +2162,8 @@ async fn submitted_prompts_reconcile_against_timeline_turns() {
         "INSERT INTO timeline_turns \
             (session_uuid, turn_id, turn_ord, preview, user_prompt_text, start_timestamp, \
              end_timestamp, duration_ms, event_count, operation_count, thinking_count, \
-             markdown, turn_json) \
-         VALUES ($1, 100, 0, 'fix the build', 'fix the  build', NOW(), NOW(), 0, 1, 0, 0, '', '{}')",
+             markdown) \
+         VALUES ($1, 100, 0, 'fix the build', 'fix the  build', NOW(), NOW(), 0, 1, 0, 0, '')",
     )
     .bind(session)
     .execute(&h.state.pool)

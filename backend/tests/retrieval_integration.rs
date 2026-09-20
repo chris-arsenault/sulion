@@ -941,13 +941,12 @@ async fn seed_retrieval_fixture(pool: &db::Pool) -> Uuid {
     sqlx::query(
         "INSERT INTO timeline_turns \
             (session_uuid, turn_id, turn_ord, preview, user_prompt_text, start_timestamp, end_timestamp, \
-             duration_ms, event_count, operation_count, thinking_count, has_errors, markdown, turn_json, chunks_json) \
+             duration_ms, event_count, operation_count, thinking_count, has_errors, markdown, chunks_json) \
          VALUES ($1, 10, 0, 'retrieval work', 'build retrieval', $2, $2, 0, 1, 1, 0, false, \
-                 'The retrieval api should find assistant evidence by repo.', $3, '[]'::jsonb)",
+                 'The retrieval api should find assistant evidence by repo.', '[]'::jsonb)",
     )
     .bind(session_uuid)
     .bind(now)
-    .bind(json!({ "id": 10 }))
     .execute(pool)
     .await
     .unwrap();

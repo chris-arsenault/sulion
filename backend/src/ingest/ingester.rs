@@ -46,6 +46,36 @@ const HEARTBEAT_EVERY: Duration = Duration::from_secs(60);
 /// stalled ingester.
 const CATCHUP_JOB_THRESHOLD: usize = 10;
 
+/// How long a session's timeline projection may lag behind its transcript
+/// while events keep arriving. A live turn is re-upserted whole on every
+/// projection, and a long turn's markdown and chunks run to megabytes, so
+/// projecting on every 500 ms tick rewrites that payload once per event.
+/// With a debounce, a stream of events costs one rewrite per interval; a
+/// session that goes quiet is projected on the next tick regardless, so a
+/// finished turn shows within a tick.
+pub const LIVE_PROJECTION_DEBOUNCE: Duration = Duration::from_secs(5);
+
+/// Projection work owed to a session after its transcript grew.
+#[derive(Debug, Clone, Copy)]
+struct PendingProjection {
+    source: TranscriptSource,
+    /// Lowest offset inserted since the last projection: the incremental
+    /// rebuild re-derives from the turn containing it.
+    first_inserted_offset: i64,
+    /// The file is a subagent transcript, so the parent's projection
+    /// follows the child's.
+    has_subagent_parent: bool,
+    /// Grew during the current tick. Cleared at the end of each tick so
+    /// a session that stops growing flushes on the next one.
+    touched_this_tick: bool,
+}
+
+#[derive(Debug, Default)]
+struct ProjectionState {
+    last_projected_at: Option<Instant>,
+    pending: Option<PendingProjection>,
+}
+
 use super::tail::{next_line_boundary, MAX_READ_BYTES};
 
 #[derive(Debug, Clone)]
@@ -53,6 +83,10 @@ pub struct IngesterConfig {
     pub claude_projects_dir: PathBuf,
     pub codex_sessions_dir: Option<PathBuf>,
     pub poll_interval: Duration,
+    /// Minimum interval between projections of one session while it keeps
+    /// growing. Zero projects on every tick, which tests rely on; the
+    /// binaries pass [`LIVE_PROJECTION_DEBOUNCE`].
+    pub projection_debounce: Duration,
 }
 
 impl IngesterConfig {
@@ -61,11 +95,17 @@ impl IngesterConfig {
             claude_projects_dir,
             codex_sessions_dir: None,
             poll_interval: Duration::from_millis(500),
+            projection_debounce: Duration::ZERO,
         }
     }
 
     pub fn with_codex_sessions_dir(mut self, codex_sessions_dir: PathBuf) -> Self {
         self.codex_sessions_dir = Some(codex_sessions_dir);
+        self
+    }
+
+    pub fn with_projection_debounce(mut self, debounce: Duration) -> Self {
+        self.projection_debounce = debounce;
         self
     }
 }
@@ -98,6 +138,8 @@ pub struct Ingester {
     catchup_jobs:
         tokio::sync::Mutex<std::collections::HashMap<&'static str, super::jobs::JobHandle>>,
     interrupted_stale_jobs: std::sync::atomic::AtomicBool,
+    /// Per-session projection timing and deferred work, for the debounce.
+    projections: tokio::sync::Mutex<std::collections::HashMap<Uuid, ProjectionState>>,
 }
 
 impl Ingester {
@@ -228,14 +270,100 @@ impl Ingester {
             pool,
             &cfg.claude_projects_dir,
             TranscriptSource::ClaudeCode,
+            cfg.projection_debounce,
             &mut summary,
         )
         .await;
         if let Some(codex_dir) = &cfg.codex_sessions_dir {
-            self.tick_root(pool, codex_dir, TranscriptSource::Codex, &mut summary)
-                .await;
+            self.tick_root(
+                pool,
+                codex_dir,
+                TranscriptSource::Codex,
+                cfg.projection_debounce,
+                &mut summary,
+            )
+            .await;
         }
+        self.flush_projections(pool, cfg.projection_debounce).await;
         Ok(summary)
+    }
+
+    /// Project the session now, or fold the work into what it already
+    /// owes when it was projected less than `debounce` ago.
+    async fn schedule_projection(
+        &self,
+        pool: &Pool,
+        session_uuid: Uuid,
+        pending: PendingProjection,
+        debounce: Duration,
+    ) {
+        let deferred = {
+            let mut projections = self.projections.lock().await;
+            let state = projections.entry(session_uuid).or_default();
+            let recent = state
+                .last_projected_at
+                .is_some_and(|at| at.elapsed() < debounce);
+            if recent {
+                state.pending = Some(match state.pending {
+                    Some(existing) => PendingProjection {
+                        first_inserted_offset: existing
+                            .first_inserted_offset
+                            .min(pending.first_inserted_offset),
+                        has_subagent_parent: existing.has_subagent_parent
+                            || pending.has_subagent_parent,
+                        touched_this_tick: true,
+                        ..pending
+                    },
+                    None => pending,
+                });
+                true
+            } else {
+                state.last_projected_at = Some(Instant::now());
+                state.pending = None;
+                false
+            }
+        };
+        if !deferred {
+            project_session(pool, session_uuid, pending).await;
+        }
+    }
+
+    /// End of tick: project every deferred session whose interval has
+    /// passed or that received nothing this tick, and forget sessions
+    /// that have been idle for a long time.
+    async fn flush_projections(&self, pool: &Pool, debounce: Duration) {
+        let due: Vec<(Uuid, PendingProjection)> = {
+            let mut projections = self.projections.lock().await;
+            let mut due = Vec::new();
+            for (session_uuid, state) in projections.iter_mut() {
+                let Some(pending) = state.pending else {
+                    continue;
+                };
+                let interval_passed = state
+                    .last_projected_at
+                    .is_none_or(|at| at.elapsed() >= debounce);
+                if interval_passed || !pending.touched_this_tick {
+                    state.pending = None;
+                    state.last_projected_at = Some(Instant::now());
+                    due.push((*session_uuid, pending));
+                } else {
+                    state.pending = Some(PendingProjection {
+                        touched_this_tick: false,
+                        ..pending
+                    });
+                }
+            }
+            projections.retain(|_, state| {
+                state.pending.is_some()
+                    || state
+                        .last_projected_at
+                        .is_some_and(|at| at.elapsed() < Duration::from_secs(3600))
+            });
+            due
+        };
+        for (session_uuid, pending) in due {
+            project_session(pool, session_uuid, pending).await;
+        }
     }
 
     async fn tick_root(
@@ -243,6 +371,7 @@ impl Ingester {
         pool: &Pool,
         root: &Path,
         source: TranscriptSource,
+        debounce: Duration,
         summary: &mut TickSummary,
     ) {
         if !root.exists() {
@@ -283,6 +412,10 @@ impl Ingester {
                             committed_offset = file_result.committed_offset,
                             "ingested events from file",
                         );
+                    }
+                    if let Some(pending) = file_result.projection {
+                        self.schedule_projection(pool, file.session_uuid, pending, debounce)
+                            .await;
                     }
                 }
                 Err(err) => {
@@ -362,6 +495,9 @@ struct FileResult {
     events_inserted: u64,
     parse_errors: u64,
     committed_offset: i64,
+    /// Set when events were inserted: the projection this file's session
+    /// now owes, scheduled by the caller under the debounce.
+    projection: Option<PendingProjection>,
 }
 
 #[derive(Debug, Clone)]
@@ -512,15 +648,30 @@ async fn process_file(
         result.committed_offset = next_committed;
     }
     if let Some(first_inserted_offset) = first_inserted_offset {
-        rebuild_projections_after_insert(pool, file.session_uuid, source, first_inserted_offset)
-            .await;
-        // Subagent events surface in the parent's timeline (subagent
-        // modal, badges), so the parent's projection must follow.
-        if file.subagent_parent.is_some() {
-            rebuild_ancestor_projections(pool, file.session_uuid, source).await;
-        }
+        result.projection = Some(PendingProjection {
+            source,
+            first_inserted_offset,
+            has_subagent_parent: file.subagent_parent.is_some(),
+            touched_this_tick: true,
+        });
     }
     Ok(result)
+}
+
+/// Bring a session's timeline projection up to date with its transcript.
+async fn project_session(pool: &Pool, session_uuid: Uuid, pending: PendingProjection) {
+    rebuild_projections_after_insert(
+        pool,
+        session_uuid,
+        pending.source,
+        pending.first_inserted_offset,
+    )
+    .await;
+    // Subagent events surface in the parent's timeline (subagent modal,
+    // badges), so the parent's projection must follow.
+    if pending.has_subagent_parent {
+        rebuild_ancestor_projections(pool, session_uuid, pending.source).await;
+    }
 }
 
 /// Best-effort read of the spawn linkage from the transcript's sibling

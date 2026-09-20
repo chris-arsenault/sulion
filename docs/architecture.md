@@ -401,4 +401,4 @@ Kept because it still explains *why* the shape is what it is. Removed when it no
 - **Web frontend, not native.** Zero-install on any LAN device beats the small latency edge a native terminal would give.
 - **PTY runs a general shell.** Lets the user navigate, clone, run `claude --resume` manually. The PTY is the workbench.
 - **Postgres, not SQLite.** The ahara ecosystem runs a shared TrueNAS Postgres; sulion joins it rather than running a sidecar.
-- **Polling, not `LISTEN`/`NOTIFY`.** Claude responses span minutes; 1–2s timeline lag is imperceptible.
+- **Polling, not `LISTEN`/`NOTIFY`.** Claude responses span minutes; 1–2s timeline lag is imperceptible, and a turn that is still streaming tolerates up to 5s (see [ingestion.md](ingestion.md#live-projection-cadence)).
