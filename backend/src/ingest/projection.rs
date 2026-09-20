@@ -302,6 +302,11 @@ pub async fn backfill_timeline_projection(
                FROM claude_sessions cs \
               WHERE cs.parent_session_uuid IS NOT NULL \
              UNION \
+             SELECT DISTINCT tt.session_uuid \
+               FROM timeline_turns tt \
+              WHERE tt.markdown LIKE '%```%' OR tt.markdown LIKE '%_Result_%' \
+                 OR tt.markdown LIKE '%_Result (error)_%' \
+             UNION \
              SELECT DISTINCT tf.session_uuid \
                FROM timeline_file_touches tf \
               WHERE tf.repo_rel_path !~ '^[A-Za-z0-9_./+@-]+$' \

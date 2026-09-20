@@ -28,7 +28,9 @@ const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // v9: file touches no longer tokenise a command snippet that already
 // carries structured edits, and only path-shaped tokens count; every
 // session is reprojected to drop the program-text touch rows.
-const TIMELINE_PROJECTION_VERSION: i32 = 9;
+// v10: the turn digest (`markdown`) no longer embeds tool inputs, diffs,
+// or result bodies; every session is reprojected so stored digests match.
+const TIMELINE_PROJECTION_VERSION: i32 = 10;
 const USAGE_PROJECTION_KEY: &str = "usage_projection";
 // v2: include Codex per-response usage, including compaction, and retain the
 // legacy prefix before a session first supplies response records.

@@ -1,3 +1,14 @@
+//! The turn digest: the readable record of a turn stored in
+//! `timeline_turns.markdown`, served to agents by `sulion-retrieve turn`
+//! and offered as "copy turn as markdown" in the timeline.
+//!
+//! It holds the prompt, every assistant text block, and one header line
+//! per tool call naming the tool and its one-line summary. Tool inputs,
+//! diffs, and result bodies are deliberately not part of it: they already
+//! live in `timeline_operations` and `event_blocks`, where the turn-detail
+//! API and search read them, and a digest that embedded them ran to tens
+//! of kilobytes per turn and was rewritten every time a live turn grew.
+
 use std::collections::HashMap;
 
 use serde_json::Value;
@@ -78,20 +89,15 @@ fn format_prompt(text: &str) -> String {
     format!("**Prompt**\n\n{quoted}")
 }
 
+/// One line per tool call: the operation, its one-line summary, and its
+/// pending or error state.
 fn format_tool_pair_markdown(pair: &TimelineToolPair) -> String {
-    let header = format!(
+    format!(
         "**Tool:** `{}`{}{}",
-        pair.operation_type.as_deref().unwrap_or(pair.name.as_str()),
+        pair_operation_type(pair),
         tool_one_line(pair),
         tool_status(pair)
-    );
-    let input = format_tool_input(pair);
-    let result = format_tool_result(pair);
-    [Some(header), input, result]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    )
 }
 
 fn tool_status(pair: &TimelineToolPair) -> String {
@@ -144,164 +150,6 @@ fn tool_one_line(pair: &TimelineToolPair) -> String {
     }
 }
 
-fn format_tool_input(pair: &TimelineToolPair) -> Option<String> {
-    let input = pair.input.as_ref()?;
-    // Anything that canonicalised to `file_edits` renders the same —
-    // tool-agnostic. Claude Edit / MultiEdit, codex apply_patch, and
-    // any future tool all land here.
-    if let Some(rendered) = format_file_edits_input(input) {
-        return Some(rendered);
-    }
-    if let Some(command) = input
-        .as_object()
-        .and_then(|obj| obj.get("command").or_else(|| obj.get("cmd")))
-        .and_then(Value::as_str)
-        .filter(|command| !command.is_empty())
-    {
-        return Some(fence("bash", command.to_string()));
-    }
-    match pair_operation_type(pair) {
-        "write" => format_write_input(input),
-        "bash" | "exec" | "exec_command" => None,
-        "todo_write" => {
-            let todos = input
-                .as_object()
-                .and_then(|obj| obj.get("todos"))
-                .and_then(Value::as_array)?;
-            if todos.is_empty() {
-                return None;
-            }
-            Some(
-                todos
-                    .iter()
-                    .filter_map(|todo| todo.as_object())
-                    .map(|todo| {
-                        let status = match todo.get("status").and_then(Value::as_str) {
-                            Some("completed") => "[x]",
-                            Some("in_progress") => "[~]",
-                            _ => "[ ]",
-                        };
-                        let content = todo
-                            .get("content")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default();
-                        format!("- {status} {content}")
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            )
-        }
-        _ => Some(fence(
-            "json",
-            serde_json::to_string_pretty(input).unwrap_or_else(|_| "{}".to_string()),
-        )),
-    }
-}
-
-fn format_file_edits_input(input: &Value) -> Option<String> {
-    let entries = input
-        .as_object()
-        .and_then(|obj| obj.get("file_edits"))
-        .and_then(Value::as_array)?;
-    if entries.is_empty() {
-        return None;
-    }
-    let chunks: Vec<String> = entries.iter().filter_map(render_file_edit_entry).collect();
-    if chunks.is_empty() {
-        None
-    } else {
-        Some(chunks.join("\n\n---\n\n"))
-    }
-}
-
-fn render_file_edit_entry(entry: &Value) -> Option<String> {
-    let obj = entry.as_object()?;
-    let path = obj
-        .get("path")
-        .and_then(Value::as_str)
-        .unwrap_or("(no path)");
-    let operation = obj
-        .get("operation")
-        .and_then(Value::as_str)
-        .unwrap_or("update");
-    let old_path = obj.get("old_path").and_then(Value::as_str);
-
-    let header = match (operation, old_path) {
-        ("move", Some(from)) => format!("**{operation}**: `{from}` → `{path}`"),
-        _ => format!("**{operation}**: `{path}`"),
-    };
-
-    let body = if let Some(in_out) = obj.get("in_out").and_then(Value::as_object) {
-        // `in_out` form (Claude Edit / MultiEdit and anything else
-        // that ships authoritative before/after strings): render as
-        // a reconstructed unified diff for the markdown surface.
-        let old_text = in_out
-            .get("old_text")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let new_text = in_out
-            .get("new_text")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if old_text.is_empty() && new_text.is_empty() {
-            return Some(header);
-        }
-        fence("diff", unified_diff(old_text, new_text))
-    } else if let Some(diff) = obj.get("diff").and_then(Value::as_str) {
-        // `diff` form (codex apply_patch): pass the patch text
-        // through verbatim, fenced as a diff.
-        if diff.trim().is_empty() {
-            return Some(header);
-        }
-        fence("diff", diff.to_string())
-    } else {
-        return Some(header);
-    };
-
-    Some(format!("{header}\n\n{body}"))
-}
-
-fn format_write_input(input: &Value) -> Option<String> {
-    let obj = input.as_object()?;
-    let content = obj
-        .get("content")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if content.is_empty() {
-        None
-    } else {
-        Some(fence("", content.to_string()))
-    }
-}
-
-fn format_tool_result(pair: &TimelineToolPair) -> Option<String> {
-    let result = pair.result.as_ref()?;
-    let body = result.content.as_deref().unwrap_or_default();
-    if body.is_empty() {
-        return None;
-    }
-    let label = if pair.is_error {
-        "Result (error)"
-    } else {
-        "Result"
-    };
-    Some(format!("_{label}_\n\n{}", fence("", body.to_string())))
-}
-
-fn unified_diff(old_text: &str, new_text: &str) -> String {
-    old_text
-        .lines()
-        .map(|line| format!("- {line}"))
-        .chain(new_text.lines().map(|line| format!("+ {line}")))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn fence(lang: &str, body: String) -> String {
-    let fence = if body.contains("```") { "````" } else { "```" };
-    format!("{fence}{lang}\n{body}\n{fence}")
-}
-
 pub(crate) fn truncate(text: &str, max: usize) -> String {
     let char_count = text.chars().count();
     if char_count <= max {
@@ -332,7 +180,10 @@ pub(crate) fn subagent_title(pair: &TimelineToolPair) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::truncate;
+    use serde_json::json;
+
+    use super::*;
+    use crate::ingest::timeline::TimelineToolResult;
 
     #[test]
     fn truncate_handles_multibyte_boundaries() {
@@ -340,5 +191,34 @@ mod tests {
         let truncated = truncate(&text, 1500);
         assert!(truncated.ends_with('…'));
         assert!(truncated.is_char_boundary(truncated.len()));
+    }
+
+    #[test]
+    fn tool_digest_is_one_header_line_without_input_or_result() {
+        let pair = TimelineToolPair {
+            id: "t1".to_string(),
+            name: "Edit".to_string(),
+            raw_name: None,
+            operation_type: Some("edit".to_string()),
+            category: None,
+            input: Some(json!({
+                "path": "src/lib.rs",
+                "file_edits": [{ "path": "src/lib.rs", "operation": "update",
+                    "in_out": { "old_text": "fn old() {}", "new_text": "fn main() {}" } }]
+            })),
+            result: Some(TimelineToolResult {
+                content: Some("edited 1 file; here is a long body".repeat(50)),
+                payload: None,
+                is_error: true,
+            }),
+            is_error: true,
+            is_pending: false,
+            file_touches: Vec::new(),
+            subagent: None,
+        };
+        let digest = format_tool_pair_markdown(&pair);
+        assert_eq!(digest, "**Tool:** `edit` `src/lib.rs` _(error)_");
+        assert!(!digest.contains("fn main"));
+        assert!(!digest.contains("long body"));
     }
 }

@@ -19,6 +19,14 @@ All notable user-visible changes to Sulion are recorded here.
   iterations, since neither harness writes a reason. *Continue* accepts the
   new model; *Dismiss* keeps the previous one expected, so restoring it by
   hand is recorded without being enforced.
+- Changed the turn digest that `sulion-retrieve turn` and "copy turn as
+  markdown" return. It now holds the prompt, the assistant's text, and one
+  header line per tool call; tool inputs, reconstructed diffs, and full
+  result bodies are no longer embedded. Those live in the operation rows
+  and event blocks the turn-detail view and search already read, and
+  embedding them made the average digest 48 kB and a long turn's over a
+  megabyte, rewritten every time the turn grew. Stored digests are
+  re-rendered on the next control start.
 - Fixed a long-running turn rewriting megabytes per event. The ingester
   re-upserts a live turn's row on every tick that appends to it, and the
   row carried a whole-turn JSON copy that nothing read, next to the

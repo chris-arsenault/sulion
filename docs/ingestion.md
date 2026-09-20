@@ -32,8 +32,11 @@ config value that defaults to zero, which the tests rely on; the ingester
 and standalone binaries pass the 5-second interval.
 
 `timeline_turns` stores no whole-turn JSON. Turn detail is served from
-`chunks_json` and `timeline_operations`; retrieval reads `markdown`; every
-rebuild derives from `events.payload`.
+`chunks_json` and `timeline_operations`; every rebuild derives from
+`events.payload`. `markdown` is the turn digest that `sulion-retrieve turn`
+returns: the prompt, the assistant's text blocks, and one header line per
+tool call. Tool inputs, diffs, and result bodies are not part of it; an
+agent that needs them reads the operation rows or restores the session.
 
 ## Usage accounting
 
