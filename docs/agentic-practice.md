@@ -29,8 +29,9 @@ carries compaction lineage, so a compacted child links back to the session it
 descends from.
 
 The timeline is the review surface: filterable by turn, tool category, error
-state, and file path, virtualized for sessions running to thousands of events,
-and exportable as markdown.
+state, and file path, virtualized for sessions running to thousands of events.
+Markdown export is a compact digest of prompt, assistant text, and tool
+headers; full tool detail remains in operation rows and canonical blocks.
 
 ## Retrieves from history instead of re-explaining it
 
@@ -40,7 +41,8 @@ command; the CLI supplies auth and context headers from the environment. Full
 contract in [`retrieval.md`](retrieval.md).
 
 Search results are curated rather than exhaustive. `include` defaults to
-assistant text. Tool traffic enters results only when asked for by category or
+assistant text; `--include user` is required to find the user's instructions.
+Tool traffic enters results only when asked for by category or
 name, and shell, edit-payload, and inspection mechanics stay behind
 `include_low_value=true`.
 
@@ -109,10 +111,11 @@ the system daemon. The node passes the socket and its numeric host GID only to
 the devenv containers it launches, so non-root PTY processes inherit access
 without a hard-coded group. The control plane never receives that socket.
 
-## Keeps sessions alive across everything
+## Preserves dedicated-node sessions across releases
 
 A PTY session is a long-lived shell on the server that survives client
-disconnect and ends on explicit delete, shell exit, or reboot.
+disconnect. Explicit deletion, shell exit, host failure, and toolset upgrade
+can end its shell.
 
 The devenv server owns the PTY masters and shadow emulators, dialing the node
 over a unix socket on the shared run volume. On the dedicated host it is a
@@ -121,7 +124,9 @@ leaves every shell running and the devenv redials the new node.
 
 The shadow `vt100` emulator is fed continuously whether or not a client is
 attached, which is what makes snapshot-on-connect land in a populated buffer.
-Attaching from a phone, laptop, or desktop mirrors the same live shell.
+Desktop terminal attachments mirror the same live shell. Mobile uses the
+timeline and prompt composer. In the combined standalone role, the devenv
+server is a child process and backend replacement ends its shells.
 
 Isolated workspaces bind a session to a Sulion-created Git worktree on its own
 branch, so parallel sessions in one repo work on separate checkouts.
@@ -136,6 +141,10 @@ with `sulion plan`. Phases carry a title, description, status, optional note,
 and t-shirt size. A plan attaches to multiple live PTYs, survives terminal exit,
 and stays in the repo's closed-plan history. It is the user-facing projection
 alongside whatever internal planning the agent does for itself.
+
+Branch plans attach to one or more parent phases. `sulion plan branch` moves
+the terminal to the sub-plan; `return` closes it and restores the parent
+attachment. Flow metrics count leaf phases and draw a burndown per root tree.
 
 **Terminal activity** answers what a PTY is doing now. `shell` and `starting`
 derive from the process; `working`, `awaiting_prompt`, `needs_input`, `blocked`,

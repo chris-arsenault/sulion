@@ -3,6 +3,14 @@
 Plan only. No code, schema, infrastructure, or database change has been made.
 Status: proposal awaiting the decisions marked `[DECISION]`.
 
+Documentation review, 2026-09-21: M0–M5 remain pending. The measured state below
+is the September 19 baseline, not a current database inventory. Since then,
+`94056c8` dropped the unused `timeline_turns.turn_json` column and `c3fe6a5`
+reduced markdown to prompt, assistant text, and tool headers. Both retain
+`events.payload`, the archive source. Re-measure digest size, table bloat, and
+post-purge estimates in M0; those changes do not implement archival or authorize
+purging, S3 publication, or maintenance.
+
 Revision 3 (2026-09-19). Revision 2 moved scope from JSONL files to the
 database. Revision 3 redefines what survives a purge from the user's side:
 what someone can still do with history older than the purge, and nothing
@@ -10,8 +18,8 @@ kept that does not serve one of those uses.
 
 ## Outcome and scope
 
-The `sulion` database is 30 GB and grows by about 1 GB of transcript
-payload a month, stored four times over across projections. This plan adds
+The September 19 sample measured a 30 GB database and roughly 1 GB of new
+transcript payload a month, with large derived copies. This proposal adds
 a control-plane archive cycle that:
 
 1. **Exports each idle session to S3** as one JSON-lines object
@@ -40,7 +48,7 @@ session's export is verified in S3 and its grace period has passed.
 | Use | Live history | Archived history |
 | --- | --- | --- |
 | `sulion-retrieve search` | hits on assistant/user text, tool calls, tool errors, with per-turn evidence | hits on turns: prompt and rendered markdown, lexical and semantic; evidence is the turn's file list |
-| `sulion-retrieve turn` | full markdown | full markdown, unchanged |
+| `sulion-retrieve turn` | compact turn digest | the same compact turn digest |
 | `sulion-retrieve file-history <path>` | every turn that touched the path, with preview and time | same, from the turn digest's file list |
 | Metrics: cost by day, repo, agent, model | from per-session daily rows | from the daily rollup, same numbers |
 | Metrics: file churn velocity | from per-turn touches | from the daily file-activity rollup; hotspots keep the 7-day live window |
@@ -49,10 +57,11 @@ session's export is verified in S3 and its grace period has passed.
 | `--resume` in the agent CLI | if the harness still has the file | no |
 | Anything else (tool output, thinking, operation-level search) | yes | restore the session first |
 
-The digest is what `sulion-retrieve turn` returns today: the prompt, every
-assistant text block, and a summary line per tool call (command, file, or
-reconstructed diff), rendered by `ingest/timeline/render.rs`. It is the
-readable record of a turn and is 1.0 GB across all history today.
+The digest is what `sulion-retrieve turn` returns: the prompt, every assistant
+text block, and one header per tool call, rendered by
+`ingest/timeline/render.rs`. It excludes tool inputs, reconstructed diffs, and
+result bodies. The September 19 measurement of 1.0 GB predates this reduction
+and must not be used as its current size.
 
 ## Why the database, not the files
 
@@ -68,7 +77,7 @@ Measured 2026-09-19:
   every reindex today.
 - The database is 30 GB; all JSONL on disk is 5.6 GB, 5.2 GB of it Codex.
 
-## Measured state
+## Measured state — 2026-09-19, before projection reductions
 
 Disk on the node: `~/.claude/projects` 384 MB (233 files),
 `~/.codex/sessions` 5.2 GB (1465 rollouts since April). `ingester_state`
@@ -156,7 +165,7 @@ Per archived session unless marked otherwise.
 
 | Table | Keep | Drop |
 | --- | --- | --- |
-| `timeline_turns` | `preview`, `user_prompt_text`, `markdown`, timestamps, `duration_ms`, counts, `has_errors`, tokens, sidechain flag, new `files_json` | `turn_json` (2.5 GB), `chunks_json` |
+| `timeline_turns` | `preview`, `user_prompt_text`, `markdown`, timestamps, `duration_ms`, counts, `has_errors`, tokens, sidechain flag, new `files_json` | `chunks_json`; `turn_json` was already dropped in `94056c8` |
 | `retrieval_embeddings`, `retrieval_embedding_sources` | new `turn_digest` sources, one per archived turn, embedding the markdown in chunks under the existing chunking rules | every block-level and operation-level source and embedding for the session |
 
 ### Purged entirely
@@ -196,11 +205,13 @@ excluded from the dump.
 
 ### What the database looks like after a full purge of everything older than the grace
 
-Digest markdown about 1 GB, turn-digest embeddings well under 1 GB, the two
-rollups and skeletons a few tens of MB, plus the live window (sessions
+The original estimate used digest markdown about 1 GB, turn-digest embeddings
+well under 1 GB, the two rollups and skeletons a few tens of MB, plus the live window (sessions
 younger than idle + grace, about 3 GB of payload and projections at
-today's rates). Roughly 5 to 6 GB of transcript history instead of 26 GB,
-and it stops growing with history.
+September 19 rates), giving roughly 5 to 6 GB of transcript history instead
+of 26 GB. Recompute this after the projection reductions. Digests, embeddings,
+rollups, and skeletons still grow with retained history; purging bounds the
+detailed live window, not the entire database.
 
 ## Design
 
@@ -250,7 +261,7 @@ implementations; tests use the directory.
    rollup rows and `files_json`; enqueue `turn_digest` embedding sources;
    delete the block and operation sources and embeddings; delete the
    per-session usage rows, touches, signals, operations, blocks, events,
-   switches, ingester state; null `turn_json` and `chunks_json`; set
+   switches, ingester state; null `chunks_json`; set
    `purged_at`. The retrieval indexer embeds the digests on its next drain.
 5. **Prune** by age; **manifest**; job complete with reclaimed bytes.
 
@@ -287,10 +298,11 @@ a concurrency bound.
 
 ### Bloat maintenance first
 
-About 3 GB of the 30 GB is dead space (`timeline_turns` ~2 GB TOAST,
-`retrieval_embeddings` ~1.2 GB, `repo_runtime_state` 184 MB heap for 55
-rows). `VACUUM (FULL)` on those three in a maintenance window recovers it
-with no row change; per-table autovacuum factors go in the M3 migration.
+The September 19 sample estimated about 3 GB of dead space (`timeline_turns`
+~2 GB TOAST, `retrieval_embeddings` ~1.2 GB, `repo_runtime_state` 184 MB heap for 55
+rows). Re-measure before requesting the maintenance window; the later column
+drop and re-render change this baseline. Any `VACUUM (FULL)` remains subject
+to decision 3 below. Per-table autovacuum factors are proposed for M3.
 
 ### Consequences to accept
 

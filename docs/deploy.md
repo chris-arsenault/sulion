@@ -28,13 +28,15 @@ The common graph now has eight runtime service roles:
 
 - `backend` — main API/control plane; also hosts the loopback runtime only in
   portable standalone mode
-- `node` — dedicated PTY, shadow-emulator, correlation, repo, worktree, file,
-  Git, upload, and direct-Docker runtime
+- `node` — dedicated PTY management, correlation, repo, worktree, file,
+  Git, upload, and direct-Docker runtime; launched devenv containers own shells
+  and shadow emulators
 - `ingester` — sole node-local Claude/Codex JSONL reader
 - `broker` — secret broker, separate container and UID
 - `retrieval` — agent-facing transcript/timeline retrieval API
 - `code-intel` — agent-facing structural source navigation API
-- `runner` — constrained Docker command broker, only service with the host Docker socket
+- `runner` — constrained Docker command broker and sole host-socket holder in
+  brokered standalone mode; absent from the direct-Docker dedicated role
 - `frontend` — static UI + reverse proxy
 
 `node`, `ingester`, code intelligence, and the constrained runner are
@@ -104,7 +106,12 @@ Push to `main`. The shared ahara CI workflow builds all Sulion images, pushes to
 1. Invokes `ahara-db-migrate-truenas` with `stack_name: "sulion"` → creates every registered Sulion database and publishes `/ahara/truenas-db/sulion/app/{username,password,url}` plus `/ahara/truenas-db/sulion/broker/{username,password,url}` to SSM.
 2. Runs `terraform apply` in [`infrastructure/terraform/`](</home/sulion/repos/sulion/infrastructure/terraform>) → creates the Sulion edge listener rules/certificate/DNS and Cognito app client, then publishes `/ahara/cognito/clients/sulion-app` plus `/ahara/auth-trigger/clients/sulion`.
 3. Creates (or reuses) the `sulion` Komodo stack pointed at this repo's `compose.yaml`.
-4. Resolves the SSM paths declared in [`secret-paths.yml`](</home/sulion/repos/sulion/secret-paths.yml>), sets them as Komodo stack env vars, and deploys.
+4. Resolves the public Cognito identifiers in [`secret-paths.yml`](../secret-paths.yml)
+   and deploys. Secret-bearing TrueNAS services enroll with their own workload
+   identities and read their database URL and service tokens from SSM at
+   startup; the paths are declared beside each service in Compose. The
+   dedicated node receives its shared configuration over the signed node
+   channel, not from deployment-injected secrets.
 5. Advances the `node-release` branch after the shared workflow succeeds. The
    root-owned timer on `sulion-enclave` first activates that commit's NixOS
    generation, then deploys the same commit's node, ingester, and
@@ -132,7 +139,7 @@ because a parent bind does not cross nested ZFS dataset mount points.
 Deploy `ahara-infra` before the first Sulion edge deployment so the internal
 nginx upstream, WireGuard ingress, and Sulion deployer permissions already
 exist. The production TrueNAS deploy replaces only control-plane services: a
-backend replacement drops browser attachments, while node-owned PTYs continue
+backend replacement drops browser attachments, while devenv-owned PTYs continue
 and reconnect. Switching to the combined role terminates PTYs owned by its
 combined backend. A node release also leaves shells running: PTY masters live
 in the devenv container (`sulion-devenv`, launched and adopted by the node,
@@ -143,6 +150,29 @@ The backend/control container owns the main `sulion` database migrations and
 Postgres-only startup repair. Node, ingester, retrieval, and code intelligence
 do not run the shared SQLx migrations; they wait in-app for the
 backend-applied migration set before starting their loops.
+
+## PTY and toolset releases
+
+`devenv` is a toolset-only image listed under `content_addressed_images` in
+`platform.yml`. Unchanged `devenv/` content reuses the image; backend-only
+releases do not replace the containers holding existing shells. The node keys
+containers by resolved image ID and starts new sessions on the current image.
+
+The node delivers `sulion-devenv` to a versioned path on `/run/sulion` when
+creating a container. It updates the separate `/run/sulion/bin/sulion` CLI
+symlink on every node start, including when it adopts an existing container.
+Running shells therefore pick up new CLI commands on their next invocation.
+
+Use **Upgrade toolset (restarts shell)** on one live session to move it to the
+current image. It starts a default shell with the same session ID and workspace;
+resume the agent separately. Non-current containers are removed when stopped
+or empty. Host reboot and combined-role replacement still end their shells.
+See [architecture](architecture.md#pty-lifetime-and-toolset-upgrades).
+
+Claude Code is seeded from the image into its native install under the
+persistent home on first start. Its own updater can subsequently update that
+copy without sudo, and the copy survives image changes. This is distinct from
+the explicit shell/toolset upgrade above.
 
 ## Retrieval Search
 

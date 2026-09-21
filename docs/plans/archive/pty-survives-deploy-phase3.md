@@ -1,5 +1,9 @@
 # Phase 3 — Upgrade, drain, and cleanup: execution steps
 
+**Completed in `6cd80c3` (2026-07-30).** Historical execution record; see
+[architecture](../../architecture.md#pty-lifetime-and-toolset-upgrades) for the
+current upgrade and cleanup contract.
+
 Expansion of Phase 3 in [pty-survives-deploy.md](pty-survives-deploy.md).
 
 Decisions 2 and 3 resolve under the standing least-brittle rubric:

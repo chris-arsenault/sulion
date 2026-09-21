@@ -21,7 +21,7 @@ adopts — never a compose service — so recreating `sulion-node` leaves every
 shell running and the devenv redials the new node. Where there is no Docker
 daemon (e2e, loopback standalone), the same binary runs as a supervised child
 process of the node: one PTY implementation, one wire protocol, no survival
-promise. See `docs/plans/pty-survives-deploy.md`.
+promise. See [PTY lifetime and toolset upgrades](#pty-lifetime-and-toolset-upgrades).
 
 ```
 PTY shell ──► devenv shadow ──► node ──► node protocol ──► control WS ──► xterm.js
@@ -65,10 +65,15 @@ checkouts. A repository belongs to at most one meta-repository.
 
 **PTY session** — a long-lived shell process on the server. It targets one
 primary repository and may retain a meta-repository identity for navigation.
-It survives client disconnect and dies only on explicit delete, shell exit, or
-server reboot. It has a backend-generated UUID.
+It survives client disconnect. Its lifetime across releases depends on the
+hosting mode described below; shell exit, deletion, host failure, and an
+explicit toolset upgrade can end its process. It has a backend-generated UUID.
 
-**Agent session** — a single `claude` or `codex` invocation inside a PTY session, identified by the agent's own session UUID, backing exactly one JSONL file. A PTY session may hold zero, one, or many agent sessions sequentially.
+**Agent session** — a Claude or Codex conversation identified by the harness's
+session UUID and transcript. A PTY may host several conversations sequentially;
+resuming one in another PTY transfers the current association. Fugu launches
+the Codex profile through `codex-fugu`: its PTY identity is `fugu`, while its
+transcript uses the Codex canonicalizer.
 
 **Workspace** — the filesystem checkout bound to a PTY session. A workspace is
 either the canonical repo checkout (`main`) or a Sulion-created Git worktree on
@@ -81,7 +86,37 @@ can be attached to multiple live PTYs, while each PTY has at most one current
 plan. It is independent of an agent's detailed internal planning state and
 survives terminal exit. See [`plans.md`](plans.md).
 
-The UI's primary object is the PTY session. The timeline defaults to the current agent session within that PTY, and the repo timeline (#56) merges top-level correlated agent sessions in a repo into one chronological feed. Codex subagent child sessions stay nested under their parent turn instead of becoming first-class repo timeline sessions.
+The UI's primary object is the PTY session. Its timeline follows the current
+agent conversation; repo timelines merge top-level correlated sessions.
+Claude and Codex child-agent logs stay attached to delegated work. See
+[meta-repositories](meta-repositories.md) for collection launch and scope rules.
+
+### PTY lifetime and toolset upgrades
+
+In dedicated container mode, devenv containers are keyed by Docker image
+identity. New sessions use the current toolset; existing sessions stay in their
+original container. The node adopts labeled containers and routes input,
+snapshots, and exit events through each session's hosting identity.
+
+The toolset-only image is content-addressed from `devenv/`. The node delivers
+the server executable through a content-hashed, write-once path on the shared
+run volume. A running devenv keeps the executable it started with. Separately,
+the node atomically updates `/run/sulion/bin/sulion` on every start, so existing
+shells get current CLI commands on their next invocation without restarting.
+
+The explicit session upgrade action ends that session's shell and starts a
+fresh default shell on the current toolset, preserving its ID, label, working
+directory, and workspace binding. It does not resume the agent automatically.
+Other sessions keep running. The launcher removes non-current containers once
+they are stopped or connected with an empty inventory. It preserves the
+current container and does not treat a disconnected inventory as proof that
+running shells are gone.
+
+Control or node replacement may disconnect the browser, but does not end
+dedicated devenv shells. Standalone and E2E use the same server and socket
+protocol in child-process mode; their shells end with the owning runtime.
+Neither mode survives host reboot. Operational details are in
+[deployment](deploy.md#pty-and-toolset-releases).
 
 ### Correlation
 
@@ -96,6 +131,10 @@ Hook sources are `backend/hooks/session-start.sh` and
 `backend/hooks/activity-hook.sh` (installed under `/opt/sulion/hooks/`).
 Correlation and activity reporting are best-effort — hook failure is silent;
 the JSONL still ingests.
+
+Codex correlation comes from the launcher's process scan, including the
+per-session thread-writer lock opened at startup and writable rollout handles.
+Fugu uses the same path. Read-only history browsing must not rebind the PTY.
 
 ### Compaction
 
@@ -162,7 +201,7 @@ The **overview pane** projects every live PTY from `/api/app-state`, sorted by
 operational activity, and enriches cards with the latest timeline turn. It does
 not depend on which terminal/timeline tabs happen to be open.
 
-The **plan pane** keeps fetched plan detail and edit state local. Open plan
+The **plan modal** keeps fetched plan detail and edit state local. Open plan
 summaries are ambient app state because the sidebar, overview, command palette,
 and sessions all consume them.
 
@@ -209,19 +248,29 @@ The node launches PTYs with Sulion-managed wrapper tools on `PATH`:
 
 `with-cred` and `aws` are the only supported secret-consumption paths. Credential grants are scoped to a PTY and secret, not to a specific wrapper. The backend does not own the broker master key and does not expose any alternate secret-injection mechanism.
 
-### Future prompts
+### Library and future prompts
+
+Reusable prompts and saved references live in `library_entries`, keyed by
+`(kind, slug)`, and are served by the control API. They require no node-local
+library directory. See `backend/src/library.rs`.
 
 Deferred follow-ups written against the agent session a PTY is currently
-correlated to. They are stored as files at
-`<future_prompts_root>/<session_uuid>/<id>.md` and carry a `pending` or `sent`
-state, so a queued prompt survives a control restart and is visible to anything
-that can read the directory.
+correlated to live in `future_prompts`, keyed by `(session_uuid, id)`, with a
+`pending` or `sent` state. `future_prompt_session_state` records the pending
+count and revision for app-state reads. Both library entries and future prompts
+survive control restarts and are available to the API regardless of deployment
+topology.
 
-They are deliberately not the prompt library: the library is reusable text
-addressed by slug, while these are one-off and bound to a single transcript
-session, and they disappear from the UI when that session is no longer current.
+Future prompts are one-off follow-ups bound to a transcript session. They
+disappear from that PTY's queue when the session is no longer current.
 Routes are `GET`/`PUT` on `/api/sessions/:id/future-prompts` and
 `DELETE`/`PATCH` on an individual entry. See `backend/src/future_prompts.rs`.
+
+Library and queue injection targets the timeline composer in effective
+timeline-only mode, including mobile, and the terminal in split or
+terminal-only mode. Injection into the composer does not submit it; the user
+still sends the text. Submitted-prompts tracking below records actual timeline
+sends separately from queue state.
 
 ### Submitted prompts
 
@@ -381,7 +430,7 @@ contract. The production Compose selections divide the graph by ownership:
 - the root TrueNAS selection starts the frontend, control-only `backend`,
   broker, and retrieval, with no source, workspace, transcript, code-intel,
   runner, or Docker mounts;
-- `node` owns `/home/sulion`, PTYs, filesystem/worktree state, correlation, and
+- `node` owns `/home/sulion`, PTY management, filesystem/worktree state, correlation, and
   the dedicated host's Docker socket, which it passes only to its launched
   devenv containers; and
 - `ingester` mounts only Claude and Codex transcript roots read-only.

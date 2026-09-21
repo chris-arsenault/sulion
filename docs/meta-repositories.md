@@ -1,5 +1,8 @@
 # Meta-repositories and collection sessions
 
+Current contract after the August 2026 simplification (`fb5fc58`) and Overview
+grouping (`d84c621`). This is the durable design, not an outstanding plan.
+
 ## Outcome
 
 A meta-repository is one logical grouping above repositories. It organizes the
@@ -85,6 +88,11 @@ existing drawer.
 The group editor selects members and one primary; it has no ordering controls.
 The collection session form omits workspace mode because canonical roots are the
 only supported mode.
+
+Overview groups member repositories' terminals and open plans into the same
+team and includes collection sessions once. This is a presentation grouping of
+existing app-state data; plans, Git actions, and retrieval keep their existing
+repository scope.
 
 ## Verification
 

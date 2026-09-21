@@ -1,6 +1,8 @@
 # IDT framework
 
-Record of the visual framework applied in the #37 pass. This is the record, not the contract — the tokens in `frontend/src/styles/tokens.css` are authoritative. If a component diverges, update the component, not this doc.
+Current visual framework and interaction conventions. The tokens in
+`frontend/src/styles/tokens.css` are authoritative; keep this guide aligned
+with shipped primitives and controls.
 
 ## Direction
 
@@ -70,14 +72,31 @@ No right-side inspector column. Reading surfaces (timeline TurnDetail, file body
 
 Live in `frontend/src/components/ui/`. Re-export from `./ui` barrel.
 
-- **Lane** — fixed-height row with `{leading, label, meta, trailing}` slots. Backbone of sidebar, tab strip, context menu, inspector headers.
 - **Sigil** — 16×16 icon + tone/category modifier. Tier-0 on-screen status indicator.
-- **Stat** — tabular-numeric value with optional label + unit + tone.
-- **Panel** — `{header, body, footer}` surface with canvas variants.
-- **Tab** — icon-forward tab with binding-sigil slot, accent underline for active state.
 - **Tooltip** — Tier-1 primitive.
 - **Overlay** — modal or anchored transient frame. Shared header / close / Esc / z-index for ToolHoverCard, ThinkingFlyout, SubagentModal.
-- **CommandPalette** — Cmd/Ctrl-K. Single entry for navigation and actions. Query-gated: an empty palette lists only action commands; navigation entries (live sessions, meta-repos, repos, plans) are `searchOnly` and surface as the user types. Meta-repository entries can reveal the group or open its collection-session form. Keeps the "only four shortcuts" rule (palette, monitor toggle, Esc, Enter). Cmd/Ctrl-M toggles the monitor overview as a modal overlay; TerminalPane excludes the chord from xterm so it never reaches the PTY.
+- **CommandPalette** — Cmd/Ctrl-K. Entry for navigation and actions.
+  An empty palette lists actions; sessions, meta-repos, repos, and plans appear
+  as the user types. Cmd/Ctrl-M opens the Overview modal, which also hosts
+  Metrics and Display settings.
+
+Lane heights, numeric typography, panels, and tabs remain visual conventions,
+implemented by their owning surfaces. The unused generic `Lane`, `Stat`,
+`Panel`, and `Tab` components were removed; do not import them from `ui`.
+
+## Display and timeline controls
+
+Desktop offers split, terminal-only, and timeline-only modes. Cmd/Ctrl-Shift-D
+cycles them, Cmd/Ctrl-Shift-E peeks at the hidden projection, and
+Cmd/Ctrl-Shift-B toggles the sidebar. Layout changes preserve live tab hosts.
+Mobile fixes the effective mode to timeline-only without changing the stored
+desktop preference.
+
+Timeline settings open from the prompt-bar toolbar: shared filters, text size,
+and list/grid/hidden turn navigation. Grid mode exposes a separate turn-grid
+flyout. These preferences apply to all timelines; selected turns and open
+flyouts remain local. Flyouts use anchor positioning on wider screens and a
+bottom sheet on narrow screens. Terminal text size is independent.
 
 ## Motion
 
@@ -103,4 +122,5 @@ Kept explicitly off-ramp so the shape can hold. File a ticket before adding.
 - Work-area column reconfiguration beyond the existing horizontal split
 - Per-tool-type icons in TurnRow (ship category-level sigils first, add per-tool only if ambiguous at a glance)
 - Radial menus
-- Keyboard navigation beyond Cmd-K / Cmd-M / Esc / Enter
+- Additional keyboard navigation beyond the palette, Overview, and shipped
+  display/sidebar/peek shortcuts

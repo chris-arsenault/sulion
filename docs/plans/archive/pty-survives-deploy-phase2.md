@@ -1,5 +1,10 @@
 # Phase 2 — Versioned tags: execution steps
 
+**Completed in `bcc6e82` (2026-07-30).** Historical execution record. Phase 3
+subsequently resolved upgrade and reaping decisions; `28ad351` later moved CLI
+delivery to every node start. Use [deployment](../../deploy.md#pty-and-toolset-releases)
+for the current release contract.
+
 Expansion of Phase 2 in [pty-survives-deploy.md](pty-survives-deploy.md).
 Reference sections: "Shape" (binary delivery through the run volume, decision
 4), "The four release surfaces" (surface 1 mechanics), and decisions 1 and 5
@@ -119,6 +124,6 @@ Child-mode devenvs (no Docker) have no image identity and report none.
 
 ## Out of scope for this phase
 
-- Reaping emptied containers and the per-session upgrade action (Phase 3;
-  decisions 2 and 3 remain open).
+- Reaping emptied containers and the per-session upgrade action (subsequently
+  completed in Phase 3, which resolved decisions 2 and 3).
 - Slimming the backend image.

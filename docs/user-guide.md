@@ -1,7 +1,9 @@
-# sulion — Feature Overview
+# Sulion user guide
 
-A visual tour of the major surfaces. Screenshots are captured against
-the real e2e stack (Rust backend + Postgres + seeded ingest) through
+A guide to sessions, review, prompts, and supervision. Existing screenshots
+illustrate the feature surfaces and may predate the current toolbar layout;
+the instructions below describe the current controls. Screenshots are captured
+against the real e2e stack (Rust backend + Postgres + seeded ingest) through
 Playwright, then cropped to feature regions with Pillow. To
 regenerate:
 
@@ -51,29 +53,67 @@ when the tree is tall.
 
 ![Command palette](screenshots/02-command-palette.png)
 
+## Create and resume sessions
+
+Use a repo's new-session action to launch Claude Code, Codex, Fugu, or a shell.
+Fugu is a Codex profile launched through `codex-fugu`; it uses the same
+transcript format and timeline support as Codex.
+
+For a single repo, choose the canonical checkout (`main`) or an isolated Git
+worktree. File and diff tabs opened for that session follow its workspace.
+Collection sessions always use canonical checkouts; see
+[meta-repositories](meta-repositories.md) for their scope.
+
+A disconnected browser can reattach to a running terminal. A dead shell needs
+the resume action to create a new PTY and resume the conversation; this moves
+the current association instead of creating a second live owner of the history.
+On the dedicated node, releases preserve running shells. **Upgrade toolset
+(restarts shell)** in a live session's menu explicitly replaces that shell on
+the current toolset, preserving its session identity and workspace. Resume the
+agent separately afterward. Combined standalone deployments do not preserve
+shells across backend replacement.
+
 ## Workspace — terminal and timeline panes
 
-Each session opens with a terminal tab and a timeline tab. The terminal
-pane is `xterm.js` mounted outside React — WebSocket bytes pipe
-straight to it, so keystroke latency matches native SSH. The timeline
-pane is a structured, virtualized review surface over the ingested
-transcript.
+On desktop, session navigation opens paired terminal and timeline tabs. The
+terminal attaches to the live server shell; the timeline reviews its ingested
+transcript. Use Display settings from the Overview modal or command palette
+to choose **Split**, **Terminal only**, or **Timeline only**. A hidden
+terminal keeps its connection and scrollback, and the desktop peek action
+temporarily shows the hidden projection.
+
+Mobile uses a timeline-only pane and sidebar drawer. It does not open terminal
+tabs or offer terminal peeking. File and reference tabs remain available, and
+the desktop display preference is preserved.
 
 ![Overview](screenshots/01-workspace.png)
 
-Tabs support file, diff, overview, plan, and reference kinds alongside terminal
-and timeline, plus the Secrets manager tab. Drag a tab header onto the
-other pane's drop zone to split the work area; the layout persists
+Tabs support file, diff, overview, metrics, and reference kinds alongside terminal
+and timeline, plus the Secrets manager tab. Plans open in a modal. Drag a tab
+header onto the other pane's drop zone to split the work area; the layout persists
 across reloads. The tab context menu can also close stale terminal and
 session-timeline tabs whose backing session is no longer associated.
+
+| Shortcut | Action |
+| --- | --- |
+| Cmd/Ctrl-K | Open command palette |
+| Cmd/Ctrl-M | Open Overview; its links also reach Metrics and Display |
+| Cmd/Ctrl-Shift-D | Cycle desktop display modes |
+| Cmd/Ctrl-Shift-E | Peek at the hidden desktop terminal or timeline |
+| Cmd/Ctrl-Shift-B | Toggle the desktop sidebar |
 
 ## Timeline — turns, filters, detail
 
 Events are grouped into **turns** (prompt → tool calls → summary). The
-left column lists turns; clicking one opens its detail on the right.
-Filter chips along the top hide speakers, operation categories, and
-bookkeeping traffic; the **FILE** input narrows the timeline to turns
-that touched a given path.
+turn list selects the detail to read. **Timeline settings** above the prompt
+input opens filters, text size, and **List / Grid / Hidden** turn navigation.
+Grid mode adds a separate **Turn grid** flyout button. These settings apply to
+every open timeline and persist across reloads; terminal text size is separate.
+
+Filter chips hide speakers, operation categories, and bookkeeping traffic;
+the **FILE** input selects turns that touched a path. **Follow latest** tracks
+new work; selecting an older turn turns it off so reading stays put. Turn
+detail shows available duration and token metrics alongside the content.
 
 ![Timeline turn](screenshots/03-timeline-turn.png)
 
@@ -82,13 +122,49 @@ renders through KaTeX: `$$ … $$` on its own lines or the LaTeX `\[ … \]`
 form for a display block, `$$ … $$` within a line or `\( … \)` for inline
 math. Single-dollar `$x$` is deliberately not math, so shell variables and
 prices in prose stay as written. A link to a repo-relative path, with an
-optional `:line` suffix, opens that file in a Sulion file tab for the
+optional `:line` or `#L12` suffix, opens that file in a Sulion file tab for the
 session's repo and workspace; `http(s)` links open in a new browser tab.
 Nothing in turn detail navigates the app itself.
 
-When you are mostly reading the structured timeline, the prompt bar can
-send text into the running Claude/Codex terminal without expanding the
-full terminal pane.
+**Copy turn as markdown** copies the prompt, assistant text, and one header
+per tool call. Open tool detail for full inputs, results, and diffs; those are
+not embedded in the copied digest.
+
+## Timeline input and prompt recovery
+
+Use the prompt bar to **Send** to an idle agent or **Steer** a running turn.
+The interrupt button stops the current turn through the terminal's interrupt
+input. Large text and clipboard images can be saved into the session workspace
+with paste-as-file; the composer receives the resulting file reference.
+
+During harness startup or a terminal question, the composer closes and explains
+why. On desktop, open or peek at the terminal to resolve the dialog. **Type
+anyway** allows an intentional override. Mobile has no terminal view, so a
+terminal-only startup interaction needs a desktop attachment.
+
+The **Submitted prompts** button lists recent timeline sends, including text
+that never matched a transcript turn. Each submission is saved before delivery.
+Use copy or retry to recover unmatched text, or dismiss the record. A matched
+record means the prompt appeared in a transcript; it does not mean the agent
+completed the requested work.
+
+If the harness changes away from the session's expected model, Sulion records
+the switch, interrupts its running turn, and opens a model-switch dialog.
+**Continue** accepts the new model. **Dismiss** retains the previous expected
+model; it does not switch the harness back. The dialog shows available
+transcript evidence, which may not explain why the harness changed models.
+
+## Library and future prompts
+
+Save reusable prompts and assistant references from timeline context menus.
+The Library lists them across sessions; prompt templates ask for `$name`
+values before insertion. Library entries are stored in Postgres.
+
+Future prompts are one-off follow-ups queued for the current agent conversation.
+Open the session's future-prompt queue to edit, insert, or remove an entry.
+In timeline-only mode, insertion fills the composer and still needs Send or
+Steer; in split or terminal-only mode it targets the terminal input. A queue
+entry marked sent is separate from the actual submission records above.
 
 ## Published plans
 
@@ -97,7 +173,10 @@ progress and the current phase. Open the repo plan index to start a plan with
 named phases, optionally attach it to a live terminal, or reopen closed history.
 The plan detail workspace edits phase descriptions, statuses, status notes,
 attachments, plan metadata, and closure. Its history records meaningful
-transitions.
+transitions. A phase can open a branch plan for a prerequisite or expanded
+milestone. Branches appear beneath their parent with a trail back to the root;
+**Return** completes a branch and moves the terminal back, while **Abandon**
+cancels it. A parent cannot close while it has an open branch.
 
 Published plans are a lightweight progress interface, not a replacement for an
 agent's detailed working plan. Agents can publish the same state from a Sulion
@@ -116,6 +195,19 @@ average token rate, and context remaining. Context is only shown when the
 transcript reports both current usage and a context window; unavailable signals
 are labeled honestly. Open plans remain visible even when no terminal is
 attached.
+
+## Metrics and background jobs
+
+Open **Metrics** from Overview to inspect input, cached input, and output
+tokens, daily usage, and model-attributed cost estimates. Input includes cache
+writes and excludes cache reads. Prices are the displayed catalog's
+standard-tier API rates applied to recorded usage, not subscription charges or
+historical invoices. Unknown model prices leave totals visibly incomplete.
+
+The same view shows Git activity, file-write hotspots, and plan flow. Branch
+plans contribute leaf phases to their root's burndown without double-counting
+the parent phase. **Background jobs** shows active work, progress, stalled
+writers, and recent completed, failed, or interrupted jobs.
 
 ## Thinking fly-out
 
@@ -192,11 +284,11 @@ it into a detail panel.
 
 ![Stats panel](screenshots/10-stats-strip.png)
 
-## Codex subagent log
+## Child-agent logs
 
-For Codex sessions the timeline surfaces delegated subagent turns with
-a **View agent log** button that opens the full child log in a modal,
-without losing your place in the parent turn.
+For Claude and Codex sessions, delegated work stays associated with its parent
+turn. **View agent log** opens the available child transcript in a modal
+without losing the parent selection. Concurrent children retain separate logs.
 
 ![Agent log modal](screenshots/11-codex-subagent.png)
 

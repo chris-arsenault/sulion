@@ -12,6 +12,8 @@ No React context stores.
 | `SessionStore` | PTY sessions, repos, meta-repos, workspaces, open-plan summaries, selected-session URL sync, both hierarchy expansion maps, unread tracking, polling. |
 | `RepoStore` | Per-repo git status, file tree state, expansion state, polling. |
 | `TabStore` | Thin tab registry only. |
+| `DisplayStore` | Persisted desktop display mode and sidebar pin; transient peek visibility. |
+| `TimelineControlsStore` | Shared, persisted timeline filters, turn-navigation mode, and timeline text size. |
 | `ContextMenuStore` | Ephemeral open/close state for the global context-menu layer. |
 
 Each store is a singleton Zustand store with selector-based reads.
@@ -27,7 +29,7 @@ imperative one-shots:
 - open a diff tab from a context menu
 - reveal a meta-repository or open its collection-session form from the rail/palette
 - close the mobile drawer after a selection
-- inject prompt text into the active terminal
+- inject prompt text into the active session's visible input
 - refresh global library lists after a prompt/reference mutation
 
 Those use the typed command layer in
@@ -73,7 +75,7 @@ single-pane mode.
 The registry does **not** hold:
 
 - Terminal scroll / selection / WebSocket state
-- Timeline filters, virtuoso scroll, current-turn selection
+- Timeline data, virtuoso scroll, current-turn selection, open flyout state
 - File-tab fetched content, raw-toggle state
 - Search query, scope, hit list
 - Diff expanded-file set, stage-pending state
@@ -95,6 +97,26 @@ mobile projection derives timeline-only behavior without persisting a new mode.
 The excluded tab-internal state above lives inside its owning component and dies
 with the tab's mount lifecycle unless there is a concrete cross-surface need to
 promote it.
+
+`TabHost` renders each tab once into a stable DOM host. Pane slots and the peek
+overlay claim that host by reference; moving it does not remount its React
+subtree or terminal connection. State dies when the tab closes, not when it
+moves panes or becomes hidden. See [architecture](architecture.md#frontend-shape).
+
+## Shared timeline controls
+
+Filters, including file path and follow-latest, navigation mode (`list`, `grid`,
+`hidden`), and timeline font scale live in `TimelineControlsStore`. Changing
+them in one timeline immediately changes every open timeline and persists the
+preference. The settings flyout above the prompt input edits that singleton;
+grid navigation has its own flyout. Flyout visibility and the selected turn
+remain local to the timeline. Terminal text size remains a separate control.
+
+`DisplayStore` owns desktop layout preferences. `displayPolicy.ts` derives
+mobile timeline-only behavior and the prompt injection target without writing
+over the desktop preference. Library and future-prompt actions use the same
+typed injection command: timeline composer in timeline-only mode, terminal in
+split and terminal-only modes.
 
 ## Why Zustand
 

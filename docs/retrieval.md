@@ -13,12 +13,14 @@ loaded from `event_blocks` and timeline tables at query time.
 
 ```sh
 sulion-retrieve search "what did we decide about retrieval" --limit 5
-sulion-retrieve search "exec_command" --tools --include-low-value --tool-category utility
+sulion-retrieve search "exec_command" --include tools --include-low-value --tool-category utility
+sulion-retrieve search "words the user said" --include user --mode lexical
 sulion-retrieve file-history backend/src/retrieval/search.rs
 sulion-retrieve turn <agent-session-uuid> <turn-id>
 sulion-retrieve reindex --repo sulion
 sulion-retrieve reset --confirm
 sulion-retrieve index-status
+sulion-retrieve facets
 ```
 
 The CLI adds auth and context headers from the PTY environment:
@@ -35,6 +37,27 @@ sulion-retrieve search "exact thing" --scope session --session <agent-session-uu
 ```
 
 Use `--json` when another tool needs stable machine-readable output.
+
+Default search includes assistant text, not user instructions. Add
+`--include user` when looking for what the user requested or decided, and use
+`--mode lexical` when their wording is known. `facets` reports indexed scope;
+`index-status` reports semantic backlog. A pending-index warning means
+semantic results may lag even though lexical history is available.
+
+## Turn lookup and file history
+
+`sulion-retrieve turn <agent-session-uuid> <turn-id>` returns a compact markdown
+digest: the prompt, assistant text, and one header per tool call. It does not
+embed tool inputs, reconstructed diffs, or full results. Those remain in
+canonical blocks and operation rows and can be inspected in timeline detail;
+search returns per-turn operation and file-touch evidence.
+
+`file-history <repo-relative-path>` lists turns that touched the path within
+the selected repository. Collection-session access does not broaden retrieval
+to all group members; choose the relevant repo explicitly when needed.
+
+Archive-tier search and restore commands are not available. The
+[archive proposal](plans/transcript-archive-and-purge.md) remains pending.
 
 ## Search
 
@@ -136,6 +159,11 @@ The current local model is `nomic-ai/nomic-embed-text-v1.5` with 768 dimensions.
 When `pgvector` is installed in the `sulion` database, the retrieval service
 creates `embedding_vector vector(768)` and a non-blocking HNSW index. Without
 pgvector, semantic search exact-scans the stored `REAL[]` vectors.
+
+Vector schema setup checks the catalog at startup and creates missing objects;
+indexing reuses those capabilities without repeating DDL. Embedding writes are batched, and timeline
+reprojection preserves unchanged operation source hashes and embeddings.
+Only changed or removed sources need reconciliation.
 
 The browser UI exposes the same backfill scheduling path from the sidebar admin controls.
 That action calls the authenticated backend endpoint

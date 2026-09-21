@@ -1,5 +1,8 @@
 # Phase 1 — Shells move into a devenv server: execution steps
 
+**Completed in `8104eb8` (2026-07-30).** Historical execution and validation
+record; current ownership is documented in [architecture](../../architecture.md).
+
 Expansion of Phase 1 in [pty-survives-deploy.md](pty-survives-deploy.md). Read
 that plan's "The four release surfaces" and "Shape" sections first; reference
 behavior below cites them and the code directly.

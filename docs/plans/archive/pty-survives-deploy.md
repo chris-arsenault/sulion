@@ -1,5 +1,12 @@
 # PTYs survive deployment
 
+**Completed historical plan.** Phases 1–3 shipped on 2026-07-30 in `8104eb8`,
+`bcc6e82`, and `6cd80c3`. The pre-change failure analysis, release table, and
+execution steps below describe that implementation period. They are not the
+current deployment contract. See
+[PTY lifetime and toolset upgrades](../../architecture.md#pty-lifetime-and-toolset-upgrades)
+and [release operations](../../deploy.md#pty-and-toolset-releases).
+
 ## The requirement
 
 1. A node release must not disturb running terminals.

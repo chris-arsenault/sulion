@@ -36,7 +36,7 @@ and standalone binaries pass the 5-second interval.
 `events.payload`. `markdown` is the turn digest that `sulion-retrieve turn`
 returns: the prompt, the assistant's text blocks, and one header line per
 tool call. Tool inputs, diffs, and result bodies are not part of it; an
-agent that needs them reads the operation rows or restores the session.
+reader that needs them opens timeline tool detail or queries operation rows.
 
 ## Usage accounting
 
@@ -69,7 +69,8 @@ frequently updated runtime-state table.
 - Derived repair remains gated by `ingest_projection_versions`. Control repairs
   missing canonical/timeline fields from existing `events.payload` rows and
   never replays JSONL during ordinary startup.
-- The node process owns correlation and PTYs but does not poll JSONL.
+- The node process owns correlation and PTY management but does not poll JSONL;
+  devenv owns the PTY masters and shadow emulators.
 - API handlers and WebSocket paths query Postgres only.
 
 The ingester restarts independently. A control or network outage leaves local
@@ -84,3 +85,33 @@ The dedicated Compose role invokes it directly and mounts only
 Postgres/migrations, not ingester liveness; ingester failures are visible in
 its independent service logs. Failure and compatibility semantics are in
 [`node-protocol.md`](node-protocol.md).
+
+## Derived repair and background jobs
+
+Startup maintenance versions canonical, timeline, and usage projections
+independently; file touches belong to timeline projection. A version change
+repairs the affected projection from stored events rather than forcing every
+derivative to rebuild. Repair
+failures in individual canonical rows are recorded, leave that version behind
+for retry, and allow later passes to run. A pass-level error still stops that
+startup-maintenance invocation.
+`ingest_jobs` records job state, progress, and errors for the browser's jobs
+panel; job completion is distinct from the background worker being alive.
+
+Claude subagent transcript directories are discovered alongside primary logs.
+Delegated logs and Codex child sessions use the same canonical model, with
+concurrent child work matched to its owning operation. Bookkeeping records,
+including per-response usage and Claude latch records, do not seed user turns.
+Codex code-mode calls are unwrapped into operations so commands and native
+patches remain visible in tool detail and file-touch evidence.
+
+## Retention boundary
+
+`events.payload` retains the full source record used by rebuilds. Removing
+`timeline_turns.turn_json` and reducing turn markdown removed derived copies,
+not canonical history. Source transcript files may disappear independently;
+ordinary startup repair and admin reindex read the database copy.
+
+Automatic archive, purge, and restore are not implemented. The
+[archive proposal](plans/transcript-archive-and-purge.md) remains pending and
+does not change the current retention contract.

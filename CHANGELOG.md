@@ -6,6 +6,24 @@ All notable user-visible changes to Sulion are recorded here.
 
 ### Timeline
 
+- Moved timeline filters, text size, and List/Grid/Hidden navigation into a
+  shared settings flyout above the prompt input. Changing a setting now
+  updates every open timeline and survives reloads. Grid navigation opens
+  its own flyout with larger turn cells; terminal text size remains separate.
+- Added per-turn duration and token metrics and preserved the reader's
+  position while detail updates. Selecting an older turn disables
+  follow-latest, so incoming work does not pull the selection back.
+- Added Claude child-agent transcript ingestion and fixed concurrent child
+  turns overwriting one another when their byte offsets coincided. Child
+  logs stay associated with the parent delegation, and bookkeeping records
+  no longer manufacture promptless turns. Codex response-usage records and
+  Claude latch records are hidden from ordinary timeline reading.
+- Changed Codex code-mode operations to show the nested command or tool
+  instead of an opaque `exec` wrapper. Native patches retain their edit
+  evidence, and operation categories follow the underlying work.
+- Added paste-as-file to the timeline composer for large text and clipboard
+  images, matching the terminal upload workflow. The resulting file
+  reference stays in the session's workspace.
 - Added a model-switch guard. Codex and Claude Code can move a session onto
   a different model on their own — Codex by applying new thread settings
   between turns, Claude Code by falling back mid-turn — and the timeline
@@ -96,6 +114,13 @@ All notable user-visible changes to Sulion are recorded here.
 
 ### PTY toolset
 
+- Fixed existing shells retaining an old Sulion CLI after a node release.
+  The node now delivers the CLI on every start, even when it adopts an
+  unchanged toolset container. Its stable symlink is replaced atomically,
+  so the next command uses the new release without restarting the shell.
+- Fixed direct Docker access in devenv shells by forwarding the host socket
+  and its numeric group to the container. Added the CA-bundle path expected
+  by Nix tools to both workbench images.
 - Changed Claude Code to run from a native install in the persistent home,
   seeded from the image on first start, instead of the root-owned npm tree.
   Its built-in updater now upgrades PTY sessions without `sudo`, and the
@@ -105,6 +130,11 @@ All notable user-visible changes to Sulion are recorded here.
 
 ### Dedicated development node
 
+- Changed secret-bearing TrueNAS services to read their database URL and
+  service tokens at startup under their own workload identities. Deployment
+  resolves public Cognito identifiers; dedicated-node credentials still
+  arrive over the authenticated node channel. Credential redelivery no
+  longer sends an already approved node through enrollment again.
 - Restricted host SSH to the trust management appliance at
   `192.168.67.2/32`. Secure LAN and server-subnet clients retain SMB and
   development-port access but can no longer open direct SSH sessions.
@@ -112,8 +142,8 @@ All notable user-visible changes to Sulion are recorded here.
 ### Plans
 
 - Added branch plans: a published plan can now hang off one or more phases of
-  another plan, to arbitrary depth. `sulion plan branch` opens a sub-plan under
-  the phases it covers and moves the terminal onto it; `sulion plan return`
+  another plan, with nesting capped at depth 8. `sulion plan branch` opens a
+  sub-plan under the phases it covers and moves the terminal onto it; `sulion plan return`
   closes the sub-plan, puts the terminal back on the parent, and clears any
   anchor phase the branch was opened to unblock. `sulion plan tree` prints a
   whole plan tree. A plan refuses to close while a branch under it is open.
@@ -125,7 +155,79 @@ All notable user-visible changes to Sulion are recorded here.
   per plan tree rather than one per plan, so a sub-plan no longer double-counts
   the phase it sits under or displaces its own parent from the chart.
 
+### Workspace and sessions
+
+- Added split, terminal-only, and timeline-only desktop display modes, with
+  shortcuts for cycling modes, toggling the sidebar, and peeking at the
+  hidden terminal or timeline. Tabs render once into stable hosts, so pane
+  moves and peeking preserve terminal connections and scrollback.
+- Changed mobile to a timeline-only workspace with drawer navigation and
+  reachable file/reference tabs. Opening a session no longer creates an
+  invisible terminal tab, and mobile does not overwrite the desktop display
+  preference. Fixed viewport height and touch interactions around the
+  timeline and prompt controls.
+- Added metadata-only repository groups and collection sessions. A group
+  has one primary repository, uses canonical checkouts, and passes the
+  other member roots to Claude or Codex as additional directories. Sidebar,
+  rail, palette, and Overview group the work without moving repositories or
+  allocating member worktrees. Group edits affect later launches and resumes;
+  retrieval and file operations retain their existing repository scope.
+- Added Fugu as a launchable, resumable agent identity using the
+  `codex-fugu` profile wrapper. It now correlates with its PTY and appears
+  in the timeline instead of leaving an orphaned Codex transcript.
+- Fixed repository rename racing background discovery and retired the old
+  code-intelligence root during rename, so the previous name no longer
+  reappears as a second repository or index root.
+
+### Library and secrets
+
+- Moved saved prompts, references, and queued future prompts into Postgres.
+  The control API now sees the same entries across deployment topologies
+  instead of depending on node-local markdown directories.
+- Added multiline secret values, preserving embedded and trailing newlines
+  through storage and credential redemption. Fixed delivered secret-file
+  ownership so the service user can read files written during bootstrap.
+
+### Metrics and background work
+
+- Replaced ambiguous token totals with separate input, cached-input, and
+  output categories, daily usage, and per-model API cost estimates. Cache
+  writes retain their provider-specific rates; unknown prices leave totals
+  visibly incomplete. Estimates use the displayed catalog rates and do not
+  claim to reproduce subscription charges or historical invoices.
+- Corrected Codex usage accounting to deduplicate per-response usage,
+  including compaction, while preserving the legacy cumulative prefix of
+  older sessions. Context snapshots after that transition update context
+  pressure without counting spend twice. Historical response sessions are
+  repaired from stored events on startup.
+- Added background-job progress and recent outcomes to Metrics. Transcript
+  catch-up and projection repairs now expose work counts and stalled,
+  interrupted, or failed state instead of appearing as an unexplained wait.
+- Split startup maintenance into independently versioned canonical,
+  timeline, and usage repairs. A timeline change no longer forces an
+  unrelated usage rebuild; failed canonical rows remain eligible for retry.
+- Reduced database contention by preserving unchanged projected rows and
+  operation embeddings, batching embedding writes, and moving repeated
+  vector schema setup out of the indexing loop. Git activity is materialized
+  by the node, database inventory runs outside the frequent stats sample,
+  and app-state polling uses bounded refresh work.
+
 ## v2.1.0 - 2026-08-03
+
+### Session lifetime and toolsets
+
+- Moved PTY masters and shadow emulators into a devenv server. On the
+  dedicated node, its containers survive node releases and reconnect with
+  their running shells; the standalone and test roles use the same server
+  as a child process and retain their existing lifetime boundary.
+- Added versioned toolset containers keyed by image identity. Existing
+  sessions keep their toolset while new sessions use the current image.
+  The explicit per-session upgrade restarts only that shell, preserves its
+  identity and workspace, and leaves neighboring sessions alone. Empty
+  non-current containers are reaped.
+- Fixed missing or disconnected devenv sessions remaining falsely live,
+  and corrected resume path splitting so a repository name repeated in a
+  parent directory does not select the wrong checkout.
 
 ### Timeline
 

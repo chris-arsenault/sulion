@@ -18,7 +18,7 @@ A plan has:
 - zero or more attached live PTYs; each PTY can have only one current plan
 - an append-only event history for meaningful mutations
 - an optional parent plan plus the parent phases it covers, giving plan trees
-  of arbitrary depth
+  up to depth 8
 
 Plan statuses are `active`, `paused`, `completed`, and `canceled`. Phase
 statuses are `pending`, `in_progress`, `blocked`, `completed`, and `skipped`.
@@ -27,7 +27,7 @@ repo's closed-plan history.
 
 ## Branch plans
 
-A plan can hang off phases of another plan, to arbitrary depth. Work that turns
+A plan can hang off phases of another plan, up to depth 8. Work that turns
 out to need its own multi-step job — a blocker discovered mid-phase, or a
 milestone that has to be expanded before it can be executed — becomes a
 sub-plan instead of being wedged into the parent's phase list or tracked in a
@@ -167,7 +167,7 @@ headers.
 
 ## Browser surfaces
 
-Each repo has a **Plans** subsection in the sidebar. Its plan tab supports
+Each repo has a **Plans** subsection in the sidebar. Its plan modal supports
 creation, metadata edits, phase status/notes, phase addition, PTY attachment,
 closure, and history. The plan index nests branches under the plan they hang
 off; a branch's detail leads with a clickable trail back to the root, shows
@@ -202,7 +202,12 @@ The CLI sends typed requests over the existing PTY correlation Unix socket.
 The socket and browser REST handlers call the same plan/activity services and
 write Postgres. Neither path reads transcript JSONL. The app-state poll carries
 open-plan summaries plus each session's operational activity and current-plan
-projection. The ingester also normalizes Codex cumulative usage snapshots and
-Claude per-response usage into `agent_session_usage`; standard input, cache
+projection. The ingester normalizes Claude per-response usage and Codex
+response records (with a legacy cumulative-snapshot prefix) into
+`agent_session_usage`; standard input, cache
 writes, cache reads, output, cumulative spend, and the latest context footprint
 stay separate.
+
+File-backed implementation records are indexed in
+[`plans/README.md`](plans/README.md). Completed records are historical evidence;
+the pending archive proposal remains separate from shipped product behavior.

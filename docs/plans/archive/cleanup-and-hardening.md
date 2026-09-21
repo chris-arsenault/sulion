@@ -1,5 +1,13 @@
 # Cleanup and hardening plan
 
+**Historical record, July 2026.** The implementation series is complete;
+original findings, line numbers, and verification below are retained as dated
+evidence. Compatibility removals in Chunk 6 and Chunk 10, plus the host-repair
+retirement in Chunk 9, remain gated work tracked in
+[the backlog](../../backlog.md#deferred-maintenance). Current contracts live in
+[architecture](../../architecture.md), [node protocol](../../node-protocol.md),
+and [secrets](../../secrets.md).
+
 Derived from a full review of the repo (legacy cruft, dead code, architectural
 cleanliness, security implementation bugs). Items are grouped into chunks that
 can be taken one at a time; within a chunk, items are independent unless a
