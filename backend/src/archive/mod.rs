@@ -152,21 +152,32 @@ pub async fn run_loop(pool: Pool, config: ArchiveConfig) {
 /// missing bucket or a broken `pg_dump` does not retry on every poll.
 const FAILED_CYCLE_BACKOFF: chrono::Duration = chrono::Duration::hours(1);
 
+#[derive(Debug, Default, sqlx::FromRow)]
+struct CycleClock {
+    last_cycle_started_at: Option<DateTime<Utc>>,
+    last_cycle_completed_at: Option<DateTime<Utc>>,
+}
+
 async fn cycle_due(pool: &Pool, config: &ArchiveConfig) -> anyhow::Result<bool> {
-    let row: Option<(Option<DateTime<Utc>>, Option<DateTime<Utc>>)> = sqlx::query_as(
+    let clock: CycleClock = sqlx::query_as(
         "SELECT last_cycle_started_at, last_cycle_completed_at FROM archive_state WHERE id = 1",
     )
     .fetch_optional(pool)
-    .await?;
-    let (started, completed) = row.unwrap_or((None, None));
+    .await?
+    .unwrap_or_default();
     let now = Utc::now();
     let interval = chrono::Duration::days(config.interval_days);
-    let completed_recently = completed.is_some_and(|at| now - at < interval);
+    let completed_recently = clock
+        .last_cycle_completed_at
+        .is_some_and(|at| now - at < interval);
     // A start with no completion after it is a cycle that failed or was cut
     // off; give it the backoff before trying again.
-    let failed_recently = matches!((started, completed),
-        (Some(started), completed) if completed.is_none_or(|done| done < started)
-            && now - started < FAILED_CYCLE_BACKOFF);
+    let failed_recently = clock.last_cycle_started_at.is_some_and(|started| {
+        clock
+            .last_cycle_completed_at
+            .is_none_or(|done| done < started)
+            && now - started < FAILED_CYCLE_BACKOFF
+    });
     Ok(!completed_recently && !failed_recently)
 }
 
