@@ -261,7 +261,7 @@ pub async fn reconcile(pool: &Pool) -> anyhow::Result<u64> {
     let result = sqlx::query(
         "WITH open AS ( \
             SELECT sp.id, sp.pty_session_id, sp.submitted_at, \
-                   regexp_replace(btrim(sp.text), '[[:space:]]+', ' ', 'g') AS norm \
+                   btrim(regexp_replace(sp.text, '[[:space:]]+', ' ', 'g')) AS norm \
               FROM submitted_prompts sp \
              WHERE sp.matched_at IS NULL AND sp.dismissed_at IS NULL \
          ), per_prompt AS ( \
@@ -271,7 +271,7 @@ pub async fn reconcile(pool: &Pool) -> anyhow::Result<u64> {
               JOIN timeline_turns t ON t.session_uuid = cs.session_uuid \
              WHERE t.user_prompt_text IS NOT NULL \
                AND t.start_timestamp >= o.submitted_at - INTERVAL '10 seconds' \
-               AND regexp_replace(btrim(t.user_prompt_text), '[[:space:]]+', ' ', 'g') = o.norm \
+               AND btrim(regexp_replace(t.user_prompt_text, '[[:space:]]+', ' ', 'g')) = o.norm \
                AND NOT EXISTS ( \
                    SELECT 1 FROM submitted_prompts m \
                     WHERE m.matched_session_uuid = t.session_uuid \

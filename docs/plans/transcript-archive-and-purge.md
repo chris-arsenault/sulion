@@ -590,13 +590,20 @@ credential helper ("SULION_PTY_ID is not set"). `6d73ba7` calls
 configuration. Deployed; first export-only cycle (request #3): 2,284
 sessions exported, 0 failures, 5,171,429,001 archive bytes, durable dump
 `db/sulion-durable-2026-09-23T155501Z.dump` at 3.1 MB, 0 purged, gate
-closed. Deep verify queued as request #4.
+closed. That export took two hours because the store spawned the `aws`
+CLI per call; `a11b63e` replaced it with one `aws-sdk-s3` client and gave
+verify a progress job, and its deploy interrupted the CLI-era deep verify
+(#4). Deep verify #5 on the SDK store: 2,284 objects, 2,284 ok, 0 missing,
+0 mismatched, 0 stale, 19:28–19:40 UTC. The purge gate remains closed;
+opening it is the operator's step.
 
 ## Current state
 
-Completed: exploration, measurement, plan revision 3, M1–M5 implementation
-and tests. Remaining: M0's re-measure, trial dump, and vacuum; commit and
-push; the first deploy (Terraform apply through the pipeline creates the
-bucket and role policy). Next action: user reviews the diff, renews the
-database grant for the re-measure, names a vacuum window, and authorizes
-commit and push.
+Completed: everything through deployment. The archive loop runs in
+production against `s3://sulion-archive-<account>`, the first export-only
+cycle and a deep verify are clean, and the durable dump is in the bucket.
+Remaining for the operator: `sulion archive purge-gate on` when ready; the
+next scheduled cycle then purges sessions exported 90 or more days earlier.
+Remaining for the repository: five structure-lint items that predate this
+work (`projection.rs`, `worktree.rs`, and `ingester.rs` file sizes;
+`load_session_events`; `process_file`), which CI does not run.

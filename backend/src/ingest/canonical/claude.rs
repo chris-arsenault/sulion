@@ -13,7 +13,16 @@ impl EventParser for ClaudeParser {
 
     fn parse(&self, value: &Value) -> CanonicalEvent {
         let kind = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let attachment = value.get("attachment");
+        let queued_human = kind == "attachment" && attachment.is_some_and(|a| {
+            a.get("type").and_then(Value::as_str) == Some("queued_command")
+                && a.get("commandMode").and_then(Value::as_str) == Some("prompt")
+                && (a.pointer("/origin/kind").and_then(Value::as_str) == Some("human")
+                    || a.get("humanTurn").and_then(Value::as_bool) == Some(true))
+        });
         let speaker = match kind {
+            "attachment" if queued_human => Speaker::User,
+            "attachment" => Speaker::System,
             "user" => Speaker::User,
             "assistant" => Speaker::Assistant,
             "system" => Speaker::System,
@@ -24,7 +33,11 @@ impl EventParser for ClaudeParser {
         // Most content lives under `message.content`. When `content` is
         // a string rather than an array (happens on some user events),
         // treat the whole string as one text block.
-        let content = value.get("message").and_then(|m| m.get("content"));
+        let content = if queued_human {
+            attachment.and_then(|a| a.get("prompt"))
+        } else {
+            value.get("message").and_then(|m| m.get("content"))
+        };
 
         let tool_result_payload = value
             .get("toolUseResult")
@@ -42,6 +55,21 @@ impl EventParser for ClaudeParser {
                 blocks.push(Block::text(0, summary.to_string()));
             }
         }
+        if kind == "attachment" && !queued_human {
+            if let Some(rendered) = value.get("rendered").and_then(Value::as_array) {
+                blocks.extend(rendered.iter().filter_map(|part| part.get("content").and_then(Value::as_str))
+                    .enumerate().map(|(i, text)| Block::text(i as i32, text)));
+            }
+        }
+        if speaker == Speaker::User {
+            for block in &mut blocks {
+                if block.kind == super::BlockKind::Text {
+                    if let Some(text) = &mut block.text {
+                        *text = super::claude_text::normalize_user_text(text);
+                    }
+                }
+            }
+        }
 
         let content_kind = content_kind_of(&blocks);
 
@@ -49,12 +77,15 @@ impl EventParser for ClaudeParser {
             agent: self.agent_id(),
             speaker,
             content_kind,
-            event_uuid: string_field(value, &["uuid"]),
+            event_uuid: queued_human.then(|| attachment.and_then(|a| string_field(a, &["source_uuid"]))).flatten()
+                .or_else(|| string_field(value, &["uuid"])),
             parent_event_uuid: string_field(value, &["parentUuid", "parent_uuid"]),
             related_tool_use_id: string_field(value, &["tool_use_id"]),
             is_sidechain: bool_field(value, &["isSidechain"]).unwrap_or(false),
-            is_meta: bool_field(value, &["isMeta"]).unwrap_or(false),
-            subtype: string_field(value, &["subtype"]),
+            is_meta: if queued_human { false } else { kind == "attachment" || bool_field(value, &["isMeta"]).unwrap_or(false) },
+            subtype: if queued_human { Some("queued_user_prompt".into()) } else {
+                string_field(value, &["subtype"]).or_else(|| attachment.and_then(|a| string_field(a, &["type"])))
+            },
             blocks,
         }
     }

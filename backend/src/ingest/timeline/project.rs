@@ -65,6 +65,7 @@ pub(crate) struct TurnSeed<'a> {
 
 pub(crate) fn group_into_turns<'a>(events: &[&'a StoredEvent]) -> Vec<TurnSeed<'a>> {
     let mut turns = Vec::new();
+    let mut prompts_seen = HashSet::new();
     // Main-line turn currently receiving events. Sidechain events never
     // touch it: concurrent subagents interleave with the parent's own
     // work by timestamp, and letting a sidechain seed capture the main
@@ -83,6 +84,13 @@ pub(crate) fn group_into_turns<'a>(events: &[&'a StoredEvent]) -> Vec<TurnSeed<'
     let mut pending_prefix: Vec<&'a StoredEvent> = Vec::new();
 
     for event in events.iter().copied() {
+        if is_real_user_prompt(event) {
+            if let Some(id) = &event.event_uuid {
+                if !prompts_seen.insert((event.source_session, id)) {
+                    continue;
+                }
+            }
+        }
         let sidechain_key =
             (event.is_sidechain || event.source_session.is_some()).then_some(event.source_session);
 
@@ -732,7 +740,7 @@ fn is_system_event(event: &StoredEvent) -> bool {
 fn is_bookkeeping_event(event: &StoredEvent) -> bool {
     // is_meta covers any speaker: claude meta-system records and codex
     // plumbing records (world_state, turn_context, …) alike.
-    BOOKKEEPING_KINDS.contains(&event.kind.as_str())
+    (BOOKKEEPING_KINDS.contains(&event.kind.as_str()) && event.subtype.as_deref() != Some("queued_user_prompt"))
         || event.is_meta
         || (is_system_event(event) && is_bookkeeping_system_subtype(event.subtype.as_deref()))
         || is_local_command_event(event)
