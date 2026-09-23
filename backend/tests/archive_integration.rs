@@ -37,7 +37,7 @@ async fn fresh_pool() -> db::Pool {
     sqlx::query(
         "UPDATE archive_state SET last_cycle_started_at = NULL, last_cycle_completed_at = NULL, \
                 last_dump_key = NULL, last_dump_at = NULL, purge_enabled = FALSE, \
-                purge_enabled_at = NULL WHERE id = 1",
+                purge_enabled_at = NULL, store = NULL, loop_started_at = NULL WHERE id = 1",
     )
     .execute(&pool)
     .await
@@ -315,8 +315,18 @@ async fn purge_keeps_the_digest_rollups_and_every_consumer_working() {
     assert_eq!(verified.ok, 1, "{:?}", verified.problems);
     assert_eq!(verified.missing + verified.mismatched, 0);
     archive::set_purge_enabled(&pool, true).await.unwrap();
-    let status = archive::status(&pool, Some(&fx.store())).await.unwrap();
+    let before_loop = archive::status(&pool).await.unwrap();
+    assert!(!before_loop.configured, "no loop has recorded a store yet");
+    archive::record_store(&pool, &fx.archive_config(0))
+        .await
+        .unwrap();
+    let status = archive::status(&pool).await.unwrap();
     assert!(status.purge_enabled);
+    assert!(status.configured);
+    assert_eq!(
+        status.store.as_deref(),
+        Some(fx.store_dir.path().to_str().unwrap())
+    );
 
     // Nothing new to export; the purge now runs with no grace.
     let outcome = archive::run_cycle(&pool, &fx.archive_config(0), false)

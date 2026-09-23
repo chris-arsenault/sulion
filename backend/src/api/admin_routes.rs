@@ -112,8 +112,7 @@ pub(super) async fn archive_purge_gate(
 pub(super) async fn archive_status(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Json<crate::archive::ArchiveStatus>> {
-    let store = crate::archive::ObjectStore::from_env();
-    let status = crate::archive::status(&state.pool, store.as_ref())
+    let status = crate::archive::status(&state.pool)
         .await
         .map_err(ApiError::Internal)?;
     Ok(Json(status))

@@ -13,6 +13,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context};
 use tokio::process::Command;
 
+/// The AWS CLI to run. `/opt/sulion/bin/aws` sits first on the image's
+/// PATH and is the PTY wrapper that routes through the secret broker with a
+/// PTY grant; the control process has no PTY and authenticates with its own
+/// machine identity, so it must call the real CLI directly.
+fn aws_cli() -> String {
+    crate::config::env_optional("SULION_AWS_CLI").unwrap_or_else(|| "/usr/bin/aws".to_string())
+}
+
 #[derive(Debug, Clone)]
 pub enum ObjectStore {
     S3 { bucket: String },
@@ -63,7 +71,7 @@ impl ObjectStore {
         }
         match self {
             Self::S3 { bucket } => {
-                let mut cmd = Command::new("aws");
+                let mut cmd = Command::new(aws_cli());
                 cmd.arg("s3")
                     .arg("cp")
                     .arg(path)
@@ -99,7 +107,7 @@ impl ObjectStore {
     pub async fn head(&self, key: &str) -> anyhow::Result<Option<ObjectHead>> {
         match self {
             Self::S3 { bucket } => {
-                let mut cmd = Command::new("aws");
+                let mut cmd = Command::new(aws_cli());
                 cmd.args(["s3api", "head-object", "--bucket"])
                     .arg(bucket)
                     .arg("--key")
@@ -163,7 +171,7 @@ impl ObjectStore {
     pub async fn get_to_file(&self, key: &str, path: &Path) -> anyhow::Result<()> {
         match self {
             Self::S3 { bucket } => {
-                let mut cmd = Command::new("aws");
+                let mut cmd = Command::new(aws_cli());
                 cmd.arg("s3")
                     .arg("cp")
                     .arg(format!("s3://{bucket}/{key}"))

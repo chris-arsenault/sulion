@@ -67,6 +67,16 @@ fn env_days(key: &str, default: i64) -> i64 {
         .unwrap_or(default)
 }
 
+/// Writes which store this loop serves, so `sulion archive status` on the
+/// node can report it without seeing the control plane's environment.
+pub async fn record_store(pool: &Pool, config: &ArchiveConfig) -> anyhow::Result<()> {
+    sqlx::query("UPDATE archive_state SET store = $1, loop_started_at = NOW() WHERE id = 1")
+        .bind(config.store.describe())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// The operator's gate on deletion. Off by default: a cycle exports and
 /// dumps but purges nothing until `sulion archive purge-gate on` after the
 /// first backup has been verified.
@@ -121,6 +131,9 @@ pub async fn run_loop(pool: Pool, config: ArchiveConfig) {
         interval_days = config.interval_days,
         "archive loop starting",
     );
+    if let Err(err) = record_store(&pool, &config).await {
+        tracing::warn!(%err, "could not record the archive store");
+    }
     match requests::fail_stale_running(&pool).await {
         Ok(0) => {}
         Ok(count) => tracing::warn!(count, "archive requests interrupted by restart"),
@@ -451,8 +464,10 @@ pub async fn run_restore(
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ArchiveStatus {
+    /// A control process has started the loop against a store.
     pub configured: bool,
     pub store: Option<String>,
+    pub loop_started_at: Option<DateTime<Utc>>,
     pub purge_enabled: bool,
     pub purge_enabled_at: Option<DateTime<Utc>>,
     pub last_cycle_started_at: Option<DateTime<Utc>>,
@@ -466,10 +481,10 @@ pub struct ArchiveStatus {
     pub recent_requests: Vec<ArchiveRequest>,
 }
 
-pub async fn status(pool: &Pool, store: Option<&ObjectStore>) -> anyhow::Result<ArchiveStatus> {
+pub async fn status(pool: &Pool) -> anyhow::Result<ArchiveStatus> {
     let state = sqlx::query(
         "SELECT last_cycle_started_at, last_cycle_completed_at, last_dump_key, last_dump_at, \
-                purge_enabled, purge_enabled_at \
+                purge_enabled, purge_enabled_at, store, loop_started_at \
            FROM archive_state WHERE id = 1",
     )
     .fetch_optional(pool)
@@ -488,9 +503,15 @@ pub async fn status(pool: &Pool, store: Option<&ObjectStore>) -> anyhow::Result<
     .fetch_one(pool)
     .await?;
     use sqlx::Row;
+    let store: Option<String> = state
+        .as_ref()
+        .and_then(|row| row.try_get("store").ok().flatten());
     Ok(ArchiveStatus {
         configured: store.is_some(),
-        store: store.map(ObjectStore::describe),
+        store,
+        loop_started_at: state
+            .as_ref()
+            .and_then(|row| row.try_get("loop_started_at").ok().flatten()),
         purge_enabled: state
             .as_ref()
             .and_then(|row| row.try_get("purge_enabled").ok())

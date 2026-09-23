@@ -425,12 +425,7 @@ async fn dispatch_archive(
         ControlRequest::ArchiveRestore { scope } => Ok(serde_json::to_value(
             archive::requests::enqueue_restore(pool, &scope, Some(&requested_by)).await?,
         )?),
-        ControlRequest::ArchiveStatus => {
-            let store = archive::ObjectStore::from_env();
-            Ok(serde_json::to_value(
-                archive::status(pool, store.as_ref()).await?,
-            )?)
-        }
+        ControlRequest::ArchiveStatus => Ok(serde_json::to_value(archive::status(pool).await?)?),
         ControlRequest::ArchiveList { limit } => Ok(serde_json::to_value(
             archive::requests::recent(pool, limit.unwrap_or(20)).await?,
         )?),
