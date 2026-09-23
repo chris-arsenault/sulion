@@ -149,12 +149,11 @@ pub async fn run_loop(pool: Pool, config: ArchiveConfig) {
 }
 
 async fn cycle_due(pool: &Pool, config: &ArchiveConfig) -> anyhow::Result<bool> {
-    let last: Option<DateTime<Utc>> = sqlx::query_scalar(
-        "SELECT last_cycle_completed_at FROM archive_state WHERE id = 1",
-    )
-    .fetch_optional(pool)
-    .await?
-    .flatten();
+    let last: Option<DateTime<Utc>> =
+        sqlx::query_scalar("SELECT last_cycle_completed_at FROM archive_state WHERE id = 1")
+            .fetch_optional(pool)
+            .await?
+            .flatten();
     let interval = chrono::Duration::days(config.interval_days);
     Ok(match last {
         None => true,
@@ -195,7 +194,11 @@ async fn handle_request(pool: &Pool, config: &ArchiveConfig, request: ArchiveReq
     let finish = match result {
         Ok(value) => Ok(value),
         Err(err) => {
-            tracing::warn!(request = request.id, error = format!("{err:#}"), "archive request failed");
+            tracing::warn!(
+                request = request.id,
+                error = format!("{err:#}"),
+                "archive request failed"
+            );
             Err(format!("{err:#}"))
         }
     };
@@ -416,8 +419,11 @@ pub async fn run_restore(
         if outcome.failures == 0 {
             job.complete().await;
         } else {
-            job.fail(&format!("{} of {} restores failed", outcome.failures, outcome.sessions))
-                .await;
+            job.fail(&format!(
+                "{} of {} restores failed",
+                outcome.failures, outcome.sessions
+            ))
+            .await;
         }
     }
     Ok(outcome)

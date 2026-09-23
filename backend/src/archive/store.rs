@@ -35,8 +35,7 @@ impl ObjectStore {
                 root: PathBuf::from(dir),
             });
         }
-        crate::config::env_optional("SULION_ARCHIVE_BUCKET")
-            .map(|bucket| Self::S3 { bucket })
+        crate::config::env_optional("SULION_ARCHIVE_BUCKET").map(|bucket| Self::S3 { bucket })
     }
 
     pub fn describe(&self) -> String {
@@ -118,8 +117,8 @@ impl ObjectStore {
                         stderr.trim()
                     ));
                 }
-                let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)
-                    .context("parse head-object output")?;
+                let parsed: serde_json::Value =
+                    serde_json::from_slice(&output.stdout).context("parse head-object output")?;
                 let content_length = parsed
                     .get("ContentLength")
                     .and_then(serde_json::Value::as_i64)
@@ -131,7 +130,9 @@ impl ObjectStore {
                         object
                             .iter()
                             .filter_map(|(name, value)| {
-                                value.as_str().map(|value| (name.clone(), value.to_string()))
+                                value
+                                    .as_str()
+                                    .map(|value| (name.clone(), value.to_string()))
                             })
                             .collect()
                     })
@@ -188,7 +189,10 @@ fn meta_path(target: &Path) -> PathBuf {
 }
 
 async fn run_cli(mut cmd: Command, what: &str) -> anyhow::Result<()> {
-    let output = cmd.output().await.with_context(|| format!("spawn {what}"))?;
+    let output = cmd
+        .output()
+        .await
+        .with_context(|| format!("spawn {what}"))?;
     if output.status.success() {
         return Ok(());
     }

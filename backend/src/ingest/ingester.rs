@@ -21,7 +21,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use ring::digest;
 use serde_json::Value;
@@ -34,6 +33,9 @@ use super::canonical::{BlockKind, Speaker};
 use super::file_scan::{dirty_transcript_files, DirtyTranscriptFile};
 
 mod canonical_backfill;
+mod replay;
+
+pub use replay::{replay_session_lines, ReplayLine, ReplayStats};
 
 pub use canonical_backfill::backfill_canonical_blocks;
 use canonical_backfill::{detect_compaction_parent, set_parent_session};
@@ -542,31 +544,7 @@ async fn process_file(
     }
 
     result.committed_offset = file.committed_offset;
-
-    // A purged session keeps only its turn digest; projecting appended
-    // lines over that would rebuild the timeline from a handful of events.
-    // Ask the archive loop to restore it first and leave the offset alone,
-    // so the file is revisited once the replay has brought the rows back.
-    if session_is_purged(pool, file.session_uuid).await? {
-        match crate::archive::requests::enqueue_restore_if_absent(
-            pool,
-            file.session_uuid,
-            "ingester",
-        )
-        .await
-        {
-            Ok(true) => tracing::info!(
-                session = %file.session_uuid,
-                path = %file.path.display(),
-                "transcript grew after purge; restore requested before ingest",
-            ),
-            Ok(false) => {}
-            Err(err) => tracing::warn!(
-                session = %file.session_uuid,
-                %err,
-                "could not request restore for a purged session",
-            ),
-        }
+    if replay::defer_if_purged(pool, file).await? {
         return Ok(result);
     }
 
@@ -702,89 +680,6 @@ async fn project_session(pool: &Pool, session_uuid: Uuid, pending: PendingProjec
     if pending.has_subagent_parent {
         rebuild_ancestor_projections(pool, session_uuid, pending.source).await;
     }
-}
-
-async fn session_is_purged(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<bool> {
-    let purged: Option<bool> = sqlx::query_scalar(
-        "SELECT purged_at IS NOT NULL FROM claude_sessions WHERE session_uuid = $1",
-    )
-    .bind(session_uuid)
-    .fetch_optional(pool)
-    .await?;
-    Ok(purged.unwrap_or(false))
-}
-
-/// One archived event, ready to go back through the insert path.
-#[derive(Debug, Clone)]
-pub struct ReplayLine {
-    /// The original transcript offset, so the row lands on the same
-    /// idempotency key the file would produce.
-    pub byte_offset: i64,
-    /// The timestamp the row carried, used when the payload has none.
-    pub timestamp: DateTime<Utc>,
-    /// The tool-use link the row carried, which a Claude subagent line
-    /// gets from a sibling meta file the archive does not hold.
-    pub related_tool_use_id: Option<String>,
-    pub payload: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ReplayStats {
-    pub events_inserted: u64,
-    pub parse_errors: u64,
-    pub turns_projected: usize,
-}
-
-/// Replays archived lines for one session through the same insert path a
-/// transcript file takes, then rebuilds the session's projection in full.
-/// The caller has already cleared the session's derived rows.
-pub async fn replay_session_lines(
-    pool: &Pool,
-    session_uuid: Uuid,
-    agent: &str,
-    parent_session_uuid: Option<Uuid>,
-    lines: Vec<ReplayLine>,
-) -> anyhow::Result<ReplayStats> {
-    let source = match agent {
-        "codex" => TranscriptSource::Codex,
-        _ => TranscriptSource::ClaudeCode,
-    };
-    let mut stats = ReplayStats::default();
-    let mut codex_ctx = match source {
-        TranscriptSource::Codex => Some(load_codex_context(pool, session_uuid).await?),
-        TranscriptSource::ClaudeCode => None,
-    };
-    for line in &lines {
-        match insert_event(
-            pool,
-            session_uuid,
-            source,
-            line.byte_offset,
-            &line.payload,
-            codex_ctx.as_mut(),
-            line.related_tool_use_id.as_deref(),
-            Some(line.timestamp),
-        )
-        .await
-        {
-            Ok(true) => stats.events_inserted += 1,
-            Ok(false) => {}
-            Err(InsertError::ParseFailed) => stats.parse_errors += 1,
-            Err(InsertError::Db(err)) => {
-                return Err(anyhow::Error::new(err).context(format!(
-                    "replay {session_uuid} at offset {}",
-                    line.byte_offset
-                )));
-            }
-        }
-    }
-    stats.turns_projected = super::projection::rebuild_session_projection(pool, session_uuid)
-        .await
-        .context("rebuild projection after replay")?;
-    if parent_session_uuid.is_some() {
-        rebuild_ancestor_projections(pool, session_uuid, source).await;
-    }
-    Ok(stats)
 }
 
 /// Best-effort read of the spawn linkage from the transcript's sibling
@@ -995,6 +890,11 @@ async fn codex_parent_session_chain(pool: &Pool, session_uuid: Uuid) -> anyhow::
 /// skip); Ok(false) if the line was blank/malformed and silently
 /// skipped with the parse-error counter already bumped via Err at the
 /// call site.
+///
+/// Eight parameters: the file path and the archive replay share this one
+/// insert, and the two extras (`subagent_tool_use_id`, `fallback_timestamp`)
+/// are the columns only one of those callers can supply.
+#[allow(clippy::too_many_arguments)]
 async fn insert_event(
     pool: &Pool,
     session_uuid: Uuid,
@@ -1111,25 +1011,29 @@ async fn insert_event(
         update_codex_context(ctx, &value, session_uuid);
     }
 
-    // If this event hints that the current session is a compaction
-    // continuation of another, record the parent linkage. Best-effort —
-    // we tolerate format drift by checking several field names.
-    if source == TranscriptSource::ClaudeCode {
-        if let Some(parent) = detect_compaction_parent(&value, session_uuid) {
-            if let Err(err) = set_parent_session(pool, session_uuid, parent).await {
-                tracing::warn!(%err, session = %session_uuid, parent = %parent, "set_parent_session failed");
-            }
-        }
-    }
-    if source == TranscriptSource::Codex {
-        if let Some(parent) = detect_codex_parent_session(&value, session_uuid) {
-            if let Err(err) = set_parent_session(pool, session_uuid, parent).await {
-                tracing::warn!(%err, session = %session_uuid, parent = %parent, "set_parent_session failed");
-            }
-        }
-    }
+    link_parent_session(pool, source, &value, session_uuid).await;
 
     Ok(inserted)
+}
+
+/// If this event hints that the current session is a compaction or
+/// subagent continuation of another, record the parent linkage. Best-effort:
+/// format drift is tolerated by checking several field names.
+async fn link_parent_session(
+    pool: &Pool,
+    source: TranscriptSource,
+    value: &Value,
+    session_uuid: Uuid,
+) {
+    let parent = match source {
+        TranscriptSource::ClaudeCode => detect_compaction_parent(value, session_uuid),
+        TranscriptSource::Codex => detect_codex_parent_session(value, session_uuid),
+    };
+    if let Some(parent) = parent {
+        if let Err(err) = set_parent_session(pool, session_uuid, parent).await {
+            tracing::warn!(%err, session = %session_uuid, parent = %parent, "set_parent_session failed");
+        }
+    }
 }
 
 /// Projections that follow a committed event row and must not fail the

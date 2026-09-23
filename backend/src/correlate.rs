@@ -403,38 +403,45 @@ async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value>
                     .flatten();
             Ok(serde_json::json!({ "agent_label": label }))
         }
-        ControlRequest::ArchiveRun { dry_run } => {
-            let requested_by = format!("pty:{}", msg.pty_id);
-            let request =
-                crate::archive::requests::enqueue_run(pool, dry_run, Some(&requested_by)).await?;
-            Ok(serde_json::to_value(request)?)
-        }
-        ControlRequest::ArchiveRestore { scope } => {
-            let requested_by = format!("pty:{}", msg.pty_id);
-            let request =
-                crate::archive::requests::enqueue_restore(pool, &scope, Some(&requested_by))
-                    .await?;
-            Ok(serde_json::to_value(request)?)
-        }
+        // Every remaining variant is an archive command; the helper refuses
+        // anything else, so a new non-archive variant cannot fall through.
+        archive => dispatch_archive(pool, msg.pty_id, archive).await,
+    }
+}
+
+/// Transcript archive commands: queue work for the control process's loop
+/// or read its state. The PTY is recorded as the requester.
+async fn dispatch_archive(
+    pool: &Pool,
+    pty_id: Uuid,
+    request: ControlRequest,
+) -> anyhow::Result<Value> {
+    use crate::archive;
+    let requested_by = format!("pty:{pty_id}");
+    match request {
+        ControlRequest::ArchiveRun { dry_run } => Ok(serde_json::to_value(
+            archive::requests::enqueue_run(pool, dry_run, Some(&requested_by)).await?,
+        )?),
+        ControlRequest::ArchiveRestore { scope } => Ok(serde_json::to_value(
+            archive::requests::enqueue_restore(pool, &scope, Some(&requested_by)).await?,
+        )?),
         ControlRequest::ArchiveStatus => {
-            let store = crate::archive::ObjectStore::from_env();
+            let store = archive::ObjectStore::from_env();
             Ok(serde_json::to_value(
-                crate::archive::status(pool, store.as_ref()).await?,
+                archive::status(pool, store.as_ref()).await?,
             )?)
         }
         ControlRequest::ArchiveList { limit } => Ok(serde_json::to_value(
-            crate::archive::requests::recent(pool, limit.unwrap_or(20)).await?,
+            archive::requests::recent(pool, limit.unwrap_or(20)).await?,
         )?),
-        ControlRequest::ArchiveVerify { deep } => {
-            let requested_by = format!("pty:{}", msg.pty_id);
-            let request =
-                crate::archive::requests::enqueue_verify(pool, deep, Some(&requested_by)).await?;
-            Ok(serde_json::to_value(request)?)
-        }
+        ControlRequest::ArchiveVerify { deep } => Ok(serde_json::to_value(
+            archive::requests::enqueue_verify(pool, deep, Some(&requested_by)).await?,
+        )?),
         ControlRequest::ArchivePurgeGate { enabled } => {
-            crate::archive::set_purge_enabled(pool, enabled).await?;
+            archive::set_purge_enabled(pool, enabled).await?;
             Ok(serde_json::json!({ "purge_enabled": enabled }))
         }
+        other => anyhow::bail!("not an archive request: {other:?}"),
     }
 }
 

@@ -45,10 +45,7 @@ struct PurgedSession {
 
 /// Purged sessions matching the scope, oldest archive month first, so a
 /// whole-history replay walks forward in time.
-pub async fn sessions_in_scope(
-    pool: &Pool,
-    scope: &RestoreScope,
-) -> anyhow::Result<Vec<Uuid>> {
+pub async fn sessions_in_scope(pool: &Pool, scope: &RestoreScope) -> anyhow::Result<Vec<Uuid>> {
     if let Some(session_uuid) = scope.session_uuid {
         return Ok(vec![session_uuid]);
     }
@@ -106,8 +103,67 @@ pub async fn restore_session(
         anyhow::bail!("{key} holds no lines");
     }
 
-    // Take the session's contributions back out of the rollups and clear
-    // the digest, in one transaction, before any line is replayed.
+    let tokens_before = withdraw_and_clear(pool, session_uuid).await?;
+
+    let replay: Vec<ReplayLine> = lines
+        .iter()
+        .map(|line| ReplayLine {
+            byte_offset: line.o,
+            timestamp: line.t,
+            related_tool_use_id: line.r.clone(),
+            payload: serde_json::to_vec(&line.p).unwrap_or_default(),
+        })
+        .collect();
+    let stats = replay_session_lines(
+        pool,
+        session_uuid,
+        &session.agent,
+        session.parent_session_uuid,
+        replay,
+    )
+    .await
+    .with_context(|| format!("replay {key}"))?;
+
+    let tokens_after: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(input_tokens + cached_input_tokens + cache_write_input_tokens \
+                             + cache_write_1h_input_tokens + output_tokens), 0)::BIGINT \
+           FROM agent_model_usage_daily WHERE session_uuid = $1",
+    )
+    .bind(session_uuid)
+    .fetch_one(pool)
+    .await?;
+    if tokens_before != tokens_after {
+        tracing::warn!(
+            session = %session_uuid,
+            tokens_before,
+            tokens_after,
+            "restored usage differs from the rollup it replaced",
+        );
+    }
+
+    let purged_again = if purge_after {
+        purge_session(pool, session_uuid).await?;
+        true
+    } else {
+        false
+    };
+
+    Ok(RestoreOutcome {
+        session_uuid,
+        key,
+        lines: lines.len(),
+        events_inserted: stats.events_inserted,
+        turns: stats.turns_projected,
+        tokens_before,
+        tokens_after,
+        purged_again,
+    })
+}
+
+/// Takes the session's contributions back out of the rollups and clears
+/// its digest and any leftover derived rows, in one transaction, before a
+/// line is replayed. Returns the token total the rollup carried for it.
+async fn withdraw_and_clear(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<i64> {
     let mut tx = pool.begin().await.context("begin restore tx")?;
     let tokens_before: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(input_tokens + cached_input_tokens + cache_write_input_tokens \
@@ -177,60 +233,7 @@ pub async fn restore_session(
         .execute(&mut *tx)
         .await?;
     tx.commit().await.context("commit restore tx")?;
-
-    let replay: Vec<ReplayLine> = lines
-        .iter()
-        .map(|line| ReplayLine {
-            byte_offset: line.o,
-            timestamp: line.t,
-            related_tool_use_id: line.r.clone(),
-            payload: serde_json::to_vec(&line.p).unwrap_or_default(),
-        })
-        .collect();
-    let stats = replay_session_lines(
-        pool,
-        session_uuid,
-        &session.agent,
-        session.parent_session_uuid,
-        replay,
-    )
-    .await
-    .with_context(|| format!("replay {key}"))?;
-
-    let tokens_after: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(input_tokens + cached_input_tokens + cache_write_input_tokens \
-                             + cache_write_1h_input_tokens + output_tokens), 0)::BIGINT \
-           FROM agent_model_usage_daily WHERE session_uuid = $1",
-    )
-    .bind(session_uuid)
-    .fetch_one(pool)
-    .await?;
-    if tokens_before != tokens_after {
-        tracing::warn!(
-            session = %session_uuid,
-            tokens_before,
-            tokens_after,
-            "restored usage differs from the rollup it replaced",
-        );
-    }
-
-    let purged_again = if purge_after {
-        purge_session(pool, session_uuid).await?;
-        true
-    } else {
-        false
-    };
-
-    Ok(RestoreOutcome {
-        session_uuid,
-        key,
-        lines: lines.len(),
-        events_inserted: stats.events_inserted,
-        turns: stats.turns_projected,
-        tokens_before,
-        tokens_after,
-        purged_again,
-    })
+    Ok(tokens_before)
 }
 
 /// When the session was last touched, for the job detail line.

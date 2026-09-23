@@ -103,7 +103,9 @@ pub(super) async fn archive_purge_gate(
     crate::archive::set_purge_enabled(&state.pool, request.enabled)
         .await
         .map_err(ApiError::Internal)?;
-    Ok(Json(serde_json::json!({ "purge_enabled": request.enabled })))
+    Ok(Json(
+        serde_json::json!({ "purge_enabled": request.enabled }),
+    ))
 }
 
 /// `GET /api/admin/archive`: store, last cycle, counts, recent requests.

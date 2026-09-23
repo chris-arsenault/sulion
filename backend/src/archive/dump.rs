@@ -43,12 +43,9 @@ pub struct DumpOutcome {
 
 /// Runs `pg_dump -Fc` for the durable set and uploads it. `pg_dump` comes
 /// from `SULION_PG_DUMP` (the pgdg 18 client in the image) or `PATH`.
-pub async fn dump_durable_tables(
-    store: &ObjectStore,
-    db_url: &str,
-) -> anyhow::Result<DumpOutcome> {
-    let pg_dump = crate::config::env_optional("SULION_PG_DUMP")
-        .unwrap_or_else(|| "pg_dump".to_string());
+pub async fn dump_durable_tables(store: &ObjectStore, db_url: &str) -> anyhow::Result<DumpOutcome> {
+    let pg_dump =
+        crate::config::env_optional("SULION_PG_DUMP").unwrap_or_else(|| "pg_dump".to_string());
     let temp = tempfile::NamedTempFile::new().context("create dump temp file")?;
     let mut cmd = Command::new(&pg_dump);
     cmd.arg("--format=custom")
@@ -93,7 +90,10 @@ pub async fn dump_durable_tables(
         .await?
         .ok_or_else(|| anyhow!("{key} is absent after upload"))?;
     if head.content_length != bytes {
-        anyhow::bail!("{key}: stored {} bytes, uploaded {bytes}", head.content_length);
+        anyhow::bail!(
+            "{key}: stored {} bytes, uploaded {bytes}",
+            head.content_length
+        );
     }
     Ok(DumpOutcome { key, bytes })
 }

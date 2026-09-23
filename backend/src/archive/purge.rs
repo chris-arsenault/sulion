@@ -16,6 +16,8 @@ use uuid::Uuid;
 
 use crate::db::Pool;
 
+type Tx<'a> = Transaction<'a, Postgres>;
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct PurgeCandidate {
     pub session_uuid: Uuid,
@@ -70,7 +72,7 @@ pub struct PurgeOutcome {
 /// Frozen into the rollup at purge time, since the rows it is derived from
 /// may not outlive the session.
 pub async fn attributed_repo(
-    tx: &mut Transaction<'_, Postgres>,
+    tx: &mut Tx<'_>,
     session_uuid: Uuid,
 ) -> anyhow::Result<Option<String>> {
     let repo: Option<String> = sqlx::query_scalar(
@@ -112,37 +114,69 @@ pub async fn attributed_repo(
     Ok(repo)
 }
 
+/// The session row's archive state, read under `FOR UPDATE` before a purge.
+#[derive(Debug, sqlx::FromRow)]
+struct PurgeGuard {
+    archived_at: Option<DateTime<Utc>>,
+    archive_events: Option<i64>,
+    purged_at: Option<DateTime<Utc>>,
+}
+
 /// Purges one session. Refuses a session that is live, unexported, changed
 /// since export, or already purged; those are the invariants the loop's
 /// candidate query enforces, re-checked under the row lock.
 pub async fn purge_session(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<PurgeOutcome> {
     let mut tx = pool.begin().await.context("begin purge tx")?;
-    let guard: Option<(Option<DateTime<Utc>>, Option<i64>, Option<DateTime<Utc>>)> =
-        sqlx::query_as(
-            "SELECT archived_at, archive_events, purged_at \
-               FROM claude_sessions WHERE session_uuid = $1 FOR UPDATE",
-        )
+    lock_and_check(&mut tx, session_uuid).await?;
+
+    let repo = attributed_repo(&mut tx, session_uuid).await?;
+    let mut outcome = PurgeOutcome {
+        session_uuid,
+        repo: repo.clone(),
+        ..PurgeOutcome::default()
+    };
+    outcome.usage_rollup_rows =
+        roll_up_usage(&mut tx, session_uuid, repo.as_deref().unwrap_or_default()).await?;
+    outcome.file_activity_rows = roll_up_file_activity(&mut tx, session_uuid).await?;
+    outcome.turns_kept = fold_touches_into_digest(&mut tx, session_uuid).await?;
+    outcome.digest_sources =
+        replace_embedding_sources(&mut tx, session_uuid, repo.as_deref()).await?;
+    delete_session_rows(&mut tx, session_uuid, &mut outcome).await?;
+
+    sqlx::query("UPDATE claude_sessions SET purged_at = NOW() WHERE session_uuid = $1")
         .bind(session_uuid)
-        .fetch_optional(&mut *tx)
+        .execute(&mut *tx)
         .await?;
-    let Some((archived_at, archive_events, purged_at)) = guard else {
+    tx.commit().await.context("commit purge tx")?;
+    Ok(outcome)
+}
+
+async fn lock_and_check(tx: &mut Tx<'_>, session_uuid: Uuid) -> anyhow::Result<()> {
+    let guard: Option<PurgeGuard> = sqlx::query_as(
+        "SELECT archived_at, archive_events, purged_at \
+           FROM claude_sessions WHERE session_uuid = $1 FOR UPDATE",
+    )
+    .bind(session_uuid)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(guard) = guard else {
         anyhow::bail!("session {session_uuid} does not exist");
     };
-    if purged_at.is_some() {
+    if guard.purged_at.is_some() {
         anyhow::bail!("session {session_uuid} is already purged");
     }
-    if archived_at.is_none() {
+    if guard.archived_at.is_none() {
         anyhow::bail!("session {session_uuid} has no verified export");
     }
     let event_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*)::BIGINT FROM events WHERE session_uuid = $1")
             .bind(session_uuid)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await?;
-    if archive_events != Some(event_count) {
+    if guard.archive_events != Some(event_count) {
         anyhow::bail!(
             "session {session_uuid} grew since its export ({event_count} events, {} archived)",
-            archive_events.unwrap_or(0)
+            guard.archive_events.unwrap_or(0)
         );
     }
     let live: bool = sqlx::query_scalar(
@@ -152,23 +186,18 @@ pub async fn purge_session(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<Pu
          )",
     )
     .bind(session_uuid)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await?;
     if live {
         anyhow::bail!("session {session_uuid} is the current session of a live PTY");
     }
+    Ok(())
+}
 
-    let repo = attributed_repo(&mut tx, session_uuid).await?;
-    let mut outcome = PurgeOutcome {
-        session_uuid,
-        repo: repo.clone(),
-        ..PurgeOutcome::default()
-    };
-    let repo_key = repo.clone().unwrap_or_default();
-
-    // Cost: freeze the per-session daily rows into the repo-level rollup,
-    // remembering exactly what was added so a restore can take it back.
-    outcome.usage_rollup_rows = sqlx::query(
+/// Cost: freeze the per-session daily rows into the repo-level rollup,
+/// remembering exactly what was added so a restore can take it back.
+async fn roll_up_usage(tx: &mut Tx<'_>, session_uuid: Uuid, repo_key: &str) -> anyhow::Result<u64> {
+    let rows = sqlx::query(
         "INSERT INTO usage_rollup_contributions \
             (session_uuid, day, repo, agent, model, input_tokens, cached_input_tokens, \
              cache_write_input_tokens, cache_write_1h_input_tokens, output_tokens) \
@@ -183,8 +212,8 @@ pub async fn purge_session(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<Pu
             output_tokens = EXCLUDED.output_tokens",
     )
     .bind(session_uuid)
-    .bind(&repo_key)
-    .execute(&mut *tx)
+    .bind(repo_key)
+    .execute(&mut **tx)
     .await
     .context("record usage contributions")?
     .rows_affected();
@@ -205,13 +234,16 @@ pub async fn purge_session(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<Pu
             updated_at = NOW()",
     )
     .bind(session_uuid)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .context("add usage rollup")?;
+    Ok(rows)
+}
 
-    // File churn: per repo, path, and day, how many of this session's turns
-    // wrote or read the path.
-    outcome.file_activity_rows = sqlx::query(
+/// File churn: per repo, path, and day, how many of this session's turns
+/// wrote or read the path.
+async fn roll_up_file_activity(tx: &mut Tx<'_>, session_uuid: Uuid) -> anyhow::Result<u64> {
+    let rows = sqlx::query(
         "INSERT INTO file_activity_contributions (session_uuid, repo, path, day, write_turns, read_turns) \
          SELECT ft.session_uuid, ft.repo_name, ft.repo_rel_path, \
                 (tt.end_timestamp AT TIME ZONE 'UTC')::DATE, \
@@ -225,7 +257,7 @@ pub async fn purge_session(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<Pu
             write_turns = EXCLUDED.write_turns, read_turns = EXCLUDED.read_turns",
     )
     .bind(session_uuid)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .context("record file activity contributions")?
     .rows_affected();
@@ -239,12 +271,16 @@ pub async fn purge_session(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<Pu
             updated_at = NOW()",
     )
     .bind(session_uuid)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .context("add file activity rollup")?;
+    Ok(rows)
+}
 
-    // The digest keeps which files each turn touched, since the touch rows
-    // are about to go and file-history still has to answer for these turns.
+/// The digest keeps which files each turn touched, since the touch rows
+/// are about to go and file-history still has to answer for these turns.
+/// Returns the number of turns the session keeps.
+async fn fold_touches_into_digest(tx: &mut Tx<'_>, session_uuid: Uuid) -> anyhow::Result<i64> {
     sqlx::query(
         "UPDATE timeline_turns tt \
             SET files_json = COALESCE(( \
@@ -258,26 +294,33 @@ pub async fn purge_session(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<Pu
           WHERE tt.session_uuid = $1",
     )
     .bind(session_uuid)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .context("fold file touches into the turn digest")?;
-    outcome.turns_kept =
+    let turns: i64 =
         sqlx::query_scalar("SELECT COUNT(*)::BIGINT FROM timeline_turns WHERE session_uuid = $1")
             .bind(session_uuid)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await?;
+    Ok(turns)
+}
 
-    // Semantic search over the digest: one source per turn with markdown,
-    // replacing every block- and operation-level source the session had.
+/// Semantic search over the digest: one source per turn with markdown,
+/// replacing every block- and operation-level source the session had.
+async fn replace_embedding_sources(
+    tx: &mut Tx<'_>,
+    session_uuid: Uuid,
+    repo: Option<&str>,
+) -> anyhow::Result<u64> {
     sqlx::query("DELETE FROM retrieval_embeddings WHERE session_uuid = $1")
         .bind(session_uuid)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     sqlx::query("DELETE FROM retrieval_embedding_sources WHERE session_uuid = $1")
         .bind(session_uuid)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    outcome.digest_sources = sqlx::query(
+    let sources = sqlx::query(
         "INSERT INTO retrieval_embedding_sources \
             (source_family, source_kind, source_key, session_uuid, turn_id, repo_name, \
              content_hash, index_status, dirty_at) \
@@ -289,58 +332,57 @@ pub async fn purge_session(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<Pu
           WHERE session_uuid = $1 AND length(trim(markdown)) > 0",
     )
     .bind(session_uuid)
-    .bind(repo.as_deref())
-    .execute(&mut *tx)
+    .bind(repo)
+    .execute(&mut **tx)
     .await
     .context("enqueue turn digest sources")?
     .rows_affected();
+    Ok(sources)
+}
 
+/// Everything the session owned beyond its digest and skeleton.
+async fn delete_session_rows(
+    tx: &mut Tx<'_>,
+    session_uuid: Uuid,
+    outcome: &mut PurgeOutcome,
+) -> anyhow::Result<()> {
     for table in [
         "agent_usage_responses",
         "agent_model_usage_daily",
         "agent_usage_daily",
         "agent_session_usage",
         "agent_model_switches",
+        "timeline_activity_signals",
     ] {
         sqlx::query(&format!("DELETE FROM {table} WHERE session_uuid = $1"))
             .bind(session_uuid)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .with_context(|| format!("purge {table}"))?;
     }
     outcome.touches_deleted =
         sqlx::query("DELETE FROM timeline_file_touches WHERE session_uuid = $1")
             .bind(session_uuid)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?
             .rows_affected();
-    sqlx::query("DELETE FROM timeline_activity_signals WHERE session_uuid = $1")
-        .bind(session_uuid)
-        .execute(&mut *tx)
-        .await?;
     outcome.operations_deleted =
         sqlx::query("DELETE FROM timeline_operations WHERE session_uuid = $1")
             .bind(session_uuid)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?
             .rows_affected();
     outcome.blocks_deleted = sqlx::query("DELETE FROM event_blocks WHERE session_uuid = $1")
         .bind(session_uuid)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?
         .rows_affected();
     outcome.events_deleted = sqlx::query("DELETE FROM events WHERE session_uuid = $1")
         .bind(session_uuid)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?
         .rows_affected();
-
-    sqlx::query("UPDATE claude_sessions SET purged_at = NOW() WHERE session_uuid = $1")
-        .bind(session_uuid)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await.context("commit purge tx")?;
-    Ok(outcome)
+    Ok(())
 }
 
 /// Age-based pruning of operational rows the cycle would otherwise let

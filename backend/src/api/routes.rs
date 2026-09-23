@@ -153,6 +153,13 @@ pub fn router() -> Router<Arc<AppState>> {
                 .put(library_routes::put_library_entry)
                 .delete(library_routes::delete_library_entry),
         )
+        .merge(admin_router())
+}
+
+fn admin_router() -> Router<Arc<AppState>> {
+    use axum::routing::{get, post};
+
+    Router::new()
         .route("/api/admin/reindex", post(admin_routes::reindex))
         .route(
             "/api/admin/retrieval/reindex",

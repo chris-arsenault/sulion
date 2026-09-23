@@ -112,7 +112,8 @@ pub async fn export_session(
 ) -> anyhow::Result<ExportOutcome> {
     let key = object_key(&session.agent, session.first_event_at, session.session_uuid);
     let temp = tempfile::NamedTempFile::new().context("create export temp file")?;
-    let (bytes, sha256, events) = write_session_lines(pool, session.session_uuid, temp.path()).await?;
+    let (bytes, sha256, events) =
+        write_session_lines(pool, session.session_uuid, temp.path()).await?;
     if events == 0 {
         anyhow::bail!("session {} has no events to export", session.session_uuid);
     }
@@ -294,9 +295,10 @@ pub async fn verify_archives(
             Ok(Some(head)) => head,
             Ok(None) => {
                 outcome.missing += 1;
-                outcome
-                    .problems
-                    .push(format!("{}: object {} is missing", session.session_uuid, session.archive_key));
+                outcome.problems.push(format!(
+                    "{}: object {} is missing",
+                    session.session_uuid, session.archive_key
+                ));
                 continue;
             }
             Err(err) => {
@@ -309,13 +311,24 @@ pub async fn verify_archives(
             }
         };
         let mut mismatch = Vec::new();
-        if head.metadata.get("sha256").map(String::as_str) != Some(session.archive_sha256.as_str()) {
+        if head.metadata.get("sha256").map(String::as_str) != Some(session.archive_sha256.as_str())
+        {
             mismatch.push("stored sha256 differs from the session row".to_string());
         }
-        if head.metadata.get("events").and_then(|v| v.parse::<i64>().ok()) != Some(session.archive_events) {
+        if head
+            .metadata
+            .get("events")
+            .and_then(|v| v.parse::<i64>().ok())
+            != Some(session.archive_events)
+        {
             mismatch.push("stored event count differs from the session row".to_string());
         }
-        if head.metadata.get("bytes").and_then(|v| v.parse::<i64>().ok()) != Some(session.archive_bytes) {
+        if head
+            .metadata
+            .get("bytes")
+            .and_then(|v| v.parse::<i64>().ok())
+            != Some(session.archive_bytes)
+        {
             mismatch.push("stored byte count differs from the session row".to_string());
         }
         if deep && mismatch.is_empty() {

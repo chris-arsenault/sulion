@@ -191,7 +191,11 @@ async fn export_verifies_object_and_records_archive_columns() {
     assert!(dry.dry_run);
     assert_eq!(dry.eligible_for_export, 1);
     assert_eq!(dry.eligible_for_purge, 0);
-    assert_eq!(count(&pool, "events", fx.session_uuid).await, 4, "dry run touches nothing");
+    assert_eq!(
+        count(&pool, "events", fx.session_uuid).await,
+        4,
+        "dry run touches nothing"
+    );
 
     let outcome = archive::run_cycle(&pool, &fx.archive_config(90), false)
         .await
@@ -199,17 +203,25 @@ async fn export_verifies_object_and_records_archive_columns() {
     assert_eq!(outcome.exported, 1);
     assert_eq!(outcome.export_failures, 0);
     assert_eq!(outcome.purged, 0, "a 90-day grace purges nothing today");
-    assert!(!outcome.purge_enabled, "the gate is closed until an operator opens it");
+    assert!(
+        !outcome.purge_enabled,
+        "the gate is closed until an operator opens it"
+    );
 
-    let (key, sha, bytes, events, purged): (String, String, i64, i64, Option<chrono::DateTime<chrono::Utc>>) =
-        sqlx::query_as(
-            "SELECT archive_key, archive_sha256, archive_bytes, archive_events, purged_at \
+    let (key, sha, bytes, events, purged): (
+        String,
+        String,
+        i64,
+        i64,
+        Option<chrono::DateTime<chrono::Utc>>,
+    ) = sqlx::query_as(
+        "SELECT archive_key, archive_sha256, archive_bytes, archive_events, purged_at \
                FROM claude_sessions WHERE session_uuid = $1",
-        )
-        .bind(fx.session_uuid)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert!(key.starts_with("sessions/claude-code/2026/01/"), "{key}");
     assert!(key.ends_with(".jsonl.zst"));
     assert_eq!(sha.len(), 64);
@@ -218,7 +230,10 @@ async fn export_verifies_object_and_records_archive_columns() {
     assert!(purged.is_none());
 
     let head = fx.store().head(&key).await.unwrap().expect("object exists");
-    assert_eq!(head.metadata.get("sha256").map(String::as_str), Some(sha.as_str()));
+    assert_eq!(
+        head.metadata.get("sha256").map(String::as_str),
+        Some(sha.as_str())
+    );
     assert_eq!(head.metadata.get("events").map(String::as_str), Some("4"));
 
     // The object round-trips: same lines, original offsets, verified hash.
@@ -261,7 +276,10 @@ async fn purge_keeps_the_digest_rollups_and_every_consumer_working() {
     ingest(&pool, &fx).await;
 
     let touches_before = count(&pool, "timeline_file_touches", fx.session_uuid).await;
-    assert!(touches_before >= 1, "the Edit call must project as a file touch");
+    assert!(
+        touches_before >= 1,
+        "the Edit call must project as a file touch"
+    );
     let turns_before = count(&pool, "timeline_turns", fx.session_uuid).await;
     assert!(turns_before >= 1);
     let tokens_before = all_time_tokens(&pool).await;
@@ -271,12 +289,13 @@ async fn purge_keeps_the_digest_rollups_and_every_consumer_working() {
         .await
         .unwrap();
     assert!(!trace_before.is_empty());
-    let markdown_before: String =
-        sqlx::query_scalar("SELECT markdown FROM timeline_turns WHERE session_uuid = $1 ORDER BY turn_id LIMIT 1")
-            .bind(fx.session_uuid)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let markdown_before: String = sqlx::query_scalar(
+        "SELECT markdown FROM timeline_turns WHERE session_uuid = $1 ORDER BY turn_id LIMIT 1",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert!(markdown_before.contains("widget_helper"));
 
     // With the gate closed a zero-grace cycle still deletes nothing.
@@ -311,14 +330,29 @@ async fn purge_keeps_the_digest_rollups_and_every_consumer_working() {
     // Gone: events, blocks, operations, touches, per-session usage.
     assert_eq!(count(&pool, "events", fx.session_uuid).await, 0);
     assert_eq!(count(&pool, "event_blocks", fx.session_uuid).await, 0);
-    assert_eq!(count(&pool, "timeline_operations", fx.session_uuid).await, 0);
-    assert_eq!(count(&pool, "timeline_file_touches", fx.session_uuid).await, 0);
-    assert_eq!(count(&pool, "agent_model_usage_daily", fx.session_uuid).await, 0);
+    assert_eq!(
+        count(&pool, "timeline_operations", fx.session_uuid).await,
+        0
+    );
+    assert_eq!(
+        count(&pool, "timeline_file_touches", fx.session_uuid).await,
+        0
+    );
+    assert_eq!(
+        count(&pool, "agent_model_usage_daily", fx.session_uuid).await,
+        0
+    );
     assert_eq!(count(&pool, "agent_usage_daily", fx.session_uuid).await, 0);
-    assert_eq!(count(&pool, "agent_session_usage", fx.session_uuid).await, 0);
+    assert_eq!(
+        count(&pool, "agent_session_usage", fx.session_uuid).await,
+        0
+    );
 
     // Kept: the digest with its markdown and file list.
-    assert_eq!(count(&pool, "timeline_turns", fx.session_uuid).await, turns_before);
+    assert_eq!(
+        count(&pool, "timeline_turns", fx.session_uuid).await,
+        turns_before
+    );
     let (markdown_after, files_json, chunks): (String, serde_json::Value, serde_json::Value) =
         sqlx::query_as(
             "SELECT markdown, files_json, chunks_json FROM timeline_turns \
@@ -332,7 +366,9 @@ async fn purge_keeps_the_digest_rollups_and_every_consumer_working() {
     assert_eq!(chunks, serde_json::json!([]));
     let files = files_json.as_array().expect("files_json array");
     assert!(
-        files.iter().any(|f| f["path"] == "src/widget.rs" && f["write"] == true),
+        files
+            .iter()
+            .any(|f| f["path"] == "src/widget.rs" && f["write"] == true),
         "{files_json}"
     );
     let purged_at: Option<chrono::DateTime<chrono::Utc>> =
@@ -370,7 +406,10 @@ async fn purge_keeps_the_digest_rollups_and_every_consumer_working() {
     assert_eq!(trace_after.len(), trace_before.len());
     assert_eq!(trace_after[0].turn_id, trace_before[0].turn_id);
     assert!(trace_after[0].is_write);
-    assert!(trace_after[0].pair_id.is_none(), "no operation to link on a digest");
+    assert!(
+        trace_after[0].pair_id.is_none(),
+        "no operation to link on a digest"
+    );
 
     // Search: the digest is queued for embedding, block sources are gone.
     let sources: Vec<(String, String)> = sqlx::query_as(
@@ -388,13 +427,17 @@ async fn purge_keeps_the_digest_rollups_and_every_consumer_working() {
 
     // The admin reindex rebuilds live sessions and leaves the digest alone.
     rebuild_ingest_derivatives(&pool).await.unwrap();
-    assert_eq!(count(&pool, "timeline_turns", fx.session_uuid).await, turns_before);
-    let still: String =
-        sqlx::query_scalar("SELECT markdown FROM timeline_turns WHERE session_uuid = $1 ORDER BY turn_id LIMIT 1")
-            .bind(fx.session_uuid)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    assert_eq!(
+        count(&pool, "timeline_turns", fx.session_uuid).await,
+        turns_before
+    );
+    let still: String = sqlx::query_scalar(
+        "SELECT markdown FROM timeline_turns WHERE session_uuid = $1 ORDER BY turn_id LIMIT 1",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(still, markdown_before);
 
     // The timeline API reports the session as archived.
@@ -410,13 +453,16 @@ async fn purge_keeps_the_digest_rollups_and_every_consumer_working() {
     );
     ingest(&pool, &fx).await;
     assert_eq!(count(&pool, "events", fx.session_uuid).await, 0);
-    let pending: Vec<(String, serde_json::Value)> = sqlx::query_as(
-        "SELECT kind, scope FROM archive_requests WHERE status = 'pending'",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-    assert_eq!(pending.len(), 1, "exactly one restore is queued, not one per tick");
+    let pending: Vec<(String, serde_json::Value)> =
+        sqlx::query_as("SELECT kind, scope FROM archive_requests WHERE status = 'pending'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        pending.len(),
+        1,
+        "exactly one restore is queued, not one per tick"
+    );
     assert_eq!(pending[0].0, "restore");
     assert_eq!(pending[0].1["session_uuid"], fx.session_uuid.to_string());
 }
@@ -431,12 +477,13 @@ async fn restore_replays_the_archive_and_purge_after_returns_to_the_digest() {
     let tokens_before = all_time_tokens(&pool).await;
     let ops_before = count(&pool, "timeline_operations", fx.session_uuid).await;
     let touches_before = count(&pool, "timeline_file_touches", fx.session_uuid).await;
-    let offsets_before: Vec<(i64,)> =
-        sqlx::query_as("SELECT byte_offset FROM events WHERE session_uuid = $1 ORDER BY byte_offset")
-            .bind(fx.session_uuid)
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+    let offsets_before: Vec<(i64,)> = sqlx::query_as(
+        "SELECT byte_offset FROM events WHERE session_uuid = $1 ORDER BY byte_offset",
+    )
+    .bind(fx.session_uuid)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
 
     archive::set_purge_enabled(&pool, true).await.unwrap();
     let outcome = archive::run_cycle(&pool, &fx.archive_config(0), false)
@@ -458,19 +505,29 @@ async fn restore_replays_the_archive_and_purge_after_returns_to_the_digest() {
     let one = &restored.outcomes[0];
     assert_eq!(one.lines, 4);
     assert_eq!(one.events_inserted, 4);
-    assert_eq!(one.tokens_before, one.tokens_after, "replayed usage matches the rollup");
+    assert_eq!(
+        one.tokens_before, one.tokens_after,
+        "replayed usage matches the rollup"
+    );
     assert!(!one.purged_again);
 
     // Exactly as before: same offsets, operations, touches, cost, no rollup left.
-    let offsets_after: Vec<(i64,)> =
-        sqlx::query_as("SELECT byte_offset FROM events WHERE session_uuid = $1 ORDER BY byte_offset")
-            .bind(fx.session_uuid)
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+    let offsets_after: Vec<(i64,)> = sqlx::query_as(
+        "SELECT byte_offset FROM events WHERE session_uuid = $1 ORDER BY byte_offset",
+    )
+    .bind(fx.session_uuid)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
     assert_eq!(offsets_after, offsets_before);
-    assert_eq!(count(&pool, "timeline_operations", fx.session_uuid).await, ops_before);
-    assert_eq!(count(&pool, "timeline_file_touches", fx.session_uuid).await, touches_before);
+    assert_eq!(
+        count(&pool, "timeline_operations", fx.session_uuid).await,
+        ops_before
+    );
+    assert_eq!(
+        count(&pool, "timeline_file_touches", fx.session_uuid).await,
+        touches_before
+    );
     assert_eq!(all_time_tokens(&pool).await, tokens_before);
     let rollup_left: (i64,) =
         sqlx::query_as("SELECT COALESCE(SUM(input_tokens), 0)::BIGINT FROM usage_daily_rollup")
@@ -487,19 +544,27 @@ async fn restore_replays_the_archive_and_purge_after_returns_to_the_digest() {
             .await
             .unwrap();
     assert!(purged_at.is_none());
-    let files_json: serde_json::Value =
-        sqlx::query_scalar("SELECT files_json FROM timeline_turns WHERE session_uuid = $1 ORDER BY turn_id LIMIT 1")
-            .bind(fx.session_uuid)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(files_json, serde_json::json!([]), "live turns carry no digest file list");
+    let files_json: serde_json::Value = sqlx::query_scalar(
+        "SELECT files_json FROM timeline_turns WHERE session_uuid = $1 ORDER BY turn_id LIMIT 1",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        files_json,
+        serde_json::json!([]),
+        "live turns carry no digest file list"
+    );
 
     // A whole-history replay: `--all` purges again after each session.
     let outcome = archive::run_cycle(&pool, &fx.archive_config(0), false)
         .await
         .unwrap();
-    assert_eq!(outcome.exported, 0, "the archive already matches the session");
+    assert_eq!(
+        outcome.exported, 0,
+        "the archive already matches the session"
+    );
     assert_eq!(outcome.purged, 1);
     let all = archive::run_restore(
         &pool,
@@ -523,7 +588,10 @@ async fn restore_replays_the_archive_and_purge_after_returns_to_the_digest() {
     );
     ingest(&pool, &fx).await;
     assert_eq!(count(&pool, "events", fx.session_uuid).await, 0);
-    let queued = archive::requests::next_pending(&pool).await.unwrap().unwrap();
+    let queued = archive::requests::next_pending(&pool)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(queued.kind, "restore");
     let scope: RestoreScope = serde_json::from_value(queued.scope).unwrap();
     archive::run_restore(&pool, &fx.archive_config(0), &scope, Some(queued.id))
@@ -567,7 +635,12 @@ async fn verify_reports_a_tampered_or_missing_object() {
     let deep = archive::export::verify_archives(&pool, &fx.store(), true)
         .await
         .unwrap();
-    assert_eq!((deep.ok, deep.missing, deep.mismatched), (0, 0, 1), "{:?}", deep.problems);
+    assert_eq!(
+        (deep.ok, deep.missing, deep.mismatched),
+        (0, 0, 1),
+        "{:?}",
+        deep.problems
+    );
 
     std::fs::remove_file(&object).unwrap();
     let gone = archive::export::verify_archives(&pool, &fx.store(), false)
@@ -602,7 +675,10 @@ async fn verify_reports_a_tampered_or_missing_object() {
     .unwrap();
     assert_eq!(restored.restored, 1);
     assert_eq!(restored.purged_again, 0);
-    assert!(restored.errors.iter().any(|e| e.contains("purge gate is closed")));
+    assert!(restored
+        .errors
+        .iter()
+        .any(|e| e.contains("purge gate is closed")));
     assert_eq!(count(&pool, "events", fx.session_uuid).await, 4);
 }
 
@@ -615,7 +691,9 @@ async fn durable_dump_uploads_when_a_matching_pg_dump_is_available() {
         .await
         .unwrap();
     let server_major: i64 = server_major.parse::<i64>().unwrap() / 10000;
-    let client = std::process::Command::new("pg_dump").arg("--version").output();
+    let client = std::process::Command::new("pg_dump")
+        .arg("--version")
+        .output();
     let client_major = client
         .ok()
         .filter(|output| output.status.success())
@@ -636,6 +714,11 @@ async fn durable_dump_uploads_when_a_matching_pg_dump_is_available() {
         .unwrap();
     assert!(dump.key.starts_with("db/sulion-durable-"));
     assert!(dump.bytes > 0);
-    let head = fx.store().head(&dump.key).await.unwrap().expect("dump object");
+    let head = fx
+        .store()
+        .head(&dump.key)
+        .await
+        .unwrap()
+        .expect("dump object");
     assert_eq!(head.content_length, dump.bytes);
 }
