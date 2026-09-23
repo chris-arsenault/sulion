@@ -180,14 +180,92 @@ The retrieval service reads the existing Sulion Postgres tables directly. Migrat
 
 Lexical search uses `pg_trgm`, which is installed by migration as `CREATE EXTENSION IF NOT EXISTS pg_trgm`.
 
-Semantic search works in two tiers:
-
-- Without `pgvector`, embeddings are stored in `REAL[]` and semantic search can exact-scan that table.
-- For indexed ANN search, a database superuser must run `CREATE EXTENSION vector;` once in the `sulion` database. The extension must already be available on the Postgres host. The current TrueNAS Postgres image has it available, so this is an install step, not a recompilation step.
-
-After `vector` is installed, the retrieval service idempotently adds the `embedding_vector vector(768)` column and HNSW index on startup. Semantic indexing schedules durable cursor backfills in `retrieval_embedding_backfills`, records source freshness in `retrieval_embedding_sources`, and drains pending sources through the local embedding service configured by `SULION_RETRIEVAL_EMBEDDING_URL`, defaulting to `http://192.168.66.3:5361` with `nomic-ai/nomic-embed-text-v1.5`. On an empty semantic source state, startup schedules the initial backfills automatically; the worker runs continuously while backlog exists and uses `SULION_RETRIEVAL_INDEX_SECONDS` only as the idle interval.
+Semantic search requires `pgvector`. Migration `0090` runs `CREATE EXTENSION IF NOT EXISTS vector`, owns the `embedding_vector vector(768)` column, and `0091` the HNSW index; the extension must be available on the Postgres host (the TrueNAS image ships it, and it was installed there before this migration existed, so the migration is a no-op apart from dropping the old `REAL[]` column). The retrieval service verifies the column and index at startup and refuses to serve if either is missing; there is no exact-scan fallback. Semantic indexing schedules durable cursor backfills in `retrieval_embedding_backfills`, records source freshness in `retrieval_embedding_sources`, and drains pending sources through the local embedding service configured by `SULION_RETRIEVAL_EMBEDDING_URL`, defaulting to `http://192.168.66.3:5361` with `nomic-ai/nomic-embed-text-v1.5`. On an empty semantic source state, startup schedules the initial backfills automatically; the worker runs continuously while backlog exists and uses `SULION_RETRIEVAL_INDEX_SECONDS` only as the idle interval.
 
 The PTY helper is `sulion-retrieve`; the full API contract is in [`docs/retrieval.md`](retrieval.md).
+
+## Transcript archive
+
+The control process runs the archive loop (`backend/src/archive/`) when
+`SULION_ARCHIVE_BUCKET` is set. The deploy resolves that name from
+`/ahara/sulion/archive-bucket`, which this repository's Terraform publishes
+alongside the bucket itself (`infrastructure/terraform/archive.tf`:
+`ahara-sulion-archive-<account>`, versioned, SSE-S3, TLS-only, public access
+blocked, Glacier Instant Retrieval after 30 days, current objects never
+expire). The backend's machine role gains put, get, and list on that one
+bucket; the shared workload permissions boundary already allowed buckets
+named `ahara-sulion-*`, so nothing changes in `ahara-infra`. The loop
+authenticates with the profile the Roles Anywhere bootstrap writes and calls
+the `aws` CLI in the image.
+
+Every `SULION_ARCHIVE_INTERVAL_DAYS` (30) the loop:
+
+1. dumps the durable tables with `pg_dump -Fc` to `db/` — the pgdg
+   PostgreSQL 18 client at `SULION_PG_DUMP=/usr/pgsql-18/bin/pg_dump`, since
+   the TrueNAS server is 18 and the image's appstream client is 16;
+2. exports every session idle for `SULION_ARCHIVE_MIN_IDLE_DAYS` (30) to
+   `sessions/<agent>/<yyyy>/<mm>/<session>.jsonl.zst` and verifies it by
+   `HEAD`;
+3. purges sessions exported `SULION_ARCHIVE_PURGE_AFTER_DAYS` (90) ago to
+   their turn digest, rolling cost and file churn up first;
+4. prunes finished backfill and job rows by age.
+
+Progress is an `ingest_jobs` row in the Jobs panel. `sulion archive status`
+in a PTY, or `GET /api/admin/archive`, shows the store, the purge gate, the
+last cycle and dump, counts, and recent requests. An empty
+`SULION_ARCHIVE_BUCKET` disables the loop; `SULION_ARCHIVE_DIR` points it at
+a directory instead (tests, or a local stand-in).
+
+### First run: nothing is deleted until the gate is opened
+
+The purge gate (`archive_state.purge_enabled`) is closed on a fresh
+database. A cycle then exports every idle session and writes the durable
+dump but purges nothing, however old the exports are. Open it only after the
+first backup has been checked:
+
+```bash
+sulion archive run              # or wait for the scheduled cycle
+sulion archive list             # the run request completes with counts
+sulion archive verify --deep    # downloads every object and re-hashes it
+sulion archive list             # verify reports ok / missing / mismatched
+sulion archive purge-gate on    # only with 0 missing and 0 mismatched
+```
+
+`verify` without `--deep` checks existence and the stored hash and counts
+only. With the gate closed, `restore --all` and `--purge-after` restore but
+do not purge again, and say so in the request result. `purge-gate off`
+closes it again at any time.
+
+### Restore a session or the whole history
+
+```bash
+sulion archive restore --session <agent-session-uuid>
+sulion archive restore --month 2026-05
+sulion archive restore --repo sulion --purge-after
+sulion archive restore --all            # oldest month first, purges again after each
+sulion archive list
+```
+
+A restore replays the archived lines through the normal ingest path; the
+session then looks exactly as it did before the purge, and `--purge-after`
+returns it to the digest once the replay is verified. `--all --purge-after`
+is a full re-index from the archive under current parsing rules and never
+holds more than one restored session at a time.
+
+### Restore the durable dump
+
+Only for rebuilding the instance. The dump holds plans, sessions, settings,
+identities, rollups, and per-session skeletons; transcript content is in the
+session objects.
+
+```bash
+aws s3 cp s3://ahara-sulion-archive-<account>/db/sulion-durable-<date>.dump .
+/usr/pgsql-18/bin/pg_restore --dbname "$SULION_DB_URL" --no-owner --no-privileges \
+  --clean --if-exists sulion-durable-<date>.dump
+```
+
+Then start the control process (it applies any newer migrations) and run
+`sulion archive restore --all` for whatever history is wanted back in full.
 
 ## Code Intelligence
 

@@ -1,7 +1,7 @@
 #![cfg(feature = "integration-tests")]
 
-//! Retrieval service integration tests: real Postgres, real axum stack,
-//! no external embedding service or pgvector dependency.
+//! Retrieval service integration tests: real Postgres with pgvector (the
+//! harness image), real axum stack, a stub embedding service in-process.
 
 use chrono::Utc;
 use reqwest::StatusCode;
@@ -79,13 +79,17 @@ async fn start_embedding_server() -> String {
             .enumerate()
             .map(|(index, value)| {
                 let text = value.as_str().unwrap_or_default();
-                let embedding = if text.contains("semantic retrieval") {
-                    vec![1.0, 0.0, 0.0]
+                // One-hot at the production width: the vector column is
+                // fixed at 768 by migration, so the stub must match it.
+                let hot = if text.contains("semantic retrieval") {
+                    0
                 } else if text.contains("exec_command") {
-                    vec![0.0, 1.0, 0.0]
+                    1
                 } else {
-                    vec![0.0, 0.0, 1.0]
+                    2
                 };
+                let mut embedding = vec![0.0_f32; 768];
+                embedding[hot] = 1.0;
                 json!({
                     "object": "embedding",
                     "index": index,
@@ -424,7 +428,7 @@ async fn startup_schedules_initial_backfill_when_source_state_is_empty() {
         token: "test-token".to_string(),
         embedding_service_url: "http://127.0.0.1:1".to_string(),
         embedding_model: "test-embed".to_string(),
-        embedding_dimensions: 3,
+        embedding_dimensions: 768,
         embedding_batch_size: 8,
         embedding_max_chars: 6000,
         embedding_chunk_max: 10,
@@ -443,7 +447,9 @@ async fn startup_schedules_initial_backfill_when_source_state_is_empty() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(scheduled, 3);
+    // One run per source family: event blocks, operation calls, operation
+    // results, and the turn digests of archived sessions.
+    assert_eq!(scheduled, 4);
 
     let _second_state = retrieval::RetrievalState::from_config(config)
         .await
@@ -453,7 +459,7 @@ async fn startup_schedules_initial_backfill_when_source_state_is_empty() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(still_scheduled, 3);
+    assert_eq!(still_scheduled, 4);
 }
 
 #[tokio::test]
@@ -473,7 +479,7 @@ async fn reindex_marks_pending_and_worker_refreshes_stale_hashes() {
             token: "test-token".to_string(),
             embedding_service_url: embedding_url,
             embedding_model: "test-embed".to_string(),
-            embedding_dimensions: 3,
+            embedding_dimensions: 768,
             embedding_batch_size: 8,
             embedding_max_chars: 6000,
             embedding_chunk_max: 10,
@@ -497,7 +503,7 @@ async fn reindex_marks_pending_and_worker_refreshes_stale_hashes() {
         .json()
         .await
         .unwrap();
-    assert_eq!(marked["backfills_started"], 3, "{marked:#}");
+    assert_eq!(marked["backfills_started"], 4, "{marked:#}");
     assert_eq!(marked["sources_seen"], 0, "{marked:#}");
     assert_eq!(marked["sources_marked_pending"], 0, "{marked:#}");
     assert_eq!(
@@ -522,7 +528,7 @@ async fn reindex_marks_pending_and_worker_refreshes_stale_hashes() {
         .json()
         .await
         .unwrap();
-    assert_eq!(refreshed["backfills_started"], 3, "{refreshed:#}");
+    assert_eq!(refreshed["backfills_started"], 4, "{refreshed:#}");
 
     retrieval::run_indexer_once_for_tests(&h.state, 10)
         .await
@@ -665,7 +671,7 @@ async fn indexing_batch_rolls_back_embeddings_when_source_finalization_fails() {
             token: "test-token".to_string(),
             embedding_service_url: embedding_url,
             embedding_model: "test-embed".to_string(),
-            embedding_dimensions: 3,
+            embedding_dimensions: 768,
             embedding_batch_size: 8,
             embedding_max_chars: 6000,
             embedding_chunk_max: 10,
@@ -732,7 +738,7 @@ async fn reset_endpoint_wipes_index_and_reschedules_backfill() {
             token: "test-token".to_string(),
             embedding_service_url: embedding_url,
             embedding_model: "test-embed".to_string(),
-            embedding_dimensions: 3,
+            embedding_dimensions: 768,
             embedding_batch_size: 8,
             embedding_max_chars: 6000,
             embedding_chunk_max: 10,
@@ -790,7 +796,7 @@ async fn reset_endpoint_wipes_index_and_reschedules_backfill() {
         .await
         .unwrap();
     assert_eq!(body["embeddings_deleted"], 2, "{body:#}");
-    assert_eq!(body["backfills_started"], 3, "{body:#}");
+    assert_eq!(body["backfills_started"], 4, "{body:#}");
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM retrieval_embeddings")
             .fetch_one(&pool)

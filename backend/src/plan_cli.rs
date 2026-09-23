@@ -11,7 +11,7 @@ use crate::plans::{BranchPlanInput, NewPhase, UpdatePhaseInput, UpdatePlanInput}
 
 mod usage;
 
-use usage::{print_activity_usage, print_name_usage, print_plan_usage};
+use usage::{print_activity_usage, print_archive_usage, print_name_usage, print_plan_usage};
 
 pub async fn run_plan(args: &[OsString]) -> anyhow::Result<i32> {
     let mut args = utf8_args(args, "plan")?;
@@ -67,6 +67,200 @@ pub async fn run_name(args: &[OsString]) -> anyhow::Result<i32> {
         Err(err) => return Ok(usage_failure(ResponseKind::Name, &err)),
     };
     run_control(request, json, ResponseKind::Name).await
+}
+
+pub async fn run_archive(args: &[OsString]) -> anyhow::Result<i32> {
+    let mut args = utf8_args(args, "archive")?;
+    let json = take_flag(&mut args, "--json");
+    let Some(command) = args.first().cloned() else {
+        print_archive_usage();
+        return Ok(64);
+    };
+    if matches!(command.as_str(), "help" | "-h" | "--help") {
+        print_archive_usage();
+        return Ok(0);
+    }
+    args.remove(0);
+    let request = match parse_archive_request(&command, &mut args) {
+        Ok(request) => request,
+        Err(err) => return Ok(usage_failure(ResponseKind::Archive, &err)),
+    };
+    run_control(request, json, ResponseKind::Archive).await
+}
+
+fn parse_archive_request(command: &str, args: &mut Vec<String>) -> anyhow::Result<ControlRequest> {
+    let request = match command {
+        "run" => {
+            let dry_run = take_flag(args, "--dry-run");
+            reject_unknown_options(args)?;
+            ControlRequest::ArchiveRun { dry_run }
+        }
+        "restore" => {
+            let session_uuid = match take_option(args, "--session")? {
+                Some(raw) => Some(
+                    raw.parse::<Uuid>()
+                        .map_err(|_| anyhow!("--session must be an agent session uuid"))?,
+                ),
+                None => None,
+            };
+            let month = take_option(args, "--month")?;
+            if let Some(month) = month.as_deref() {
+                let valid = month.len() == 7
+                    && month.as_bytes()[4] == b'-'
+                    && month[..4].chars().all(|c| c.is_ascii_digit())
+                    && month[5..].chars().all(|c| c.is_ascii_digit());
+                if !valid {
+                    bail!("--month must be YYYY-MM");
+                }
+            }
+            let repo = take_option(args, "--repo")?;
+            let all = take_flag(args, "--all");
+            let purge_after = take_flag(args, "--purge-after");
+            reject_unknown_options(args)?;
+            let scope = crate::archive::RestoreScope {
+                session_uuid,
+                month,
+                repo,
+                all,
+                purge_after,
+            };
+            if scope.is_empty() {
+                bail!("restore needs --session, --month, --repo, or --all");
+            }
+            ControlRequest::ArchiveRestore { scope }
+        }
+        "status" => {
+            reject_unknown_options(args)?;
+            ControlRequest::ArchiveStatus
+        }
+        "verify" => {
+            let deep = take_flag(args, "--deep");
+            reject_unknown_options(args)?;
+            ControlRequest::ArchiveVerify { deep }
+        }
+        "purge-gate" => {
+            let enabled = match args.first().map(String::as_str) {
+                Some("on") => true,
+                Some("off") => false,
+                _ => bail!("purge-gate takes on or off"),
+            };
+            args.remove(0);
+            reject_unknown_options(args)?;
+            ControlRequest::ArchivePurgeGate { enabled }
+        }
+        "list" => {
+            let limit = match take_option(args, "--limit")? {
+                Some(raw) => Some(
+                    raw.parse::<i64>()
+                        .map_err(|_| anyhow!("--limit must be a number"))?,
+                ),
+                None => None,
+            };
+            reject_unknown_options(args)?;
+            ControlRequest::ArchiveList { limit }
+        }
+        other => bail!("unknown archive command: {other}"),
+    };
+    Ok(request)
+}
+
+fn print_archive_data(data: &Value) {
+    if let Some(items) = data.as_array() {
+        if items.is_empty() {
+            println!("No archive requests.");
+            return;
+        }
+        for item in items {
+            print_archive_request(item);
+        }
+        return;
+    }
+    if data.get("purge_enabled").is_some() && data.get("configured").is_none() {
+        println!(
+            "purge gate: {}",
+            if data["purge_enabled"].as_bool().unwrap_or(false) {
+                "open — cycles may delete purged sessions"
+            } else {
+                "closed — cycles export and dump only"
+            }
+        );
+        return;
+    }
+    if data.get("configured").is_some() {
+        let configured = data["configured"].as_bool().unwrap_or(false);
+        println!(
+            "store: {}",
+            if configured {
+                data["store"].as_str().unwrap_or("(configured)")
+            } else {
+                "not configured (SULION_ARCHIVE_BUCKET unset)"
+            }
+        );
+        println!(
+            "purge gate: {}",
+            if data["purge_enabled"].as_bool().unwrap_or(false) {
+                format!(
+                    "open since {}",
+                    data["purge_enabled_at"].as_str().unwrap_or("?")
+                )
+            } else {
+                "closed — cycles export and dump only; verify, then `sulion archive purge-gate on`"
+                    .to_string()
+            }
+        );
+        println!(
+            "last cycle: started {} completed {}",
+            data["last_cycle_started_at"].as_str().unwrap_or("never"),
+            data["last_cycle_completed_at"].as_str().unwrap_or("never"),
+        );
+        println!(
+            "last dump: {} at {}",
+            data["last_dump_key"].as_str().unwrap_or("none"),
+            data["last_dump_at"].as_str().unwrap_or("never"),
+        );
+        println!(
+            "sessions: {} archived, {} purged, {} archived bytes",
+            data["sessions_archived"].as_i64().unwrap_or(0),
+            data["sessions_purged"].as_i64().unwrap_or(0),
+            data["archived_bytes"].as_i64().unwrap_or(0),
+        );
+        println!(
+            "requests: {} pending or running",
+            data["pending_requests"].as_i64().unwrap_or(0)
+        );
+        if let Some(recent) = data["recent_requests"].as_array() {
+            for item in recent.iter().take(10) {
+                print_archive_request(item);
+            }
+        }
+        return;
+    }
+    if data.get("kind").is_some() {
+        print_archive_request(data);
+        println!("next: sulion archive list");
+        return;
+    }
+    println!("{}", serde_json::to_string_pretty(data).unwrap_or_default());
+}
+
+fn print_archive_request(item: &Value) {
+    let detail = item["error"]
+        .as_str()
+        .map(|error| format!(" — {error}"))
+        .unwrap_or_default();
+    println!(
+        "#{} {} [{}] requested {} {}{}",
+        item["id"].as_i64().unwrap_or(0),
+        item["kind"].as_str().unwrap_or("?"),
+        item["status"].as_str().unwrap_or("?"),
+        item["requested_at"].as_str().unwrap_or(""),
+        item["scope"]
+            .as_object()
+            .filter(|scope| !scope.is_empty())
+            .map(|scope| serde_json::to_string(scope).unwrap_or_default())
+            .unwrap_or_default(),
+        detail,
+    );
 }
 
 fn parse_name_request(args: &mut Vec<String>) -> anyhow::Result<ControlRequest> {
@@ -372,6 +566,7 @@ enum ResponseKind {
     Plan,
     Activity,
     Name,
+    Archive,
 }
 
 impl ResponseKind {
@@ -380,6 +575,7 @@ impl ResponseKind {
             ResponseKind::Plan => "sulion plan",
             ResponseKind::Activity => "sulion activity",
             ResponseKind::Name => "sulion name",
+            ResponseKind::Archive => "sulion archive",
         }
     }
 
@@ -391,6 +587,7 @@ impl ResponseKind {
             ResponseKind::Plan => "sulion plan list --all",
             ResponseKind::Activity => "sulion activity status",
             ResponseKind::Name => "sulion name show",
+            ResponseKind::Archive => "sulion archive status",
         }
     }
 }
@@ -436,6 +633,7 @@ async fn run_control(
         ResponseKind::Plan => print_plan_data(&data),
         ResponseKind::Activity => print_activity_data(&data),
         ResponseKind::Name => print_name_data(&data),
+        ResponseKind::Archive => print_archive_data(&data),
     }
     Ok(0)
 }

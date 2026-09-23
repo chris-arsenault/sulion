@@ -8,6 +8,7 @@ use uuid::Uuid;
 pub mod activity;
 pub mod agent;
 pub mod api;
+pub mod archive;
 pub mod auth;
 pub mod cli_http;
 pub mod code_cli;

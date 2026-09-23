@@ -333,6 +333,18 @@ RUN curl -fsSL \
 COPY truenas-roles-anywhere-bootstrap /usr/local/bin/truenas-roles-anywhere-bootstrap
 RUN chmod 0755 /usr/local/bin/truenas-roles-anywhere-bootstrap
 
+# The archive cycle dumps the durable tables with pg_dump. The appstream
+# `postgresql` client above is 16; the TrueNAS server is 18, which a 16
+# client refuses to dump. The pgdg client lives beside it under
+# /usr/pgsql-18 and the control service is pointed at it explicitly
+# (SULION_PG_DUMP), leaving the default psql on PATH unchanged for PTYs.
+RUN rpm --import https://download.postgresql.org/pub/repos/yum/keys/PGDG-RPM-GPG-KEY-RHEL \
+  && dnf install -y \
+       https://download.postgresql.org/pub/repos/yum/reporpms/EL-10-x86_64/pgdg-redhat-repo-latest.noarch.rpm \
+  && dnf install -y postgresql18 \
+  && dnf clean all \
+  && /usr/pgsql-18/bin/pg_dump --version
+
 COPY dist/sulion /usr/local/bin/sulion
 COPY dist/sulion-node /usr/local/bin/sulion-node
 COPY dist/sulion-devenv /usr/local/bin/sulion-devenv

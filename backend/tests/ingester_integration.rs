@@ -988,8 +988,8 @@ async fn incremental_projection_preserves_unchanged_operation_embeddings() {
     sqlx::query(
         "INSERT INTO retrieval_embeddings \
             (source_kind, source_key, session_uuid, turn_id, operation_ord, content_hash, \
-             embedding_model, embedding_dimensions, embedding) \
-         VALUES ('tool_call', $1, $2, $3, $4, $5, 'test-model', 1, ARRAY[0.5]::REAL[])",
+             embedding_model, embedding_dimensions, embedding_vector) \
+         VALUES ('tool_call', $1, $2, $3, $4, $5, 'test-model', 768, array_fill(0.5::REAL, ARRAY[768])::vector)",
     )
     .bind(&call_key)
     .bind(fx.session_uuid)
@@ -1033,8 +1033,8 @@ async fn incremental_projection_preserves_unchanged_operation_embeddings() {
     sqlx::query(
         "INSERT INTO retrieval_embeddings \
             (source_kind, source_key, session_uuid, turn_id, operation_ord, content_hash, \
-             embedding_model, embedding_dimensions, embedding) \
-         VALUES ('tool_call', $1, $2, $3, 99, 'stale', 'test-model', 1, ARRAY[0.5]::REAL[])",
+             embedding_model, embedding_dimensions, embedding_vector) \
+         VALUES ('tool_call', $1, $2, $3, 99, 'stale', 'test-model', 768, array_fill(0.5::REAL, ARRAY[768])::vector)",
     )
     .bind(&stale_key)
     .bind(fx.session_uuid)

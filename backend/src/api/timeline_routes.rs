@@ -50,6 +50,7 @@ pub(super) async fn session_timeline(
                 session_agent: None,
                 total_event_count: 0,
                 turns: Vec::new(),
+                archived_at: None,
             }));
         }
         SessionLookup::MissingPty => return Err(ApiError::NotFound),
@@ -62,6 +63,7 @@ pub(super) async fn session_timeline(
     ingest::annotate_timeline_summaries(&mut response.turns, &meta);
     response.session_uuid = Some(resolved.session_uuid);
     response.session_agent = resolved.session_agent;
+    response.archived_at = meta.archived_at;
     Ok(Json(response))
 }
 
@@ -95,6 +97,7 @@ pub(super) async fn session_timeline_turn(
         session_uuid: resolved.session_uuid,
         session_agent: resolved.session_agent,
         turn,
+        archived_at: meta.archived_at,
     }))
 }
 
@@ -129,6 +132,7 @@ pub(super) async fn repo_timeline_turn(
         session_uuid,
         session_agent: meta.session_agent,
         turn,
+        archived_at: meta.archived_at,
     }))
 }
 

@@ -50,6 +50,10 @@ pub(in crate::retrieval) struct SearchResult {
     pub(super) snippet: String,
     pub(super) tool: Option<ToolSearchPayload>,
     pub(super) evidence: Option<EvidencePacket>,
+    /// The session was purged to its turn digest: the hit comes from the
+    /// turn's markdown, and operation-level detail needs a restore.
+    #[serde(default)]
+    pub(super) archived: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,6 +75,10 @@ pub(in crate::retrieval) struct EvidencePacket {
     pub(super) turn_end_timestamp: Option<DateTime<Utc>>,
     pub(super) operations: Vec<EvidenceOperation>,
     pub(super) file_touches: Vec<EvidenceFileTouch>,
+    /// Operations are gone for an archived turn; `file_touches` then comes
+    /// from the digest's own file list.
+    #[serde(default)]
+    pub(super) archived: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

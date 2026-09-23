@@ -167,6 +167,7 @@ Code boundary:
 5. **Ingester idempotency key: `(session_uuid, byte_offset)`.** JSONL is append-only, so byte offset is stable.
 6. **Schema carries `parent_session_uuid NULL`** from day one.
 7. **The node process owns no PTY masters.** Shells live in the devenv server (`backend/src/devenv/`), which dials the node over `/run/sulion/devenv.sock` and reconnects on its own; recreating the node container leaves shells running. The devenv container is never a compose service — `--remove-orphans` must not know it exists.
+8. **Transcript rows are deleted only after a verified export, and rebuilds skip purged sessions.** The archive loop (`backend/src/archive/`) is the one path that removes `events`; it does so per session, after the session's object is in the bucket with a matching hash. A purged session (`claude_sessions.purged_at`) keeps its turn digest and has no events behind it: every projection rebuild and the admin reindex must check `purged_at` first, and the ingester queues a restore rather than appending to it. See [`ingestion.md`](ingestion.md#retention-boundary).
 
 ## Frontend shape
 
@@ -242,6 +243,7 @@ The node launches PTYs with Sulion-managed wrapper tools on `PATH`:
 - `sulion-retrieve` for transcript/timeline retrieval
 - `sulion-code` for structural code navigation
 - `sulion plan` / `sulion activity` for published progress and operational state
+- `sulion archive` to queue transcript archive cycles and restores for the control process
 - `with-cred` for general env-bundle injection
 - `aws` as a wrapper over the real AWS CLI
 - `docker` as either the real CLI in direct mode or a constrained runner client

@@ -73,6 +73,11 @@ pub async fn start(
 }
 
 impl JobHandle {
+    /// The `ingest_jobs` row this handle writes to.
+    pub fn id(&self) -> i64 {
+        self.id
+    }
+
     /// Units processed so far by this handle.
     pub fn counted(&self) -> i64 {
         self.counted.load(Ordering::Relaxed)

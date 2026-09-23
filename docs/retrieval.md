@@ -56,8 +56,26 @@ search returns per-turn operation and file-touch evidence.
 the selected repository. Collection-session access does not broaden retrieval
 to all group members; choose the relevant repo explicitly when needed.
 
-Archive-tier search and restore commands are not available. The
-[archive proposal](plans/transcript-archive-and-purge.md) remains pending.
+## Archived sessions
+
+A session the archive loop has purged keeps only its turn digest (see
+[`ingestion.md`](ingestion.md#retention-boundary)). Retrieval still answers
+for it, at turn granularity:
+
+- `search` returns `turn_digest` hits for purged sessions whenever the
+  include set covers assistant, user, or summary text: lexical full-text over
+  the turn markdown and prompt, semantic over one `turn_digest` embedding
+  source per turn. Results and evidence packets carry `archived: true`;
+  evidence lists the turn's files from the digest and no operations.
+- `turn` returns the same markdown it always did, with `archived: true`.
+- `file-history` unions per-touch rows of live sessions with the digest
+  file lists of purged ones.
+- Tool-scoped search (`--include tools`, `--tool-name`, `--tool-category`),
+  operation detail, and tool output need the session restored:
+  `sulion archive restore --session <uuid>`.
+
+A `sulion-retrieve reset` rebuilds archived history too: the backfill
+enumerates `turn_digest` sources alongside the three live families.
 
 ## Search
 
@@ -156,14 +174,14 @@ writes, diffs, image payloads, and MCP state dumps are dropped — they are
 redundant with the code index and dilute semantic search.
 
 The current local model is `nomic-ai/nomic-embed-text-v1.5` with 768 dimensions.
-When `pgvector` is installed in the `sulion` database, the retrieval service
-creates `embedding_vector vector(768)` and a non-blocking HNSW index. Without
-pgvector, semantic search exact-scans the stored `REAL[]` vectors.
+Vectors live only in `embedding_vector vector(768)` under an HNSW index; both
+are created by migration, and the service refuses to start if the column's
+dimension does not match the configured model or the index is invalid. There
+is no `REAL[]` copy and no exact-scan fallback: pgvector is required.
 
-Vector schema setup checks the catalog at startup and creates missing objects;
-indexing reuses those capabilities without repeating DDL. Embedding writes are batched, and timeline
-reprojection preserves unchanged operation source hashes and embeddings.
-Only changed or removed sources need reconciliation.
+Embedding writes are batched, and timeline reprojection preserves unchanged
+operation source hashes and embeddings. Only changed or removed sources need
+reconciliation.
 
 The browser UI exposes the same backfill scheduling path from the sidebar admin controls.
 That action calls the authenticated backend endpoint

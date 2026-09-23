@@ -12,8 +12,8 @@ pub mod timeline;
 mod usage;
 
 pub use ingester::{
-    backfill_canonical_blocks, parse_codex_session_uuid, Ingester, IngesterConfig,
-    LIVE_PROJECTION_DEBOUNCE,
+    backfill_canonical_blocks, parse_codex_session_uuid, replay_session_lines, Ingester,
+    IngesterConfig, ReplayLine, ReplayStats, LIVE_PROJECTION_DEBOUNCE,
 };
 pub use maintenance::{
     mark_projection_versions_current, run_required_startup_maintenance, StartupMaintenanceStats,

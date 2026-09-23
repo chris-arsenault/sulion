@@ -792,7 +792,8 @@ async function ensureDb() {
       "POSTGRES_PASSWORD=testpass",
       "-e",
       "POSTGRES_DB=sulion",
-      "docker.io/library/postgres:16",
+      // pgvector is required by the retrieval migrations.
+      "docker.io/pgvector/pgvector:pg16",
     ],
     { cwd: REPO_ROOT },
   );

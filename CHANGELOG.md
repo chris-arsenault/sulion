@@ -4,6 +4,33 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Transcript archive
+
+- Added a monthly archive cycle in the control process. Idle agent sessions
+  are exported from the database to an S3 bucket under the backend's own
+  machine identity, the durable tables are dumped beside them, and after a
+  grace period each exported session is purged down to its turn digest:
+  prompt, markdown, timestamps, tokens, and the files each turn touched.
+  Cost and file churn are rolled up to daily repo-level tables first, so the
+  metrics do not change at the purge. `sulion-retrieve search`, `turn`, and
+  `file-history` keep answering for archived sessions; the timeline shows
+  their turns from markdown with an archived banner. `sulion archive
+  run|restore|status|list` and `/api/admin/archive*` queue work for the
+  loop; a restore replays the archive through the normal ingest path and
+  can purge again afterwards, which is how a whole-history re-index runs.
+  Deletion is behind an operator gate that starts closed: the first cycle
+  exports and dumps only, `sulion archive verify --deep` re-reads every
+  object, and `sulion archive purge-gate on` is what allows purging.
+
+### Retrieval
+
+- Made pgvector a requirement and dropped the `REAL[]` copy of every
+  embedding. The extension, vector column, and HNSW index are created by
+  migration; the service verifies them at startup instead of creating them
+  lazily, and the exact-scan fallback is removed. Halves the embeddings
+  table's row payload. The integration harness and e2e stack run the
+  `pgvector/pgvector:pg16` image.
+
 ### Timeline
 
 - Moved timeline filters, text size, and List/Grid/Hidden navigation into a

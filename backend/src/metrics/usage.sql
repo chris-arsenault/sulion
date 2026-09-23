@@ -31,14 +31,28 @@ WITH RECURSIVE repo_hashes AS MATERIALIZED (
           AND r.project_hash = cs.project_hash
         LIMIT 1
     ) hash_repo ON TRUE
+ ), live AS (
+    SELECT d.day, dimensions.repo, d.agent, d.model,
+        d.input_tokens, d.cached_input_tokens, d.cache_write_input_tokens,
+        d.cache_write_1h_input_tokens, d.output_tokens
+    FROM agent_model_usage_daily d
+    LEFT JOIN dimensions ON dimensions.session_uuid = d.session_uuid
+ ), archived AS (
+    -- Purged sessions: their per-session rows were rolled up at purge time
+    -- with the attribution above frozen in, so the report is the union.
+    SELECT r.day, NULLIF(r.repo, '') AS repo, r.agent, r.model,
+        r.input_tokens, r.cached_input_tokens, r.cache_write_input_tokens,
+        r.cache_write_1h_input_tokens, r.output_tokens
+    FROM usage_daily_rollup r
+ ), combined AS (
+    SELECT * FROM live UNION ALL SELECT * FROM archived
  )
- SELECT d.day, dimensions.repo, d.agent, d.model,
-    COALESCE(SUM(d.input_tokens), 0)::BIGINT AS standard_input,
-    COALESCE(SUM(d.cached_input_tokens), 0)::BIGINT AS cache_read,
-    COALESCE(SUM(d.cache_write_input_tokens), 0)::BIGINT AS cache_write,
-    COALESCE(SUM(d.cache_write_1h_input_tokens), 0)::BIGINT AS cache_write_1h,
-    COALESCE(SUM(d.output_tokens), 0)::BIGINT AS output
- FROM agent_model_usage_daily d
- LEFT JOIN dimensions ON dimensions.session_uuid = d.session_uuid
- GROUP BY d.day, dimensions.repo, d.agent, d.model
- ORDER BY d.day;
+ SELECT c.day, c.repo, c.agent, c.model,
+    COALESCE(SUM(c.input_tokens), 0)::BIGINT AS standard_input,
+    COALESCE(SUM(c.cached_input_tokens), 0)::BIGINT AS cache_read,
+    COALESCE(SUM(c.cache_write_input_tokens), 0)::BIGINT AS cache_write,
+    COALESCE(SUM(c.cache_write_1h_input_tokens), 0)::BIGINT AS cache_write_1h,
+    COALESCE(SUM(c.output_tokens), 0)::BIGINT AS output
+ FROM combined c
+ GROUP BY c.day, c.repo, c.agent, c.model
+ ORDER BY c.day;

@@ -99,6 +99,36 @@ describe("TurnDetail", () => {
     expect(screen.getByText(/orphan turn — no user prompt/)).toBeDefined();
   });
 
+  it("renders an archived turn from its markdown digest with a restore hint", () => {
+    const archived = {
+      ...makeTurn({
+        user_prompt_text: "rename the helper",
+        markdown:
+          "**Prompt**\n\n> rename the helper\n\nRenamed it in `src/widget.rs`.",
+        chunks: [],
+      }),
+      archived_at: "2026-09-01T00:00:00Z",
+      session_uuid: "11111111-2222-3333-4444-555555555555",
+    };
+    renderWithContextMenu(<TurnDetail turn={archived} showThinking={true} />);
+    const banner = screen.getByTestId("turn-archived");
+    expect(banner.textContent).toContain("Archived 2026-09-01");
+    expect(banner.textContent).toContain(
+      "sulion archive restore --session 11111111-2222-3333-4444-555555555555",
+    );
+    expect(screen.getByText(/Renamed it in/)).toBeDefined();
+  });
+
+  it("renders a live turn without the archived banner", () => {
+    renderWithContextMenu(
+      <TurnDetail
+        turn={makeTurn({ chunks: [assistantChunk(assistantItems("reply"))] })}
+        showThinking={true}
+      />,
+    );
+    expect(screen.queryByTestId("turn-archived")).toBeNull();
+  });
+
   it("hides thinking chips when showThinking=false", () => {
     renderWithContextMenu(
       <TurnDetail

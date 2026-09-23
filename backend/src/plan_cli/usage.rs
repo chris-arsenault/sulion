@@ -86,6 +86,52 @@ Start:
     );
 }
 
+pub(super) fn print_archive_usage() {
+    println!(
+        "\
+Sulion transcript archive — export idle sessions to object storage, purge
+them down to their turn digest, restore them on request
+
+Usage:
+  sulion archive [--json] <command> ...
+
+Commands:
+  help
+  status                       store, purge gate, last cycle and dump, counts, recent requests
+  run [--dry-run]              queue a cycle now (dry run only reports what is eligible)
+  verify [--deep]              check every archived object against its session row;
+                               --deep downloads and re-hashes each one
+  purge-gate on|off            allow or forbid deletion. Closed by default: a cycle
+                               exports and dumps but purges nothing until opened
+  restore --session <uuid>     bring one purged session back in full
+  restore --month YYYY-MM      every purged session whose archive month matches
+  restore --repo <name>        every purged session attributed to a repo
+  restore --all                whole history, oldest month first
+          [--purge-after]      purge again once the replay is verified
+                               (always on for --all)
+  list [--limit n]             recent requests and their results
+
+Rules:
+  requests are queued here and executed by the control process's archive
+    loop; watch progress in the Jobs panel or with `list`
+  a purged session keeps its turn digest: prompt, assistant text, tool
+    headers, files touched, tokens. Search, `sulion-retrieve turn`, and
+    file-history keep working on it; tool output and per-operation detail
+    need a restore
+  a restore replays the archived lines through the normal ingest path; the
+    session then looks exactly as it did before the purge
+
+First run:
+  sulion archive run            exports and dumps; the gate is closed, nothing is deleted
+  sulion archive verify --deep  re-reads every object from the store
+  sulion archive purge-gate on  only after verify reports 0 missing, 0 mismatched
+
+Start:
+  sulion archive status
+  sulion archive restore --session <agent-session-uuid>"
+    );
+}
+
 pub(super) fn print_activity_usage() {
     println!(
         "\

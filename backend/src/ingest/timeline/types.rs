@@ -137,6 +137,10 @@ pub struct TimelineSummaryResponse {
     pub session_agent: Option<String>,
     pub total_event_count: i64,
     pub turns: Vec<TimelineTurnSummary>,
+    /// Set when the session was purged to its turn digest: the turns
+    /// listed here have markdown and files but no operations or chunks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -191,6 +195,8 @@ pub struct TimelineTurnDetailResponse {
     pub session_uuid: Uuid,
     pub session_agent: Option<String>,
     pub turn: TimelineTurn,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

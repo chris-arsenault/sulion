@@ -95,6 +95,29 @@
   font-size: var(--timeline-t-meta);
 }
 
+/* A purged session: the turn is its digest, rendered from markdown. */
+.td__archived {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 10px 14px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--canvas-3);
+  border-radius: 6px;
+  background: var(--canvas-2);
+  color: var(--text-lo);
+  font-size: var(--timeline-t-meta);
+}
+
+.td__archived code {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.td__archived-markdown {
+  padding: 10px 14px;
+}
+
 .td__body {
   flex: 1;
   overflow: auto;

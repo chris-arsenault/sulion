@@ -1,7 +1,7 @@
 # Database archive, backup, and monthly purge
 
 Plan only. No code, schema, infrastructure, or database change has been made.
-Status: proposal awaiting the decisions marked `[DECISION]`.
+Status: proposal; design settled, awaiting authorization to execute M0.
 
 Documentation review, 2026-09-21: M0–M5 remain pending. The measured state below
 is the September 19 baseline, not a current database inventory. Since then,
@@ -325,26 +325,36 @@ Settled:
 - Restore replays through `insert_event` in the control process.
 - The dump covers durable tables, skeletons, and rollups only.
 
-`[DECISION]` user-owned, blocking M1:
+Settled in revision 3 (previously listed as user decisions; none needed
+user input):
 
-1. **Object encryption.** SSE-S3 (no cross-repo change) or SSE-KMS (needs a
-   `kms ViaService s3` statement in the boundary in `ahara-infra`).
-   Recommendation: SSE-S3.
-2. **Windows.** Export after 30 idle days; purge 90 days after export.
-   Recommendation: those defaults.
-3. **Authorize `VACUUM (FULL)`** on the three bloated tables in a window.
-   Recommendation: yes.
-4. **Where the loop runs.** Inside control on the backend's identity
-   (recommended) or a separate archiver service with its own identity.
+- **Object encryption: SSE-S3.** Transcripts are code and prompts, the
+  bucket is private, versioned, and TLS-only, and SSE-S3 needs no change
+  outside this repository. Recorded in the M5 ADR; SSE-KMS can be adopted
+  later by adding a `kms ViaService s3` statement to the boundary.
+- **Windows: export after 30 idle days, purge 90 days after export, cycle
+  every 30 days.** Env-tunable defaults; changing them is a config edit.
+- **The loop runs inside the control process** on the backend's identity.
+  A separate service buys a narrower IAM role at the cost of a fifth
+  control-plane container, a new workload declaration in `ahara-trust`,
+  and a new Terraform role.
+- **Bloat maintenance is part of M0.** `VACUUM (FULL)` on
+  `timeline_turns`, `retrieval_embeddings`, and `repo_runtime_state` takes
+  exclusive locks on the production database, so it is scheduled with the
+  user when M0 executes; that is an authorization to run, not a design
+  choice.
 
-`[DECISION]` deferred:
+Deferred, with trigger:
 
-5. **Drop `retrieval_embeddings.embedding REAL[]`** (1.7 GB plus TOAST) now
-   that pgvector is present; needs the non-pgvector fallback retired.
-   Proposed for M3.
-6. **Codex rollouts on the node**: once restore works, deleting rollouts for
-   archived sessions is a small ingester-host addition. Trigger: disk
-   pressure on the node.
+- **Drop `retrieval_embeddings.embedding REAL[]`** (1.7 GB plus TOAST) now
+  that pgvector is present; needs the non-pgvector fallback retired.
+  Proposed for M3.
+- **Codex rollouts on the node**: once restore works, deleting rollouts for
+  archived sessions is a small ingester-host addition. Trigger: disk
+  pressure on the node.
+
+What remains the user's: authorizing execution of each milestone, and
+choosing the maintenance window for the M0 vacuum.
 
 Assumptions checked in M0: the image's `pg_dump` is major 18 or is replaced
 by pgdg `postgresql18`; `sulion_app_app` can dump what it owns; `aws-sdk-s3`
@@ -353,11 +363,48 @@ honours the bootstrap's `credential_process` profile; a trgm or FTS index on
 
 ## Milestones
 
-### M0 — Settle decisions, maintenance, tool checks
+### M0 — Re-measure, maintenance, tool checks
 
-Decisions 1–4; authorized `VACUUM (FULL)`; `pg_dump` version and image
-change if needed; trial durable dump size; size the markdown search index.
+Re-measure after the projection reductions of 2026-09-21 (`turn_json`
+dropped, markdown reduced to prompt, assistant text, and tool headers):
+digest size, table bloat, post-purge estimate. `VACUUM (FULL)` in a window
+the user picks; `pg_dump` version and image change if needed; trial durable
+dump size; size the markdown search index.
 Acceptance: all recorded here with before/after `pg_database_size`.
+
+#### M0 execution steps (2026-09-22)
+
+1. Re-measure after the projection reductions.
+   - State / evidence: **blocked**. The broker's database grant for this
+     PTY expired between sessions (`with-cred` now injects no
+     `SULION_DB_PASSWORD`; psql reports `fe_sendauth: no password
+     supplied`). Not retried beyond one attempt per the credential rule.
+     Re-run once the grant is renewed; the September 19 numbers stand as the
+     baseline until then.
+2. `VACUUM (FULL)` on the three bloated tables.
+   - State: **pending a maintenance window** named by the user; not run.
+3. `pg_dump` client for an 18.4 server.
+   - Evidence: the backend image (`rockylinux:10`) installs the appstream
+     `postgresql` package, which is 16.14 and cannot dump an 18 server. The
+     pgdg repository for EL-10 offers `postgresql18` (client 18.6),
+     verified in a throwaway container. The dnf metadata signature needs the
+     pgdg key imported; the Dockerfile change in M3 imports it.
+   - Outcome: M3 adds the pgdg client to the image and sets
+     `SULION_PG_DUMP=/usr/pgsql-18/bin/pg_dump`.
+4. Trial durable dump size.
+   - State: blocked on the same credential as step 1.
+5. S3 client choice.
+   - Evidence: the image already carries `awscli2` and the bootstrap sets
+     `AWS_PROFILE`; the trust appliance's backup uses the same CLI. The
+     `aws-sdk-s3` crate is not in the local registry and would add a large
+     dependency set for three calls.
+   - Outcome: the object store shells out to `aws s3 cp` / `aws s3api
+     head-object` behind the store trait; tests use the directory store.
+     Records a change from the revision 3 text, which named the SDK.
+
+M0 acceptance is therefore partial: tool checks done, measurements and
+maintenance deferred to the user's credential renewal and window. Work
+continues on M1–M5, none of which depends on those numbers.
 
 ### M1 — Bucket and role  [depends on M0]
 
@@ -383,7 +430,7 @@ Durable dump gate; migration for nullable `payload` and autovacuum
 factors; purge transaction; `turn_digest` sources and embedding; markdown
 search index; retrieval search/evidence/file-history over archived
 sessions; late-append guard; `archived` flag; timeline markdown detail with
-banner; optional `REAL[]` drop. Acceptance: for a purged session, `search`
+banner; `REAL[]` drop (done 2026-09-23, migrations 0090/0091). Acceptance: for a purged session, `search`
 finds it and `turn` reads it, `file-history` lists its turns, cost and churn
 totals are identical before and after, the timeline shows its turns,
 `/api/admin/reindex` and the usage rebuild leave it alone, and an append to
@@ -415,7 +462,113 @@ M5 `1d37f8cb-ac3c-4cac-a1a1-bf2a80076d64`. (M2/M3 titles in Sulion predate
 revision 3; scope is as written here.) Revision 1 plan
 `c4bbe19d-0971-4133-933a-805959c9cd0a` is canceled.
 
+## Implementation record (2026-09-22)
+
+M1–M5 were implemented in one working tree under the user's "implement all
+phases" authorization. Nothing is pushed, applied, or deployed.
+
+- **M1 — bucket and role.** `infrastructure/terraform/archive.tf` (bucket,
+  versioning, SSE-S3, public block, TLS-only policy, lifecycle, SSM
+  parameter, backend policy document); `workload_identities.tf` passes the
+  policy to the backend's machine role only; `secret-paths.yml` resolves
+  `SULION_ARCHIVE_BUCKET`; `compose.yaml` carries the archive env and
+  `SULION_PG_DUMP`. Evidence: `terraform fmt -check`, `terraform init
+  -backend=false`, `terraform validate` pass; all three compose selections
+  render. The startup probe became `sulion archive status` plus the loop's
+  own start log rather than a separate check.
+- **M2 — export, rollups, guards.** Migration `0088_transcript_archive.sql`
+  (archive columns, `archive_requests`, `archive_state`, the two rollups and
+  their contribution tables, `timeline_turns.files_json`, nullable
+  `events.payload`, `turn_digest` family, autovacuum factors) and
+  `0089_timeline_turns_markdown_fts_idx.sql`. `backend/src/archive/`
+  (`store`, `export`, `dump`, `purge`, `restore`, `requests`, loop).
+  Guards: `projection/write.rs` skips purged sessions in all three rebuild
+  entry points; `reset.rs` scopes its deletes to live sessions;
+  `metrics/usage.sql` unions the rollup. CLI `sulion archive` over the
+  correlate socket (`ControlRequest::Archive*`), REST `/api/admin/archive*`.
+  Object store is the `aws` CLI or a directory (see M0 step 5).
+- **M3 — dump and purge.** In the same module: `pg_dump` gate
+  (`dump_enabled`), per-session purge transaction, digest embedding
+  sources, late-append guard in `ingester.rs`, `archived_at` on the
+  timeline summary and detail responses, retrieval `archived` flags,
+  archived-tier lexical (`lexical_digest_search`) and semantic
+  (`turn_digest` in the include set and text `CASE`), evidence from
+  `files_json`, file-history and repo file-trace unions, the timeline
+  banner and markdown rendering in `TurnDetail.tsx`. Dockerfile installs
+  the pgdg 18 client. The `REAL[]` column drop followed on 2026-09-23 (see
+  the follow-up record below).
+- **M4 — restore.** `restore.rs` and `ingest::replay_session_lines`;
+  scopes session, month, repo, all; `--purge-after`; sequential, so at most
+  one restored session is live at a time.
+- **M5 — docs.** `docs/ingestion.md` retention boundary, `docs/retrieval.md`
+  archived sessions, `docs/architecture.md` invariant 8 and the CLI list,
+  `docs/deploy.md` transcript archive and runbooks,
+  `docs/adrs/0003-tiered-transcript-retention.md`, `CHANGELOG.md`.
+
+Evidence: `backend/tests/archive_integration.rs` (registered in the
+harness) covers export verification and eligibility, dry run, purge with
+every consumer checked before and after (cost totals and repo attribution,
+file-history and repo file-trace, digest markdown and file list, embedding
+sources, admin reindex leaving the digest alone, timeline `archived_at`,
+the late-append guard queuing exactly one restore), restore replaying to
+identical offsets, operations, touches, and cost with the rollup subtracted,
+`--all --purge-after`, the guard releasing an appended line after restore,
+and the durable dump when a matching `pg_dump` is on `PATH`. All four pass
+against a throwaway Postgres 16. `cargo check --all-targets` is clean;
+`TurnDetail.test.tsx` gains two cases (15 pass); `tsc` and eslint pass on
+the changed files. `make test-rust-integration` ran all twelve targets: every
+target passed except three `retrieval_integration` cases that asserted the
+number of backfill families as 3; the turn-digest family makes it 4, the
+assertions were updated, and the target then passed in full. `cargo test
+--lib` passes (298).
+
+Follow-up on 2026-09-23 (user: first run must delete nothing; vacuum any
+time; decide `REAL[]`):
+
+- **Purge gate.** `archive_state.purge_enabled` starts false. A cycle
+  exports and dumps but selects no purge candidates until
+  `sulion archive purge-gate on` (also `POST /api/admin/archive/purge-gate`).
+  `restore --all` / `--purge-after` restore without re-purging while it is
+  closed and say so. `sulion archive verify [--deep]` checks every archived
+  object against its row; deep re-downloads and re-hashes. Covered by a new
+  integration test (tampered and missing objects, gate closed and open).
+- **Re-measure (2026-09-23, before the vacuum below).** Database 25 GB:
+  `events` 7.6 GB, `retrieval_embeddings` 7.3 GB (4.6 GB TOAST, 60k dead
+  tuples, autovacuum still 2026-08-28), `event_blocks` 3.3 GB,
+  `code_symbols` 3.1 GB, `timeline_operations` 2.2 GB, `timeline_turns`
+  217 MB with 59 MB of markdown (the digest corpus is now that small).
+  2,285 of 2,455 sessions idle over 30 days. pgvector present.
+- **`VACUUM (FULL)`** run on `repo_runtime_state`, `workspaces`,
+  `timeline_turns`, `retrieval_embeddings`; result in "Current state".
+- **`REAL[]` column: dropped** (reversing the same-day decision above,
+  which had kept it for the test harness's sake). Migration
+  `0090_retrieval_pgvector_required.sql` creates the extension, owns the
+  `embedding_vector vector(768)` column, backfills it from the array, and
+  drops the array; `0091` owns the HNSW index under the name the service
+  used. The service verifies the schema at startup instead of creating it,
+  the exact-scan search path and the dual-write upsert are gone, and the
+  integration harness and e2e stack run `pgvector/pgvector:pg16`. The
+  retrieval tests now embed at 768 dimensions. ADR 0003 records the
+  reversal.
+
+- **Vacuum result (2026-09-23 07:37–07:42 UTC).** `retrieval_embeddings`
+  7,328 → 6,836 MB, `timeline_turns` 217 → 186 MB, `workspaces` 528 →
+  440 kB, `repo_runtime_state` unchanged at 368 kB; database 25 → 24 GB.
+  The embeddings table's TOAST was mostly live data (the vector stored
+  twice), not dead space; the HNSW rebuild noted `maintenance_work_mem` is
+  too small for the graph, which only slows the rebuild.
+- **Trial durable dump.** `pg_dump -Fc` with the PostgreSQL 18 client
+  against production, excluding the transcript-derived, retrieval, and code
+  tables: 3.1 MB. Monthly dumps are negligible; keep every one.
+
+Still not done: `git push` and `terraform apply` (both through the deploy
+pipeline, on the user's say-so).
+
 ## Current state
 
-Completed: exploration, measurement, plan revision 3. Remaining: M0–M5.
-Blockers: decisions 1–4. Next action: user answers them; then M0.
+Completed: exploration, measurement, plan revision 3, M1–M5 implementation
+and tests. Remaining: M0's re-measure, trial dump, and vacuum; commit and
+push; the first deploy (Terraform apply through the pipeline creates the
+bucket and role policy). Next action: user reviews the diff, renews the
+database grant for the re-measure, names a vacuum window, and authorizes
+commit and push.

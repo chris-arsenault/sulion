@@ -128,6 +128,32 @@ pub enum ControlRequest {
         name: Option<String>,
     },
     SessionNameGet,
+    /// Transcript archive: queue a cycle run (optionally a dry run that
+    /// only reports the eligible sets). Executed by the control process's
+    /// archive loop; the response is the queued request.
+    ArchiveRun {
+        #[serde(default)]
+        dry_run: bool,
+    },
+    /// Queue a restore of purged sessions in scope.
+    ArchiveRestore {
+        scope: crate::archive::RestoreScope,
+    },
+    ArchiveStatus,
+    ArchiveList {
+        #[serde(default)]
+        limit: Option<i64>,
+    },
+    /// Queue a check of every archived session's object against its row;
+    /// `deep` downloads and re-hashes each object.
+    ArchiveVerify {
+        #[serde(default)]
+        deep: bool,
+    },
+    /// Open or close the operator's gate on deletion.
+    ArchivePurgeGate {
+        enabled: bool,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -376,6 +402,38 @@ async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value>
                     .await?
                     .flatten();
             Ok(serde_json::json!({ "agent_label": label }))
+        }
+        ControlRequest::ArchiveRun { dry_run } => {
+            let requested_by = format!("pty:{}", msg.pty_id);
+            let request =
+                crate::archive::requests::enqueue_run(pool, dry_run, Some(&requested_by)).await?;
+            Ok(serde_json::to_value(request)?)
+        }
+        ControlRequest::ArchiveRestore { scope } => {
+            let requested_by = format!("pty:{}", msg.pty_id);
+            let request =
+                crate::archive::requests::enqueue_restore(pool, &scope, Some(&requested_by))
+                    .await?;
+            Ok(serde_json::to_value(request)?)
+        }
+        ControlRequest::ArchiveStatus => {
+            let store = crate::archive::ObjectStore::from_env();
+            Ok(serde_json::to_value(
+                crate::archive::status(pool, store.as_ref()).await?,
+            )?)
+        }
+        ControlRequest::ArchiveList { limit } => Ok(serde_json::to_value(
+            crate::archive::requests::recent(pool, limit.unwrap_or(20)).await?,
+        )?),
+        ControlRequest::ArchiveVerify { deep } => {
+            let requested_by = format!("pty:{}", msg.pty_id);
+            let request =
+                crate::archive::requests::enqueue_verify(pool, deep, Some(&requested_by)).await?;
+            Ok(serde_json::to_value(request)?)
+        }
+        ControlRequest::ArchivePurgeGate { enabled } => {
+            crate::archive::set_purge_enabled(pool, enabled).await?;
+            Ok(serde_json::json!({ "purge_enabled": enabled }))
         }
     }
 }

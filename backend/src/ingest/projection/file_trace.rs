@@ -47,31 +47,58 @@ pub async fn load_repo_file_trace(
     repo_name: &str,
     repo_rel_path: &str,
 ) -> anyhow::Result<Vec<RepoFileTraceTouch>> {
+    // Live sessions keep per-touch rows with their operation; purged sessions
+    // keep the touch folded into the turn digest, with no operation to link.
     let rows: Vec<TraceRow> = sqlx::query_as(
-        "SELECT cs.pty_session_id AS pty_session_id, \
-                tf.session_uuid, \
-                cs.agent AS session_agent, \
-                ps.label AS session_label, \
-                ps.state AS session_state, \
-                tf.turn_id, \
-                tt.preview AS turn_preview, \
-                tt.start_timestamp AS turn_timestamp, \
-                op.operation_type AS operation_type, \
-                op.operation_category AS operation_category, \
-                op.pair_id AS pair_id, \
-                tf.touch_kind, \
-                tf.is_write \
-           FROM timeline_file_touches tf \
-           JOIN timeline_turns tt \
-             ON tt.session_uuid = tf.session_uuid AND tt.turn_id = tf.turn_id \
-           LEFT JOIN timeline_operations op \
-             ON op.session_uuid = tf.session_uuid \
-            AND op.turn_id = tf.turn_id \
-            AND op.operation_ord = tf.operation_ord \
-           JOIN claude_sessions cs ON cs.session_uuid = tf.session_uuid \
-           LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
-          WHERE tf.repo_name = $1 AND tf.repo_rel_path = $2 \
-          ORDER BY tt.start_timestamp DESC, tf.turn_id DESC, tf.touch_ord ASC",
+        "SELECT * FROM ( \
+            SELECT cs.pty_session_id AS pty_session_id, \
+                   tf.session_uuid, \
+                   cs.agent AS session_agent, \
+                   ps.label AS session_label, \
+                   ps.state AS session_state, \
+                   tf.turn_id, \
+                   tt.preview AS turn_preview, \
+                   tt.start_timestamp AS turn_timestamp, \
+                   op.operation_type AS operation_type, \
+                   op.operation_category AS operation_category, \
+                   op.pair_id AS pair_id, \
+                   tf.touch_kind, \
+                   tf.is_write, \
+                   tf.touch_ord AS touch_ord \
+              FROM timeline_file_touches tf \
+              JOIN timeline_turns tt \
+                ON tt.session_uuid = tf.session_uuid AND tt.turn_id = tf.turn_id \
+              LEFT JOIN timeline_operations op \
+                ON op.session_uuid = tf.session_uuid \
+               AND op.turn_id = tf.turn_id \
+               AND op.operation_ord = tf.operation_ord \
+              JOIN claude_sessions cs ON cs.session_uuid = tf.session_uuid \
+              LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
+             WHERE tf.repo_name = $1 AND tf.repo_rel_path = $2 \
+            UNION ALL \
+            SELECT cs.pty_session_id AS pty_session_id, \
+                   tt.session_uuid, \
+                   cs.agent AS session_agent, \
+                   ps.label AS session_label, \
+                   ps.state AS session_state, \
+                   tt.turn_id, \
+                   tt.preview AS turn_preview, \
+                   tt.start_timestamp AS turn_timestamp, \
+                   NULL::TEXT AS operation_type, \
+                   NULL::TEXT AS operation_category, \
+                   NULL::TEXT AS pair_id, \
+                   f ->> 'kind' AS touch_kind, \
+                   COALESCE((f ->> 'write')::BOOLEAN, FALSE) AS is_write, \
+                   0 AS touch_ord \
+              FROM timeline_turns tt \
+              JOIN claude_sessions cs ON cs.session_uuid = tt.session_uuid \
+              LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
+              CROSS JOIN LATERAL jsonb_array_elements(tt.files_json) f \
+             WHERE cs.purged_at IS NOT NULL \
+               AND tt.files_json @> jsonb_build_array(jsonb_build_object('repo', $1::TEXT, 'path', $2::TEXT)) \
+               AND f ->> 'repo' = $1 AND f ->> 'path' = $2 \
+         ) touches \
+          ORDER BY turn_timestamp DESC, turn_id DESC, touch_ord ASC",
     )
     .bind(repo_name)
     .bind(repo_rel_path)

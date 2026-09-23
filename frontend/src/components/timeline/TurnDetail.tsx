@@ -364,6 +364,21 @@ export function TurnDetail({
         ref={bodyRef}
         onScroll={onBodyScroll}
       >
+        {turn.archived_at && (
+          <div className="td__archived" data-testid="turn-archived">
+            <Icon name="file-text" size={12} />
+            <span>
+              Archived {turn.archived_at.slice(0, 10)}: this session was purged
+              to its turn digest. Tool output and per-call detail come back
+              with <code>sulion archive restore --session {turn.session_uuid ?? ""}</code>.
+            </span>
+          </div>
+        )}
+        {turn.archived_at && turn.chunks.length === 0 && (
+          <div className="td__archived-markdown">
+            <Markdown source={turn.markdown} fileTarget={fileTarget} />
+          </div>
+        )}
         {turn.chunks.map((chunk, idx) => {
           if (chunk.kind === "assistant") {
             return (

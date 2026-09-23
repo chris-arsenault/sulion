@@ -695,6 +695,10 @@ export interface TimelineTurn {
   session_agent?: string | null;
   session_label?: string | null;
   session_state?: SessionState | null;
+  /** Set by the client from the detail response when the session was
+   * purged to its turn digest: `chunks` is empty and `markdown` is the
+   * whole record until the session is restored. */
+  archived_at?: string | null;
 }
 
 export interface TimelineTurnSummary {
@@ -724,12 +728,15 @@ export interface TimelineSummaryResponse {
   session_agent: string | null;
   total_event_count: number;
   turns: TimelineTurnSummary[];
+  /** The session was purged to its turn digest on this date. */
+  archived_at?: string | null;
 }
 
 export interface TimelineTurnDetailResponse {
   session_uuid: string;
   session_agent: string | null;
   turn: TimelineTurn;
+  archived_at?: string | null;
 }
 
 export interface MonitorSessionTurn {

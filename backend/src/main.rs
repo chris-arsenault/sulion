@@ -60,6 +60,14 @@ async fn main() -> anyhow::Result<()> {
     });
     tokio::spawn(sulion::submitted_prompts::run_reconciler(pool.clone()));
     tokio::spawn(sulion::api::run_model_switch_enforcer(state.clone()));
+    match sulion::archive::ArchiveConfig::from_env(&cfg.db_url) {
+        Some(archive) => {
+            tokio::spawn(sulion::archive::run_loop(pool.clone(), archive));
+        }
+        None => tracing::info!(
+            "transcript archive disabled; set SULION_ARCHIVE_BUCKET to enable the cycle"
+        ),
+    }
 
     if cfg.standalone_node.is_some() {
         let correlate_pool = pool.clone();
@@ -235,6 +243,7 @@ async fn dispatch_cli(argv: &[std::ffi::OsString]) -> anyhow::Result<Option<i32>
         "plan" => sulion::plan_cli::run_plan(args).await?,
         "activity" => sulion::plan_cli::run_activity(args).await?,
         "name" => sulion::plan_cli::run_name(args).await?,
+        "archive" => sulion::plan_cli::run_archive(args).await?,
         _ => return Ok(None),
     };
     Ok(Some(code))

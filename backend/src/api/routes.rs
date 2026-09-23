@@ -158,6 +158,20 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/admin/retrieval/reindex",
             post(admin_routes::retrieval_reindex),
         )
+        .route("/api/admin/archive", get(admin_routes::archive_status))
+        .route("/api/admin/archive/run", post(admin_routes::archive_run))
+        .route(
+            "/api/admin/archive/restore",
+            post(admin_routes::archive_restore),
+        )
+        .route(
+            "/api/admin/archive/verify",
+            post(admin_routes::archive_verify),
+        )
+        .route(
+            "/api/admin/archive/purge-gate",
+            post(admin_routes::archive_purge_gate),
+        )
 }
 
 fn workspace_router() -> Router<Arc<AppState>> {

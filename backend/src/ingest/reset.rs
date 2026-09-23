@@ -16,7 +16,10 @@ use uuid::Uuid;
 ///     canonical event rows.
 ///
 /// Tables preserved: `events`, `ingester_state`, `pty_sessions`,
-/// `repos`, `tool_category_rules`, and `claude_sessions`.
+/// `repos`, `tool_category_rules`, and `claude_sessions`. Purged sessions
+/// (`claude_sessions.purged_at` set) are skipped entirely: their turn rows
+/// are the digest the archive left behind and there are no events to
+/// rebuild them from.
 pub async fn rebuild_ingest_derivatives(pool: &Pool) -> anyhow::Result<ReindexStats> {
     let sessions: Vec<(Uuid,)> = sqlx::query_as(
         "SELECT DISTINCT session_uuid \
@@ -31,13 +34,21 @@ pub async fn rebuild_ingest_derivatives(pool: &Pool) -> anyhow::Result<ReindexSt
 
     let mut tx = pool.begin().await?;
 
-    // `timeline_turns` cascades to timeline projection child tables.
-    sqlx::query("DELETE FROM timeline_turns")
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM event_blocks")
-        .execute(&mut *tx)
-        .await?;
+    // `timeline_turns` cascades to timeline projection child tables. A purged
+    // session's turns are its digest and it has no events to rebuild them
+    // from, so those rows are left alone; the archive loop owns them.
+    sqlx::query(
+        "DELETE FROM timeline_turns \
+          WHERE session_uuid IN (SELECT session_uuid FROM claude_sessions WHERE purged_at IS NULL)",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "DELETE FROM event_blocks \
+          WHERE session_uuid IN (SELECT session_uuid FROM claude_sessions WHERE purged_at IS NULL)",
+    )
+    .execute(&mut *tx)
+    .await?;
     sqlx::query(
         "UPDATE events \
             SET speaker = NULL, \

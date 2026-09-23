@@ -77,6 +77,17 @@ services:
       SULION_CODE_INTEL_URL: ""
       SULION_RUNNER_URL: ""
       SULION_DEV_PORT_RANGE: "${SULION_DEV_PORT_RANGE:-26000-26010}"
+      # Transcript archive: idle sessions are exported from the database to
+      # this bucket under the backend's own identity, the durable tables are
+      # dumped beside them, and exported sessions are purged down to their
+      # turn digest after the grace period. Empty disables the cycle.
+      SULION_ARCHIVE_BUCKET: "${SULION_ARCHIVE_BUCKET:-}"
+      SULION_ARCHIVE_MIN_IDLE_DAYS: "${SULION_ARCHIVE_MIN_IDLE_DAYS:-30}"
+      SULION_ARCHIVE_PURGE_AFTER_DAYS: "${SULION_ARCHIVE_PURGE_AFTER_DAYS:-90}"
+      SULION_ARCHIVE_INTERVAL_DAYS: "${SULION_ARCHIVE_INTERVAL_DAYS:-30}"
+      # The pgdg client: the server is PostgreSQL 18 and the appstream client
+      # in the image is 16, which refuses to dump it.
+      SULION_PG_DUMP: "/usr/pgsql-18/bin/pg_dump"
       HOME: "/home/sulion"
     networks:
       - sulion

@@ -18,6 +18,7 @@ TEST_TARGETS=(
   ws_integration
   node_protocol_integration
   ingester_integration
+  archive_integration
 )
 INTEGRATION_FEATURE="integration-tests"
 
@@ -99,7 +100,9 @@ start_postgres_container() {
     -p "127.0.0.1::${DOCKER_CONTAINER_PORT}"
   )
 
-  docker_args+=(docker.io/library/postgres:16)
+  # pgvector is required by the retrieval migrations, so the harness runs
+  # the pgvector build of the same Postgres major.
+  docker_args+=(docker.io/pgvector/pgvector:pg16)
   docker "${docker_args[@]}" >/dev/null
 
   local mapped

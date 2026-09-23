@@ -11,7 +11,24 @@ use crate::ingest::timeline::{
     StoredOperationProjection, StoredTurnProjection,
 };
 
+/// A purged session's `timeline_turns` rows are its digest, the only record
+/// it has left; its `events` are gone. Every rebuild entry point checks this
+/// first, because rebuilding from zero events would delete the digest.
+async fn session_is_purged(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<bool> {
+    let purged: Option<bool> = sqlx::query_scalar(
+        "SELECT purged_at IS NOT NULL FROM claude_sessions WHERE session_uuid = $1",
+    )
+    .bind(session_uuid)
+    .fetch_optional(pool)
+    .await
+    .context("check purged state before projection")?;
+    Ok(purged.unwrap_or(false))
+}
+
 pub async fn rebuild_session_projection(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<usize> {
+    if session_is_purged(pool, session_uuid).await? {
+        return Ok(0);
+    }
     let events = load_projection_source_events(pool, session_uuid)
         .await
         .context("load canonical projection events")?;
@@ -32,6 +49,9 @@ pub async fn reconcile_session_projection(
     pool: &Pool,
     session_uuid: Uuid,
 ) -> anyhow::Result<usize> {
+    if session_is_purged(pool, session_uuid).await? {
+        return Ok(0);
+    }
     let events = load_projection_source_events(pool, session_uuid)
         .await
         .context("load canonical projection events")?;
@@ -58,6 +78,9 @@ pub async fn rebuild_session_projection_after_insert(
     session_uuid: Uuid,
     first_inserted_offset: i64,
 ) -> anyhow::Result<usize> {
+    if session_is_purged(pool, session_uuid).await? {
+        return Ok(0);
+    }
     if session_has_descendants(pool, session_uuid).await? {
         return reconcile_session_projection(pool, session_uuid).await;
     }

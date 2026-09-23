@@ -107,11 +107,45 @@ patches remain visible in tool detail and file-touch evidence.
 
 ## Retention boundary
 
-`events.payload` retains the full source record used by rebuilds. Removing
-`timeline_turns.turn_json` and reducing turn markdown removed derived copies,
-not canonical history. Source transcript files may disappear independently;
-ordinary startup repair and admin reindex read the database copy.
+`events.payload` is the full source record every rebuild reads. Source
+transcript files disappear independently (Claude Code deletes its own after
+30 days); ordinary startup repair and the admin reindex read the database
+copy, never the file.
 
-Automatic archive, purge, and restore are not implemented. The
-[archive proposal](plans/transcript-archive-and-purge.md) remains pending and
-does not change the current retention contract.
+The archive loop in the control process (`backend/src/archive/`) is the one
+thing that removes transcript rows, and only for a session whose export it
+has verified in object storage. A session idle past `SULION_ARCHIVE_MIN_IDLE_DAYS`
+is exported as one JSON-lines object of envelope records
+(`{"o": byte_offset, "t": timestamp, "k": kind, "r": related_tool_use_id, "p": payload}`)
+under `sessions/<agent>/<yyyy>/<mm>/<session>.jsonl.zst`; the offset is what
+lets a restore land rows on the same `(session_uuid, byte_offset)` key the
+file would. `SULION_ARCHIVE_PURGE_AFTER_DAYS` later the session is purged to
+its **turn digest**: `timeline_turns` keeps preview, prompt text, markdown,
+timestamps, tokens, and a `files_json` list of the paths each turn touched;
+`claude_sessions`, `agent_session_metadata`, and `timeline_session_state`
+stay; cost and file churn are rolled up into `usage_daily_rollup` and
+`file_activity_daily` first (with per-session contribution tables so a
+restore can subtract exactly what was added); everything else the session
+owned — `events`, `event_blocks`, `timeline_operations`, touches, signals,
+per-session usage, model switches, block- and operation-level embedding
+sources — is deleted. `claude_sessions.purged_at` marks the state.
+
+Three rules follow from the digest having no events behind it:
+
+- `rebuild_session_projection`, its reconcile and incremental variants, and
+  `rebuild_ingest_derivatives` skip purged sessions. A rebuild from zero
+  events would delete the digest.
+- The ingester refuses to append to a purged session. When a transcript file
+  grows after its session was purged, `process_file` queues an
+  `archive_requests` restore and leaves the offset alone; the next tick after
+  the replay ingests the new lines normally.
+- Restore replays the archived envelope lines through the same `insert_event`
+  path a file takes (`ingest::replay_session_lines`), then rebuilds the
+  projection in full. No transcript file is written and the ingester binary
+  is unchanged.
+
+Requests reach the loop through the `archive_requests` table: `sulion archive
+run|restore|status|list` over the correlate socket, or `/api/admin/archive*`
+from the UI. Progress is an `ingest_jobs` row. The durable tables are dumped
+with `pg_dump` at the start of every cycle before anything is purged. Design
+record: [`adrs/0003-tiered-transcript-retention.md`](adrs/0003-tiered-transcript-retention.md).

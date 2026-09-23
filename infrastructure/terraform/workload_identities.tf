@@ -11,8 +11,10 @@
 # split topology it runs beside the node and is delivered to in the same way.
 # runner and frontend hold no secret and appear here not at all.
 #
-# No policy is passed to any of them: reading this project's parameters is all
-# they do with credentials, and machine-role derives that from the prefix.
+# Reading this project's parameters is all most of them do with credentials,
+# and machine-role derives that from the prefix. The backend alone carries one
+# more grant: the transcript archive bucket in archive.tf, which its control
+# process writes to and reads back from.
 
 data "aws_caller_identity" "workload" {}
 
@@ -31,6 +33,8 @@ module "workload_role" {
 
   prefix = local.prefix
   name   = each.key
+
+  policy_json = each.key == "backend" ? data.aws_iam_policy_document.archive_backend.json : null
 
   permissions_boundary_arn = (
     "arn:aws:iam::${data.aws_caller_identity.workload.account_id}:policy/pb-${local.prefix}-truenas-workload"

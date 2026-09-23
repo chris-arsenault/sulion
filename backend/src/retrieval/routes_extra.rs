@@ -87,12 +87,25 @@ pub(super) async fn file_history_route(
     Query(query): Query<FileHistoryQuery>,
 ) -> Result<Json<Vec<FileHistoryItem>>, RetrievalError> {
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    // Live sessions keep per-touch rows; purged sessions keep the same facts
+    // folded into each turn's digest.
     let rows = sqlx::query(
-        "SELECT ft.session_uuid, ft.turn_id, tt.end_timestamp, tt.preview, ft.touch_kind, ft.is_write \
-           FROM timeline_file_touches ft \
-           JOIN timeline_turns tt ON tt.session_uuid = ft.session_uuid AND tt.turn_id = ft.turn_id \
-          WHERE ft.repo_name = $1 AND ft.repo_rel_path = $2 \
-          ORDER BY tt.end_timestamp DESC \
+        "SELECT session_uuid, turn_id, end_timestamp, preview, touch_kind, is_write FROM ( \
+            SELECT ft.session_uuid, ft.turn_id, tt.end_timestamp, tt.preview, ft.touch_kind, ft.is_write \
+              FROM timeline_file_touches ft \
+              JOIN timeline_turns tt ON tt.session_uuid = ft.session_uuid AND tt.turn_id = ft.turn_id \
+             WHERE ft.repo_name = $1 AND ft.repo_rel_path = $2 \
+            UNION ALL \
+            SELECT tt.session_uuid, tt.turn_id, tt.end_timestamp, tt.preview, \
+                   f ->> 'kind' AS touch_kind, COALESCE((f ->> 'write')::BOOLEAN, FALSE) AS is_write \
+              FROM timeline_turns tt \
+              JOIN claude_sessions cs ON cs.session_uuid = tt.session_uuid \
+              CROSS JOIN LATERAL jsonb_array_elements(tt.files_json) f \
+             WHERE cs.purged_at IS NOT NULL \
+               AND tt.files_json @> jsonb_build_array(jsonb_build_object('repo', $1::TEXT, 'path', $2::TEXT)) \
+               AND f ->> 'repo' = $1 AND f ->> 'path' = $2 \
+         ) touches \
+          ORDER BY end_timestamp DESC \
           LIMIT $3",
     )
     .bind(&query.repo)
@@ -213,6 +226,9 @@ pub(super) struct TurnResponse {
     preview: String,
     markdown: String,
     evidence: Option<EvidencePacket>,
+    /// The session was purged to its digest; the markdown is intact but
+    /// tool output and per-operation detail need `sulion archive restore`.
+    archived: bool,
 }
 
 pub(super) async fn turn_route(
@@ -220,7 +236,10 @@ pub(super) async fn turn_route(
     Query(query): Query<TurnQuery>,
 ) -> Result<Json<TurnResponse>, RetrievalError> {
     let row = sqlx::query(
-        "SELECT preview, markdown FROM timeline_turns WHERE session_uuid = $1 AND turn_id = $2",
+        "SELECT tt.preview, tt.markdown, (cs.purged_at IS NOT NULL) AS archived \
+           FROM timeline_turns tt \
+           JOIN claude_sessions cs ON cs.session_uuid = tt.session_uuid \
+          WHERE tt.session_uuid = $1 AND tt.turn_id = $2",
     )
     .bind(query.agent_session_uuid)
     .bind(query.turn_id)
@@ -233,5 +252,6 @@ pub(super) async fn turn_route(
         preview: row.try_get("preview").unwrap_or_default(),
         markdown: row.try_get("markdown").unwrap_or_default(),
         evidence: load_evidence(&state.pool, query.agent_session_uuid, query.turn_id, true).await?,
+        archived: row.try_get("archived").unwrap_or(false),
     }))
 }

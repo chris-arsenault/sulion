@@ -37,6 +37,86 @@ pub(super) async fn reindex(
     }))
 }
 
+/// `POST /api/admin/archive/run`: queue an archive cycle for the control
+/// process's loop. The loop, not this handler, does the work.
+#[derive(Deserialize, Default)]
+pub(super) struct ArchiveRunRequest {
+    #[serde(default)]
+    dry_run: bool,
+}
+
+pub(super) async fn archive_run(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<ArchiveRunRequest>>,
+) -> ApiResult<Json<crate::archive::ArchiveRequest>> {
+    let request = body.map(|Json(body)| body).unwrap_or_default();
+    let queued = crate::archive::requests::enqueue_run(&state.pool, request.dry_run, Some("ui"))
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(queued))
+}
+
+/// `POST /api/admin/archive/restore`: queue a restore of purged sessions.
+pub(super) async fn archive_restore(
+    State(state): State<Arc<AppState>>,
+    Json(scope): Json<crate::archive::RestoreScope>,
+) -> ApiResult<Json<crate::archive::ArchiveRequest>> {
+    if scope.is_empty() {
+        return Err(ApiError::BadRequest(
+            "restore needs a session_uuid, month, repo, or all".into(),
+        ));
+    }
+    let queued = crate::archive::requests::enqueue_restore(&state.pool, &scope, Some("ui"))
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(queued))
+}
+
+/// `POST /api/admin/archive/verify`: queue a check of every archived object.
+#[derive(Deserialize, Default)]
+pub(super) struct ArchiveVerifyRequest {
+    #[serde(default)]
+    deep: bool,
+}
+
+pub(super) async fn archive_verify(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<ArchiveVerifyRequest>>,
+) -> ApiResult<Json<crate::archive::ArchiveRequest>> {
+    let request = body.map(|Json(body)| body).unwrap_or_default();
+    let queued = crate::archive::requests::enqueue_verify(&state.pool, request.deep, Some("ui"))
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(queued))
+}
+
+/// `POST /api/admin/archive/purge-gate`: open or close deletion.
+#[derive(Deserialize)]
+pub(super) struct ArchivePurgeGateRequest {
+    enabled: bool,
+}
+
+pub(super) async fn archive_purge_gate(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ArchivePurgeGateRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    crate::archive::set_purge_enabled(&state.pool, request.enabled)
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(serde_json::json!({ "purge_enabled": request.enabled })))
+}
+
+/// `GET /api/admin/archive`: store, last cycle, counts, recent requests.
+pub(super) async fn archive_status(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<crate::archive::ArchiveStatus>> {
+    let store = crate::archive::ObjectStore::from_env();
+    let status = crate::archive::status(&state.pool, store.as_ref())
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(status))
+}
+
 #[derive(Deserialize, Serialize)]
 pub(super) struct RetrievalReindexRequest {
     repo: Option<String>,

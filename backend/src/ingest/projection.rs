@@ -354,6 +354,7 @@ fn empty_timeline_summary_response(total_event_count: i64) -> TimelineSummaryRes
         session_agent: None,
         total_event_count,
         turns: Vec::new(),
+        archived_at: None,
     }
 }
 
@@ -364,6 +365,9 @@ pub struct TimelineSessionMeta {
     pub session_agent: Option<String>,
     pub session_label: Option<String>,
     pub session_state: Option<String>,
+    /// Purged down to its turn digest by the archive loop: turns carry
+    /// markdown and files but no operations or chunks until restored.
+    pub archived_at: Option<DateTime<Utc>>,
 }
 
 #[derive(FromRow)]
@@ -373,6 +377,7 @@ struct SessionMetaRow {
     session_agent: Option<String>,
     session_label: Option<String>,
     session_state: Option<String>,
+    archived_at: Option<DateTime<Utc>>,
 }
 
 pub async fn load_timeline_session_meta(
@@ -384,7 +389,8 @@ pub async fn load_timeline_session_meta(
                 cs.session_uuid AS session_uuid, \
                 cs.agent AS session_agent, \
                 ps.label AS session_label, \
-                ps.state AS session_state \
+                ps.state AS session_state, \
+                CASE WHEN cs.purged_at IS NOT NULL THEN cs.archived_at ELSE NULL END AS archived_at \
            FROM claude_sessions cs \
            LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
           WHERE cs.session_uuid = $1",
@@ -400,6 +406,7 @@ pub async fn load_timeline_session_meta(
         session_agent: row.session_agent,
         session_label: row.session_label,
         session_state: row.session_state,
+        archived_at: row.archived_at,
     })
 }
 
@@ -413,7 +420,8 @@ pub async fn load_repo_timeline_summary_response(
                 cs.session_uuid AS session_uuid, \
                 cs.agent AS session_agent, \
                 ps.label AS session_label, \
-                ps.state AS session_state \
+                ps.state AS session_state, \
+                CASE WHEN cs.purged_at IS NOT NULL THEN cs.archived_at ELSE NULL END AS archived_at \
            FROM claude_sessions cs \
            JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
           WHERE ps.repo = $1 \
@@ -441,6 +449,7 @@ pub async fn load_repo_timeline_summary_response(
             session_agent: row.session_agent,
             session_label: row.session_label,
             session_state: row.session_state,
+            archived_at: row.archived_at,
         };
         let mut response = load_timeline_summary_response(pool, meta.session_uuid, filters).await?;
         total_event_count += response.total_event_count;
@@ -461,6 +470,7 @@ pub async fn load_repo_timeline_summary_response(
         session_agent: None,
         total_event_count,
         turns,
+        archived_at: None,
     })
 }
 
@@ -874,6 +884,7 @@ pub async fn load_timeline_summary_response(
         session_agent: None,
         total_event_count,
         turns,
+        archived_at: None,
     })
 }
 

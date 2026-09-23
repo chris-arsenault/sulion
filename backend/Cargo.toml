@@ -102,11 +102,14 @@ rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"]
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 axum-server = { version = "0.7.2", default-features = false, features = ["tls-rustls-no-provider"] }
 rustls-pemfile = "2"
+# Archive objects: one zstd stream per exported session, staged in a temp
+# file so the process never holds a whole session in memory.
+zstd = "0.13"
+tempfile = "3"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http = "1"
-tempfile = "3"
 syn = { version = "2", features = ["full", "visit"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 

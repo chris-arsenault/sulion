@@ -16,7 +16,7 @@ use ring::digest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::Row;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::db::{self, Pool};
@@ -160,7 +160,6 @@ pub struct RetrievalState {
     pool: Pool,
     config: Arc<RetrievalConfig>,
     http: reqwest::Client,
-    vector_capabilities: Arc<RwLock<VectorCapabilities>>,
     index_lock: Arc<Mutex<()>>,
 }
 
@@ -171,10 +170,9 @@ impl RetrievalState {
             pool,
             config: Arc::new(config),
             http: reqwest::Client::new(),
-            vector_capabilities: Arc::new(RwLock::new(VectorCapabilities::default())),
             index_lock: Arc::new(Mutex::new(())),
         });
-        state.initialize_vector_capabilities().await?;
+        state.verify_vector_schema().await?;
         bootstrap_index_if_empty(&state)
             .await
             .map_err(|err| anyhow!(err.to_string()))?;
@@ -208,96 +206,44 @@ impl RetrievalState {
             pool,
             config: Arc::new(config),
             http: reqwest::Client::new(),
-            vector_capabilities: Arc::new(RwLock::new(VectorCapabilities::default())),
             index_lock: Arc::new(Mutex::new(())),
         })
     }
 
-    async fn initialize_vector_capabilities(&self) -> anyhow::Result<VectorCapabilities> {
-        let extension_installed: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')",
+    /// pgvector is required: migration 0090 owns the extension, the
+    /// `embedding_vector` column, and 0091 the HNSW index. This only confirms
+    /// the catalog matches the configured dimension and refuses to serve
+    /// otherwise; there is no fallback search path to fall back to.
+    async fn verify_vector_schema(&self) -> anyhow::Result<()> {
+        let dimensions = self.config.embedding_dimensions;
+        let expected_type = format!("vector({dimensions})");
+        let column_type: Option<String> = sqlx::query_scalar(
+            "SELECT format_type(a.atttypid, a.atttypmod) \
+               FROM pg_attribute a \
+               JOIN pg_class c ON c.oid = a.attrelid \
+               JOIN pg_namespace n ON n.oid = c.relnamespace \
+              WHERE n.nspname = 'public' \
+                AND c.relname = 'retrieval_embeddings' \
+                AND a.attname = 'embedding_vector' \
+                AND NOT a.attisdropped",
         )
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await
-        .context("check pgvector extension")?;
-
-        let mut column_exists = false;
-        let mut ann_index_exists = false;
-        if extension_installed {
-            let dimensions = self.config.embedding_dimensions;
-            let expected_type = format!("vector({dimensions})");
-            let mut column_type: Option<String> = sqlx::query_scalar(
-                "SELECT format_type(a.atttypid, a.atttypmod) \
-                   FROM pg_attribute a \
-                   JOIN pg_class c ON c.oid = a.attrelid \
-                   JOIN pg_namespace n ON n.oid = c.relnamespace \
-                  WHERE n.nspname = 'public' \
-                    AND c.relname = 'retrieval_embeddings' \
-                    AND a.attname = 'embedding_vector' \
-                    AND NOT a.attisdropped",
-            )
-            .fetch_optional(&self.pool)
-            .await
-            .context("check embedding_vector column")?;
-
-            if column_type.is_none() {
-                let add_column_sql = format!(
-                    "ALTER TABLE retrieval_embeddings \
-                     ADD COLUMN IF NOT EXISTS embedding_vector vector({dimensions})"
-                );
-                sqlx::query(&add_column_sql)
-                    .execute(&self.pool)
-                    .await
-                    .context("add retrieval embedding_vector column")?;
-                column_type = Some(expected_type.clone());
-            }
-
-            column_exists = column_type.as_deref() == Some(expected_type.as_str());
-            if let Some(column_type) = column_type {
-                if column_type != expected_type {
-                    tracing::warn!(
-                        actual = %column_type,
-                        expected = %expected_type,
-                        "retrieval embedding_vector column has incompatible pgvector dimension; semantic search will use exact REAL[] scan"
-                    );
-                }
-            }
-
-            if column_exists {
-                let index_name = format!("retrieval_embeddings_embedding_hnsw_{dimensions}_idx");
-                ann_index_exists = self.pgvector_index_ready(&index_name).await?;
-
-                if !ann_index_exists {
-                    // CONCURRENTLY must run outside a transaction. This path is
-                    // startup-only and reached only when the catalog says the
-                    // configured ANN index is absent or unusable.
-                    let index_sql = format!(
-                        "CREATE INDEX CONCURRENTLY IF NOT EXISTS {index_name} \
-                         ON retrieval_embeddings USING hnsw (embedding_vector vector_cosine_ops) \
-                         WHERE embedding_dimensions = {dimensions}",
-                    );
-                    sqlx::query(&index_sql)
-                        .execute(&self.pool)
-                        .await
-                        .context("create retrieval pgvector HNSW index")?;
-                    ann_index_exists = self.pgvector_index_ready(&index_name).await?;
-                    if !ann_index_exists {
-                        tracing::warn!(
-                            index = %index_name,
-                            "retrieval pgvector HNSW index is not ready; semantic search will use exact REAL[] scan"
-                        );
-                    }
-                }
-            }
+        .context("check embedding_vector column")?;
+        match column_type.as_deref() {
+            Some(actual) if actual == expected_type => {}
+            Some(actual) => anyhow::bail!(
+                "retrieval_embeddings.embedding_vector is {actual}; the configured model needs {expected_type}"
+            ),
+            None => anyhow::bail!(
+                "retrieval_embeddings.embedding_vector is missing; migration 0090 requires the pgvector extension"
+            ),
         }
-
-        let capabilities = VectorCapabilities {
-            extension_installed,
-            column_exists,
-            ann_index_exists,
-        };
-        *self.vector_capabilities.write().await = capabilities;
-        Ok(capabilities)
+        let index_name = format!("retrieval_embeddings_embedding_hnsw_{dimensions}_idx");
+        if !self.pgvector_index_ready(&index_name).await? {
+            anyhow::bail!("retrieval HNSW index {index_name} is missing or invalid");
+        }
+        Ok(())
     }
 
     async fn pgvector_index_ready(&self, index_name: &str) -> anyhow::Result<bool> {
@@ -340,11 +286,24 @@ pub async fn run_indexer_once_for_tests(
         .map_err(|err| anyhow!(err.to_string()))
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize)]
+/// Reported in health and index-status responses for the UI. pgvector is a
+/// startup requirement now, so a running service always reports all three
+/// as present; the struct stays for the response contract.
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct VectorCapabilities {
     pub extension_installed: bool,
     pub column_exists: bool,
     pub ann_index_exists: bool,
+}
+
+impl VectorCapabilities {
+    pub const fn required() -> Self {
+        Self {
+            extension_installed: true,
+            column_exists: true,
+            ann_index_exists: true,
+        }
+    }
 }
 
 async fn run_background_indexer(state: Arc<RetrievalState>, seconds: u64) {
@@ -402,7 +361,7 @@ struct HealthResponse {
 async fn health(State(state): State<Arc<RetrievalState>>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
-        vector: *state.vector_capabilities.read().await,
+        vector: VectorCapabilities::required(),
         embedding_service_url: state.config.embedding_service_url.clone(),
         embedding_model: state.config.embedding_model.clone(),
         embedding_dimensions: state.config.embedding_dimensions,
@@ -602,6 +561,16 @@ impl SourceKind {
 
     fn is_tool(self) -> bool {
         matches!(self, Self::ToolCall | Self::ToolResult | Self::ToolError)
+    }
+
+    /// Kinds whose archived form is the turn digest: a purged session keeps
+    /// its prompt and assistant text only as the turn's markdown, so a
+    /// search for either also searches digests.
+    fn covers_digest(self) -> bool {
+        matches!(
+            self,
+            Self::AssistantText | Self::UserPrompt | Self::Summary | Self::TurnDigest
+        )
     }
 }
 

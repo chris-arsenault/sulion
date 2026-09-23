@@ -86,7 +86,7 @@ pub(super) async fn reindex_inner(
     state: &RetrievalState,
     request: ReindexRequest,
 ) -> Result<ReindexResponse, RetrievalError> {
-    let vector = *state.vector_capabilities.read().await;
+    let vector = VectorCapabilities::required();
     let _guard = state.index_lock.lock().await;
     let generation = next_backfill_generation(state).await?;
     let backfills_started = start_backfill_runs(
@@ -131,7 +131,7 @@ pub(super) async fn reset_inner(
             "index reset requires {\"confirm\": true}",
         ));
     }
-    let vector = *state.vector_capabilities.read().await;
+    let vector = VectorCapabilities::required();
     // Serialize against the crawler: the background indexer holds this same lock
     // while advancing backfills, so the wipe waits for an in-flight pass to finish
     // and blocks the next one until the rebuild is scheduled.
@@ -216,8 +216,9 @@ pub(super) async fn bootstrap_index_if_empty(
 pub(super) async fn index_status_route(
     State(state): State<Arc<RetrievalState>>,
 ) -> Result<Json<IndexStatusResponse>, RetrievalError> {
-    let vector = *state.vector_capabilities.read().await;
-    Ok(Json(load_index_status_inner(&state, vector).await?))
+    Ok(Json(
+        load_index_status_inner(&state, VectorCapabilities::required()).await?,
+    ))
 }
 
 pub(super) async fn pending_source_count(state: &RetrievalState) -> Result<i64, RetrievalError> {
@@ -261,7 +262,6 @@ pub(super) async fn index_pending_embeddings(
     limit: i64,
 ) -> Result<EmbeddingIndexStats, RetrievalError> {
     let embedder = state.embedding_client();
-    let vector = *state.vector_capabilities.read().await;
     let limit = limit.clamp(1, MAX_REINDEX_LIMIT);
     let sources = load_pending_embedding_sources(state, limit).await?;
     let mut stats = EmbeddingIndexStats {
@@ -328,15 +328,7 @@ pub(super) async fn index_pending_embeddings(
         }
 
         for (chunk_ord, embedding) in source_vectors.iter().enumerate() {
-            upsert_embedding(
-                &mut tx,
-                state,
-                source,
-                chunk_ord as i32,
-                embedding,
-                vector.column_exists,
-            )
-            .await?;
+            upsert_embedding(&mut tx, state, source, chunk_ord as i32, embedding).await?;
             stats.embedded += 1;
         }
         let chunk_count = chunks.len();
@@ -469,7 +461,42 @@ async fn load_current_source(
         SourceFamily::EventBlock => load_current_event_source(state, pending).await,
         SourceFamily::OperationCall => load_current_operation_source(state, pending, false).await,
         SourceFamily::OperationResult => load_current_operation_source(state, pending, true).await,
+        SourceFamily::TurnDigest => load_current_digest_source(state, pending).await,
     }
+}
+
+/// The digest of one turn of a purged session. A session that was restored
+/// is no longer purged, so its digest sources resolve to nothing and are
+/// marked deleted; its block and operation sources take over again.
+async fn load_current_digest_source(
+    state: &RetrievalState,
+    pending: &PendingSourceRow,
+) -> Result<Option<EmbeddingSource>, RetrievalError> {
+    let Some(turn_id) = pending.turn_id else {
+        return Ok(None);
+    };
+    let row = sqlx::query(
+        "SELECT 'turn_digest' AS source_kind, \
+                ('turn:' || tt.session_uuid::TEXT || ':' || tt.turn_id::TEXT) AS source_key, \
+                tt.session_uuid, NULL::BIGINT AS byte_offset, NULL::INT AS block_ord, tt.turn_id, NULL::INT AS operation_ord, \
+                COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/sulion/repos/%' THEN split_part(substr(asm.cwd, length('/home/sulion/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/sulion/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/sulion/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
+                tt.markdown AS text \
+           FROM timeline_turns tt \
+           JOIN claude_sessions cs ON cs.session_uuid = tt.session_uuid \
+           LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
+           LEFT JOIN agent_session_metadata asm ON asm.session_uuid = cs.session_uuid \
+          WHERE tt.session_uuid = $1 \
+            AND tt.turn_id = $2 \
+            AND cs.purged_at IS NOT NULL \
+            AND length(trim(tt.markdown)) > 0",
+    )
+    .bind(pending.session_uuid)
+    .bind(turn_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    row.map(|row| source_from_row(row, SourceFamily::TurnDigest))
+        .transpose()
+        .map(Option::flatten)
 }
 
 async fn load_current_event_source(
@@ -619,67 +646,34 @@ async fn upsert_embedding(
     source: &EmbeddingSource,
     chunk_ord: i32,
     embedding: &[f32],
-    vector_column_exists: bool,
 ) -> Result<(), RetrievalError> {
-    if vector_column_exists {
-        sqlx::query(
-            "INSERT INTO retrieval_embeddings \
-                (source_kind, source_key, session_uuid, byte_offset, block_ord, turn_id, operation_ord, repo_name, \
-                 content_hash, embedding_model, embedding_dimensions, embedding, embedding_vector, chunk_ord, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::vector, $14, NOW()) \
-             ON CONFLICT (embedding_model, source_key, chunk_ord) DO UPDATE SET \
-                 content_hash = EXCLUDED.content_hash, \
-                 embedding_dimensions = EXCLUDED.embedding_dimensions, \
-                 embedding = EXCLUDED.embedding, \
-                 embedding_vector = EXCLUDED.embedding_vector, \
-                 operation_ord = EXCLUDED.operation_ord, \
-                 updated_at = NOW()",
-        )
-        .bind(source.source_kind.as_str())
-        .bind(&source.source_key)
-        .bind(source.session_uuid)
-        .bind(source.byte_offset)
-        .bind(source.block_ord)
-        .bind(source.turn_id)
-        .bind(source.operation_ord)
-        .bind(source.repo_name.as_deref())
-        .bind(&source.content_hash)
-        .bind(&state.config.embedding_model)
-        .bind(state.config.embedding_dimensions)
-        .bind(embedding)
-        .bind(vector_literal(embedding))
-        .bind(chunk_ord)
-        .execute(&mut **tx)
-        .await?;
-    } else {
-        sqlx::query(
-            "INSERT INTO retrieval_embeddings \
-                (source_kind, source_key, session_uuid, byte_offset, block_ord, turn_id, operation_ord, repo_name, \
-                 content_hash, embedding_model, embedding_dimensions, embedding, chunk_ord, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW()) \
-             ON CONFLICT (embedding_model, source_key, chunk_ord) DO UPDATE SET \
-                 content_hash = EXCLUDED.content_hash, \
-                 embedding_dimensions = EXCLUDED.embedding_dimensions, \
-                 embedding = EXCLUDED.embedding, \
-                 operation_ord = EXCLUDED.operation_ord, \
-                 updated_at = NOW()",
-        )
-        .bind(source.source_kind.as_str())
-        .bind(&source.source_key)
-        .bind(source.session_uuid)
-        .bind(source.byte_offset)
-        .bind(source.block_ord)
-        .bind(source.turn_id)
-        .bind(source.operation_ord)
-        .bind(source.repo_name.as_deref())
-        .bind(&source.content_hash)
-        .bind(&state.config.embedding_model)
-        .bind(state.config.embedding_dimensions)
-        .bind(embedding)
-        .bind(chunk_ord)
-        .execute(&mut **tx)
-        .await?;
-    }
+    sqlx::query(
+        "INSERT INTO retrieval_embeddings \
+            (source_kind, source_key, session_uuid, byte_offset, block_ord, turn_id, operation_ord, repo_name, \
+             content_hash, embedding_model, embedding_dimensions, embedding_vector, chunk_ord, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::vector, $13, NOW()) \
+         ON CONFLICT (embedding_model, source_key, chunk_ord) DO UPDATE SET \
+             content_hash = EXCLUDED.content_hash, \
+             embedding_dimensions = EXCLUDED.embedding_dimensions, \
+             embedding_vector = EXCLUDED.embedding_vector, \
+             operation_ord = EXCLUDED.operation_ord, \
+             updated_at = NOW()",
+    )
+    .bind(source.source_kind.as_str())
+    .bind(&source.source_key)
+    .bind(source.session_uuid)
+    .bind(source.byte_offset)
+    .bind(source.block_ord)
+    .bind(source.turn_id)
+    .bind(source.operation_ord)
+    .bind(source.repo_name.as_deref())
+    .bind(&source.content_hash)
+    .bind(&state.config.embedding_model)
+    .bind(state.config.embedding_dimensions)
+    .bind(vector_literal(embedding))
+    .bind(chunk_ord)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 

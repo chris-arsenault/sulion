@@ -65,7 +65,7 @@ endpoint. Never point integration tests at the deployed database.
 
 Postgres-backed tests live in `backend/tests/*_integration.rs`, gated with `#![cfg(feature = "integration-tests")]`, and run through `scripts/run-backend-integration-tests.sh` (also `make test-rust-integration`).
 
-- The harness enables the `integration-tests` Cargo feature, runs each integration target one at a time with `--test-threads=1`, and auto-starts an ephemeral `docker.io/library/postgres:16` container via Docker when `SULION_TEST_DB` is unset.
+- The harness enables the `integration-tests` Cargo feature, runs each integration target one at a time with `--test-threads=1`, and auto-starts an ephemeral `docker.io/pgvector/pgvector:pg16` container via Docker when `SULION_TEST_DB` is unset. The retrieval migrations require the `vector` extension, so a `SULION_TEST_DB` you supply yourself must have pgvector available.
 - The container's port is always published, and the harness probes how it is reachable rather than inferring it from which `docker` binary is on `PATH`. A reachable published port wins and tests connect to `127.0.0.1` on the mapped port; otherwise the harness falls back to the container name on port `5432` for callers that share a Docker network with it. If neither answers it fails with both addresses named, rather than handing the tests an address that cannot resolve.
 - Do not mark backend integration tests `#[ignore]`. When adding a new target, register it in the script so the harness stays the single supported path.
 - `node_protocol_integration` exercises real WebSocket pairing/authentication,

@@ -258,7 +258,73 @@ async fn lexical_search(
         results.extend(lexical_tool_search(pool, q, filters).await?);
     }
 
+    if filters.include.iter().any(|kind| kind.covers_digest()) {
+        results.extend(lexical_digest_search(pool, q, filters).await?);
+    }
+
     Ok(results)
+}
+
+/// Lexical search over archived sessions. A purged session keeps only its
+/// turn digest, so the hit is the turn: full-text over the markdown (the
+/// prompt, assistant text, and tool headers) plus the prompt itself.
+async fn lexical_digest_search(
+    pool: &Pool,
+    q: &str,
+    filters: &SearchFilters,
+) -> Result<Vec<SearchResult>, RetrievalError> {
+    let rows = sqlx::query(
+        "SELECT 'turn_digest' AS source_kind, \
+                tt.session_uuid, NULL::BIGINT AS byte_offset, NULL::INT AS block_ord, \
+                tt.end_timestamp AS timestamp, \
+                cs.agent, cs.pty_session_id, ps.repo AS pty_repo, asm.cwd, asm.model, \
+                tt.markdown AS text, \
+                (COALESCE(ts_rank_cd(to_tsvector('simple', tt.markdown), plainto_tsquery('simple', $1)), 0) \
+                 + CASE WHEN tt.user_prompt_text ILIKE '%' || $1 || '%' THEN 0.5 ELSE 0 END)::REAL AS lexical_score, \
+                tt.turn_id, tt.preview AS turn_preview, TRUE AS archived \
+           FROM timeline_turns tt \
+           JOIN claude_sessions cs ON cs.session_uuid = tt.session_uuid \
+           LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
+           LEFT JOIN agent_session_metadata asm ON asm.session_uuid = cs.session_uuid \
+          WHERE cs.purged_at IS NOT NULL \
+            AND octet_length(tt.markdown) <= 1000000 \
+            AND (to_tsvector('simple', tt.markdown) @@ plainto_tsquery('simple', $1) \
+                 OR tt.user_prompt_text ILIKE '%' || $1 || '%') \
+            AND ($2::UUID IS NULL OR tt.session_uuid = $2) \
+            AND ($3::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/sulion/repos/%' THEN split_part(substr(asm.cwd, length('/home/sulion/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/sulion/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/sulion/workspaces/') + 1), '/', 1) ELSE NULL END) = $3) \
+            AND ($4::TEXT IS NULL OR cs.agent = $4) \
+            AND ($5::TEXT IS NULL OR asm.model = $5) \
+            AND ($6::TIMESTAMPTZ IS NULL OR tt.end_timestamp >= $6) \
+            AND ($7::TIMESTAMPTZ IS NULL OR tt.end_timestamp <= $7) \
+            AND ($8::BOOLEAN = FALSE OR tt.has_errors) \
+            AND ($9::TEXT IS NULL OR tt.files_json @> jsonb_build_array(jsonb_build_object('path', $9::TEXT))) \
+          ORDER BY lexical_score DESC, tt.end_timestamp DESC \
+          LIMIT $10",
+    )
+    .bind(q)
+    .bind(if filters.context.scope == "session" {
+        filters.context.agent_session_uuid
+    } else {
+        None
+    })
+    .bind(if filters.context.scope == "repo" {
+        filters.context.repo.as_deref()
+    } else {
+        None
+    })
+    .bind(filters.agent.as_deref())
+    .bind(filters.model.as_deref())
+    .bind(filters.since)
+    .bind(filters.until)
+    .bind(filters.errors_only)
+    .bind(filters.file_path.as_deref())
+    .bind(filters.limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| row_to_search_result(row, Some("lexical")))
+        .collect())
 }
 
 async fn lexical_tool_search(
@@ -414,6 +480,7 @@ fn row_to_search_result(row: sqlx::postgres::PgRow, source: Option<&str>) -> Opt
         snippet,
         tool: None,
         evidence: None,
+        archived: row.try_get("archived").unwrap_or(false),
     })
 }
 
@@ -481,6 +548,7 @@ fn row_to_tool_search_result(
                 || row.try_get::<bool, _>("result_is_error").unwrap_or(false),
         }),
         evidence: None,
+        archived: row.try_get("archived").unwrap_or(false),
     })
 }
 
@@ -535,9 +603,11 @@ pub(super) async fn load_evidence(
 ) -> Result<Option<EvidencePacket>, RetrievalError> {
     let low_value_tool_names = low_value_tool_names();
     let turn = sqlx::query(
-        "SELECT preview, start_timestamp, end_timestamp \
-           FROM timeline_turns \
-          WHERE session_uuid = $1 AND turn_id = $2",
+        "SELECT tt.preview, tt.start_timestamp, tt.end_timestamp, \
+                (cs.purged_at IS NOT NULL) AS archived \
+           FROM timeline_turns tt \
+           JOIN claude_sessions cs ON cs.session_uuid = tt.session_uuid \
+          WHERE tt.session_uuid = $1 AND tt.turn_id = $2",
     )
     .bind(session_uuid)
     .bind(turn_id)
@@ -564,6 +634,7 @@ pub(super) async fn load_evidence(
     .bind(&low_value_tool_names)
     .fetch_all(pool)
     .await?;
+    // An archived turn's touches live in its digest, keyed the same way.
     let file_rows = sqlx::query(
         "SELECT repo_name, repo_rel_path, touch_kind, is_write \
            FROM timeline_file_touches \
@@ -575,7 +646,25 @@ pub(super) async fn load_evidence(
     .bind(turn_id)
     .fetch_all(pool)
     .await?;
+    let archived: bool = turn.try_get("archived").unwrap_or(false);
+    let file_rows = if archived && file_rows.is_empty() {
+        sqlx::query(
+            "SELECT f ->> 'repo' AS repo_name, f ->> 'path' AS repo_rel_path, \
+                    f ->> 'kind' AS touch_kind, COALESCE((f ->> 'write')::BOOLEAN, FALSE) AS is_write \
+               FROM timeline_turns tt \
+               CROSS JOIN LATERAL jsonb_array_elements(tt.files_json) f \
+              WHERE tt.session_uuid = $1 AND tt.turn_id = $2 \
+              LIMIT 48",
+        )
+        .bind(session_uuid)
+        .bind(turn_id)
+        .fetch_all(pool)
+        .await?
+    } else {
+        file_rows
+    };
     Ok(Some(EvidencePacket {
+        archived,
         turn_preview: turn.try_get("preview").ok(),
         turn_start_timestamp: turn.try_get("start_timestamp").ok(),
         turn_end_timestamp: turn.try_get("end_timestamp").ok(),

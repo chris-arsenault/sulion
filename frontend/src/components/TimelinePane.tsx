@@ -309,7 +309,7 @@ export function TimelinePane({
           next.set(selectedTurnKey, {
             fingerprint: selectedFingerprint,
             revision: resourceRevision,
-            turn: resp.turn,
+            turn: { ...resp.turn, archived_at: resp.archived_at ?? null },
           });
           return next;
         });

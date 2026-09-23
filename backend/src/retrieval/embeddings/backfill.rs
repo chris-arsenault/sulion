@@ -20,6 +20,10 @@ pub(super) enum SourceFamily {
     EventBlock,
     OperationCall,
     OperationResult,
+    /// One source per turn of a purged session, embedding the turn's
+    /// markdown. Enqueued by the archive purge; a backfill also enumerates
+    /// them so a reset rebuilds archived history along with live.
+    TurnDigest,
 }
 
 impl SourceFamily {
@@ -28,6 +32,7 @@ impl SourceFamily {
             Self::EventBlock => "event_block",
             Self::OperationCall => "operation_call",
             Self::OperationResult => "operation_result",
+            Self::TurnDigest => "turn_digest",
         }
     }
 
@@ -36,6 +41,7 @@ impl SourceFamily {
             "event_block" => Ok(Self::EventBlock),
             "operation_call" => Ok(Self::OperationCall),
             "operation_result" => Ok(Self::OperationResult),
+            "turn_digest" => Ok(Self::TurnDigest),
             other => Err(RetrievalError::internal(anyhow!(
                 "unknown retrieval source family: {other}"
             ))),
@@ -90,6 +96,7 @@ pub(super) async fn start_backfill_runs(
         SourceFamily::EventBlock,
         SourceFamily::OperationCall,
         SourceFamily::OperationResult,
+        SourceFamily::TurnDigest,
     ];
     let mut started = 0;
     for family in families {
@@ -246,7 +253,47 @@ async fn load_backfill_sources(
         SourceFamily::OperationResult => {
             load_operation_backfill_sources(state, run, true, limit).await
         }
+        SourceFamily::TurnDigest => load_digest_backfill_sources(state, run, limit).await,
     }
+}
+
+/// Turn digests of purged sessions, keyed `turn:<session>:<turn_id>`. The
+/// cursor walks `(session_uuid, turn_id)`; `cursor_operation_ord` is unused.
+async fn load_digest_backfill_sources(
+    state: &RetrievalState,
+    run: &BackfillRun,
+    limit: i64,
+) -> Result<Vec<EmbeddingSource>, RetrievalError> {
+    let rows = sqlx::query(
+        "SELECT 'turn_digest' AS source_kind, \
+                ('turn:' || tt.session_uuid::TEXT || ':' || tt.turn_id::TEXT) AS source_key, \
+                tt.session_uuid, NULL::BIGINT AS byte_offset, NULL::INT AS block_ord, tt.turn_id, NULL::INT AS operation_ord, \
+                COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/sulion/repos/%' THEN split_part(substr(asm.cwd, length('/home/sulion/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/sulion/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/sulion/workspaces/') + 1), '/', 1) ELSE NULL END) AS repo_name, \
+                tt.markdown AS text \
+           FROM timeline_turns tt \
+           JOIN claude_sessions cs ON cs.session_uuid = tt.session_uuid \
+           LEFT JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
+           LEFT JOIN agent_session_metadata asm ON asm.session_uuid = cs.session_uuid \
+          WHERE cs.purged_at IS NOT NULL \
+            AND length(trim(tt.markdown)) > 0 \
+            AND ($1::UUID IS NULL OR tt.session_uuid = $1) \
+            AND ($2::TEXT IS NULL OR COALESCE(ps.repo, CASE WHEN asm.cwd LIKE '/home/sulion/repos/%' THEN split_part(substr(asm.cwd, length('/home/sulion/repos/') + 1), '/', 1) WHEN asm.cwd LIKE '/home/sulion/workspaces/%' THEN split_part(substr(asm.cwd, length('/home/sulion/workspaces/') + 1), '/', 1) ELSE NULL END) = $2) \
+            AND ( \
+                $3::UUID IS NULL \
+                OR tt.session_uuid > $3 \
+                OR (tt.session_uuid = $3 AND tt.turn_id > $4) \
+            ) \
+          ORDER BY tt.session_uuid ASC, tt.turn_id ASC \
+          LIMIT $5",
+    )
+    .bind(run.scope_session_uuid)
+    .bind(run.scope_repo.as_deref())
+    .bind(run.cursor_session_uuid)
+    .bind(run.cursor_turn_id)
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await?;
+    source_rows_from_db(rows, SourceFamily::TurnDigest)
 }
 
 async fn load_event_backfill_sources(
