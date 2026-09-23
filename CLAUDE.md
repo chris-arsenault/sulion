@@ -60,6 +60,13 @@ Full list in [docs/architecture.md](docs/architecture.md#invariants--do-not-brea
   complements rather than replaces an agent's detailed internal plan. When a
   step turns out to need its own multi-step job, `sulion plan branch` opens a
   sub-plan under it and `sulion plan return` comes back. See `docs/plans.md`.
+- Write concise plan guidance from the request: outcome, principles with reasons,
+  and assumptions that evidence could invalidate. At phase start, on resume,
+  and when evidence contradicts the approach, read `sulion plan current` and
+  relevant source material. Check the next step against the outcome and
+  principles, including ancestor guidance. Revise steps when justified and
+  explain consequential deviations; ask before changing user requirements or
+  agreed architectural boundaries.
 
 ## Companion doc
 

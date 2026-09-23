@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { PlanView, SessionView } from "../api/types";
@@ -43,6 +43,9 @@ function plan(status: PlanView["status"] = "active"): PlanView {
     repo_name: "alpha",
     title: ROOT_TITLE,
     summary: "Publish durable phases",
+    outcome: "",
+    principles: [],
+    assumptions: [],
     status,
     revision: 2,
     parent_plan_id: null,
@@ -78,6 +81,7 @@ function plan(status: PlanView["status"] = "active"): PlanView {
 
 describe("PlanModal", () => {
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
     resetAppCommands();
     act(() => {
@@ -127,6 +131,9 @@ describe("PlanModal", () => {
       screen.getByLabelText("Phases"),
       "Backend | Schema and service{enter}Frontend | Plan workspace",
     );
+    await user.type(screen.getByLabelText("Outcome"), "Recover product intent");
+    await user.type(screen.getByLabelText("Principles"), "Read evidence{enter}Preserve requirements");
+    await user.type(screen.getByLabelText("Assumptions"), "Agents read plans");
     await user.selectOptions(
       screen.getByLabelText("Attach to terminal"),
       "pty-1",
@@ -139,6 +146,9 @@ describe("PlanModal", () => {
       ).toEqual({
         title: ROOT_TITLE,
         summary: "Publish durable phases",
+        outcome: "Recover product intent",
+        principles: ["Read evidence", "Preserve requirements"],
+        assumptions: ["Agents read plans"],
         phases: [
           { title: "Backend", description: "Schema and service" },
           { title: "Frontend", description: "Plan workspace" },
@@ -148,6 +158,68 @@ describe("PlanModal", () => {
     );
     // Creating navigates the modal onto the new plan's detail view.
     expect(await screen.findByText("revision 2")).toBeDefined();
+  });
+
+  it("edits and clears guidance, keeps a rejected draft, and displays history", async () => {
+    let current = { ...plan(), outcome: "Original benefit", principles: ["Keep requirements"], assumptions: ["Unverified"] };
+    const before = { outcome: current.outcome, principles: current.principles, assumptions: current.assumptions };
+    const requests: unknown[] = [];
+    let reject = true;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url === APP_STATE_URL) return jsonResponse(appStatePayload());
+      if (url.endsWith("/events")) return jsonResponse(requests.length > 1 ? [{
+        id: 1, event_type: "guidance_changed", actor_kind: "user", created_at: NOW,
+        guidance_before: before, guidance_after: current,
+      }] : []);
+      if (init?.method === "PATCH") {
+        const body = JSON.parse(init.body as string);
+        requests.push(body);
+        if (reject) return jsonResponse({ error: "Guidance rejected" }, 400);
+        current = { ...current, ...body, revision: 3 };
+      }
+      return jsonResponse(current);
+    }));
+    render(<PlanModal open repo="alpha" planId="plan-1" onClose={noop} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    await user.clear(screen.getByLabelText("Outcome"));
+    await user.type(screen.getByLabelText("Outcome"), "Verified benefit");
+    await user.clear(screen.getByLabelText("Assumptions"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect((screen.getByLabelText("Outcome") as HTMLTextAreaElement).value).toBe("Verified benefit");
+    reject = false;
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByLabelText("Outcome")).toBeNull());
+    expect(requests[1]).toMatchObject({ outcome: "Verified benefit", principles: ["Keep requirements"], assumptions: [] });
+    await user.click(screen.getByText("History · 1"));
+    await user.click(screen.getByText("Guidance changes"));
+    expect(screen.getByText("Original benefit")).toBeDefined();
+    expect(screen.getByText("Unverified")).toBeDefined();
+  });
+
+  it("refreshes inherited guidance when the ancestor revision changes", async () => {
+    let ancestor = { ...plan(), outcome: "Initial intent" };
+    const branch = { ...plan(), id: "plan-2", parent_plan_id: "plan-1", depth: 1, outcome: "Branch intent" };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url.endsWith("/events")) return jsonResponse([]);
+      return jsonResponse({ ...branch, ancestors: [ancestor] });
+    }));
+    const summary = {
+      ...plan(), total_phases: 1, completed_phases: 0, blocked_phases: 0,
+      current_phase_id: "phase-1", current_phase_title: "Build",
+      current_phase_status: "in_progress" as const, attached_pty_ids: [], open_branches: 1,
+    };
+    useSessionStore.setState({ plans: [summary] });
+    render(<PlanModal open repo="alpha" planId="plan-2" onClose={noop} />);
+    const inherited = await screen.findByRole("region", { name: `Guidance from ${ROOT_TITLE}` });
+    expect(within(inherited).getByText("Initial intent")).toBeDefined();
+    ancestor = { ...ancestor, outcome: "Revised intent", revision: 3 };
+    act(() => useSessionStore.setState({ plans: [{ ...summary, revision: 3 }] }));
+    expect(await within(inherited).findByText("Revised intent")).toBeDefined();
+    expect(screen.getByText("Branch intent")).toBeDefined();
   });
 
   it("updates a published phase from the plan detail view", async () => {
@@ -308,7 +380,7 @@ describe("PlanModal", () => {
       depth: 1,
       anchor_phase_ids: ["phase-1"],
       ancestors: [
-        { id: "plan-1", title: ROOT_TITLE, status: "active", depth: 0 },
+        { ...plan(), id: "plan-1", title: ROOT_TITLE, status: "active", depth: 0 },
       ],
     };
     const requests: Array<{ url: string; method: string; body?: unknown }> = [];
@@ -342,6 +414,8 @@ describe("PlanModal", () => {
       screen.getByLabelText("Sub-plan phases"),
       "Diagnose | Find the cause{enter}Fix | Land it",
     );
+    await user.type(screen.getByLabelText("Outcome"), "Resolve the blocker");
+    await user.type(screen.getByLabelText("Principles"), "Preserve parent requirements");
     await user.click(screen.getByRole("button", { name: "Branch" }));
 
     await waitFor(() =>
@@ -350,6 +424,9 @@ describe("PlanModal", () => {
           url: "/api/plans/plan-1/branches",
           body: {
             title: "Unblock the gate",
+            outcome: "Resolve the blocker",
+            principles: ["Preserve parent requirements"],
+            assumptions: [],
             parent_phase_refs: ["1", "2", "3"],
             phases: [
               { title: "Diagnose", description: "Find the cause" },
@@ -375,7 +452,7 @@ describe("PlanModal", () => {
       depth: 1,
       anchor_phase_ids: ["phase-1"],
       ancestors: [
-        { id: "plan-1", title: ROOT_TITLE, status: "active", depth: 0 },
+        { ...plan(), id: "plan-1", title: ROOT_TITLE, status: "active", depth: 0 },
       ],
     };
     const parent = plan();
@@ -399,6 +476,8 @@ describe("PlanModal", () => {
 
     render(<PlanModal open repo="alpha" planId="plan-2" onClose={noop} />);
     const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    await user.type(screen.getByLabelText("Outcome"), "Unsaved branch draft");
     await user.click(
       await screen.findByRole("button", { name: "Return & skip 1" }),
     );
@@ -414,5 +493,7 @@ describe("PlanModal", () => {
     // Returning lands on the parent, which is a root and so has no breadcrumb.
     await waitFor(() => expect(screen.getByText("Backend")).toBeDefined());
     expect(document.querySelector(".plan-modal__breadcrumb")).toBeNull();
+    expect(screen.queryByLabelText("Outcome")).toBeNull();
+    expect(screen.queryByText("Unsaved branch draft")).toBeNull();
   });
 });

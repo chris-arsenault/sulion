@@ -343,11 +343,18 @@ export interface PlanAttachmentView {
   attached_at: string;
 }
 
-export interface PlanAncestorView {
+export interface PlanGuidance {
+  outcome: string;
+  principles: string[];
+  assumptions: string[];
+}
+
+export interface PlanAncestorView extends PlanGuidance {
   id: string;
   title: string;
   status: PlanStatus;
   depth: number;
+  revision: number;
 }
 
 /** A direct sub-plan, with the parent phases it covers. */
@@ -374,7 +381,7 @@ export interface PlanTreeNodeView {
   attached_pty_ids: string[];
 }
 
-export interface PlanView {
+export interface PlanView extends PlanGuidance {
   id: string;
   repo_name: string;
   title: string;
@@ -399,7 +406,7 @@ export interface PlanView {
   branches: PlanBranchView[];
 }
 
-export interface BranchPlanRequest {
+export interface BranchPlanRequest extends Partial<PlanGuidance> {
   title: string;
   summary?: string;
   phases: NewPlanPhaseInput[];
@@ -440,6 +447,8 @@ export interface PlanEventView {
   from_status: string | null;
   to_status: string | null;
   note: string | null;
+  guidance_before: PlanGuidance | null;
+  guidance_after: PlanGuidance | null;
   created_at: string;
 }
 
@@ -449,7 +458,7 @@ export interface NewPlanPhaseInput {
   status?: PlanPhaseStatus;
 }
 
-export interface CreatePlanInput {
+export interface CreatePlanInput extends Partial<PlanGuidance> {
   title: string;
   summary?: string;
   phases: NewPlanPhaseInput[];
@@ -457,7 +466,7 @@ export interface CreatePlanInput {
   attach_pty_id?: string;
 }
 
-export interface UpdatePlanInput {
+export interface UpdatePlanInput extends Partial<PlanGuidance> {
   title?: string;
   summary?: string;
   status?: PlanStatus;

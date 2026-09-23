@@ -108,6 +108,18 @@ The new plan attaches to the current PTY. Most later commands infer that
 attachment. Run `sulion plan help` for attach/detach, pause, history, explicit
 plan ids, and JSON output.
 
+Write short guidance from the request with `--outcome`, repeatable `--principle`,
+and repeatable `--assumption` on `start`, `branch`, or `update`. State the user
+benefit, decision rules with reasons, and beliefs that evidence could invalidate.
+At phase start, on resume, and when evidence contradicts the approach, read
+`sulion plan current` and relevant source material. It shows live ancestor
+guidance before the phases. Check the next step against the outcome and
+principles, revise steps when justified, and explain consequential deviations.
+Ask before changing user requirements or agreed architectural boundaries.
+Updates replace supplied lists; omitted fields stay unchanged. Use
+`--clear-principles` or `--clear-assumptions` to clear lists. `history` retains
+before/after guidance values.
+
 Operational activity is separate from plan progress. Lifecycle hooks report
 routine working/awaiting state automatically. Publish explicit attention only
 when useful:

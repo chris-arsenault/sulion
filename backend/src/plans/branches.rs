@@ -35,6 +35,7 @@ pub async fn branch(
     validate_actor(actor)?;
     let title = required_text(&input.title, "plan title", MAX_TITLE_CHARS)?;
     let summary = limited_text(&input.summary, "plan summary", MAX_SUMMARY_CHARS)?;
+    let guidance = input.guidance.validated()?;
     let note = clean_note(input.note.as_deref())?;
     let phases = validate_new_phases(&input.phases, input.all_pending)?;
 
@@ -62,6 +63,7 @@ pub async fn branch(
         &repo_name,
         &title,
         &summary,
+        &guidance,
         Some(parent_plan_id),
         root_plan_id,
         depth,
@@ -267,13 +269,13 @@ pub(super) async fn anchor_phase_ids(pool: &Pool, plan_id: Uuid) -> anyhow::Resu
 pub(super) async fn ancestors(pool: &Pool, plan_id: Uuid) -> anyhow::Result<Vec<PlanAncestorView>> {
     let rows = sqlx::query_as(
         "WITH RECURSIVE chain AS ( \
-             SELECT id, title, status, depth, parent_plan_id \
+             SELECT id, title, status, depth, parent_plan_id, revision, outcome, principles, assumptions \
                FROM plans WHERE id = $1 \
              UNION ALL \
-             SELECT p.id, p.title, p.status, p.depth, p.parent_plan_id \
+             SELECT p.id, p.title, p.status, p.depth, p.parent_plan_id, p.revision, p.outcome, p.principles, p.assumptions \
                FROM plans p JOIN chain c ON p.id = c.parent_plan_id \
          ) \
-         SELECT id, title, status, depth FROM chain WHERE id <> $1 ORDER BY depth",
+         SELECT id, title, status, depth, revision, outcome, principles, assumptions FROM chain WHERE id <> $1 ORDER BY depth",
     )
     .bind(plan_id)
     .fetch_all(pool)

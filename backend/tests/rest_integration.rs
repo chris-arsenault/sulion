@@ -547,6 +547,7 @@ async fn metrics_endpoint_rolls_up_usage_and_plan_flow() {
             repo_name: "metrics-repo".to_string(),
             title: "Flow plan".to_string(),
             summary: String::new(),
+            guidance: Default::default(),
             phases: vec![
                 sulion::plans::NewPhase {
                     title: "Build".to_string(),
@@ -1642,6 +1643,149 @@ async fn health_endpoint_reports_ok_when_db_reachable() {
     // The harness attaches an in-process node over loopback, which is what
     // standalone does, so the node reads as connected rather than absent.
     assert_eq!(body["development_node"], "connected");
+}
+
+#[tokio::test]
+async fn plan_guidance_inherits_live_values_and_audits_revisions() {
+    let h = Harness::new().await;
+    let root: serde_json::Value = h
+        .client
+        .post(format!("{}/api/repos/guidance/plans", h.base))
+        .json(&json!({
+            "title": "Root", "phases": [{"title": "Build"}],
+            "outcome": " User benefit ", "principles": [" Preserve requirements "],
+            "assumptions": ["The approach fits"]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let root_id = root["id"].as_str().unwrap();
+    assert_eq!(root["outcome"], "User benefit");
+    assert_eq!(root["principles"], json!(["Preserve requirements"]));
+
+    let branch: serde_json::Value = h.client
+        .post(format!("{}/api/plans/{root_id}/branches", h.base))
+        .json(&json!({"title": "Branch", "phases": [{"title": "Investigate"}], "outcome": "Local benefit"}))
+        .send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+    let branch_id = branch["id"].as_str().unwrap();
+    let leaf: serde_json::Value = h
+        .client
+        .post(format!("{}/api/plans/{branch_id}/branches", h.base))
+        .json(&json!({"title": "Leaf", "phases": [{"title": "Probe"}]}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let leaf_id = leaf["id"].as_str().unwrap();
+    assert_eq!(leaf["outcome"], "");
+    assert_eq!(leaf["principles"], json!([]));
+    assert_eq!(leaf["assumptions"], json!([]));
+    assert_eq!(leaf["ancestors"][0]["id"], root_id);
+    assert_eq!(leaf["ancestors"][1]["outcome"], "Local benefit");
+
+    let updated: serde_json::Value = h.client
+        .patch(format!("{}/api/plans/{root_id}", h.base))
+        .json(&json!({"principles": ["Evidence before changes", "Preserve requirements"], "assumptions": [], "note": "Probe disproved assumption"}))
+        .send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+    assert_eq!(updated["outcome"], "User benefit");
+    let reread: serde_json::Value = h
+        .client
+        .get(format!("{}/api/plans/{leaf_id}", h.base))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reread["ancestors"][0]["principles"], updated["principles"]);
+    assert_eq!(reread["ancestors"][0]["revision"], updated["revision"]);
+    assert_eq!(reread["ancestors"][0]["assumptions"], json!([]));
+    assert_eq!(
+        reread["revision"], leaf["revision"],
+        "ancestor edits must not copy into descendants"
+    );
+
+    for invalid in [
+        json!({"outcome": "x".repeat(1001)}),
+        json!({"principles": [" "]}),
+        json!({"principles": vec!["rule"; 11]}),
+        json!({"assumptions": ["x".repeat(501)]}),
+    ] {
+        let response = h
+            .client
+            .patch(format!("{}/api/plans/{root_id}", h.base))
+            .json(&invalid)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400);
+    }
+    let unchanged: serde_json::Value = h
+        .client
+        .get(format!("{}/api/plans/{root_id}", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(unchanged["revision"], updated["revision"]);
+
+    // Repeating the current values must not manufacture a guidance change.
+    h.client
+        .patch(format!("{}/api/plans/{root_id}", h.base))
+        .json(&json!({"outcome": "User benefit", "assumptions": []}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    h.client
+        .patch(format!("{}/api/plans/{root_id}", h.base))
+        .json(&json!({"outcome": "", "principles": []}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let events: Vec<serde_json::Value> = h
+        .client
+        .get(format!("{}/api/plans/{root_id}/events", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let changes: Vec<_> = events
+        .iter()
+        .filter(|event| event["event_type"] == "guidance_changed")
+        .collect();
+    assert_eq!(changes.len(), 3);
+    assert_eq!(
+        changes[0]["guidance_after"],
+        json!({"outcome": "", "principles": [], "assumptions": []})
+    );
+    assert_eq!(
+        changes[1]["guidance_before"]["assumptions"],
+        json!(["The approach fits"])
+    );
+    assert_eq!(changes[1]["guidance_after"]["assumptions"], json!([]));
+    assert_eq!(changes[1]["note"], "Probe disproved assumption");
+    assert_eq!(changes[1]["actor_kind"], "user");
+    assert!(changes[2]["guidance_before"].is_null());
+    assert_eq!(changes[2]["guidance_after"]["outcome"], "User benefit");
 }
 
 #[tokio::test]

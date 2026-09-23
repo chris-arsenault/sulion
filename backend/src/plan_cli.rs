@@ -7,9 +7,10 @@ use uuid::Uuid;
 
 use crate::activity::ActivityState;
 use crate::correlate::{ControlRequest, ControlResponse};
-use crate::plans::{BranchPlanInput, NewPhase, UpdatePhaseInput, UpdatePlanInput};
+use crate::plans::{BranchPlanInput, NewPhase, PlanGuidance, UpdatePhaseInput, UpdatePlanInput};
 
 mod archive;
+mod guidance;
 mod usage;
 
 pub use archive::run_archive;
@@ -140,6 +141,7 @@ fn parse_plan_request(command: &str, args: &mut Vec<String>) -> anyhow::Result<C
         "start" => {
             let title_option = take_option(args, "--title")?;
             let summary = take_option(args, "--summary")?.unwrap_or_default();
+            let guidance = guidance::parse_new(args)?;
             let all_pending = take_flag(args, "--all-pending");
             let mut phases = Vec::new();
             while let Some(raw) = take_option(args, "--phase")? {
@@ -152,6 +154,7 @@ fn parse_plan_request(command: &str, args: &mut Vec<String>) -> anyhow::Result<C
             Ok(ControlRequest::PlanStart {
                 title,
                 summary,
+                guidance,
                 phases,
                 all_pending,
             })
@@ -215,6 +218,9 @@ fn parse_plan_request(command: &str, args: &mut Vec<String>) -> anyhow::Result<C
             let title = take_option(args, "--title")?;
             let summary = take_option(args, "--summary")?;
             let note = take_option(args, "--note")?;
+            let outcome = take_option(args, "--outcome")?;
+            let principles = guidance::parse_items(args, "--principle", "--clear-principles")?;
+            let assumptions = guidance::parse_items(args, "--assumption", "--clear-assumptions")?;
             reject_unknown_options(args)?;
             Ok(ControlRequest::PlanUpdate {
                 plan_id,
@@ -222,6 +228,9 @@ fn parse_plan_request(command: &str, args: &mut Vec<String>) -> anyhow::Result<C
                     title,
                     summary,
                     note,
+                    outcome,
+                    principles,
+                    assumptions,
                     ..Default::default()
                 },
             })
@@ -275,6 +284,7 @@ fn parse_branch_request(command: &str, args: &mut Vec<String>) -> anyhow::Result
     }
     let title_option = take_option(args, "--title")?;
     let summary = take_option(args, "--summary")?.unwrap_or_default();
+    let guidance = guidance::parse_new(args)?;
     let note = take_option(args, "--note")?;
     let all_pending = take_flag(args, "--all-pending");
     let mut phases = Vec::new();
@@ -294,6 +304,7 @@ fn parse_branch_request(command: &str, args: &mut Vec<String>) -> anyhow::Result
         input: BranchPlanInput {
             title,
             summary,
+            guidance,
             phases,
             all_pending,
             parent_phase_refs,
@@ -470,6 +481,12 @@ fn print_plan_data(data: &Value) {
                         .map(|note| format!(" — {note}"))
                         .unwrap_or_default()
                 );
+                for key in ["guidance_before", "guidance_after"] {
+                    if event.get(key).is_some_and(|value| !value.is_null()) {
+                        println!("  {}", key.replace('_', " "));
+                        print!("{}", guidance::format_fields(&event[key]));
+                    }
+                }
             }
             return;
         }
@@ -511,6 +528,7 @@ fn print_plan_data(data: &Value) {
         return;
     }
     print_plan_header(data);
+    print!("{}", guidance::format_context(data));
     let branches = data
         .get("branches")
         .and_then(Value::as_array)

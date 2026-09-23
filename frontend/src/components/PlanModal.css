@@ -296,6 +296,53 @@
 
 /* ---- Phases ---- */
 
+.plan-guidance,
+.plan-guidance__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--hairline);
+  background: var(--canvas-1);
+}
+
+.plan-guidance h3 {
+  margin: 0;
+  font-size: var(--t-ui);
+  font-weight: var(--w-600);
+}
+
+.plan-guidance__fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--t-ui);
+  color: var(--text-lo);
+}
+
+.plan-guidance__content {
+  margin: 6px 0 0;
+  font-size: var(--t-ui);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.plan-guidance__content dt {
+  margin-top: 6px;
+  color: var(--text-lo);
+}
+
+.plan-guidance__content dd {
+  margin: 3px 0 0;
+}
+
+.plan-guidance__content ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
 .plan-modal__phase-list {
   display: flex;
   flex-direction: column;

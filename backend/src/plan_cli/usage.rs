@@ -16,7 +16,7 @@ Commands:
   current
   list [--all]
   show [plan-id]
-  update [--plan uuid] [--title text] [--summary text]
+  update [--plan uuid] [--title text] [--summary text] [--note text]
   status <active|paused> [--plan uuid] [--note text]
   close (--completed|--canceled) [--skip-remaining] [--note text]
   branch <title> [--from <id|position>]... --phase <title[|description[|size]]>...
@@ -28,6 +28,25 @@ Commands:
   attach <plan-uuid>
   detach [plan-uuid]
   history [plan-id]
+
+Guidance (start, branch, update):
+  --outcome <text>       user-visible improvement and evidence of success
+  --principle <text>...  concrete decision rules, constraints, and reasons
+  --assumption <text>... beliefs that evidence might invalidate
+  update replaces each supplied list; omitted fields stay unchanged
+  --clear-principles / --clear-assumptions clear lists; --outcome \"\" clears outcome
+  keep it short: outcome <= 1000 characters; <= 10 entries per list, <= 500 each
+  current/show include live ancestor guidance, root first, before phases
+  history retains guidance before/after, including cleared values
+
+Execution:
+  write guidance from the request; label uncertain interpretations as assumptions
+  at phase start, on resume, and when evidence contradicts the approach, read
+    current guidance and relevant source material; check the next step against
+    the outcome and principles
+  revise steps when justified and explain consequential deviations; ask before
+    changing user requirements or agreed architectural boundaries
+  branch guidance adds context; it does not override ancestor requirements
 
 Statuses:
   plan   active | paused (close sets completed or canceled)

@@ -603,6 +603,7 @@ async fn control_socket_publishes_plans_and_preserves_explicit_attention() {
         ControlRequest::PlanStart {
             title: "Published work".to_string(),
             summary: "Short durable progress".to_string(),
+            guidance: Default::default(),
             phases: vec![
                 NewPhase {
                     title: "Build".to_string(),
@@ -734,6 +735,11 @@ async fn control_socket_branches_to_arbitrary_depth_and_returns_to_the_parent() 
         ControlRequest::PlanStart {
             title: "Root plan".to_string(),
             summary: String::new(),
+            guidance: sulion::plans::PlanGuidance {
+                outcome: "Preserve product intent".into(),
+                principles: vec!["Consult source evidence".into()],
+                assumptions: vec!["The planned mechanism fits".into()],
+            },
             phases: vec![
                 phase("One"),
                 phase("Two"),
@@ -751,6 +757,7 @@ async fn control_socket_branches_to_arbitrary_depth_and_returns_to_the_parent() 
     let root_plan = root.data.unwrap();
     let root_id = root_plan["id"].as_str().unwrap().parse::<Uuid>().unwrap();
     assert_eq!(root_plan["depth"], 0);
+    assert_eq!(root_plan["outcome"], "Preserve product intent");
     assert_eq!(root_plan["root_plan_id"], root_plan["id"]);
 
     // Phase 4 is where the agent gets stuck.
@@ -782,6 +789,7 @@ async fn control_socket_branches_to_arbitrary_depth_and_returns_to_the_parent() 
             input: BranchPlanInput {
                 title: "Cover four through six".to_string(),
                 summary: "Span branch".to_string(),
+                guidance: Default::default(),
                 phases: vec![phase("Diagnose"), phase("Fix")],
                 all_pending: false,
                 parent_phase_refs: vec!["4".to_string(), "5".to_string(), "6".to_string()],
@@ -799,6 +807,10 @@ async fn control_socket_branches_to_arbitrary_depth_and_returns_to_the_parent() 
     assert_eq!(branch["root_plan_id"], root_plan["id"]);
     assert_eq!(branch["anchor_phase_ids"].as_array().unwrap().len(), 3);
     assert_eq!(branch["ancestors"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        branch["ancestors"][0]["principles"],
+        serde_json::json!(["Consult source evidence"])
+    );
     // The branch takes the PTY with it.
     assert_eq!(
         branch["attachments"][0]["pty_session_id"],

@@ -4,6 +4,7 @@ use uuid::Uuid;
 use crate::db::Pool;
 
 mod branches;
+mod guidance;
 mod model;
 mod phases;
 
@@ -12,8 +13,8 @@ pub use branches::{branch, tree};
 use model::PlanRow;
 pub use model::{
     BranchPlanInput, CreatePlanInput, NewPhase, PlanActor, PlanAncestorView, PlanAttachmentView,
-    PlanBranchView, PlanEventView, PlanPhaseView, PlanSummaryView, PlanTreeNodeView, PlanView,
-    UpdatePhaseInput, UpdatePlanInput,
+    PlanBranchView, PlanEventView, PlanGuidance, PlanPhaseView, PlanSummaryView, PlanTreeNodeView,
+    PlanView, UpdatePhaseInput, UpdatePlanInput,
 };
 pub use phases::{add_phase, resolve_phase_id, update_phase};
 use phases::{initial_phase_status, skip_remaining_phases, validate_phase_size};
@@ -23,7 +24,8 @@ const MAX_SUMMARY_CHARS: usize = 1_000;
 const MAX_DESCRIPTION_CHARS: usize = 1_000;
 const MAX_NOTE_CHARS: usize = 1_000;
 
-const PLAN_COLUMNS: &str = "id, repo_name, title, summary, status, revision, \
+const PLAN_COLUMNS: &str =
+    "id, repo_name, title, summary, outcome, principles, assumptions, status, revision, \
      parent_plan_id, root_plan_id, depth, \
      created_by_pty_id, created_by_agent_session_uuid, \
      created_at, updated_at, closed_at";
@@ -37,12 +39,13 @@ pub async fn create(
     let repo_name = required_text(&input.repo_name, "repo name", MAX_TITLE_CHARS)?;
     let title = required_text(&input.title, "plan title", MAX_TITLE_CHARS)?;
     let summary = limited_text(&input.summary, "plan summary", MAX_SUMMARY_CHARS)?;
+    let guidance = input.guidance.validated()?;
     let phases = validate_new_phases(&input.phases, input.all_pending)?;
 
     let plan_id = Uuid::new_v4();
     let mut tx = pool.begin().await?;
     insert_plan(
-        &mut tx, plan_id, &repo_name, &title, &summary, None, plan_id, 0, actor,
+        &mut tx, plan_id, &repo_name, &title, &summary, &guidance, None, plan_id, 0, actor,
     )
     .await?;
     insert_phases(&mut tx, plan_id, phases, actor).await?;
@@ -156,23 +159,24 @@ pub async fn update(
 ) -> anyhow::Result<PlanView> {
     validate_actor(actor)?;
     let mut tx = pool.begin().await?;
-    let current: (String, String, String, Option<Uuid>) = sqlx::query_as(
-        "SELECT title, summary, status, parent_plan_id FROM plans WHERE id = $1 FOR UPDATE",
-    )
+    let current: PlanRow = sqlx::query_as(&format!(
+        "SELECT {PLAN_COLUMNS} FROM plans WHERE id = $1 FOR UPDATE"
+    ))
     .bind(plan_id)
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| anyhow::anyhow!("plan not found: {plan_id}"))?;
-    let parent_plan_id = current.3;
+    let parent_plan_id = current.parent_plan_id;
     let title = match input.title.as_deref() {
         Some(value) => required_text(value, "plan title", MAX_TITLE_CHARS)?,
-        None => current.0,
+        None => current.title,
     };
     let summary = match input.summary.as_deref() {
         Some(value) => limited_text(value, "plan summary", MAX_SUMMARY_CHARS)?,
-        None => current.1,
+        None => current.summary,
     };
-    let status = input.status.as_deref().unwrap_or(&current.2);
+    let guidance = current.guidance.with_update(&input)?;
+    let status = input.status.as_deref().unwrap_or(&current.status);
     validate_plan_status(status)?;
     let note = clean_note(input.note.as_deref())?;
 
@@ -222,17 +226,30 @@ pub async fn update(
         "UPDATE plans \
             SET title = $2, summary = $3, status = $4, revision = revision + 1, \
                 closed_at = CASE WHEN $4 IN ('completed', 'canceled') THEN COALESCE(closed_at, NOW()) ELSE NULL END, \
-                updated_at = NOW() \
+                updated_at = NOW(), outcome = $5, principles = $6, assumptions = $7 \
           WHERE id = $1",
     )
     .bind(plan_id)
     .bind(title)
     .bind(summary)
     .bind(status)
+    .bind(&guidance.outcome)
+    .bind(&guidance.principles)
+    .bind(&guidance.assumptions)
     .execute(&mut *tx)
     .await?;
 
-    let event_type = if status != current.2 {
+    guidance::record_change(
+        &mut tx,
+        plan_id,
+        actor,
+        Some(&current.guidance),
+        &guidance,
+        note.as_deref(),
+    )
+    .await?;
+
+    let event_type = if status != current.status {
         if matches!(status, "completed" | "canceled") {
             "plan_closed"
         } else {
@@ -247,7 +264,7 @@ pub async fn update(
         None,
         event_type,
         actor,
-        Some(&current.2),
+        Some(&current.status),
         Some(status),
         note.as_deref(),
     )
@@ -319,7 +336,7 @@ pub async fn detach(
 pub async fn events(pool: &Pool, plan_id: Uuid) -> anyhow::Result<Vec<PlanEventView>> {
     let rows = sqlx::query_as(
         "SELECT id, plan_id, phase_id, event_type, actor_kind, pty_session_id, \
-                agent_session_uuid, from_status, to_status, note, created_at \
+                agent_session_uuid, from_status, to_status, note, guidance_before, guidance_after, created_at \
            FROM plan_events WHERE plan_id = $1 \
           ORDER BY created_at DESC, id DESC",
     )
@@ -389,6 +406,7 @@ async fn hydrate(pool: &Pool, row: PlanRow) -> anyhow::Result<PlanView> {
         repo_name: row.repo_name,
         title: row.title,
         summary: row.summary,
+        guidance: row.guidance,
         status: row.status,
         revision: row.revision,
         parent_plan_id: row.parent_plan_id,
@@ -441,6 +459,7 @@ async fn insert_plan(
     repo_name: &str,
     title: &str,
     summary: &str,
+    guidance: &PlanGuidance,
     parent_plan_id: Option<Uuid>,
     root_plan_id: Uuid,
     depth: i32,
@@ -450,8 +469,8 @@ async fn insert_plan(
         "INSERT INTO plans \
              (id, repo_name, title, summary, status, revision, parent_plan_id, \
               root_plan_id, depth, created_by_pty_id, created_by_agent_session_uuid, \
-              created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, 'active', 1, $5, $6, $7, $8, $9, NOW(), NOW())",
+              created_at, updated_at, outcome, principles, assumptions) \
+         VALUES ($1, $2, $3, $4, 'active', 1, $5, $6, $7, $8, $9, NOW(), NOW(), $10, $11, $12)",
     )
     .bind(plan_id)
     .bind(repo_name)
@@ -462,6 +481,9 @@ async fn insert_plan(
     .bind(depth)
     .bind(actor.pty_session_id)
     .bind(actor.agent_session_uuid)
+    .bind(&guidance.outcome)
+    .bind(&guidance.principles)
+    .bind(&guidance.assumptions)
     .execute(&mut **tx)
     .await?;
     insert_event(
@@ -479,6 +501,7 @@ async fn insert_plan(
         None,
     )
     .await?;
+    guidance::record_change(tx, plan_id, actor, None, guidance, None).await?;
     Ok(())
 }
 

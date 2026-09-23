@@ -4,6 +4,13 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Plan guidance
+
+- Plans carry an outcome, principles, and assumptions, editable through the CLI
+  and browser. Plan reads show guidance before phases, including current
+  ancestor guidance for branch work. History preserves guidance changes with
+  before/after values and their author.
+
 ### Transcript compatibility
 
 - Preserve queued Claude prompts and pasted text, reconcile submitted prompts,

@@ -60,6 +60,8 @@ pub struct CreatePlanInput {
     pub title: String,
     #[serde(default)]
     pub summary: String,
+    #[serde(flatten)]
+    pub guidance: PlanGuidance,
     #[serde(default)]
     pub phases: Vec<NewPhase>,
     #[serde(default)]
@@ -76,6 +78,8 @@ pub struct BranchPlanInput {
     pub title: String,
     #[serde(default)]
     pub summary: String,
+    #[serde(flatten)]
+    pub guidance: PlanGuidance,
     #[serde(default)]
     pub phases: Vec<NewPhase>,
     #[serde(default)]
@@ -91,6 +95,9 @@ pub struct BranchPlanInput {
 pub struct UpdatePlanInput {
     pub title: Option<String>,
     pub summary: Option<String>,
+    pub outcome: Option<String>,
+    pub principles: Option<Vec<String>>,
+    pub assumptions: Option<Vec<String>>,
     pub status: Option<String>,
     pub note: Option<String>,
     #[serde(default)]
@@ -141,6 +148,10 @@ pub struct PlanAncestorView {
     pub title: String,
     pub status: String,
     pub depth: i32,
+    pub revision: i64,
+    #[serde(flatten)]
+    #[sqlx(flatten)]
+    pub guidance: PlanGuidance,
 }
 
 /// A direct sub-plan, with the parent phases it covers.
@@ -176,6 +187,8 @@ pub struct PlanView {
     pub repo_name: String,
     pub title: String,
     pub summary: String,
+    #[serde(flatten)]
+    pub guidance: PlanGuidance,
     pub status: String,
     pub revision: i64,
     pub parent_plan_id: Option<Uuid>,
@@ -208,6 +221,8 @@ pub struct PlanEventView {
     pub from_status: Option<String>,
     pub to_status: Option<String>,
     pub note: Option<String>,
+    pub guidance_before: Option<sqlx::types::Json<PlanGuidance>>,
+    pub guidance_after: Option<sqlx::types::Json<PlanGuidance>>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -239,6 +254,8 @@ pub(super) struct PlanRow {
     pub(super) repo_name: String,
     pub(super) title: String,
     pub(super) summary: String,
+    #[sqlx(flatten)]
+    pub(super) guidance: PlanGuidance,
     pub(super) status: String,
     pub(super) revision: i64,
     pub(super) parent_plan_id: Option<Uuid>,
@@ -253,4 +270,14 @@ pub(super) struct PlanRow {
 
 fn default_true() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, sqlx::FromRow)]
+pub struct PlanGuidance {
+    #[serde(default)]
+    pub outcome: String,
+    #[serde(default)]
+    pub principles: Vec<String>,
+    #[serde(default)]
+    pub assumptions: Vec<String>,
 }

@@ -33,9 +33,11 @@ import type {
   UpdatePlanPhaseInput,
 } from "../api/types";
 import { Icon } from "../icons";
+import { cleanGuidance, EMPTY_GUIDANCE } from "../lib/planGuidance";
 import type { Maybe } from "../lib/types";
 import { useSessions } from "../state/SessionStore";
 import { FileRefText } from "./common/FileRefText";
+import { GuidanceContent, GuidanceFields } from "./PlanGuidance";
 import { Overlay } from "./ui";
 import "./PlanModal.css";
 
@@ -46,7 +48,7 @@ interface PlanModalProps {
   onClose: () => void;
 }
 
-type PlanMutation = (operation: () => Promise<PlanView>) => Promise<void>;
+type PlanMutation = (operation: () => Promise<PlanView>) => Promise<boolean>;
 
 /** Published plans live in a compact modal, not a workspace tab. It opens
  * either on a repo's plan index (list + create) or straight onto one plan's
@@ -104,6 +106,7 @@ export function PlanModal({ open, repo, planId, onClose }: PlanModalProps) {
     >
       {selectedPlanId ? (
         <PlanDetail
+          key={selectedPlanId}
           repo={repo}
           planId={selectedPlanId}
           onTitle={setDetailTitle}
@@ -131,6 +134,7 @@ function PlanIndex({
   const [title, setTitle] = useState("");
   const [summary, setSummary] = useState("");
   const [phaseText, setPhaseText] = useState("");
+  const [guidance, setGuidance] = useState(EMPTY_GUIDANCE);
   const [attachPty, setAttachPty] = useState("");
   const [creating, setCreating] = useState(false);
   const { sessions, refresh, planRevisionKey } = useSessions(
@@ -201,6 +205,7 @@ function PlanIndex({
       setCreating(true);
       try {
         const created = await createPlan(repo, {
+          ...cleanGuidance(guidance),
           title: title.trim(),
           summary: summary.trim(),
           phases,
@@ -209,6 +214,7 @@ function PlanIndex({
         setTitle("");
         setSummary("");
         setPhaseText("");
+        setGuidance(EMPTY_GUIDANCE);
         setAttachPty("");
         setShowCreate(false);
         setError(null);
@@ -220,7 +226,7 @@ function PlanIndex({
         setCreating(false);
       }
     },
-    [attachPty, onOpenPlan, phaseText, refresh, repo, summary, title],
+    [attachPty, guidance, onOpenPlan, phaseText, refresh, repo, summary, title],
   );
 
   // The create form defaults open when the repo has no plans yet, and can be
@@ -280,6 +286,7 @@ function PlanIndex({
               One phase per line. Add a description after <code>|</code>.
             </span>
           </label>
+          <GuidanceFields value={guidance} onChange={setGuidance} disabled={creating} />
           <label>
             Attach to terminal
             <select value={attachPty} onChange={onAttachPtyChange}>
@@ -333,6 +340,7 @@ function PlanDetail({
   const [newPhaseDescription, setNewPhaseDescription] = useState("");
   const [attachPty, setAttachPty] = useState("");
   const [editMeta, setEditMeta] = useState(false);
+  const [guidance, setGuidance] = useState(EMPTY_GUIDANCE);
   const [title, setTitle] = useState("");
   const [summary, setSummary] = useState("");
   // Position of the phase whose branch form is open, or null for none.
@@ -340,12 +348,19 @@ function PlanDetail({
   const [branchTitle, setBranchTitle] = useState("");
   const [branchCovers, setBranchCovers] = useState("");
   const [branchPhaseText, setBranchPhaseText] = useState("");
+  const [branchGuidance, setBranchGuidance] = useState(EMPTY_GUIDANCE);
   const { sessions, refresh, ambientRevision } = useSessions(
     useShallow((store) => ({
       sessions: store.sessions,
       refresh: store.refresh,
       ambientRevision:
-        store.plans.find((candidate) => candidate.id === planId)?.revision ?? null,
+        store.plans
+          .filter((candidate) =>
+            candidate.id === planId ||
+            plan?.ancestors.some((ancestor) => ancestor.id === candidate.id),
+          )
+          .map((candidate) => `${candidate.id}:${candidate.revision}`)
+          .join(","),
     })),
   );
 
@@ -357,8 +372,6 @@ function PlanDetail({
       ]);
       setPlan(nextPlan);
       setEvents(nextEvents);
-      setTitle(nextPlan.title);
-      setSummary(nextPlan.summary);
       onTitle(nextPlan.title);
       setError(null);
     } catch (err) {
@@ -376,14 +389,14 @@ function PlanDetail({
       try {
         const next = await operation();
         setPlan(next);
-        setTitle(next.title);
-        setSummary(next.summary);
         onTitle(next.title);
         setEvents(await getPlanEvents(planId));
         setError(null);
         await refresh();
+        return true;
       } catch (err) {
         setError(messageOf(err));
+        return false;
       } finally {
         setBusy(false);
       }
@@ -409,10 +422,14 @@ function PlanDetail({
     async (event: FormEvent) => {
       event.preventDefault();
       if (!plan) return;
-      await mutate(() => updatePlan(plan.id, { title: title.trim(), summary: summary.trim() }));
-      setEditMeta(false);
+      const saved = await mutate(() => updatePlan(plan.id, {
+        title: title.trim(),
+        summary: summary.trim(),
+        ...cleanGuidance(guidance),
+      }));
+      if (saved) setEditMeta(false);
     },
-    [mutate, plan, summary, title],
+    [guidance, mutate, plan, summary, title],
   );
   const setPlanStatus = useCallback(
     (status: PlanStatus, skipRemaining = false) => {
@@ -455,6 +472,7 @@ function PlanDetail({
     setBranchCovers(String(position));
     setBranchTitle("");
     setBranchPhaseText("");
+    setBranchGuidance(EMPTY_GUIDANCE);
   }, []);
   const closeBranchForm = useCallback(() => setBranchAnchor(null), []);
   // Creating a branch opens it: the branch is where the work continues.
@@ -469,6 +487,7 @@ function PlanDetail({
       setBusy(true);
       try {
         const branch = await branchPlan(plan.id, {
+          ...cleanGuidance(branchGuidance),
           title: branchTitle.trim(),
           phases: parsePhases(branchPhaseText),
           parent_phase_refs: covers,
@@ -483,7 +502,7 @@ function PlanDetail({
         setBusy(false);
       }
     },
-    [branchCovers, branchPhaseText, branchTitle, onOpenPlan, plan, refresh],
+    [branchCovers, branchGuidance, branchPhaseText, branchTitle, onOpenPlan, plan, refresh],
   );
   const returnToParent = useCallback(
     async (status: PlanStatus) => {
@@ -547,7 +566,13 @@ function PlanDetail({
     (event: ChangeEvent<HTMLSelectElement>) => setAttachPty(event.target.value),
     [],
   );
-  const beginMetaEdit = useCallback(() => setEditMeta(true), []);
+  const beginMetaEdit = useCallback(() => {
+    if (!plan) return;
+    setTitle(plan.title);
+    setSummary(plan.summary);
+    setGuidance(cleanGuidance(plan));
+    setEditMeta(true);
+  }, [plan]);
   const cancelMetaEdit = useCallback(() => setEditMeta(false), []);
 
   if (!plan) {
@@ -592,6 +617,7 @@ function PlanDetail({
               rows={2}
               maxLength={1_000}
             />
+            <GuidanceFields value={guidance} onChange={setGuidance} disabled={busy} />
             <div className="plan-modal__actions">
               <button type="submit" className="plan-modal__primary" disabled={busy}>
                 Save
@@ -671,6 +697,20 @@ function PlanDetail({
         <PlanProgress phases={plan.phases} />
       </div>
 
+      <section className="plan-guidance" aria-label="Plan guidance">
+        {plan.ancestors.map((ancestor) => (
+          <section key={ancestor.id} aria-label={`Guidance from ${ancestor.title}`}>
+            <h3>Guidance from {ancestor.title}</h3>
+            <span className="plan-modal__revision">revision {ancestor.revision}</span>
+            <GuidanceContent value={ancestor} repo={repo} />
+          </section>
+        ))}
+        <section aria-label="Guidance for this plan">
+          <h3>Guidance for this plan</h3>
+          <GuidanceContent value={plan} repo={repo} />
+        </section>
+      </section>
+
       <ol className="plan-modal__phase-list">
         {plan.phases.map((phase) => (
           <li key={phase.id}>
@@ -710,6 +750,7 @@ function PlanDetail({
                   aria-label="Sub-plan phases"
                   rows={3}
                 />
+                <GuidanceFields value={branchGuidance} onChange={setBranchGuidance} disabled={busy} />
                 <div className="plan-modal__actions">
                   <button
                     type="submit"
@@ -800,6 +841,15 @@ function PlanDetail({
               <strong>{humanEvent(event.event_type)}</strong>
               <span>{event.note || statusChange(event) || event.actor_kind}</span>
               <time dateTime={event.created_at}>{relativeAge(event.created_at)}</time>
+              {event.guidance_after ? (
+                <details>
+                  <summary>Guidance changes</summary>
+                  <h4>Before</h4>
+                  <GuidanceContent value={event.guidance_before ?? EMPTY_GUIDANCE} repo={repo} />
+                  <h4>After</h4>
+                  <GuidanceContent value={event.guidance_after} repo={repo} />
+                </details>
+              ) : null}
             </li>
           ))}
         </ol>

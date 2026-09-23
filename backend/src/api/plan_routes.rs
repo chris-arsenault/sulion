@@ -24,6 +24,8 @@ pub(super) struct CreateRepoPlanRequest {
     title: String,
     #[serde(default)]
     summary: String,
+    #[serde(flatten)]
+    guidance: crate::plans::PlanGuidance,
     #[serde(default)]
     phases: Vec<NewPhase>,
     #[serde(default)]
@@ -62,6 +64,7 @@ pub(super) async fn create_repo_plan(
             repo_name,
             title: request.title,
             summary: request.summary,
+            guidance: request.guidance,
             phases: request.phases,
             all_pending: request.all_pending,
             attach_current_pty: false,

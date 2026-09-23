@@ -13,6 +13,8 @@ implementation steps. A published plan is the smaller user-facing projection.
 A plan has:
 
 - a repo, title, short summary, status, revision, and audit timestamps
+- guidance: outcome text, an ordered list of principles, and an ordered list
+  of assumptions; existing plans default to empty guidance
 - ordered phases with a title, short description, status, and optional status
   note
 - zero or more attached live PTYs; each PTY can have only one current plan
@@ -24,6 +26,62 @@ Plan statuses are `active`, `paused`, `completed`, and `canceled`. Phase
 statuses are `pending`, `in_progress`, `blocked`, `completed`, and `skipped`.
 Closing a plan detaches all PTYs. Plans survive terminal exit and remain in the
 repo's closed-plan history.
+
+## Guidance during execution
+
+Guidance preserves the reasons for the work alongside its phases:
+
+- **Outcome:** what should improve for the user and what would demonstrate
+  success.
+- **Principles:** concrete rules for choosing approaches, including constraints
+  and their reasons. Keep user requirements distinct from implementation choices.
+- **Assumptions:** beliefs the proposed approach depends on that new evidence
+  might invalidate. Put uncertain interpretations here.
+
+Keep guidance concise: outcome allows 1,000 characters; each list allows up to
+10 nonempty entries of 500 characters. Agents can write guidance from the
+request. Guidance does not authorize changes to user requirements or agreed
+architectural boundaries.
+
+At phase start, on resume, and when evidence contradicts the approach, read
+`sulion plan current` and relevant source material. Check whether the next step
+still advances the outcome under the principles. Revise steps when justified,
+explain consequential deviations, and ask before changing user requirements or
+agreed architectural boundaries. Consult referenced source material rather than
+treating guidance as a substitute for it.
+
+`current` and `show` display guidance before phases. Branch reads include the
+live guidance of every ancestor, root first, labeled with the source plan and
+revision. Branch guidance adds local context; it does not replace or override
+ancestor requirements. Guidance is read from its owner rather than copied into
+children. The plan modal shows the same guidance and refreshes an open branch
+when an open ancestor's revision changes.
+
+```sh
+sulion plan start "Plan guidance" \
+  --outcome "Agents can recover product intent when resuming work." \
+  --principle "Preserve user requirements when adapting implementation steps." \
+  --assumption "Agents consult the current plan at phase boundaries." \
+  --phase "Implement" --phase "Verify"
+
+sulion plan update --principle "Read guidance and source evidence before changing direction." \
+  --note "Clarify how to judge a deviation"
+sulion plan update --clear-assumptions --note "Assumption checked against execution"
+sulion plan history
+```
+
+`start`, `branch`, and `update` accept `--outcome`, repeatable `--principle`, and
+repeatable `--assumption`. An update replaces each supplied list in order;
+omitted fields stay unchanged. `--clear-principles` and `--clear-assumptions`
+clear lists and cannot be combined with entries for the same list. Use
+`--outcome ""` to clear the outcome. The API uses `outcome`, `principles`, and
+`assumptions` fields with empty strings/arrays for clearing.
+
+Guidance changes increment the plan revision and append a `guidance_changed`
+event in the same transaction, preserving actor, optional explanation, and
+complete before/after values. CLI history and the browser history expose these
+values. Initial nonempty guidance is recorded too; unchanged guidance does not
+produce an extra event.
 
 ## Branch plans
 

@@ -76,6 +76,8 @@ pub enum ControlRequest {
     PlanStart {
         title: String,
         summary: String,
+        #[serde(flatten)]
+        guidance: crate::plans::PlanGuidance,
         phases: Vec<crate::plans::NewPhase>,
         all_pending: bool,
     },
@@ -272,23 +274,23 @@ async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value>
         ControlRequest::PlanStart {
             title,
             summary,
+            guidance,
             phases,
             all_pending,
-        } => Ok(serde_json::to_value(
-            plans::create(
-                pool,
-                plans::CreatePlanInput {
-                    repo_name,
-                    title,
-                    summary,
-                    phases,
-                    all_pending,
-                    attach_current_pty: true,
-                },
-                &actor,
-            )
-            .await?,
-        )?),
+        } => {
+            let input = plans::CreatePlanInput {
+                repo_name,
+                title,
+                summary,
+                guidance,
+                phases,
+                all_pending,
+                attach_current_pty: true,
+            };
+            Ok(serde_json::to_value(
+                plans::create(pool, input, &actor).await?,
+            )?)
+        }
         ControlRequest::PlanBranch { plan_id, input } => {
             let parent_id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
             Ok(serde_json::to_value(
