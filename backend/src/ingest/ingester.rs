@@ -508,6 +508,7 @@ struct CodexSessionContext {
     session_id: String,
     parent_session_id: Option<String>,
     current_turn_id: Option<String>,
+    history_start_ordinal: Option<u64>,
 }
 
 impl CodexSessionContext {
@@ -516,7 +517,21 @@ impl CodexSessionContext {
             session_id: session_uuid.to_string(),
             parent_session_id: None,
             current_turn_id: None,
+            history_start_ordinal: None,
         }
+    }
+
+    fn is_inherited(&self, value: &Value) -> bool {
+        let foreign_meta = super::canonical::codex_record_kind(value) == Some("session_meta")
+            && value
+                .pointer("/payload/id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| id != self.session_id);
+        foreign_meta
+            || self
+                .history_start_ordinal
+                .zip(value.get("ordinal").and_then(Value::as_u64))
+                .is_some_and(|(start, ordinal)| ordinal > 0 && ordinal < start)
     }
 }
 
@@ -838,7 +853,8 @@ async fn load_codex_context(
         "SELECT payload \
          FROM events \
          WHERE session_uuid = $1 AND agent = 'codex' AND kind = 'session_meta' \
-         ORDER BY byte_offset DESC \
+           AND payload #>> '{payload,id}' = $1::TEXT \
+         ORDER BY byte_offset ASC \
          LIMIT 1",
     )
     .bind(session_uuid)
@@ -852,6 +868,7 @@ async fn load_codex_context(
         "SELECT payload \
          FROM events \
          WHERE session_uuid = $1 AND agent = 'codex' AND kind IN ('turn_context', 'task_started') \
+           AND subtype IS DISTINCT FROM 'inherited_history' \
          ORDER BY byte_offset DESC \
          LIMIT 1",
     )
@@ -1003,7 +1020,7 @@ async fn insert_event(
 
     tx.commit().await.map_err(InsertError::Db)?;
 
-    if inserted {
+    if inserted && parsed.subtype.as_deref() != Some("inherited_history") {
         project_after_insert(pool, session_uuid, source, &value, byte_offset, timestamp).await;
     }
 
@@ -1091,6 +1108,9 @@ async fn insert_event_derivatives(
     value: &Value,
     parsed: &super::canonical::CanonicalEvent,
 ) -> Result<(), InsertError> {
+    if parsed.subtype.as_deref() == Some("inherited_history") {
+        return Ok(());
+    }
     if !parsed.blocks.is_empty() {
         insert_blocks(
             tx,
@@ -1128,7 +1148,7 @@ fn parse_canonical_event(
 fn stored_event_kind(
     source: TranscriptSource,
     value: &Value,
-    parsed: &super::canonical::CanonicalEvent,
+    _parsed: &super::canonical::CanonicalEvent,
 ) -> String {
     match source {
         TranscriptSource::ClaudeCode => value
@@ -1138,9 +1158,9 @@ fn stored_event_kind(
             .to_string(),
         TranscriptSource::Codex => {
             let outer = super::canonical::codex_record_kind(value).unwrap_or("");
-            let subtype = parsed
-                .subtype
-                .as_deref()
+            let subtype = value
+                .pointer("/payload/type")
+                .and_then(Value::as_str)
                 .filter(|kind| !kind.is_empty())
                 .unwrap_or("unknown");
             match outer {
@@ -1169,6 +1189,19 @@ fn enrich_codex_lineage(
     let current_turn_id = codex_ctx.and_then(|ctx| ctx.current_turn_id.clone());
     let synthetic_id = format!("codex:{session_uuid}:{byte_offset}");
 
+    if codex_ctx.is_some_and(|ctx| ctx.is_inherited(value)) {
+        parsed.event_uuid = Some(synthetic_id);
+        parsed.parent_event_uuid = None;
+        parsed.related_tool_use_id = None;
+        parsed.is_sidechain = session_parent.is_some();
+        parsed.is_meta = true;
+        parsed.speaker = super::canonical::Speaker::System;
+        parsed.content_kind = super::canonical::ContentKind::None;
+        parsed.subtype = Some("inherited_history".into());
+        parsed.blocks.clear();
+        return;
+    }
+
     match outer {
         "session_meta" => {
             parsed.event_uuid = codex_string_at_path(payload, &["id"])
@@ -1189,6 +1222,11 @@ fn enrich_codex_lineage(
             parsed.parent_event_uuid = parent;
             parsed.is_sidechain = session_parent.is_some();
             parsed.event_uuid = match subtype {
+                "agent_message" => payload
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .or(Some(synthetic_id)),
                 "function_call" | "custom_tool_call" => parsed
                     .blocks
                     .iter()
@@ -1209,6 +1247,24 @@ fn enrich_codex_lineage(
                 .or_else(|| codex_string_at_path(payload, &["call_id"]).map(ToString::to_string));
             parsed.is_sidechain = session_parent.is_some();
             match subtype {
+                "item_completed"
+                    if payload.pointer("/item/type").and_then(Value::as_str)
+                        == Some("SubAgentActivity")
+                        && payload.pointer("/item/kind").and_then(Value::as_str)
+                            == Some("started") =>
+                {
+                    parsed.event_uuid = payload
+                        .pointer("/item/agent_thread_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .or(Some(synthetic_id));
+                    parsed.related_tool_use_id = payload
+                        .pointer("/item/id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                    parsed.parent_event_uuid = current_turn_id.or(Some(session_id));
+                    parsed.is_sidechain = false;
+                }
                 "task_started" => {
                     parsed.event_uuid = codex_string_at_path(payload, &["turn_id"])
                         .map(ToString::to_string)
@@ -1236,6 +1292,9 @@ fn enrich_codex_lineage(
 }
 
 fn update_codex_context(ctx: &mut CodexSessionContext, value: &Value, session_uuid: Uuid) {
+    if ctx.is_inherited(value) {
+        return;
+    }
     let payload = value.get("payload").unwrap_or(&Value::Null);
     match super::canonical::codex_record_kind(value).unwrap_or("") {
         "session_meta" => {
@@ -1243,6 +1302,9 @@ fn update_codex_context(ctx: &mut CodexSessionContext, value: &Value, session_uu
                 .map(ToString::to_string)
                 .unwrap_or_else(|| session_uuid.to_string());
             ctx.parent_session_id = codex_parent_session_string(value).map(ToString::to_string);
+            ctx.history_start_ordinal = payload
+                .get("subagent_history_start_ordinal")
+                .and_then(Value::as_u64);
         }
         "turn_context" => {
             ctx.current_turn_id =
@@ -1267,6 +1329,9 @@ fn codex_parent_session_string(value: &Value) -> Option<&str> {
 }
 
 fn detect_codex_parent_session(value: &Value, current: Uuid) -> Option<Uuid> {
+    if value.pointer("/payload/id").and_then(Value::as_str) != Some(current.to_string().as_str()) {
+        return None;
+    }
     codex_parent_session_string(value)
         .and_then(|raw| Uuid::parse_str(raw).ok())
         .filter(|uuid| *uuid != current)

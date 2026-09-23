@@ -121,6 +121,7 @@ async fn rebuild_derivative_phases(
             job.advance(Some(&session_uuid.to_string())).await;
         }
     }
+    super::usage::rebuild_usage_projection(pool, 0).await?;
     super::maintenance::mark_projection_versions_current(pool).await?;
     Ok((canonical_outcome.repaired as u64, timeline_sessions_rebuilt))
 }

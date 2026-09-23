@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use super::ingester::TranscriptSource;
 
+mod claude;
 mod rebuild;
 mod records;
 pub(super) use rebuild::rebuild_usage_projection;
@@ -74,6 +75,9 @@ pub(super) async fn upsert_from_event(
     {
         return Ok(());
     }
+    if source == TranscriptSource::ClaudeCode {
+        return claude::apply_response(tx, session_uuid, byte_offset, observed_at, &usage).await;
+    }
     let response_record = source == TranscriptSource::Codex && usage.mode == UsageMode::Delta;
     if source == TranscriptSource::Codex
         && !response_record
@@ -94,6 +98,7 @@ pub(super) async fn upsert_from_event(
             sqlx::query_scalar(
                 "SELECT payload #>> '{payload,model}' FROM events \
              WHERE session_uuid = $1 AND byte_offset <= $2 AND kind = 'turn_context' \
+               AND subtype IS DISTINCT FROM 'inherited_history' \
                AND payload #>> '{payload,model}' IS NOT NULL \
              ORDER BY byte_offset DESC LIMIT 1",
             )

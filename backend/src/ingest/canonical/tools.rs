@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 use super::code_mode::{parse_tool_calls, shell_executable};
 
 pub fn canonicalize_tool_name(raw: &str) -> String {
-    match raw {
+    match raw.rsplit('.').next().unwrap_or(raw) {
         // Claude Code builtins
         "Read" | "read_file" => "read",
         "Write" | "write_file" => "write",
@@ -171,8 +171,8 @@ pub(crate) fn canonicalize_tool_input(canonical_name: &str, input: Value) -> Val
         }
         "task" => {
             copy_first(&obj, &mut out, "agent", &["agent", "subagent_type"]);
-            copy_key(&obj, &mut out, "description");
-            copy_key(&obj, &mut out, "prompt");
+            copy_first(&obj, &mut out, "description", &["description", "task_name"]);
+            copy_first(&obj, &mut out, "prompt", &["prompt", "message"]);
         }
         "todo_write" => {
             copy_key(&obj, &mut out, "todos");

@@ -254,6 +254,8 @@ pub async fn backfill_timeline_projection(
 ) -> anyhow::Result<usize> {
     let sessions: Vec<(Uuid,)> = sqlx::query_as(
         "WITH sessions_to_rebuild AS ( \
+             SELECT DISTINCT session_uuid FROM events \
+             UNION \
              SELECT DISTINCT e.session_uuid \
                FROM events e \
               WHERE NOT EXISTS ( \

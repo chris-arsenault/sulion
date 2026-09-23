@@ -377,12 +377,210 @@ fn turn_token_usage_dedupes_claude_messages() {
     first.usage_message_id = Some("msg-1".to_string());
     let mut repeat = event(3, "assistant", vec![text(0, "part two")]);
     repeat.usage_json = Some(usage);
+    repeat.usage_json.as_mut().unwrap()["output_tokens"] = json!(268);
     repeat.usage_message_id = Some("msg-1".to_string());
 
     let events = vec![event(1, "user", vec![text(0, "prompt")]), first, repeat];
     let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
     assert_eq!(projected.turns[0].input_tokens, 1050);
-    assert_eq!(projected.turns[0].output_tokens, 40);
+    assert_eq!(projected.turns[0].output_tokens, 268);
+}
+
+#[test]
+fn runtime_items_enrich_one_operation_and_report_runtime_failures() {
+    let mut runtime = event(
+        3,
+        "system",
+        vec![Block::tool_result(
+            0,
+            "exec-runtime",
+            None,
+            true,
+            Some(
+                json!({"runtime_item":{"type":"CommandExecution","id":"exec-runtime","command":["bash","-lc","false"],
+            "cwd":"file:///repo","exit_code":1,"stdout":"","stderr":"failure","duration":{"secs":1,"nanos":0}},"started_at_ms":2500}),
+            ),
+        )],
+    );
+    runtime.is_meta = true;
+    let mut change = event(
+        4,
+        "system",
+        vec![Block::tool_result(
+            0,
+            "edit-runtime",
+            None,
+            false,
+            Some(
+                json!({"runtime_item":{"type":"FileChange","id":"edit-runtime","changes":{
+            "/repo/src/main.rs":{"type":"update","unified_diff":"@@ -1 +1 @@\n-old\n+new"}}},"started_at_ms":2600}),
+            ),
+        )],
+    );
+    change.is_meta = true;
+    let events = vec![
+        event(1, "user", vec![text(0, "fix")]),
+        event(
+            2,
+            "assistant",
+            vec![Block::tool_use(
+                0,
+                "call",
+                "exec",
+                json!("await tools.exec_command(args); await tools.apply_patch(patch);"),
+            )],
+        ),
+        runtime,
+        change,
+        event(5, "system", vec![tool_result(0, "call", "finished", false)]),
+    ];
+    let projected = project_timeline(&events, 5, &ProjectionFilters::default());
+    let turn = &projected.turns[0];
+    assert_eq!(turn.operation_count, 1);
+    assert!(turn.has_errors);
+    let pair = &turn.tool_pairs[0];
+    assert!(pair.is_error);
+    assert_eq!(
+        pair.input.as_ref().unwrap()["runtime_items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        pair.input.as_ref().unwrap()["file_edits"][0]["path"],
+        "/repo/src/main.rs"
+    );
+    assert_eq!(
+        pair.result.as_ref().unwrap().payload.as_ref().unwrap()["runtime_items"][0]["runtime_item"]
+            ["stderr"],
+        "failure"
+    );
+    assert!(!turn.markdown.contains("failure"));
+    assert_eq!(
+        build_session_projection(&events, None)[0].operations.len(),
+        1
+    );
+}
+
+#[test]
+fn ambiguous_runtime_evidence_is_visible_without_an_extra_operation() {
+    let runtime = event(
+        4,
+        "system",
+        vec![Block::tool_result(
+            0,
+            "runtime",
+            None,
+            false,
+            Some(
+                json!({"runtime_item":{"type":"ImageView","id":"runtime","path":"file:///image.png"},"started_at_ms":3500}),
+            ),
+        )],
+    );
+    let events = vec![
+        event(1, "user", vec![text(0, "look")]),
+        event(
+            2,
+            "assistant",
+            vec![Block::tool_use(
+                0,
+                "a",
+                "exec",
+                json!("await tools.view_image(args)"),
+            )],
+        ),
+        event(
+            3,
+            "assistant",
+            vec![Block::tool_use(
+                0,
+                "b",
+                "exec",
+                json!("await tools.view_image(args)"),
+            )],
+        ),
+        runtime,
+    ];
+    let projected = project_timeline(&events, 4, &ProjectionFilters::default());
+    assert_eq!(projected.turns[0].operation_count, 2);
+    assert!(projected.turns[0]
+        .markdown
+        .contains("Uncorrelated runtime evidence"));
+    assert!(projected.turns[0].tool_pairs.iter().all(|p| p.is_pending));
+}
+
+#[test]
+fn runtime_after_yield_attaches_to_exec_and_wait_completion_closes_its_interval() {
+    let runtime = |offset, id, start| {
+        event(
+            offset,
+            "system",
+            vec![Block::tool_result(
+                0,
+                id,
+                None,
+                false,
+                Some(
+                    json!({"runtime_item":{"type":"CommandExecution","id":id,"command":["pwd"]},"started_at_ms":start}),
+                ),
+            )],
+        )
+    };
+    let events = vec![
+        event(1, "user", vec![text(0, "run")]),
+        event(
+            2,
+            "assistant",
+            vec![Block::tool_use(
+                0,
+                "a",
+                "exec",
+                json!("await tools.exec_command(args)"),
+            )],
+        ),
+        event(
+            3,
+            "system",
+            vec![tool_result(
+                0,
+                "a",
+                "Script running with cell ID cell-a",
+                false,
+            )],
+        ),
+        event(
+            4,
+            "assistant",
+            vec![Block::tool_use(0, "w", "wait", json!({"cell_id":"cell-a"}))],
+        ),
+        runtime(5, "runtime-a", 4500),
+        event(6, "system", vec![tool_result(0, "w", "finished", false)]),
+        event(
+            7,
+            "assistant",
+            vec![Block::tool_use(
+                0,
+                "b",
+                "exec",
+                json!("await tools.exec_command(args)"),
+            )],
+        ),
+        runtime(8, "runtime-b", 7500),
+        event(9, "system", vec![tool_result(0, "b", "finished", false)]),
+    ];
+    let projected = project_timeline(&events, 9, &ProjectionFilters::default());
+    let pairs = &projected.turns[0].tool_pairs;
+    assert_eq!(pairs.len(), 3);
+    assert_eq!(
+        pairs[0].input.as_ref().unwrap()["runtime_items"][0]["runtime_item"]["id"],
+        "runtime-a"
+    );
+    assert_eq!(
+        pairs[2].input.as_ref().unwrap()["runtime_items"][0]["runtime_item"]["id"],
+        "runtime-b"
+    );
+    assert!(!projected.turns[0].markdown.contains("Uncorrelated"));
 }
 
 /// Codex reports cumulative session totals; a turn's usage is the

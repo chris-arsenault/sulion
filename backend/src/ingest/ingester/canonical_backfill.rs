@@ -28,6 +28,11 @@ async fn rewrite_canonical_event(
     .bind(parsed.search_text())
     .execute(&mut *tx)
     .await?;
+    sqlx::query("DELETE FROM event_blocks WHERE session_uuid=$1 AND byte_offset=$2")
+        .bind(session_uuid)
+        .bind(byte_offset)
+        .execute(&mut *tx)
+        .await?;
     insert_blocks(
         &mut tx,
         session_uuid,
@@ -62,6 +67,9 @@ pub async fn backfill_canonical_blocks(
         "SELECT DISTINCT session_uuid \
          FROM events e \
          WHERE e.agent = 'codex' AND ( \
+             e.payload #>> '{payload,type}' IN ('agent_message', 'item_completed') OR \
+             e.payload #> '{payload,subagent_history_start_ordinal}' IS NOT NULL OR \
+             e.payload #> '{payload,namespace}' IS NOT NULL OR \
              e.speaker IS NULL OR \
              e.content_kind IS NULL OR \
              (e.content_kind IS DISTINCT FROM 'none' AND NOT EXISTS ( \
@@ -116,6 +124,7 @@ pub async fn backfill_canonical_blocks(
         "SELECT e.session_uuid, e.byte_offset, e.agent, e.payload \
          FROM events e \
          WHERE e.agent <> 'codex' AND ( \
+             e.kind IN ('attachment', 'user') OR \
              e.speaker IS NULL OR \
              e.content_kind IS NULL OR \
              EXISTS ( \
@@ -183,31 +192,8 @@ pub async fn backfill_canonical_blocks(
 /// Re-derive one codex session's canonical rows, threading the session
 /// context in offset order so tool correlation stays correct.
 async fn repair_codex_session(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<usize> {
-    let rows: Vec<(Uuid, i64, String, serde_json::Value, bool)> = sqlx::query_as(
-        "SELECT e.session_uuid, e.byte_offset, e.agent, e.payload, \
-                ( \
-                    e.speaker IS NULL OR \
-                    e.content_kind IS NULL OR \
-                    (e.content_kind IS DISTINCT FROM 'none' AND NOT EXISTS ( \
-                        SELECT 1 FROM event_blocks b \
-                         WHERE b.session_uuid = e.session_uuid \
-                           AND b.byte_offset = e.byte_offset \
-                    )) OR \
-                    EXISTS ( \
-                        SELECT 1 FROM event_blocks b \
-                         WHERE b.session_uuid = e.session_uuid \
-                           AND b.byte_offset = e.byte_offset \
-                           AND b.kind = 'tool_use' \
-                           AND COALESCE(b.tool_name_canonical, b.tool_name) = 'exec' \
-                           AND ( \
-                               jsonb_typeof(b.tool_input) = 'string' OR \
-                               ( \
-                                   jsonb_typeof(b.tool_input) = 'object' \
-                                   AND COALESCE(b.tool_input ->> 'code', '') LIKE '%tools.%' \
-                               ) \
-                           ) \
-                    ) \
-                ) AS needs_backfill \
+    let rows: Vec<(Uuid, i64, String, serde_json::Value)> = sqlx::query_as(
+        "SELECT e.session_uuid, e.byte_offset, e.agent, e.payload \
          FROM events e \
          WHERE e.session_uuid = $1 \
          ORDER BY byte_offset",
@@ -219,20 +205,22 @@ async fn repair_codex_session(pool: &Pool, session_uuid: Uuid) -> anyhow::Result
 
     let mut repaired = 0usize;
     let mut ctx = CodexSessionContext::new(session_uuid);
-    for (row_session_uuid, byte_offset, agent, payload, needs_backfill) in rows {
-        if needs_backfill {
-            let parsed =
-                parse_canonical_event(&agent, &payload, row_session_uuid, byte_offset, Some(&ctx));
-            rewrite_canonical_event(pool, row_session_uuid, byte_offset, &parsed)
-                .await
-                .with_context(|| format!("rewrite event at byte offset {byte_offset}"))?;
-            if let Some(parent) = detect_codex_parent_session(&payload, row_session_uuid) {
-                set_parent_session(pool, row_session_uuid, parent)
-                    .await
-                    .with_context(|| format!("set parent session at byte offset {byte_offset}"))?;
-            }
-            repaired += 1;
+    for (row_session_uuid, byte_offset, agent, payload) in rows {
+        let parsed =
+            parse_canonical_event(&agent, &payload, row_session_uuid, byte_offset, Some(&ctx));
+        rewrite_canonical_event(pool, row_session_uuid, byte_offset, &parsed)
+            .await
+            .with_context(|| format!("rewrite event at byte offset {byte_offset}"))?;
+        if parsed.subtype.as_deref() != Some("inherited_history") {
+            super::super::metadata::upsert_from_event(pool, row_session_uuid, &agent, &payload)
+                .await?;
         }
+        if let Some(parent) = detect_codex_parent_session(&payload, row_session_uuid) {
+            set_parent_session(pool, row_session_uuid, parent)
+                .await
+                .with_context(|| format!("set parent session at byte offset {byte_offset}"))?;
+        }
+        repaired += 1;
         update_codex_context(&mut ctx, &payload, row_session_uuid);
     }
     Ok(repaired)

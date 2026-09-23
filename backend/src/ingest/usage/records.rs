@@ -201,6 +201,7 @@ pub(super) async fn rebuild(tx: &mut Transaction<'_, Postgres>) -> Result<u64, s
                         THEN jsonb_build_object('model', payload #> '{payload,model}') \
                         ELSE payload->'payload' END) AS payload \
              FROM events WHERE session_uuid = $1 \
+               AND subtype IS DISTINCT FROM 'inherited_history' \
                AND kind IN ('token_count', 'token_usage_record', 'turn_context') \
              ORDER BY byte_offset",
         )

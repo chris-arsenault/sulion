@@ -106,7 +106,7 @@ async fn response_usage_includes_compaction_and_preserves_legacy_prefix_across_r
     let stats = sulion::ingest::run_required_startup_maintenance(&pool)
         .await
         .unwrap();
-    assert_eq!(stats.usage_sessions_backfilled, 1);
+    assert_eq!(stats.usage_sessions_backfilled, 2);
     assert_eq!(snapshot(&pool, fx.session_uuid).await, before);
     assert_eq!(snapshot(&pool, legacy.session_uuid).await, legacy_before);
     let second = sulion::ingest::run_required_startup_maintenance(&pool)

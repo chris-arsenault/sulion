@@ -26,6 +26,9 @@ mod model_switches;
 #[path = "ingester_integration/projection_debounce.rs"]
 mod projection_debounce;
 
+#[path = "ingester_integration/harness_compatibility.rs"]
+mod harness_compatibility;
+
 fn test_db_url() -> Option<String> {
     std::env::var("SULION_TEST_DB").ok()
 }

@@ -58,6 +58,45 @@ fn parse_codex_response_item(value: &Value) -> CanonicalEvent {
         .and_then(|v| v.as_str())
         .unwrap_or("response_item");
     match subtype {
+        "agent_message" => {
+            let author = payload
+                .get("author")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown agent");
+            let recipient = payload
+                .get("recipient")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown recipient");
+            let mut blocks = vec![Block::text(
+                0,
+                format!("Agent message: {author} → {recipient}"),
+            )];
+            if let Some(items) = payload.get("content").and_then(Value::as_array) {
+                for item in items {
+                    let text = item.get("text").and_then(Value::as_str).or_else(|| {
+                        (item.get("type").and_then(Value::as_str) == Some("encrypted_content"))
+                            .then_some("[Encrypted agent message; plaintext unavailable]")
+                    });
+                    if let Some(text) = text {
+                        blocks.push(Block::text(blocks.len() as i32, text.to_owned()));
+                    } else {
+                        blocks.push(Block::unknown(blocks.len() as i32, item.clone()));
+                    }
+                }
+            }
+            CanonicalEvent {
+                agent: "codex",
+                speaker: Speaker::System,
+                content_kind: content_kind_of(&blocks),
+                event_uuid: payload.get("id").and_then(Value::as_str).map(str::to_owned),
+                parent_event_uuid: None,
+                related_tool_use_id: None,
+                is_sidechain: false,
+                is_meta: false,
+                subtype: Some(subtype.into()),
+                blocks,
+            }
+        }
         "message" => {
             let role = payload
                 .get("role")
@@ -110,11 +149,18 @@ fn parse_codex_response_item(value: &Value) -> CanonicalEvent {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let name = payload
+            let mut name = payload
                 .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or(subtype)
                 .to_string();
+            if let Some(namespace) = payload
+                .get("namespace")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
+                name = format!("{namespace}.{name}");
+            }
             let input = if subtype == "function_call" {
                 parse_json_string(payload.get("arguments"))
             } else {
@@ -180,10 +226,37 @@ fn parse_codex_event_msg(value: &Value) -> CanonicalEvent {
         .get("type")
         .and_then(|v| v.as_str())
         .unwrap_or("event_msg");
+    let mut blocks = Vec::new();
+    if subtype == "item_completed" {
+        if let Some(item) = payload.get("item") {
+            if matches!(
+                item.get("type").and_then(Value::as_str),
+                Some("CommandExecution" | "FileChange" | "Extension" | "ImageView")
+            ) {
+                let id = item.get("id").and_then(Value::as_str).unwrap_or("");
+                let failed = item
+                    .get("exit_code")
+                    .and_then(Value::as_i64)
+                    .is_some_and(|n| n != 0)
+                    || item.get("status").and_then(Value::as_str) == Some("failed");
+                blocks.push(Block::tool_result(
+                    0,
+                    id,
+                    None,
+                    failed,
+                    Some(serde_json::json!({
+                        "runtime_item": item,
+                        "started_at_ms": payload.get("started_at_ms"),
+                        "completed_at_ms": payload.get("completed_at_ms"),
+                    })),
+                ));
+            }
+        }
+    }
     CanonicalEvent {
         agent: "codex",
         speaker: Speaker::System,
-        content_kind: ContentKind::None,
+        content_kind: content_kind_of(&blocks),
         event_uuid: None,
         parent_event_uuid: None,
         related_tool_use_id: payload
@@ -193,7 +266,7 @@ fn parse_codex_event_msg(value: &Value) -> CanonicalEvent {
         is_sidechain: false,
         is_meta: true,
         subtype: Some(subtype.to_string()),
-        blocks: Vec::new(),
+        blocks,
     }
 }
 

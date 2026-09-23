@@ -38,7 +38,12 @@ pub(crate) fn format_turn_markdown(
         if is_tool_result_event(event) {
             continue;
         }
-        if is_assistant_event(event) {
+        if is_assistant_event(event)
+            || matches!(
+                event.subtype.as_deref(),
+                Some("agent_message" | "runtime_evidence")
+            )
+        {
             let formatted = format_assistant_event_markdown(event, pair_by_id);
             if !formatted.is_empty() {
                 parts.push(formatted);

@@ -18,13 +18,11 @@ pub(crate) async fn rebuild_usage_projection(
     sqlx::query("DELETE FROM agent_usage_responses")
         .execute(&mut *tx)
         .await?;
-    // Version 1 already has correct legacy and Claude projections. Repair
-    // only response-record sessions on upgrade instead of replaying all history.
-    if from_version < 1 {
+    if from_version < 3 {
         rebuild_legacy(&mut tx).await?;
     }
     let mut sessions = records::rebuild(&mut tx).await?;
-    if from_version < 1 {
+    if from_version < 3 {
         let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_session_usage")
             .fetch_one(&mut *tx)
             .await?;
@@ -35,15 +33,19 @@ pub(crate) async fn rebuild_usage_projection(
 }
 
 async fn rebuild_legacy(tx: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM agent_model_usage_daily")
+    sqlx::query("DELETE FROM agent_model_usage_daily WHERE session_uuid IN (SELECT session_uuid FROM events)")
         .execute(&mut **tx)
         .await?;
-    sqlx::query("DELETE FROM agent_usage_daily")
-        .execute(&mut **tx)
-        .await?;
-    sqlx::query("DELETE FROM agent_session_usage")
-        .execute(&mut **tx)
-        .await?;
+    sqlx::query(
+        "DELETE FROM agent_usage_daily WHERE session_uuid IN (SELECT session_uuid FROM events)",
+    )
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "DELETE FROM agent_session_usage WHERE session_uuid IN (SELECT session_uuid FROM events)",
+    )
+    .execute(&mut **tx)
+    .await?;
 
     sqlx::query(include_str!("codex_sessions.sql"))
         .execute(&mut **tx)

@@ -58,6 +58,8 @@ pub fn build_session_projection(
     events: &[StoredEvent],
     file_context: Option<&FileTouchContext>,
 ) -> Vec<StoredTurnProjection> {
+    let enriched = super::runtime::enrich(events);
+    let events = enriched.as_ref();
     let event_refs: Vec<&StoredEvent> = events.iter().collect();
     group_into_turns(&event_refs)
         .into_iter()

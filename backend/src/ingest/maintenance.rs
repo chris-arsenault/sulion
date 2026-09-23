@@ -9,7 +9,8 @@ const CANONICAL_BLOCKS_KEY: &str = "canonical_blocks";
 // predate the mapping get re-derived.
 // v4: Codex Code Mode `exec` wrappers canonicalize to their nested tool
 // or shell executable; all historical wrapper blocks get re-derived.
-const CANONICAL_BLOCKS_VERSION: i32 = 4;
+// v5: queued/pasted Claude input and Codex inheritance, collaboration and runtime items.
+const CANONICAL_BLOCKS_VERSION: i32 = 5;
 const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // v3: sessions with codex `exec` operations reprojected after their
 // inputs were re-canonicalized into the {command, code} shape.
@@ -30,11 +31,13 @@ const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // session is reprojected to drop the program-text touch rows.
 // v10: the turn digest (`markdown`) no longer embeds tool inputs, diffs,
 // or result bodies; every session is reprojected so stored digests match.
-const TIMELINE_PROJECTION_VERSION: i32 = 10;
+// v11: current harness input, lineage, runtime evidence and latest Claude usage.
+const TIMELINE_PROJECTION_VERSION: i32 = 11;
 const USAGE_PROJECTION_KEY: &str = "usage_projection";
 // v2: include Codex per-response usage, including compaction, and retain the
 // legacy prefix before a session first supplies response records.
-const USAGE_PROJECTION_VERSION: i32 = 2;
+// v3: replace revised Claude receipts and exclude inherited Codex usage.
+const USAGE_PROJECTION_VERSION: i32 = 3;
 
 #[derive(Debug, Default, Clone, Copy, serde::Serialize)]
 pub struct StartupMaintenanceStats {
@@ -48,8 +51,8 @@ pub async fn run_required_startup_maintenance(
 ) -> anyhow::Result<StartupMaintenanceStats> {
     let mut stats = StartupMaintenanceStats::default();
     repair_canonical_blocks_if_behind(pool, &mut stats).await?;
-    repair_timeline_projection_if_behind(pool, &mut stats).await?;
     repair_usage_projection_if_behind(pool, &mut stats).await?;
+    repair_timeline_projection_if_behind(pool, &mut stats).await?;
     Ok(stats)
 }
 
@@ -128,6 +131,7 @@ async fn repair_canonical_blocks_if_behind(
             repaired = outcome.repaired,
             "canonical repair incomplete; version gate held for retry",
         );
+        anyhow::bail!("canonical repair incomplete; dependent projections must wait for repair");
     }
     Ok(())
 }

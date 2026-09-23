@@ -5,6 +5,7 @@ WITH codex_raw AS (
             (SELECT prior.payload #>> '{payload,model}'
                FROM events prior
               WHERE prior.session_uuid = e.session_uuid
+                AND prior.subtype IS DISTINCT FROM 'inherited_history'
                 AND prior.byte_offset <= e.byte_offset
                 AND prior.payload ->> 'type' = 'turn_context'
                 AND prior.payload #>> '{payload,model}' IS NOT NULL
@@ -13,6 +14,7 @@ WITH codex_raw AS (
         e.payload #> '{payload,info,total_token_usage}' AS usage
     FROM events e
     WHERE e.agent = 'codex'
+      AND e.subtype IS DISTINCT FROM 'inherited_history'
       AND e.payload #>> '{payload,type}' = 'token_count'
       AND jsonb_typeof(e.payload #> '{payload,info,total_token_usage}') = 'object'
  ), codex_parsed AS (

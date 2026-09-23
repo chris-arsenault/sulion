@@ -4,6 +4,16 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Transcript compatibility
+
+- Preserve queued Claude prompts and pasted text, reconcile submitted prompts,
+  and replace partial response usage with the latest receipt.
+- Keep Codex child lineage intact across inherited history, display agent
+  messages, link current subagent-start records, and enrich tool operations with
+  completed runtime evidence without double-counting operations.
+- Repair retained canonical, timeline, and usage projections on startup and
+  reindex while preserving raw transcripts and archived digests.
+
 ### Transcript archive
 
 - Added a monthly archive cycle in the control process. Idle agent sessions

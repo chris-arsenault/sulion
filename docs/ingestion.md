@@ -47,13 +47,16 @@ without adding spend. Response IDs are persisted in `agent_usage_responses`
 so duplicates at new byte offsets remain harmless after restarts. Missing
 response IDs or usage objects do not switch the accounting source.
 
-Usage projection version 2 repairs response-record sessions from stored events
-during control startup. Upgrades preserve existing legacy-only and Claude
-projections; databases without version 1 rebuild those first. Repair replays
-model changes in event
-order for Codex response sessions, and replaces daily projections and response
-identities in the same transaction. The projection tables remain locked until
-the replacement is complete, so concurrent ingestion continues afterward.
+Claude assistant blocks can revise usage for the same message ID. The latest
+receipt replaces the earlier contribution, including downward corrections and
+changes to its day or model. Prior receipts remain in `events`; an indexed
+lookup makes the correction survive restarts and interleaved responses.
+
+Usage projection version 3 rebuilds retained sessions from stored events during
+control startup, correcting older Claude totals and excluding inherited Codex
+history. It preserves archived rollups. Daily projections and response
+identities are replaced in the same transaction; the projection tables remain
+locked until replacement completes. Admin reindex also rebuilds usage.
 
 Metrics apply the catalog rates dated in the response to all historical dates;
 they estimate API-equivalent usage rather than historical invoices. Unpriced
@@ -92,9 +95,9 @@ Startup maintenance versions canonical, timeline, and usage projections
 independently; file touches belong to timeline projection. A version change
 repairs the affected projection from stored events rather than forcing every
 derivative to rebuild. Repair
-failures in individual canonical rows are recorded, leave that version behind
-for retry, and allow later passes to run. A pass-level error still stops that
-startup-maintenance invocation.
+failures in individual canonical rows are recorded and leave that version behind
+for retry. Dependent usage and timeline repairs wait until canonical repair
+succeeds.
 `ingest_jobs` records job state, progress, and errors for the browser's jobs
 panel; job completion is distinct from the background worker being alive.
 
@@ -104,6 +107,23 @@ concurrent child work matched to its owning operation. Bookkeeping records,
 including per-response usage and Claude latch records, do not seed user turns.
 Codex code-mode calls are unwrapped into operations so commands and native
 patches remain visible in tool detail and file-touch evidence.
+
+Queued Claude attachments become human turns only when their origin identifies
+human input. Paired harness paste delimiters are removed from canonical text;
+the pasted body and raw payload remain intact. Duplicate prompt UUIDs produce
+one turn, and submitted prompts match against whitespace-normalized bodies.
+
+Codex child sessions retain their owning metadata and use
+`subagent_history_start_ordinal` to exclude copied parent history from turns,
+usage, and activity. Agent messages retain their author, recipient, and available
+text; encrypted content gets an explicit unavailable-content marker. New
+`SubAgentActivity` start records connect spawning operations to child turns.
+Completed runtime items enrich an existing operation by ID or a unique enclosing
+code-mode execution, including yielded executions resumed by `wait`. Commands,
+output, exit status, duration, and file changes remain available as operation
+evidence. Ambiguous runtime records stay visible without adding an operation or
+guessing their owner. Canonical version 5 and timeline version 11 repair retained
+history through the same interpretation used by live ingest and archive restore.
 
 ## Retention boundary
 

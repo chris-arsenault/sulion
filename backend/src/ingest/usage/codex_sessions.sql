@@ -6,6 +6,7 @@ WITH raw AS (
         e.payload #> '{payload,info,model_context_window}' AS context_window
     FROM events e
     WHERE e.agent = 'codex'
+      AND e.subtype IS DISTINCT FROM 'inherited_history'
       AND e.payload #>> '{payload,type}' = 'token_count'
       AND jsonb_typeof(e.payload #> '{payload,info,total_token_usage}') = 'object'
     ORDER BY e.session_uuid, e.byte_offset DESC

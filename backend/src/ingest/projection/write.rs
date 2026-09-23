@@ -90,6 +90,26 @@ pub async fn rebuild_session_projection_after_insert(
         return reconcile_session_projection(pool, session_uuid).await;
     };
 
+    // A revised response or a completed background operation can belong to a
+    // turn before the current suffix. Reconcile that session when evidence
+    // explicitly crosses the anchor instead of leaving the older turn stale.
+    let crosses_anchor: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM events e WHERE e.session_uuid=$1 AND e.byte_offset >= $2 AND ( \
+            (e.agent='claude-code' AND e.kind='assistant' AND EXISTS (SELECT 1 FROM events prior \
+                WHERE prior.session_uuid=$1 AND prior.agent='claude-code' AND prior.kind='assistant' \
+                  AND prior.byte_offset<$3 AND prior.payload #>> '{message,id}'=e.payload #>> '{message,id}')) OR \
+            (e.speaker='user' AND EXISTS (SELECT 1 FROM events prior WHERE prior.session_uuid=$1 \
+                AND prior.byte_offset<$3 AND prior.speaker='user' AND prior.event_uuid=e.event_uuid)) OR \
+            (e.agent='codex' AND e.kind='item_completed' \
+                AND CASE WHEN jsonb_typeof(e.payload #> '{payload,started_at_ms}')='number' \
+                    THEN (e.payload #>> '{payload,started_at_ms}')::NUMERIC \
+                    ELSE NULL END < (SELECT EXTRACT(EPOCH FROM timestamp)*1000 FROM events \
+                                    WHERE session_uuid=$1 AND byte_offset=$3))))",
+    ).bind(session_uuid).bind(first_inserted_offset).bind(anchor.turn_id).fetch_one(pool).await?;
+    if crosses_anchor {
+        return reconcile_session_projection(pool, session_uuid).await;
+    }
+
     let events = load_direct_session_events_from(pool, session_uuid, anchor.turn_id)
         .await
         .context("load canonical projection suffix events")?;

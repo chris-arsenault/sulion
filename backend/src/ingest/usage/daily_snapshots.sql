@@ -5,6 +5,7 @@ WITH codex_raw AS (
         e.payload #> '{payload,info,total_token_usage}' AS usage
     FROM events e
     WHERE e.agent = 'codex'
+      AND e.subtype IS DISTINCT FROM 'inherited_history'
       AND e.payload #>> '{payload,type}' = 'token_count'
       AND jsonb_typeof(e.payload #> '{payload,info,total_token_usage}') = 'object'
     ORDER BY e.session_uuid, (e.timestamp AT TIME ZONE 'UTC')::DATE, e.byte_offset DESC

@@ -18,6 +18,8 @@ pub fn project_timeline(
     total_event_count: i64,
     filters: &ProjectionFilters,
 ) -> TimelineResponse {
+    let enriched = super::runtime::enrich(events);
+    let events = enriched.as_ref();
     let filtered_events: Vec<&StoredEvent> = events
         .iter()
         .filter(|event| filters.show_bookkeeping || !is_bookkeeping_event(event))
@@ -84,6 +86,9 @@ pub(crate) fn group_into_turns<'a>(events: &[&'a StoredEvent]) -> Vec<TurnSeed<'
     let mut pending_prefix: Vec<&'a StoredEvent> = Vec::new();
 
     for event in events.iter().copied() {
+        if event.subtype.as_deref() == Some("inherited_history") {
+            continue;
+        }
         if is_real_user_prompt(event) {
             if let Some(id) = &event.event_uuid {
                 if !prompts_seen.insert((event.source_session, id)) {
@@ -207,6 +212,7 @@ pub(crate) fn project_turn(
     for event in turn.events.iter().copied() {
         if is_assistant_event(event) {
             for tool in tool_uses_in(event) {
+                has_errors |= tool.is_error;
                 let id = tool
                     .id
                     .clone()
@@ -248,10 +254,11 @@ pub(crate) fn project_turn(
                 payload: result.payload.clone(),
                 is_error: result.is_error,
             }),
-            is_error: result_match
-                .as_ref()
-                .map(|(result, _)| result.is_error)
-                .unwrap_or(false),
+            is_error: tool.is_error
+                || result_match
+                    .as_ref()
+                    .map(|(result, _)| result.is_error)
+                    .unwrap_or(false),
             is_pending: result_match.is_none(),
             file_touches: Vec::new(),
             subagent: None,
@@ -321,20 +328,46 @@ fn turn_token_usage(turn: &TurnSeed<'_>, all_events: &[StoredEvent]) -> (i64, i6
 
     let mut input = 0i64;
     let mut output = 0i64;
-    let mut seen_messages: HashSet<&str> = HashSet::new();
+    let mut seen_messages = HashSet::new();
     let mut codex_last: Option<&Value> = None;
+    let mut receipts: HashMap<_, (&StoredEvent, &StoredEvent)> = HashMap::new();
+    for event in all_events
+        .iter()
+        .filter(|event| event.agent != "codex" && event.usage_json.is_some())
+    {
+        if let Some(id) = event.usage_message_id.as_deref() {
+            let (first, last) = receipts
+                .entry((event.source_session, id))
+                .or_insert((event, event));
+            if event.byte_offset < first.byte_offset {
+                *first = event;
+            }
+            if event.byte_offset > last.byte_offset {
+                *last = event;
+            }
+        }
+    }
 
-    for event in turn.events.iter().copied() {
-        let Some(usage) = event.usage_json.as_ref() else {
+    for event in turn.events.iter().rev().copied() {
+        let Some(mut usage) = event.usage_json.as_ref() else {
             continue;
         };
         if event.agent == "codex" {
-            codex_last = Some(usage);
+            codex_last.get_or_insert(usage);
             continue;
         }
         if let Some(message_id) = event.usage_message_id.as_deref() {
-            if !seen_messages.insert(message_id) {
+            if !seen_messages.insert((event.source_session, message_id)) {
                 continue;
+            }
+            if let Some((first, latest)) = receipts.get(&(event.source_session, message_id)) {
+                if !turn.events.iter().any(|candidate| {
+                    candidate.byte_offset == first.byte_offset
+                        && candidate.source_session == first.source_session
+                }) {
+                    continue;
+                }
+                usage = latest.usage_json.as_ref().unwrap();
             }
         }
         input += token(usage, "input_tokens")
@@ -351,10 +384,16 @@ fn turn_token_usage(turn: &TurnSeed<'_>, all_events: &[StoredEvent]) -> (i64, i6
             .unwrap_or(i64::MIN);
         let baseline = all_events
             .iter()
-            .take_while(|event| event.byte_offset < first_offset)
-            .filter(|event| event.agent == "codex")
-            .filter_map(|event| event.usage_json.as_ref())
-            .last();
+            .filter(|event| {
+                event.byte_offset < first_offset
+                    && event.agent == "codex"
+                    && event.source_session
+                        == turn.events.first().and_then(|event| event.source_session)
+                    && event.subtype.as_deref() != Some("inherited_history")
+                    && event.usage_json.is_some()
+            })
+            .max_by_key(|event| event.byte_offset)
+            .and_then(|event| event.usage_json.as_ref());
         let delta =
             |key: &str| (token(last, key) - baseline.map_or(0, |usage| token(usage, key))).max(0);
         input += delta("input_tokens");
@@ -616,6 +655,7 @@ struct ToolUseView {
     operation_type: Option<String>,
     category: Option<OperationCategory>,
     input: Option<Value>,
+    is_error: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -632,6 +672,7 @@ fn tool_uses_in(event: &StoredEvent) -> Vec<ToolUseView> {
         .iter()
         .filter(|block| block.kind == BlockKind::ToolUse)
         .map(|block| ToolUseView {
+            is_error: block.is_error.unwrap_or(false),
             id: block.tool_id.clone(),
             name: block
                 .tool_name_canonical
@@ -740,7 +781,8 @@ fn is_system_event(event: &StoredEvent) -> bool {
 fn is_bookkeeping_event(event: &StoredEvent) -> bool {
     // is_meta covers any speaker: claude meta-system records and codex
     // plumbing records (world_state, turn_context, …) alike.
-    (BOOKKEEPING_KINDS.contains(&event.kind.as_str()) && event.subtype.as_deref() != Some("queued_user_prompt"))
+    (BOOKKEEPING_KINDS.contains(&event.kind.as_str())
+        && event.subtype.as_deref() != Some("queued_user_prompt"))
         || event.is_meta
         || (is_system_event(event) && is_bookkeeping_system_subtype(event.subtype.as_deref()))
         || is_local_command_event(event)

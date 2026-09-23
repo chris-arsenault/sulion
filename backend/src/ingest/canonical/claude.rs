@@ -14,12 +14,13 @@ impl EventParser for ClaudeParser {
     fn parse(&self, value: &Value) -> CanonicalEvent {
         let kind = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
         let attachment = value.get("attachment");
-        let queued_human = kind == "attachment" && attachment.is_some_and(|a| {
-            a.get("type").and_then(Value::as_str) == Some("queued_command")
-                && a.get("commandMode").and_then(Value::as_str) == Some("prompt")
-                && (a.pointer("/origin/kind").and_then(Value::as_str) == Some("human")
-                    || a.get("humanTurn").and_then(Value::as_bool) == Some(true))
-        });
+        let queued_human = kind == "attachment"
+            && attachment.is_some_and(|a| {
+                a.get("type").and_then(Value::as_str) == Some("queued_command")
+                    && a.get("commandMode").and_then(Value::as_str) == Some("prompt")
+                    && (a.pointer("/origin/kind").and_then(Value::as_str) == Some("human")
+                        || a.get("humanTurn").and_then(Value::as_bool) == Some(true))
+            });
         let speaker = match kind {
             "attachment" if queued_human => Speaker::User,
             "attachment" => Speaker::System,
@@ -57,8 +58,13 @@ impl EventParser for ClaudeParser {
         }
         if kind == "attachment" && !queued_human {
             if let Some(rendered) = value.get("rendered").and_then(Value::as_array) {
-                blocks.extend(rendered.iter().filter_map(|part| part.get("content").and_then(Value::as_str))
-                    .enumerate().map(|(i, text)| Block::text(i as i32, text)));
+                blocks.extend(
+                    rendered
+                        .iter()
+                        .filter_map(|part| part.get("content").and_then(Value::as_str))
+                        .enumerate()
+                        .map(|(i, text)| Block::text(i as i32, text)),
+                );
             }
         }
         if speaker == Speaker::User {
@@ -77,14 +83,23 @@ impl EventParser for ClaudeParser {
             agent: self.agent_id(),
             speaker,
             content_kind,
-            event_uuid: queued_human.then(|| attachment.and_then(|a| string_field(a, &["source_uuid"]))).flatten()
+            event_uuid: queued_human
+                .then(|| attachment.and_then(|a| string_field(a, &["source_uuid"])))
+                .flatten()
                 .or_else(|| string_field(value, &["uuid"])),
             parent_event_uuid: string_field(value, &["parentUuid", "parent_uuid"]),
             related_tool_use_id: string_field(value, &["tool_use_id"]),
             is_sidechain: bool_field(value, &["isSidechain"]).unwrap_or(false),
-            is_meta: if queued_human { false } else { kind == "attachment" || bool_field(value, &["isMeta"]).unwrap_or(false) },
-            subtype: if queued_human { Some("queued_user_prompt".into()) } else {
-                string_field(value, &["subtype"]).or_else(|| attachment.and_then(|a| string_field(a, &["type"])))
+            is_meta: if queued_human {
+                false
+            } else {
+                kind == "attachment" || bool_field(value, &["isMeta"]).unwrap_or(false)
+            },
+            subtype: if queued_human {
+                Some("queued_user_prompt".into())
+            } else {
+                string_field(value, &["subtype"])
+                    .or_else(|| attachment.and_then(|a| string_field(a, &["type"])))
             },
             blocks,
         }
