@@ -612,9 +612,13 @@ from 25 GB to 22 GB. The HNSW rebuild logged that the graph no longer fits
 Completed: everything through deployment. The archive loop runs in
 production against `s3://sulion-archive-<account>`, the first export-only
 cycle and a deep verify are clean, and the durable dump is in the bucket.
-Enabling deletion is a commit that changes `SULION_ARCHIVE_PURGE_ENABLED`
-in `compose.yaml` from `"0"` to `"1"`; the next scheduled cycle after that
-deploy purges sessions exported 90 or more days earlier. Remaining for the
-repository: five structure-lint items that predate this work
-(`projection.rs`, `worktree.rs`, and `ingester.rs` file sizes;
-`load_session_events`; `process_file`), which CI does not run.
+Deletion was enabled by the commit that changes
+`SULION_ARCHIVE_PURGE_ENABLED` in `compose.yaml` from `"0"` to `"1"` and
+sets `SULION_ARCHIVE_PURGE_AFTER_DAYS` to `0`, so the verified export is
+purged in the first cycle after that deploy rather than 90 days later, and
+future cycles purge each session in the cycle that exports it. That cycle
+was requested with `sulion archive run` after the deploy; its counts, the
+`VACUUM (FULL)` of the purged tables, and the resulting database size are
+recorded below. Remaining for the repository: five structure-lint items
+that predate this work (`projection.rs`, `worktree.rs`, and `ingester.rs`
+file sizes; `load_session_events`; `process_file`), which CI does not run.

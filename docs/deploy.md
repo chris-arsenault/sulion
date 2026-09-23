@@ -213,8 +213,9 @@ Every `SULION_ARCHIVE_INTERVAL_DAYS` (30) the loop:
 2. exports every session idle for `SULION_ARCHIVE_MIN_IDLE_DAYS` (30) to
    `sessions/<agent>/<yyyy>/<mm>/<session>.jsonl.zst` and verifies it by
    `HEAD`;
-3. purges sessions exported `SULION_ARCHIVE_PURGE_AFTER_DAYS` (90) ago to
-   their turn digest, rolling cost and file churn up first;
+3. purges sessions exported `SULION_ARCHIVE_PURGE_AFTER_DAYS` (0: in the
+   same cycle, once the upload's hash is confirmed) ago to their turn
+   digest, rolling cost and file churn up first;
 4. prunes finished backfill and job rows by age.
 
 Progress is an `ingest_jobs` row in the Jobs panel. `sulion archive status`
@@ -223,15 +224,17 @@ enabled, the last cycle and dump, counts, and recent requests. An empty
 `SULION_ARCHIVE_BUCKET` disables the loop; `SULION_ARCHIVE_DIR` points it at
 a directory instead (tests, or a local stand-in).
 
-### Purging is a committed setting, off to start
+### Purging is a committed setting
 
-`SULION_ARCHIVE_PURGE_ENABLED` in `compose.yaml` is a literal `"0"`. A
-cycle then exports every idle session and writes the durable dump but purges
-nothing, however old the exports are. Enabling deletion is a commit that
-changes that line to `"1"`, reviewed and deployed like any other change;
-there is no command or API that flips it. The loop records the value it
-started with in `archive_state`, which is what `sulion archive status`
-shows. Before that commit:
+`SULION_ARCHIVE_PURGE_ENABLED` in `compose.yaml` is a literal. With `"0"` a
+cycle exports every idle session and writes the durable dump but purges
+nothing, however old the exports are; with `"1"` it purges. Changing it is a
+commit, reviewed and deployed like any other change; there is no command or
+API that flips it. The loop records the value it started with in
+`archive_state`, which is what `sulion archive status` shows.
+
+The first deployment ran with `"0"`, and the line was changed to `"1"` only
+after the first export had been checked:
 
 ```bash
 sulion archive run              # or wait for the scheduled cycle
@@ -243,7 +246,9 @@ sulion archive list             # verify reports ok / missing / mismatched
 `verify` without `--deep` checks existence and the stored hash and counts
 only. While purging is disabled, `restore --all` and `--purge-after` restore
 but do not purge again, and say so in the request result. Changing the line
-back to `"0"` disables deletion again on the next deploy.
+back to `"0"` disables deletion again on the next deploy. A new deployment
+of Sulion should start the same way: `"0"`, one cycle, `verify --deep`,
+then the commit to `"1"`.
 
 ### Restore a session or the whole history
 

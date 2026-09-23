@@ -83,13 +83,18 @@ services:
       # turn digest after the grace period. Empty disables the cycle.
       SULION_ARCHIVE_BUCKET: "${SULION_ARCHIVE_BUCKET:-}"
       SULION_ARCHIVE_MIN_IDLE_DAYS: "${SULION_ARCHIVE_MIN_IDLE_DAYS:-30}"
-      SULION_ARCHIVE_PURGE_AFTER_DAYS: "${SULION_ARCHIVE_PURGE_AFTER_DAYS:-90}"
       SULION_ARCHIVE_INTERVAL_DAYS: "${SULION_ARCHIVE_INTERVAL_DAYS:-30}"
+      # Grace between a session's export and its purge, in days. A literal:
+      # 0 purges each exported session in the same cycle, once its object
+      # has been uploaded and its hash confirmed by HEAD. The first export
+      # (2026-09-23) ran with purging off and was deep-verified before this
+      # was set.
+      SULION_ARCHIVE_PURGE_AFTER_DAYS: "0"
       # Whether a cycle deletes purge-eligible sessions. Deliberately a
-      # literal, not a passthrough: turning deletion on is a reviewed commit
-      # to this line, after `sulion archive verify --deep` has re-read every
-      # object of the first export. "0" exports and dumps only.
-      SULION_ARCHIVE_PURGE_ENABLED: "0"
+      # literal, not a passthrough: changing it is a reviewed commit to this
+      # line. "0" exports and dumps only; it was "0" for the first export,
+      # and "1" since the deep verify of that export came back clean.
+      SULION_ARCHIVE_PURGE_ENABLED: "1"
       # The pgdg client: the server is PostgreSQL 18 and the appstream client
       # in the image is 16, which refuses to dump it.
       SULION_PG_DUMP: "/usr/pgsql-18/bin/pg_dump"
