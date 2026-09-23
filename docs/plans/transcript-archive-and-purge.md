@@ -218,7 +218,7 @@ detailed live window, not the entire database.
 ### Archive object layout
 
 ```text
-s3://ahara-sulion-archive-<account>/
+s3://sulion-archive-<account>/
   sessions/<agent>/<yyyy>/<mm>/<session_uuid>.jsonl.zst
   db/sulion-durable-<yyyy-mm-dd>.dump
   manifests/<yyyy-mm>/<run-id>.json
@@ -230,7 +230,9 @@ and length of the uncompressed bytes, run id. Subagent sessions are their
 own objects and move with their parent. JSONB re-serialisation changes key
 order and number formatting, which `insert_event` does not care about.
 
-Bucket `ahara-sulion-archive-<account>` from this repository's Terraform:
+Bucket `sulion-archive-<account>` from this repository's Terraform (the
+deployer needs ahara-infra's `s3-private-storage` policy module to create
+it; see the deployment record):
 versioning, public access blocked, TLS-only, SSE, Glacier Instant Retrieval
 after 30 days, noncurrent versions expire after 90 days, current objects
 never. Well under 200 MB a month after zstd.
@@ -561,8 +563,23 @@ time; decide `REAL[]`):
   against production, excluding the transcript-derived, retrieval, and code
   tables: 3.1 MB. Monthly dumps are negligible; keep every one.
 
-Still not done: `git push` and `terraform apply` (both through the deploy
-pipeline, on the user's say-so).
+**Deployment record (2026-09-23).** Pushed as `31429c1`; CI failed on
+rustfmt (I had not run `make ci` before pushing). Fix pushed as `77594c6`
+after rustfmt, two clippy denials, and structure-lint splits of my own
+code; five structure-lint items that were over the limit before this work
+remain and CI does not run that lint. The second run passed every check
+and failed in the deploy's `terraform apply`: `CreateBucket` on
+`ahara-sulion-archive-<account>` returned 403 for the sulion deployer
+role, whose policy modules (`terraform-state`, `komodo-deploy`,
+`secrets-manager`, `ssm-write`) grant no S3 administration. Nothing was
+deployed and no migration ran. Corrections held locally: the bucket is
+renamed to `sulion-archive-<account>` to sit in the `sulion-*` namespace
+the deployer's `s3-private-storage` module manages, the TLS-only bucket
+policy is dropped (that module grants no bucket-policy calls), and the
+archive loop backs off for an hour after a failed cycle instead of
+retrying every poll. Blocked on: adding `s3-private-storage` to
+`project-sulion.tf` in `ahara-infra` and applying it, which is a deployer
+IAM change in another repository and needs the user's decision.
 
 ## Current state
 

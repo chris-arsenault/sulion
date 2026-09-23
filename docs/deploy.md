@@ -190,13 +190,16 @@ The control process runs the archive loop (`backend/src/archive/`) when
 `SULION_ARCHIVE_BUCKET` is set. The deploy resolves that name from
 `/ahara/sulion/archive-bucket`, which this repository's Terraform publishes
 alongside the bucket itself (`infrastructure/terraform/archive.tf`:
-`ahara-sulion-archive-<account>`, versioned, SSE-S3, TLS-only, public access
-blocked, Glacier Instant Retrieval after 30 days, current objects never
-expire). The backend's machine role gains put, get, and list on that one
-bucket; the shared workload permissions boundary already allowed buckets
-named `ahara-sulion-*`, so nothing changes in `ahara-infra`. The loop
-authenticates with the profile the Roles Anywhere bootstrap writes and calls
-the `aws` CLI in the image.
+`sulion-archive-<account>`, versioned, SSE-S3, public access blocked,
+Glacier Instant Retrieval after 30 days, current objects never expire). The
+backend's machine role gains put, get, and list on that one bucket, inside
+the `sulion-*` namespace the shared workload permissions boundary already
+allows. The deployer creates and configures the bucket through the
+`s3-private-storage` policy module declared for this project in
+`ahara-infra` (`project-sulion.tf`); that module carries no bucket-policy
+calls, so the bucket has no TLS-only policy and transport security rests on
+the clients, which use HTTPS. The loop authenticates with the profile the
+Roles Anywhere bootstrap writes and calls the `aws` CLI in the image.
 
 Every `SULION_ARCHIVE_INTERVAL_DAYS` (30) the loop:
 
@@ -259,7 +262,7 @@ identities, rollups, and per-session skeletons; transcript content is in the
 session objects.
 
 ```bash
-aws s3 cp s3://ahara-sulion-archive-<account>/db/sulion-durable-<date>.dump .
+aws s3 cp s3://sulion-archive-<account>/db/sulion-durable-<date>.dump .
 /usr/pgsql-18/bin/pg_restore --dbname "$SULION_DB_URL" --no-owner --no-privileges \
   --clean --if-exists sulion-durable-<date>.dump
 ```

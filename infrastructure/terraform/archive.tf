@@ -6,15 +6,18 @@
 # Losing this bucket loses the only copy of purged transcript detail, so it is
 # versioned and never expires current objects.
 #
-# The name matches the `ahara-sulion-*` pattern the shared TrueNAS workload
-# permissions boundary already allows S3 access on, so the backend's machine
-# role can be granted below without a change in ahara-infra. Encryption is the
-# bucket's own SSE-S3: transcripts are code and prompts in a private,
-# versioned, TLS-only bucket, and a project KMS key would need the boundary
+# The name matches the `sulion-*` namespace twice over: the shared TrueNAS
+# workload permissions boundary allows the backend's machine role S3 access
+# on it, and the project deployer's `s3-private-storage` policy module
+# (ahara-infra, project-sulion.tf) lets the deploy create and configure it.
+# That module grants no bucket-policy calls, so transport is left to the
+# clients (the `aws` CLI uses HTTPS) rather than a TLS-only bucket policy.
+# Encryption is the bucket's own SSE-S3: transcripts are code and prompts in a
+# private, versioned bucket, and a project KMS key would need the boundary
 # widened first.
 
 locals {
-  archive_bucket_name = "ahara-${local.prefix}-archive-${data.aws_caller_identity.workload.account_id}"
+  archive_bucket_name = "${local.prefix}-archive-${data.aws_caller_identity.workload.account_id}"
 }
 
 resource "aws_s3_bucket" "archive" {
@@ -76,34 +79,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "archive" {
       days_after_initiation = 7
     }
   }
-}
-
-data "aws_iam_policy_document" "archive_bucket" {
-  statement {
-    sid    = "RequireTls"
-    effect = "Deny"
-    principals {
-      type        = "*"
-      identifiers = ["*"]
-    }
-    actions = ["s3:*"]
-    resources = [
-      aws_s3_bucket.archive.arn,
-      "${aws_s3_bucket.archive.arn}/*",
-    ]
-    condition {
-      test     = "Bool"
-      variable = "aws:SecureTransport"
-      values   = ["false"]
-    }
-  }
-}
-
-resource "aws_s3_bucket_policy" "archive" {
-  bucket = aws_s3_bucket.archive.id
-  policy = data.aws_iam_policy_document.archive_bucket.json
-
-  depends_on = [aws_s3_bucket_public_access_block.archive]
 }
 
 # What the control process may do with its identity, beyond reading its own
