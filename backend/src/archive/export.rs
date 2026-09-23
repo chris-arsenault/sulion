@@ -270,6 +270,7 @@ pub async fn verify_archives(
     pool: &Pool,
     store: &ObjectStore,
     deep: bool,
+    job: Option<&crate::ingest::jobs::JobHandle>,
 ) -> anyhow::Result<VerifyOutcome> {
     let sessions: Vec<ArchivedSession> = sqlx::query_as(
         "SELECT cs.session_uuid, cs.archive_key, cs.archive_sha256, cs.archive_bytes, \
@@ -287,7 +288,13 @@ pub async fn verify_archives(
         sessions_archived: sessions.len(),
         ..VerifyOutcome::default()
     };
+    if let Some(job) = job {
+        job.set_total(sessions.len() as i64).await;
+    }
     for session in &sessions {
+        if let Some(job) = job {
+            job.advance(Some(&session.archive_key)).await;
+        }
         if session.purged_at.is_none() && session.event_count != session.archive_events {
             outcome.stale += 1;
         }

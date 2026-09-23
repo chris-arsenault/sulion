@@ -60,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
     });
     tokio::spawn(sulion::submitted_prompts::run_reconciler(pool.clone()));
     tokio::spawn(sulion::api::run_model_switch_enforcer(state.clone()));
-    match sulion::archive::ArchiveConfig::from_env(&cfg.db_url) {
+    match sulion::archive::ArchiveConfig::from_env(&cfg.db_url).await {
         Some(archive) => {
             tokio::spawn(sulion::archive::run_loop(pool.clone(), archive));
         }

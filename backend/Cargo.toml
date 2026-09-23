@@ -103,9 +103,12 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 axum-server = { version = "0.7.2", default-features = false, features = ["tls-rustls-no-provider"] }
 rustls-pemfile = "2"
 # Archive objects: one zstd stream per exported session, staged in a temp
-# file so the process never holds a whole session in memory.
+# file so the process never holds a whole session in memory, moved with one
+# reused S3 client rather than a CLI process per object.
 zstd = "0.13"
 tempfile = "3"
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = "1"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

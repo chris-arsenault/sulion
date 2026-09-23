@@ -198,8 +198,12 @@ allows. The deployer creates and configures the bucket through the
 `s3-private-storage` policy module declared for this project in
 `ahara-infra` (`project-sulion.tf`); that module carries no bucket-policy
 calls, so the bucket has no TLS-only policy and transport security rests on
-the clients, which use HTTPS. The loop authenticates with the profile the
-Roles Anywhere bootstrap writes and calls the `aws` CLI in the image.
+the clients, which use HTTPS. The loop talks to S3 through the AWS SDK with
+one reused client, authenticated by the profile the Roles Anywhere
+bootstrap writes; it never runs the `aws` CLI, whose PTY wrapper on the
+image's PATH routes through the secret broker with a PTY grant the control
+process does not have, and whose per-call start-up made the first export
+take hours.
 
 Every `SULION_ARCHIVE_INTERVAL_DAYS` (30) the loop:
 

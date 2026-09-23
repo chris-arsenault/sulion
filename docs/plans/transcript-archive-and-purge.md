@@ -577,9 +577,20 @@ renamed to `sulion-archive-<account>` to sit in the `sulion-*` namespace
 the deployer's `s3-private-storage` module manages, the TLS-only bucket
 policy is dropped (that module grants no bucket-policy calls), and the
 archive loop backs off for an hour after a failed cycle instead of
-retrying every poll. Blocked on: adding `s3-private-storage` to
-`project-sulion.tf` in `ahara-infra` and applying it, which is a deployer
-IAM change in another repository and needs the user's decision.
+retrying every poll. The user authorized the `ahara-infra` change:
+`s3-private-storage` added to `project-sulion.tf` (`dd3c956`), applied by
+that repository's pipeline. Sulion `195ed5a` then failed clippy on the new
+backoff (a tuple type; fixed in `eb64f51`), which deployed: CI green,
+`node-release` advanced, control healthy, retrieval up on the pgvector-only
+schema. The first cycle failed at the dump upload: the image puts the PTY
+`aws` wrapper first on PATH, so control's upload went through the broker's
+credential helper ("SULION_PTY_ID is not set"). `6d73ba7` calls
+`/usr/bin/aws` directly and records the loop's store in `archive_state`
+(migration 0092) so `sulion archive status` on the node reports control's
+configuration. Deployed; first export-only cycle (request #3): 2,284
+sessions exported, 0 failures, 5,171,429,001 archive bytes, durable dump
+`db/sulion-durable-2026-09-23T155501Z.dump` at 3.1 MB, 0 purged, gate
+closed. Deep verify queued as request #4.
 
 ## Current state
 

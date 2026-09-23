@@ -1,30 +1,37 @@
 //! Where archive objects go.
 //!
-//! Two backends behind one enum: S3 through the `aws` CLI the image already
-//! carries (the same mechanism the trust appliance uses for its secret-store
-//! backup, authenticated by the profile the Roles Anywhere bootstrap writes),
-//! and a plain directory for integration tests. An enum rather than a trait
-//! object because the call sites are three async methods and nothing else
-//! will ever implement them.
+//! Two backends behind one enum: S3 through the AWS SDK with one reused
+//! client (authenticated by the profile the Roles Anywhere bootstrap writes,
+//! resolved by the SDK's default chain), and a plain directory for
+//! integration tests. An enum rather than a trait object because the call
+//! sites are three async methods and nothing else will ever implement them.
+//!
+//! Earlier this shelled out to the `aws` CLI per call. At thousands of
+//! objects the second-long CLI start dominated: an export or a deep verify
+//! spent hours spawning processes and minutes moving bytes.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context};
-use tokio::process::Command;
+use anyhow::Context;
+use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::primitives::ByteStream;
 
-/// The AWS CLI to run. `/opt/sulion/bin/aws` sits first on the image's
-/// PATH and is the PTY wrapper that routes through the secret broker with a
-/// PTY grant; the control process has no PTY and authenticates with its own
-/// machine identity, so it must call the real CLI directly.
-fn aws_cli() -> String {
-    crate::config::env_optional("SULION_AWS_CLI").unwrap_or_else(|| "/usr/bin/aws".to_string())
+#[derive(Clone)]
+pub enum ObjectStore {
+    S3 {
+        bucket: String,
+        client: aws_sdk_s3::Client,
+    },
+    Dir {
+        root: PathBuf,
+    },
 }
 
-#[derive(Debug, Clone)]
-pub enum ObjectStore {
-    S3 { bucket: String },
-    Dir { root: PathBuf },
+impl std::fmt::Debug for ObjectStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.describe())
+    }
 }
 
 /// What a `HEAD` reports: enough to verify an upload landed intact.
@@ -37,55 +44,53 @@ pub struct ObjectHead {
 impl ObjectStore {
     /// `SULION_ARCHIVE_BUCKET` selects S3; `SULION_ARCHIVE_DIR` selects a
     /// directory (tests, or a local stand-in); neither disables archiving.
-    pub fn from_env() -> Option<Self> {
+    pub async fn from_env() -> Option<Self> {
         if let Some(dir) = crate::config::env_optional("SULION_ARCHIVE_DIR") {
             return Some(Self::Dir {
                 root: PathBuf::from(dir),
             });
         }
-        crate::config::env_optional("SULION_ARCHIVE_BUCKET").map(|bucket| Self::S3 { bucket })
+        let bucket = crate::config::env_optional("SULION_ARCHIVE_BUCKET")?;
+        let config = aws_config::load_from_env().await;
+        Some(Self::S3 {
+            bucket,
+            client: aws_sdk_s3::Client::new(&config),
+        })
     }
 
     pub fn describe(&self) -> String {
         match self {
-            Self::S3 { bucket } => format!("s3://{bucket}"),
+            Self::S3 { bucket, .. } => format!("s3://{bucket}"),
             Self::Dir { root } => root.display().to_string(),
         }
     }
 
-    /// Uploads a local file under `key` with string metadata. Metadata values
-    /// must be plain tokens (hashes, counts, ids): the CLI form is
-    /// comma-separated and unquoted.
+    /// Uploads a local file under `key` with string metadata.
     pub async fn put_file(
         &self,
         key: &str,
         path: &Path,
         metadata: &BTreeMap<String, String>,
     ) -> anyhow::Result<()> {
-        for (name, value) in metadata {
-            if value.contains(',') || value.contains('=') || name.contains(',') {
-                return Err(anyhow!(
-                    "archive metadata {name} must not contain ',' or '='"
-                ));
-            }
-        }
         match self {
-            Self::S3 { bucket } => {
-                let mut cmd = Command::new(aws_cli());
-                cmd.arg("s3")
-                    .arg("cp")
-                    .arg(path)
-                    .arg(format!("s3://{bucket}/{key}"))
-                    .arg("--only-show-errors");
-                if !metadata.is_empty() {
-                    let joined = metadata
-                        .iter()
-                        .map(|(name, value)| format!("{name}={value}"))
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    cmd.arg("--metadata").arg(joined);
-                }
-                run_cli(cmd, "aws s3 cp (upload)").await?;
+            Self::S3 { bucket, client } => {
+                let body = ByteStream::from_path(path)
+                    .await
+                    .with_context(|| format!("open {} for upload", path.display()))?;
+                client
+                    .put_object()
+                    .bucket(bucket)
+                    .key(key)
+                    .body(body)
+                    .set_metadata(Some(
+                        metadata
+                            .iter()
+                            .map(|(name, value)| (name.clone(), value.clone()))
+                            .collect(),
+                    ))
+                    .send()
+                    .await
+                    .map_err(|err| anyhow::anyhow!("put {key}: {}", describe_sdk_error(&err)))?;
                 Ok(())
             }
             Self::Dir { root } => {
@@ -106,49 +111,30 @@ impl ObjectStore {
     /// `HEAD` on the object; `None` when it does not exist.
     pub async fn head(&self, key: &str) -> anyhow::Result<Option<ObjectHead>> {
         match self {
-            Self::S3 { bucket } => {
-                let mut cmd = Command::new(aws_cli());
-                cmd.args(["s3api", "head-object", "--bucket"])
-                    .arg(bucket)
-                    .arg("--key")
-                    .arg(key)
-                    .args(["--output", "json"]);
-                let output = cmd.output().await.context("spawn aws s3api head-object")?;
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    if stderr.contains("404") || stderr.contains("Not Found") {
-                        return Ok(None);
-                    }
-                    return Err(anyhow!(
-                        "aws s3api head-object failed ({}): {}",
-                        output.status,
-                        stderr.trim()
-                    ));
-                }
-                let parsed: serde_json::Value =
-                    serde_json::from_slice(&output.stdout).context("parse head-object output")?;
-                let content_length = parsed
-                    .get("ContentLength")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or_default();
-                let metadata = parsed
-                    .get("Metadata")
-                    .and_then(serde_json::Value::as_object)
-                    .map(|object| {
-                        object
-                            .iter()
-                            .filter_map(|(name, value)| {
-                                value
-                                    .as_str()
-                                    .map(|value| (name.clone(), value.to_string()))
+            Self::S3 { bucket, client } => {
+                let response = client.head_object().bucket(bucket).key(key).send().await;
+                match response {
+                    Ok(head) => Ok(Some(ObjectHead {
+                        content_length: head.content_length().unwrap_or_default(),
+                        metadata: head
+                            .metadata()
+                            .map(|map| {
+                                map.iter()
+                                    .map(|(name, value)| (name.clone(), value.clone()))
+                                    .collect()
                             })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                Ok(Some(ObjectHead {
-                    content_length,
-                    metadata,
-                }))
+                            .unwrap_or_default(),
+                    })),
+                    Err(err) => {
+                        if err
+                            .as_service_error()
+                            .is_some_and(|service| service.is_not_found())
+                        {
+                            return Ok(None);
+                        }
+                        Err(anyhow::anyhow!("head {key}: {}", describe_sdk_error(&err)))
+                    }
+                }
             }
             Self::Dir { root } => {
                 let target = root.join(key);
@@ -167,17 +153,25 @@ impl ObjectStore {
         }
     }
 
-    /// Downloads `key` to a local file.
+    /// Downloads `key` to a local file, streaming.
     pub async fn get_to_file(&self, key: &str, path: &Path) -> anyhow::Result<()> {
         match self {
-            Self::S3 { bucket } => {
-                let mut cmd = Command::new(aws_cli());
-                cmd.arg("s3")
-                    .arg("cp")
-                    .arg(format!("s3://{bucket}/{key}"))
-                    .arg(path)
-                    .arg("--only-show-errors");
-                run_cli(cmd, "aws s3 cp (download)").await?;
+            Self::S3 { bucket, client } => {
+                let object = client
+                    .get_object()
+                    .bucket(bucket)
+                    .key(key)
+                    .send()
+                    .await
+                    .map_err(|err| anyhow::anyhow!("get {key}: {}", describe_sdk_error(&err)))?;
+                let mut body = object.body.into_async_read();
+                let mut file = tokio::fs::File::create(path)
+                    .await
+                    .with_context(|| format!("create {}", path.display()))?;
+                tokio::io::copy(&mut body, &mut file)
+                    .await
+                    .with_context(|| format!("stream {key} to disk"))?;
+                file.sync_all().await?;
                 Ok(())
             }
             Self::Dir { root } => {
@@ -196,17 +190,11 @@ fn meta_path(target: &Path) -> PathBuf {
     target.with_file_name(name)
 }
 
-async fn run_cli(mut cmd: Command, what: &str) -> anyhow::Result<()> {
-    let output = cmd
-        .output()
-        .await
-        .with_context(|| format!("spawn {what}"))?;
-    if output.status.success() {
-        return Ok(());
+/// The SDK's error `Display` is the outer wrapper only; the service message
+/// is what says "AccessDenied" or "NoSuchBucket".
+fn describe_sdk_error<E: std::fmt::Debug + std::error::Error>(err: &SdkError<E>) -> String {
+    match err {
+        SdkError::ServiceError(service) => format!("{:?}", service.err()),
+        other => format!("{other}"),
     }
-    Err(anyhow!(
-        "{what} failed ({}): {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr).trim()
-    ))
 }

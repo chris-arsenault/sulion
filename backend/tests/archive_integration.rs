@@ -308,7 +308,7 @@ async fn purge_keeps_the_digest_rollups_and_every_consumer_working() {
     assert_eq!(count(&pool, "events", fx.session_uuid).await, 4);
 
     // The first backup is verified, then the operator opens the gate.
-    let verified = archive::export::verify_archives(&pool, &fx.store(), true)
+    let verified = archive::export::verify_archives(&pool, &fx.store(), true, None)
         .await
         .unwrap();
     assert_eq!(verified.sessions_archived, 1);
@@ -627,7 +627,7 @@ async fn verify_reports_a_tampered_or_missing_object() {
             .await
             .unwrap();
 
-    let shallow = archive::export::verify_archives(&pool, &fx.store(), false)
+    let shallow = archive::export::verify_archives(&pool, &fx.store(), false, None)
         .await
         .unwrap();
     assert_eq!((shallow.ok, shallow.missing, shallow.mismatched), (1, 0, 0));
@@ -638,11 +638,11 @@ async fn verify_reports_a_tampered_or_missing_object() {
     let last = bytes.len() - 1;
     bytes[last] ^= 0xff;
     std::fs::write(&object, bytes).unwrap();
-    let shallow = archive::export::verify_archives(&pool, &fx.store(), false)
+    let shallow = archive::export::verify_archives(&pool, &fx.store(), false, None)
         .await
         .unwrap();
     assert_eq!(shallow.ok, 1);
-    let deep = archive::export::verify_archives(&pool, &fx.store(), true)
+    let deep = archive::export::verify_archives(&pool, &fx.store(), true, None)
         .await
         .unwrap();
     assert_eq!(
@@ -653,7 +653,7 @@ async fn verify_reports_a_tampered_or_missing_object() {
     );
 
     std::fs::remove_file(&object).unwrap();
-    let gone = archive::export::verify_archives(&pool, &fx.store(), false)
+    let gone = archive::export::verify_archives(&pool, &fx.store(), false, None)
         .await
         .unwrap();
     assert_eq!((gone.ok, gone.missing, gone.mismatched), (0, 1, 0));

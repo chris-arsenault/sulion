@@ -73,10 +73,15 @@ because the session objects hold it.
   workload declaration in `ahara-trust`, and a Terraform role, for three
   object-store calls. The backend's identity gains put, get, and list on one
   bucket; the boundary already allowed it.
-- **`aws-sdk-s3` instead of the CLI.** The image already carries `awscli2`
-  and the bootstrap sets the profile; the trust appliance's own backup uses
-  the CLI. The object store is a small enum with a directory backend for
-  tests, so the SDK bought nothing.
+- **The `aws` CLI instead of `aws-sdk-s3`.** Chosen first because the
+  image already carries `awscli2`, the bootstrap sets the profile, and the
+  trust appliance's backup uses the CLI for one tarball. Reversed after the
+  first production run: the store makes two calls per session, the CLI is
+  a Python program that takes about a second to start, and 2,284 sessions
+  cost two hours of process spawns for five gigabytes of bytes; a deep
+  verify cost the same again. The PTY `aws` wrapper on the image's PATH
+  also intercepted the first attempt. The SDK holds one client for the
+  loop's lifetime, and a HEAD is tens of milliseconds.
 - **SSE-KMS with a project key.** The estate's precedent for secret
   material. Transcripts are code and prompts in a private bucket, and a
   project key needs the shared workload permissions boundary widened first.

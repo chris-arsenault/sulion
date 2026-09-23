@@ -47,8 +47,8 @@ pub struct ArchiveConfig {
 
 impl ArchiveConfig {
     /// `None` when no store is configured, which disables the loop entirely.
-    pub fn from_env(db_url: &str) -> Option<Self> {
-        let store = ObjectStore::from_env()?;
+    pub async fn from_env(db_url: &str) -> Option<Self> {
+        let store = ObjectStore::from_env().await?;
         Some(Self {
             store,
             db_url: db_url.to_string(),
@@ -218,7 +218,7 @@ async fn handle_request(pool: &Pool, config: &ArchiveConfig, request: ArchiveReq
                 .get("deep")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            export::verify_archives(pool, &config.store, deep)
+            run_verify(pool, config, deep, Some(request.id))
                 .await
                 .and_then(|outcome| serde_json::to_value(outcome).map_err(Into::into))
         }
@@ -380,6 +380,48 @@ async fn run_cycle_phases(
     outcome.backfills_pruned = backfills;
     outcome.jobs_pruned = jobs_pruned;
     Ok(())
+}
+
+/// Verifies every archived object with a progress job, so a deep pass over
+/// thousands of objects is visible in the Jobs panel while it runs.
+pub async fn run_verify(
+    pool: &Pool,
+    config: &ArchiveConfig,
+    deep: bool,
+    request_id: Option<i64>,
+) -> anyhow::Result<export::VerifyOutcome> {
+    let job = jobs::start(
+        pool,
+        "archive-verify",
+        if deep {
+            "Verify archive (deep)"
+        } else {
+            "Verify archive"
+        },
+        "objects",
+        None,
+    )
+    .await
+    .ok();
+    if let (Some(job), Some(request_id)) = (job.as_ref(), request_id) {
+        let _ = requests::attach_job(pool, request_id, job.id()).await;
+    }
+    let result = export::verify_archives(pool, &config.store, deep, job.as_ref()).await;
+    match (&result, job.as_ref()) {
+        (Ok(outcome), Some(job)) if outcome.missing + outcome.mismatched == 0 => {
+            job.complete().await
+        }
+        (Ok(outcome), Some(job)) => {
+            job.fail(&format!(
+                "{} missing, {} mismatched",
+                outcome.missing, outcome.mismatched
+            ))
+            .await
+        }
+        (Err(err), Some(job)) => job.fail(&format!("{err:#}")).await,
+        _ => {}
+    }
+    result
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
