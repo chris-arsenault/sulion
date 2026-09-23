@@ -527,13 +527,19 @@ assertions were updated, and the target then passed in full. `cargo test
 Follow-up on 2026-09-23 (user: first run must delete nothing; vacuum any
 time; decide `REAL[]`):
 
-- **Purge gate.** `archive_state.purge_enabled` starts false. A cycle
-  exports and dumps but selects no purge candidates until
-  `sulion archive purge-gate on` (also `POST /api/admin/archive/purge-gate`).
-  `restore --all` / `--purge-after` restore without re-purging while it is
-  closed and say so. `sulion archive verify [--deep]` checks every archived
-  object against its row; deep re-downloads and re-hashes. Covered by a new
-  integration test (tampered and missing objects, gate closed and open).
+- **Purging off to start.** First landed as `archive_state.purge_enabled`
+  toggled by `sulion archive purge-gate on|off` and
+  `POST /api/admin/archive/purge-gate`. Replaced the same day (user: the
+  switch must be encoded in the repo, "turning on the purge should be a
+  commit, not a cli command"): `SULION_ARCHIVE_PURGE_ENABLED` is a literal
+  `"0"` in `compose.yaml`, read into `ArchiveConfig.purge_enabled`; the loop
+  records the value and the first enable time in `archive_state` for
+  `sulion archive status`. The CLI command, control request, and admin route
+  are gone. A cycle exports and dumps but selects no purge candidates while
+  it is off; `restore --all` / `--purge-after` restore without re-purging
+  and say so. `sulion archive verify [--deep]` checks every archived object
+  against its row; deep re-downloads and re-hashes. Covered by the
+  integration tests (tampered and missing objects, purging off and on).
 - **Re-measure (2026-09-23, before the vacuum below).** Database 25 GB:
   `events` 7.6 GB, `retrieval_embeddings` 7.3 GB (4.6 GB TOAST, 60k dead
   tuples, autovacuum still 2026-08-28), `event_blocks` 3.3 GB,
@@ -594,16 +600,21 @@ closed. That export took two hours because the store spawned the `aws`
 CLI per call; `a11b63e` replaced it with one `aws-sdk-s3` client and gave
 verify a progress job, and its deploy interrupted the CLI-era deep verify
 (#4). Deep verify #5 on the SDK store: 2,284 objects, 2,284 ok, 0 missing,
-0 mismatched, 0 stale, 19:28–19:40 UTC. The purge gate remains closed;
-opening it is the operator's step.
+0 mismatched, 0 stale, 19:28–19:40 UTC. Purging stays off.
+
+`VACUUM (FULL) retrieval_embeddings` after the `REAL[]` drop, 2026-09-23
+19:43–19:47 UTC: the table went from 6,882 MB to 4,566 MB and the database
+from 25 GB to 22 GB. The HNSW rebuild logged that the graph no longer fits
+`maintenance_work_mem` after 284,900 tuples; it completed regardless.
 
 ## Current state
 
 Completed: everything through deployment. The archive loop runs in
 production against `s3://sulion-archive-<account>`, the first export-only
 cycle and a deep verify are clean, and the durable dump is in the bucket.
-Remaining for the operator: `sulion archive purge-gate on` when ready; the
-next scheduled cycle then purges sessions exported 90 or more days earlier.
-Remaining for the repository: five structure-lint items that predate this
-work (`projection.rs`, `worktree.rs`, and `ingester.rs` file sizes;
+Enabling deletion is a commit that changes `SULION_ARCHIVE_PURGE_ENABLED`
+in `compose.yaml` from `"0"` to `"1"`; the next scheduled cycle after that
+deploy purges sessions exported 90 or more days earlier. Remaining for the
+repository: five structure-lint items that predate this work
+(`projection.rs`, `worktree.rs`, and `ingester.rs` file sizes;
 `load_session_events`; `process_file`), which CI does not run.

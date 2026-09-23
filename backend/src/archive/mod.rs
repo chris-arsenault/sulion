@@ -39,6 +39,12 @@ pub struct ArchiveConfig {
     pub min_idle_days: i64,
     pub purge_after_days: i64,
     pub interval_days: i64,
+    /// Whether a cycle deletes purge-eligible sessions. Comes from
+    /// `SULION_ARCHIVE_PURGE_ENABLED`, a literal in `compose.yaml`, so
+    /// turning deletion on is a reviewed commit rather than a command. Off
+    /// exports and dumps only, and `restore --purge-after` restores without
+    /// purging again.
+    pub purge_enabled: bool,
     /// Whether a cycle starts with the durable `pg_dump`. Always on in
     /// production; tests that exercise export and purge without a matching
     /// `pg_dump` client turn it off.
@@ -55,9 +61,23 @@ impl ArchiveConfig {
             min_idle_days: env_days("SULION_ARCHIVE_MIN_IDLE_DAYS", 30),
             purge_after_days: env_days("SULION_ARCHIVE_PURGE_AFTER_DAYS", 90),
             interval_days: env_days("SULION_ARCHIVE_INTERVAL_DAYS", 30),
+            purge_enabled: env_flag("SULION_ARCHIVE_PURGE_ENABLED"),
             dump_enabled: true,
         })
     }
+}
+
+/// True only for an explicit `1`, `true`, `yes`, or `on`; unset or anything
+/// else is off, so a missing line can never enable deletion.
+fn env_flag(key: &str) -> bool {
+    crate::config::env_optional(key)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn env_days(key: &str, default: i64) -> i64 {
@@ -67,35 +87,23 @@ fn env_days(key: &str, default: i64) -> i64 {
         .unwrap_or(default)
 }
 
-/// Writes which store this loop serves, so `sulion archive status` on the
-/// node can report it without seeing the control plane's environment.
+/// Writes which store this loop serves and whether it may purge, so
+/// `sulion archive status` on the node can report the control plane's
+/// configuration without seeing its environment. `purge_enabled_at` is set
+/// the first time a loop starts with purging on and kept thereafter.
 pub async fn record_store(pool: &Pool, config: &ArchiveConfig) -> anyhow::Result<()> {
-    sqlx::query("UPDATE archive_state SET store = $1, loop_started_at = NOW() WHERE id = 1")
-        .bind(config.store.describe())
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
-/// The operator's gate on deletion. Off by default: a cycle exports and
-/// dumps but purges nothing until `sulion archive purge-gate on` after the
-/// first backup has been verified.
-pub async fn purge_enabled(pool: &Pool) -> anyhow::Result<bool> {
-    let enabled: Option<bool> =
-        sqlx::query_scalar("SELECT purge_enabled FROM archive_state WHERE id = 1")
-            .fetch_optional(pool)
-            .await?;
-    Ok(enabled.unwrap_or(false))
-}
-
-pub async fn set_purge_enabled(pool: &Pool, enabled: bool) -> anyhow::Result<()> {
     sqlx::query(
         "UPDATE archive_state \
-            SET purge_enabled = $1, \
-                purge_enabled_at = CASE WHEN $1 THEN NOW() ELSE purge_enabled_at END \
+            SET store = $1, \
+                loop_started_at = NOW(), \
+                purge_enabled = $2, \
+                purge_enabled_at = CASE \
+                    WHEN $2 THEN COALESCE(purge_enabled_at, NOW()) \
+                    ELSE purge_enabled_at END \
           WHERE id = 1",
     )
-    .bind(enabled)
+    .bind(config.store.describe())
+    .bind(config.purge_enabled)
     .execute(pool)
     .await?;
     Ok(())
@@ -104,7 +112,8 @@ pub async fn set_purge_enabled(pool: &Pool, enabled: bool) -> anyhow::Result<()>
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct CycleOutcome {
     pub dry_run: bool,
-    /// False means the purge phase was skipped because the gate is closed.
+    /// False means the purge phase was skipped because the deployment has
+    /// `SULION_ARCHIVE_PURGE_ENABLED` off.
     pub purge_enabled: bool,
     pub dump_key: Option<String>,
     pub dump_bytes: i64,
@@ -249,7 +258,7 @@ pub async fn run_cycle(
 ) -> anyhow::Result<CycleOutcome> {
     let mut outcome = CycleOutcome {
         dry_run,
-        purge_enabled: purge_enabled(pool).await?,
+        purge_enabled: config.purge_enabled,
         ..CycleOutcome::default()
     };
     let export_set = export::eligible_sessions(pool, config.min_idle_days).await?;
@@ -342,12 +351,12 @@ async fn run_cycle_phases(
 
     // Selected after the exports so a zero-day grace purges what this cycle
     // just exported; with the production grace the two sets never overlap.
-    // Nothing is selected while the operator's gate is closed.
+    // Nothing is selected until the deployment enables purging.
     let purge_set = if outcome.purge_enabled {
         purge::purge_candidates(pool, config.purge_after_days).await?
     } else {
         tracing::info!(
-            "archive purge gate is closed; exported without deleting (sulion archive purge-gate on)"
+            "purging is disabled (SULION_ARCHIVE_PURGE_ENABLED); exported without deleting"
         );
         Vec::new()
     };
@@ -444,16 +453,16 @@ pub async fn run_restore(
     request_id: Option<i64>,
 ) -> anyhow::Result<RestoreRunOutcome> {
     let sessions = restore::sessions_in_scope(pool, scope).await?;
-    let gate_open = purge_enabled(pool).await?;
-    let purge_after = (scope.purge_after || scope.all) && gate_open;
+    let purge_after = (scope.purge_after || scope.all) && config.purge_enabled;
     let mut outcome = RestoreRunOutcome {
         sessions: sessions.len(),
         ..RestoreRunOutcome::default()
     };
-    if (scope.purge_after || scope.all) && !gate_open {
-        outcome
-            .errors
-            .push("purge gate is closed; sessions were restored but not purged again".into());
+    if (scope.purge_after || scope.all) && !config.purge_enabled {
+        outcome.errors.push(
+            "purging is disabled (SULION_ARCHIVE_PURGE_ENABLED); sessions were restored but not purged again"
+                .into(),
+        );
     }
     if sessions.is_empty() {
         return Ok(outcome);

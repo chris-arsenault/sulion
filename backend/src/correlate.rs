@@ -150,10 +150,6 @@ pub enum ControlRequest {
         #[serde(default)]
         deep: bool,
     },
-    /// Open or close the operator's gate on deletion.
-    ArchivePurgeGate {
-        enabled: bool,
-    },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -432,10 +428,6 @@ async fn dispatch_archive(
         ControlRequest::ArchiveVerify { deep } => Ok(serde_json::to_value(
             archive::requests::enqueue_verify(pool, deep, Some(&requested_by)).await?,
         )?),
-        ControlRequest::ArchivePurgeGate { enabled } => {
-            archive::set_purge_enabled(pool, enabled).await?;
-            Ok(serde_json::json!({ "purge_enabled": enabled }))
-        }
         other => anyhow::bail!("not an archive request: {other:?}"),
     }
 }

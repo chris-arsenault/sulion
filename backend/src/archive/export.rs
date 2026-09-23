@@ -265,7 +265,8 @@ struct ArchivedSession {
 /// Checks every archived session's object against what the session row
 /// recorded. Shallow: `HEAD` for existence and the stored hash and counts.
 /// Deep: also downloads and decompresses each object and re-hashes the
-/// bytes, which is the check to run once before opening the purge gate.
+/// bytes, which is the check to run once before committing
+/// `SULION_ARCHIVE_PURGE_ENABLED` on.
 pub async fn verify_archives(
     pool: &Pool,
     store: &ObjectStore,

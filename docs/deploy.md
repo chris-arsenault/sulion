@@ -218,30 +218,32 @@ Every `SULION_ARCHIVE_INTERVAL_DAYS` (30) the loop:
 4. prunes finished backfill and job rows by age.
 
 Progress is an `ingest_jobs` row in the Jobs panel. `sulion archive status`
-in a PTY, or `GET /api/admin/archive`, shows the store, the purge gate, the
-last cycle and dump, counts, and recent requests. An empty
+in a PTY, or `GET /api/admin/archive`, shows the store, whether purging is
+enabled, the last cycle and dump, counts, and recent requests. An empty
 `SULION_ARCHIVE_BUCKET` disables the loop; `SULION_ARCHIVE_DIR` points it at
 a directory instead (tests, or a local stand-in).
 
-### First run: nothing is deleted until the gate is opened
+### Purging is a committed setting, off to start
 
-The purge gate (`archive_state.purge_enabled`) is closed on a fresh
-database. A cycle then exports every idle session and writes the durable
-dump but purges nothing, however old the exports are. Open it only after the
-first backup has been checked:
+`SULION_ARCHIVE_PURGE_ENABLED` in `compose.yaml` is a literal `"0"`. A
+cycle then exports every idle session and writes the durable dump but purges
+nothing, however old the exports are. Enabling deletion is a commit that
+changes that line to `"1"`, reviewed and deployed like any other change;
+there is no command or API that flips it. The loop records the value it
+started with in `archive_state`, which is what `sulion archive status`
+shows. Before that commit:
 
 ```bash
 sulion archive run              # or wait for the scheduled cycle
 sulion archive list             # the run request completes with counts
 sulion archive verify --deep    # downloads every object and re-hashes it
 sulion archive list             # verify reports ok / missing / mismatched
-sulion archive purge-gate on    # only with 0 missing and 0 mismatched
 ```
 
 `verify` without `--deep` checks existence and the stored hash and counts
-only. With the gate closed, `restore --all` and `--purge-after` restore but
-do not purge again, and say so in the request result. `purge-gate off`
-closes it again at any time.
+only. While purging is disabled, `restore --all` and `--purge-after` restore
+but do not purge again, and say so in the request result. Changing the line
+back to `"0"` disables deletion again on the next deploy.
 
 ### Restore a session or the whole history
 

@@ -54,16 +54,6 @@ fn parse_archive_request(command: &str, args: &mut Vec<String>) -> anyhow::Resul
             reject_unknown_options(args)?;
             ControlRequest::ArchiveVerify { deep }
         }
-        "purge-gate" => {
-            let enabled = match args.first().map(String::as_str) {
-                Some("on") => true,
-                Some("off") => false,
-                _ => bail!("purge-gate takes on or off"),
-            };
-            args.remove(0);
-            reject_unknown_options(args)?;
-            ControlRequest::ArchivePurgeGate { enabled }
-        }
         "list" => {
             let limit = match take_option(args, "--limit")? {
                 Some(raw) => Some(
@@ -126,17 +116,6 @@ pub(super) fn print_archive_data(data: &Value) {
         }
         return;
     }
-    if data.get("purge_enabled").is_some() && data.get("configured").is_none() {
-        println!(
-            "purge gate: {}",
-            if data["purge_enabled"].as_bool().unwrap_or(false) {
-                "open — cycles may delete purged sessions"
-            } else {
-                "closed — cycles export and dump only"
-            }
-        );
-        return;
-    }
     if data.get("configured").is_some() {
         print_archive_status(data);
         return;
@@ -160,14 +139,15 @@ fn print_archive_status(data: &Value) {
         }
     );
     println!(
-        "purge gate: {}",
+        "purging: {}",
         if data["purge_enabled"].as_bool().unwrap_or(false) {
             format!(
-                "open since {}",
+                "enabled since {} (SULION_ARCHIVE_PURGE_ENABLED in compose.yaml)",
                 data["purge_enabled_at"].as_str().unwrap_or("?")
             )
         } else {
-            "closed — cycles export and dump only; verify, then `sulion archive purge-gate on`"
+            "disabled — cycles export and dump only; enable it with a commit to \
+             SULION_ARCHIVE_PURGE_ENABLED in compose.yaml"
                 .to_string()
         }
     );

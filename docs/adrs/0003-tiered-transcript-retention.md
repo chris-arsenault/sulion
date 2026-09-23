@@ -98,11 +98,13 @@ because the session objects hold it.
   is now required: the migration owns the extension, column, and index, the
   harness and e2e stack run the `pgvector/pgvector:pg16` image, and the
   exact-scan path is gone.
-- **Purge from the first cycle.** Rejected in favour of an operator gate.
-  Deletion is off until `sulion archive purge-gate on`; the first cycle
-  exports and dumps, `verify --deep` re-reads every object, and only then is
-  the gate opened. The restore path exists, but the first deletion should
-  not depend on it.
+- **Purge from the first cycle.** Rejected. Deletion is off until the
+  deployment says otherwise: `SULION_ARCHIVE_PURGE_ENABLED` is a literal in
+  `compose.yaml`, and turning it on is a reviewed commit after
+  `verify --deep` has re-read every object of the first export. A first
+  version kept this as a database flag toggled by a CLI command; that put
+  critical state outside the repository, and it was replaced before any
+  deletion ran.
 
 ## Consequences
 

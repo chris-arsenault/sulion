@@ -90,24 +90,6 @@ pub(super) async fn archive_verify(
     Ok(Json(queued))
 }
 
-/// `POST /api/admin/archive/purge-gate`: open or close deletion.
-#[derive(Deserialize)]
-pub(super) struct ArchivePurgeGateRequest {
-    enabled: bool,
-}
-
-pub(super) async fn archive_purge_gate(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<ArchivePurgeGateRequest>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::archive::set_purge_enabled(&state.pool, request.enabled)
-        .await
-        .map_err(ApiError::Internal)?;
-    Ok(Json(
-        serde_json::json!({ "purge_enabled": request.enabled }),
-    ))
-}
-
 /// `GET /api/admin/archive`: store, last cycle, counts, recent requests.
 pub(super) async fn archive_status(
     State(state): State<Arc<AppState>>,

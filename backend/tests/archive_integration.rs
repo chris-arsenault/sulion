@@ -112,6 +112,7 @@ impl Fixture {
         }
     }
 
+    /// The shipped configuration: purging off, as `compose.yaml` starts.
     fn archive_config(&self, purge_after_days: i64) -> ArchiveConfig {
         ArchiveConfig {
             store: self.store(),
@@ -119,7 +120,17 @@ impl Fixture {
             min_idle_days: 1,
             purge_after_days,
             interval_days: 30,
+            purge_enabled: false,
             dump_enabled: false,
+        }
+    }
+
+    /// The configuration after the commit that sets
+    /// `SULION_ARCHIVE_PURGE_ENABLED` to `1`.
+    fn purging_config(&self, purge_after_days: i64) -> ArchiveConfig {
+        ArchiveConfig {
+            purge_enabled: true,
+            ..self.archive_config(purge_after_days)
         }
     }
 
@@ -205,7 +216,7 @@ async fn export_verifies_object_and_records_archive_columns() {
     assert_eq!(outcome.purged, 0, "a 90-day grace purges nothing today");
     assert!(
         !outcome.purge_enabled,
-        "the gate is closed until an operator opens it"
+        "the shipped configuration never deletes"
     );
 
     let (key, sha, bytes, events, purged): (
@@ -298,7 +309,7 @@ async fn purge_keeps_the_digest_rollups_and_every_consumer_working() {
     .unwrap();
     assert!(markdown_before.contains("widget_helper"));
 
-    // With the gate closed a zero-grace cycle still deletes nothing.
+    // With purging off a zero-grace cycle still deletes nothing.
     let closed = archive::run_cycle(&pool, &fx.archive_config(0), false)
         .await
         .unwrap();
@@ -307,29 +318,47 @@ async fn purge_keeps_the_digest_rollups_and_every_consumer_working() {
     assert!(!closed.purge_enabled);
     assert_eq!(count(&pool, "events", fx.session_uuid).await, 4);
 
-    // The first backup is verified, then the operator opens the gate.
+    // The first backup is verified; the loop that starts with purging off
+    // records that, and the loop after the enabling commit records when.
     let verified = archive::export::verify_archives(&pool, &fx.store(), true, None)
         .await
         .unwrap();
     assert_eq!(verified.sessions_archived, 1);
     assert_eq!(verified.ok, 1, "{:?}", verified.problems);
     assert_eq!(verified.missing + verified.mismatched, 0);
-    archive::set_purge_enabled(&pool, true).await.unwrap();
     let before_loop = archive::status(&pool).await.unwrap();
     assert!(!before_loop.configured, "no loop has recorded a store yet");
     archive::record_store(&pool, &fx.archive_config(0))
         .await
         .unwrap();
+    let off = archive::status(&pool).await.unwrap();
+    assert!(off.configured);
+    assert!(!off.purge_enabled);
+    assert!(off.purge_enabled_at.is_none());
+    archive::record_store(&pool, &fx.purging_config(0))
+        .await
+        .unwrap();
     let status = archive::status(&pool).await.unwrap();
     assert!(status.purge_enabled);
-    assert!(status.configured);
+    let enabled_at = status
+        .purge_enabled_at
+        .expect("recorded when purging came on");
     assert_eq!(
         status.store.as_deref(),
         Some(fx.store_dir.path().to_str().unwrap())
     );
+    archive::record_store(&pool, &fx.purging_config(0))
+        .await
+        .unwrap();
+    let restarted = archive::status(&pool).await.unwrap();
+    assert_eq!(
+        restarted.purge_enabled_at,
+        Some(enabled_at),
+        "a restart keeps the first enable time"
+    );
 
     // Nothing new to export; the purge now runs with no grace.
-    let outcome = archive::run_cycle(&pool, &fx.archive_config(0), false)
+    let outcome = archive::run_cycle(&pool, &fx.purging_config(0), false)
         .await
         .unwrap();
     assert_eq!(outcome.exported, 0);
@@ -495,8 +524,7 @@ async fn restore_replays_the_archive_and_purge_after_returns_to_the_digest() {
     .await
     .unwrap();
 
-    archive::set_purge_enabled(&pool, true).await.unwrap();
-    let outcome = archive::run_cycle(&pool, &fx.archive_config(0), false)
+    let outcome = archive::run_cycle(&pool, &fx.purging_config(0), false)
         .await
         .unwrap();
     assert_eq!(outcome.purged, 1);
@@ -568,7 +596,7 @@ async fn restore_replays_the_archive_and_purge_after_returns_to_the_digest() {
     );
 
     // A whole-history replay: `--all` purges again after each session.
-    let outcome = archive::run_cycle(&pool, &fx.archive_config(0), false)
+    let outcome = archive::run_cycle(&pool, &fx.purging_config(0), false)
         .await
         .unwrap();
     assert_eq!(
@@ -578,7 +606,7 @@ async fn restore_replays_the_archive_and_purge_after_returns_to_the_digest() {
     assert_eq!(outcome.purged, 1);
     let all = archive::run_restore(
         &pool,
-        &fx.archive_config(0),
+        &fx.purging_config(0),
         &RestoreScope {
             all: true,
             ..RestoreScope::default()
@@ -658,20 +686,19 @@ async fn verify_reports_a_tampered_or_missing_object() {
         .unwrap();
     assert_eq!((gone.ok, gone.missing, gone.mismatched), (0, 1, 0));
 
-    // A restore with the gate closed brings the session back but does not
-    // purge it again, and says so.
-    archive::set_purge_enabled(&pool, true).await.unwrap();
-    // Re-export so the object exists again, then purge, then close the gate.
+    // A restore with purging off brings the session back but does not
+    // purge it again, and says so. Re-export so the object exists again and
+    // purge under the enabling configuration, then restore under the
+    // shipped one.
     sqlx::query("UPDATE claude_sessions SET archived_at = NULL WHERE session_uuid = $1")
         .bind(fx.session_uuid)
         .execute(&pool)
         .await
         .unwrap();
-    let cycle = archive::run_cycle(&pool, &fx.archive_config(0), false)
+    let cycle = archive::run_cycle(&pool, &fx.purging_config(0), false)
         .await
         .unwrap();
     assert_eq!((cycle.exported, cycle.purged), (1, 1));
-    archive::set_purge_enabled(&pool, false).await.unwrap();
     let restored = archive::run_restore(
         &pool,
         &fx.archive_config(0),
@@ -688,7 +715,7 @@ async fn verify_reports_a_tampered_or_missing_object() {
     assert!(restored
         .errors
         .iter()
-        .any(|e| e.contains("purge gate is closed")));
+        .any(|e| e.contains("purging is disabled")));
     assert_eq!(count(&pool, "events", fx.session_uuid).await, 4);
 }
 

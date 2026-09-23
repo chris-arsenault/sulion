@@ -28,9 +28,9 @@ All notable user-visible changes to Sulion are recorded here.
   run|restore|status|list` and `/api/admin/archive*` queue work for the
   loop; a restore replays the archive through the normal ingest path and
   can purge again afterwards, which is how a whole-history re-index runs.
-  Deletion is behind an operator gate that starts closed: the first cycle
-  exports and dumps only, `sulion archive verify --deep` re-reads every
-  object, and `sulion archive purge-gate on` is what allows purging.
+  Deletion is off until `SULION_ARCHIVE_PURGE_ENABLED` in `compose.yaml` is
+  committed as `"1"`: until then a cycle exports and dumps only, and
+  `sulion archive verify --deep` re-reads every object of the export.
 
 ### Retrieval
 

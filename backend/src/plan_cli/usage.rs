@@ -97,12 +97,11 @@ Usage:
 
 Commands:
   help
-  status                       store, purge gate, last cycle and dump, counts, recent requests
+  status                       store, whether purging is enabled, last cycle and dump,
+                               counts, recent requests
   run [--dry-run]              queue a cycle now (dry run only reports what is eligible)
   verify [--deep]              check every archived object against its session row;
                                --deep downloads and re-hashes each one
-  purge-gate on|off            allow or forbid deletion. Closed by default: a cycle
-                               exports and dumps but purges nothing until opened
   restore --session <uuid>     bring one purged session back in full
   restore --month YYYY-MM      every purged session whose archive month matches
   restore --repo <name>        every purged session attributed to a repo
@@ -121,10 +120,12 @@ Rules:
   a restore replays the archived lines through the normal ingest path; the
     session then looks exactly as it did before the purge
 
-First run:
-  sulion archive run            exports and dumps; the gate is closed, nothing is deleted
-  sulion archive verify --deep  re-reads every object from the store
-  sulion archive purge-gate on  only after verify reports 0 missing, 0 mismatched
+Purging:
+  off until the deployment sets SULION_ARCHIVE_PURGE_ENABLED to 1 in
+    compose.yaml, which is a reviewed commit, not a command; until then a
+    cycle exports and dumps and deletes nothing
+  sulion archive verify --deep  re-reads every object from the store; run it
+                                before that commit
 
 Start:
   sulion archive status

@@ -175,10 +175,6 @@ fn admin_router() -> Router<Arc<AppState>> {
             "/api/admin/archive/verify",
             post(admin_routes::archive_verify),
         )
-        .route(
-            "/api/admin/archive/purge-gate",
-            post(admin_routes::archive_purge_gate),
-        )
 }
 
 fn workspace_router() -> Router<Arc<AppState>> {
