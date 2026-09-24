@@ -64,6 +64,11 @@ correct result in place, and continue natively.
   Keep phases current and close the plan when work lands. Single-step changes,
   pure questions, and read-only investigations without follow-on edits are
   exempt.
+- Give plans concise guidance: outcome, principles with reasons, and assumptions
+  that evidence could invalidate. At phase start, on resume, and when evidence
+  contradicts the approach, read `sulion plan current` and relevant source
+  material before adapting steps. Explain consequential deviations; ask before
+  changing user requirements or agreed architectural boundaries.
 - When a phase turns out to be blocked by work that is itself a multi-step job
   — a prerequisite fix, an unrelated regression a gate surfaced, a repair that
   has to land first — do not inline it into the phase and do not abandon the
@@ -184,6 +189,11 @@ different credential is technically reachable.
   (`--from 4 --from 5 --from 6`). `sulion plan return` closes the sub-plan and
   puts the terminal back on the parent, clearing any phase the branch was
   blocked on. `sulion plan tree` shows where you are in a nested plan.
+- Set guidance with `--outcome`, repeatable `--principle`, and repeatable
+  `--assumption` on `sulion plan start`, `branch`, or `update`. `current` and
+  `show` include live ancestor guidance before phases; branch guidance adds
+  context without overriding ancestor requirements. `history` preserves
+  before/after guidance edits.
 - Use `sulion activity` to publish blocked or needs-input state. You may use
   `sulion name "<text>"` when a short terminal label helps distinguish sessions.
 - `$SULION_PTY_ID` identifies a managed PTY. The internal agent launcher is
