@@ -1,8 +1,8 @@
 # Incremental timeline writes using the existing model
 
-Status: reset and replanned on 2026-09-24; implementation pending for a fresh agent.
-This contract supersedes the previous generation-based replacement design.
-Start with [the handoff](incremental-timeline-handoff.md).
+Status: M0–M2 implemented on 2026-09-24 in the working tree, uncommitted and
+undeployed. This contract supersedes the previous generation-based replacement
+design. The data map, reader decisions and measured results are recorded below.
 
 Sulion plan: `3023d7e5-89ab-4c29-9506-032477ecbb85`.
 The canceled predecessor is `e2029cd3-13a7-4e00-9de1-95adacfef341`; its completed
@@ -110,6 +110,111 @@ the choices here. Migration locking/backfill and ID mapping must be explicit
 before M2; avoid solving them by preserving every old operating mode.
 Commit/push/deployment still require explicit authorization. This reset did not
 authorize production database changes.
+
+## Data map (M0 decision, simplified)
+
+One reducer consumes a session's events in byte-offset order. Stored rows are
+append-only except an operation's result and status and its turn's counters;
+grouping, digests and child totals are derived on read. The old whole-session
+pass's chunk grouping, preview and prefix rules are not requirements.
+
+| Responsibility | Storage |
+| --- | --- |
+| Cursor, open main/sidechain turn, Codex running totals, reducer version | `timeline_session_state`: `projected_through`, `next_turn_ord`, `current_main_turn_id`, `current_sidechain_turn_id`, `codex_input_total`, `codex_output_total`, `projection_version` |
+| Prompt dedupe | `timeline_turns.prompt_event_uuid`, indexed per session |
+| Codex usage baseline | `timeline_turns`: `usage_baseline_input`, `usage_baseline_output` |
+| Visible events (replaces `chunks_json`) | new `timeline_items(session_uuid, turn_id, byte_offset, body)`; one row per visible event, never rewritten |
+| Call/result lookup across turns | `timeline_operations(session_uuid, pair_id, call_offset)` index plus `call_at` |
+| Runtime evidence correlation | `timeline_operations`: `call_error`, `running_cell`, `finished_at` |
+| Change feed for open views | `timeline_operations.changed_at`: offset of the last event that changed the operation |
+| Revised Claude usage | new `timeline_message_usage(session_uuid, message_id, turn_id, input_tokens, output_tokens)` |
+| Child references (replaces `subagent_json` and merged descendant turns) | new `timeline_child_links(session_uuid, pair_id, child_session_uuid, child_turn_id)`; a Claude subagent file links to its parent's call, Codex spawns link from the parent's spawn event, in-file sidechain turns link to the call their seed names |
+| Turn digest | composed from items and operations on read; written to `timeline_turns.markdown` only by the archive purge |
+| `timeline_activity_signals` | dropped: nothing reads it |
+
+Batch budget: 500 events per transaction. The per-session
+`timeline_session_state` row is locked `FOR UPDATE` for the batch, which makes
+the reducer the single writer across the ingester and maintenance processes.
+The API cursor is the event offset: detail reads return `through` and accept
+`since=<through>`.
+
+The migration path is the existing projection version: a bump rebuilds every
+non-purged session through the same reducer from its canonical events, most
+recent first. A live session whose state predates the version is rebuilt on its
+next batch. Turn ids, operation ordinals and retrieval source keys keep their
+existing formulas.
+
+## Readers (M1 decision)
+
+- Turn detail returns `turn.items` (each with its `offset`) and `through`.
+  With `since=<through>` it returns the turn header whole plus the items at
+  later offsets and the pairs with a later `changed_at`, plus linked pairs.
+  An item's visibility under the filters never changes, so a delta needs no
+  removal list. `TimelinePane` reads a turn whole once, then appends items and
+  replaces pairs by id on every revision tick. The client joins consecutive
+  assistant items into one block and lists the calls of the event that closes
+  it as rows. A delta carries no digest; "copy turn as markdown" reads the
+  turn whole.
+- A spawning pair's `subagent` is a reference (`session_uuid`, `turn_ids`,
+  counts) attached on every read. The modal reads the turns from
+  `GET /api/timeline/sessions/{session_uuid}/turns[?ids=]`. A session's
+  app-state timeline revision adds its direct children's revisions, so an
+  open parent view refreshes while no parent row changes.
+- The sidechain view lists spawned sessions' turns from their own timelines,
+  attributed to the child session; their detail reads that session.
+- The turn list stays a whole read: it is proportional to turns, not events.
+  The monitor still reads each session's latest turn whole.
+
+Intentional differences from the whole-session pass, each covered by a test:
+
+- Events apply in byte-offset order; the old pass sorted by timestamp first.
+- A result pairs with the latest earlier call with its id in any turn; the old
+  pass paired only within a turn. The result's own turn still records its error.
+  A result with no earlier call stays unpaired.
+- Bookkeeping before the first prompt is not projected or counted.
+- A turn without a prompt previews "(no user prompt)" until assistant text
+  arrives, then that text.
+- Runtime evidence is placed with what has arrived: a call that finishes after
+  the evidence line still counts as open, and the first completed `wait` to
+  arrive closes a running cell.
+- The header's event count is the session's own events; a spawned child's
+  transcript is referenced rather than merged into it.
+- A nested in-file sidechain prompt links to its own task call only.
+- Live digests are composed on read. A Codex agent message's text joins its
+  blocks with spaces, as its chunk does.
+
+## Migration and results (M2)
+
+Migration `0095` adds the columns and tables above, drops `chunks_json`,
+`subagent_json` and `timeline_activity_signals`, and leaves source ingestion
+checkpoints alone. Timeline projection version 12 marks every retained session
+for rebuild and replays them through the reducer, most recently active first;
+purged sessions stay outside it. Until a session is rebuilt its turn list,
+operations, file touches and stored digest still read, but its detail has no
+items and no child references; a live session is rebuilt on its next batch.
+The whole-session pass is deleted; reducer tests check that per-event batches
+end where a single batch ends.
+
+Ingestion admits at most 2,000 lines or 250 ms per file per tick, serves files
+with the least pending bytes first, and reads again at once while a backlog
+remains.
+
+Measured by `backend/tests/ingester_integration/incremental_workload.rs`
+(release build, disposable Postgres on the development host; one run, not
+deployed-system or browser figures):
+
+- Appending a call and its result after 200 and after 2,000 earlier calls in
+  the same turn rewrote 1 existing row (the turn) and added 2 (the item and
+  the operation) each time; the median append took 9.7 ms and 9.4 ms.
+- Rebuilding 2,020 events took 851 ms and 4,040 events 1,824 ms (ratio 2.14).
+- With a 10,001-line transcript draining, a quiet session's prompt reached
+  `events` 267 ms after it was written and its timeline turn 113 ms after that.
+
+Browser: the Playwright timeline specs `02` and `07` pass. `02` was updated
+for the settings flyout, which predates this work; `07` expects the child
+session's own turn in the sidechain view and 8 Codex parent events, since
+bookkeeping before the first prompt is no longer counted. The full suite
+passes; the on-demand screenshot tour is skipped as configured.
 
 ## Milestones
 

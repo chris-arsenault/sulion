@@ -3,9 +3,13 @@ use std::collections::HashMap;
 use crate::ingest::canonical::BlockKind;
 use crate::ingest::timeline::{
     is_bookkeeping_system_subtype, is_local_command_text, ProjectionFilters, SpeakerFacet,
-    TimelineAssistantItem, TimelineChunk, TimelineToolPair, TimelineTurn, BOOKKEEPING_KINDS,
+    TimelineAssistantItem, TimelineChunk, TimelineItem, TimelineToolPair, TimelineTurn,
+    BOOKKEEPING_KINDS,
 };
 
+/// Drops the turn's items and results the filters hide. An item's
+/// visibility never changes after it is written, so a delta read filters
+/// the same way.
 pub(super) fn apply_projection_filters(turn: &mut TimelineTurn, filters: &ProjectionFilters) {
     // The hidden User facet is applied client-side: blanking
     // user_prompt_text here made the detail indistinguishable from a
@@ -21,11 +25,14 @@ pub(super) fn apply_projection_filters(turn: &mut TimelineTurn, filters: &Projec
         .iter()
         .map(|pair| (pair.id.as_str(), pair))
         .collect();
-    turn.chunks = turn
-        .chunks
-        .clone()
+    turn.items = std::mem::take(&mut turn.items)
         .into_iter()
-        .filter_map(|chunk| filter_chunk(chunk, &pair_by_id, filters))
+        .filter_map(|item| {
+            filter_chunk(item.chunk, &pair_by_id, filters).map(|chunk| TimelineItem {
+                offset: item.offset,
+                chunk,
+            })
+        })
         .collect();
 }
 
@@ -54,15 +61,6 @@ fn filter_chunk(
             } else {
                 Some(TimelineChunk::Assistant { items, thinking })
             }
-        }
-        TimelineChunk::Tool { pair_id } => {
-            if filters.hidden_speakers.contains(&SpeakerFacet::Assistant) {
-                return None;
-            }
-            pair_by_id
-                .get(pair_id.as_str())
-                .filter(|pair| pair_visible(pair, filters))
-                .map(|_| TimelineChunk::Tool { pair_id })
         }
         TimelineChunk::System {
             subtype,
@@ -150,7 +148,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             markdown: String::new(),
-            chunks: Vec::new(),
+            items: Vec::new(),
             pty_session_id: None,
             session_uuid: None,
             session_agent: None,
@@ -203,15 +201,11 @@ mod tests {
             },
         };
         let mut turn = turn_with_pair();
-        turn.chunks = vec![chunk];
+        turn.items = vec![TimelineItem { offset: 0, chunk }];
 
         let mut hidden = turn.clone();
         apply_projection_filters(&mut hidden, &ProjectionFilters::default());
-        assert!(
-            hidden.chunks.is_empty(),
-            "chunk visible: {:?}",
-            hidden.chunks
-        );
+        assert!(hidden.items.is_empty(), "item visible: {:?}", hidden.items);
 
         let mut shown = turn;
         let filters = ProjectionFilters {
@@ -219,7 +213,7 @@ mod tests {
             ..Default::default()
         };
         apply_projection_filters(&mut shown, &filters);
-        assert_eq!(shown.chunks.len(), 1);
+        assert_eq!(shown.items.len(), 1);
     }
 
     #[test]
@@ -230,11 +224,11 @@ mod tests {
             is_meta: false,
         };
         let mut turn = turn_with_pair();
-        turn.chunks = vec![chunk];
+        turn.items = vec![TimelineItem { offset: 0, chunk }];
 
         let mut hidden = turn.clone();
         apply_projection_filters(&mut hidden, &ProjectionFilters::default());
-        assert!(hidden.chunks.is_empty());
+        assert!(hidden.items.is_empty());
 
         let mut shown = turn;
         let filters = ProjectionFilters {
@@ -242,7 +236,7 @@ mod tests {
             ..Default::default()
         };
         apply_projection_filters(&mut shown, &filters);
-        assert_eq!(shown.chunks.len(), 1);
+        assert_eq!(shown.items.len(), 1);
     }
 
     #[test]

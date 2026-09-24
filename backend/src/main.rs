@@ -38,8 +38,7 @@ async fn main() -> anyhow::Result<()> {
 
     let ingester = std::sync::Arc::new(Ingester::new());
     let ingester_cfg = IngesterConfig::new(cfg.claude_projects_dir.clone())
-        .with_codex_sessions_dir(cfg.codex_sessions_dir.clone())
-        .with_projection_debounce(sulion::ingest::LIVE_PROJECTION_DEBOUNCE);
+        .with_codex_sessions_dir(cfg.codex_sessions_dir.clone());
 
     let state = AppState::new_with_auth(
         pool.clone(),

@@ -23,8 +23,11 @@ mod usage_records;
 #[path = "ingester_integration/model_switches.rs"]
 mod model_switches;
 
-#[path = "ingester_integration/projection_debounce.rs"]
-mod projection_debounce;
+#[path = "ingester_integration/incremental_projection.rs"]
+mod incremental_projection;
+
+#[path = "ingester_integration/incremental_workload.rs"]
+mod incremental_workload;
 
 #[path = "ingester_integration/harness_compatibility.rs"]
 mod harness_compatibility;
@@ -495,9 +498,8 @@ async fn claude_agent_spawn_projects_subagent_onto_parent_pair() {
 
     Ingester::new().tick(&pool, &fx.config()).await.unwrap();
 
-    // The attachment joined the prompt turn instead of seeding an
-    // orphan, and the subagent's own turn is stored as sidechain so the
-    // default view hides it.
+    // The attachment joined the prompt turn instead of seeding an orphan.
+    // The subagent's turns stay in its own session, stored as sidechain.
     let turns: Vec<(String, bool)> = sqlx::query_as(
         "SELECT preview, is_sidechain_turn FROM timeline_turns \
           WHERE session_uuid = $1 ORDER BY turn_ord",
@@ -506,44 +508,126 @@ async fn claude_agent_spawn_projects_subagent_onto_parent_pair() {
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(
-        turns
-            .iter()
-            .map(|(preview, sidechain)| (preview.as_str(), *sidechain))
-            .collect::<Vec<_>>(),
-        vec![
-            ("survey both repos", false),
-            ("survey the ingest surface", true),
-        ],
-    );
-
-    // The Agent pair canonicalizes as a task delegation carrying the
-    // subagent's projected turns.
-    let (operation_type, operation_category, subagent_json): (
-        Option<String>,
-        Option<String>,
-        Option<serde_json::Value>,
-    ) = sqlx::query_as(
-        "SELECT operation_type, operation_category, subagent_json \
-           FROM timeline_operations WHERE session_uuid = $1 AND pair_id = 'toolu_agent1'",
+    assert_eq!(turns, vec![("survey both repos".to_string(), false)]);
+    let child: Uuid = sqlx::query_scalar(
+        "SELECT session_uuid FROM claude_sessions WHERE parent_session_uuid = $1",
     )
     .bind(fx.session_uuid)
     .fetch_one(&pool)
     .await
     .unwrap();
+    let child_turns: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT preview, is_sidechain_turn FROM timeline_turns \
+          WHERE session_uuid = $1 ORDER BY turn_ord",
+    )
+    .bind(child)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        child_turns,
+        vec![("survey the ingest surface".to_string(), true)]
+    );
+
+    // The Agent pair canonicalizes as a task delegation referencing the
+    // subagent's session.
+    let (operation_type, operation_category, turn_id): (Option<String>, Option<String>, i64) =
+        sqlx::query_as(
+            "SELECT operation_type, operation_category, turn_id \
+               FROM timeline_operations WHERE session_uuid = $1 AND pair_id = 'toolu_agent1'",
+        )
+        .bind(fx.session_uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(operation_type.as_deref(), Some("task"));
     assert_eq!(operation_category.as_deref(), Some("delegate"));
-    let subagent = subagent_json.expect("subagent projected on parent pair");
-    let previews: Vec<&str> = subagent["turns"]
-        .as_array()
-        .expect("turns")
-        .iter()
-        .filter_map(|turn| turn["preview"].as_str())
-        .collect();
-    assert!(
-        previews.contains(&"survey the ingest surface"),
-        "subagent turns: {previews:?}",
+    let turn = sulion::ingest::load_timeline_turn_detail(
+        &pool,
+        fx.session_uuid,
+        turn_id,
+        &Default::default(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let subagent = turn.tool_pairs[0]
+        .subagent
+        .as_ref()
+        .expect("subagent referenced on parent pair");
+    assert_eq!(subagent.session_uuid, Some(child));
+    assert_eq!(subagent.event_count, 2);
+    assert_eq!(subagent.turn_count, 1);
+    assert_eq!(subagent.title, "Agent log · Survey ingest surface");
+
+    // The modal reads the child's turns by reference, and the sidechain view
+    // lists them beside the parent's, attributed to the child session.
+    let (_, referenced) =
+        sulion::ingest::load_session_turns(&pool, child, None, &Default::default())
+            .await
+            .unwrap();
+    assert_eq!(referenced.len(), 1);
+    assert_eq!(referenced[0].preview, "survey the ingest surface");
+    let sidechain = sulion::ingest::ProjectionFilters {
+        show_sidechain: true,
+        ..Default::default()
+    };
+    let listed = sulion::ingest::load_timeline_summary_response(&pool, fx.session_uuid, &sidechain)
+        .await
+        .unwrap();
+    assert_eq!(
+        listed
+            .turns
+            .iter()
+            .map(|turn| (turn.preview.as_str(), turn.session_uuid))
+            .collect::<Vec<_>>(),
+        vec![
+            ("survey both repos", None),
+            ("survey the ingest surface", Some(child)),
+        ],
     );
+
+    // The child growing leaves the parent's rows alone; the reference reads
+    // the child's totals.
+    let parent_rows = || {
+        let pool = pool.clone();
+        let session = fx.session_uuid;
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT string_agg(xmin::TEXT, ',' ORDER BY k) FROM ( \
+                     SELECT 'turn' || turn_id AS k, xmin FROM timeline_turns WHERE session_uuid = $1 \
+                     UNION ALL \
+                     SELECT 'op' || turn_id || ':' || operation_ord, xmin FROM timeline_operations \
+                      WHERE session_uuid = $1) rows",
+            )
+            .bind(session)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let parent_before = parent_rows().await;
+    let mut child_file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(subagents_dir.join("agent-abc123.jsonl"))
+        .unwrap();
+    writeln!(
+        child_file,
+        r#"{{"type":"assistant","timestamp":"2025-01-01T00:00:08Z","uuid":"s-a2","parentUuid":"s-a1","isSidechain":true,"agentId":"abc123","message":{{"role":"assistant","content":[{{"type":"text","text":"more"}}]}}}}"#
+    )
+    .unwrap();
+    Ingester::new().tick(&pool, &fx.config()).await.unwrap();
+    assert_eq!(parent_rows().await, parent_before);
+    let turn = sulion::ingest::load_timeline_turn_detail(
+        &pool,
+        fx.session_uuid,
+        turn_id,
+        &Default::default(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(turn.tool_pairs[0].subagent.as_ref().unwrap().event_count, 3);
 }
 
 #[tokio::test]
@@ -772,29 +856,30 @@ async fn codex_fixture_preserves_subagent_lineage() {
     );
     assert!(child_turn.2);
 
-    let projected_subagents: Vec<(Option<serde_json::Value>,)> = sqlx::query_as(
-        "SELECT subagent_json \
-           FROM timeline_operations \
-          WHERE session_uuid = $1 \
-          ORDER BY turn_id, operation_ord",
+    // The spawn call references the child session, whose own timeline holds
+    // the subagent's turns.
+    let linked: Vec<(String, Uuid)> = sqlx::query_as(
+        "SELECT pair_id, child_session_uuid FROM timeline_child_links WHERE session_uuid = $1",
     )
     .bind(parent)
     .fetch_all(&pool)
     .await
     .unwrap();
-    let found_subagent_preview = projected_subagents.into_iter().any(|(subagent_json,)| {
-        subagent_json
-            .as_ref()
-            .and_then(|value| value.get("turns"))
-            .and_then(|value| value.as_array())
-            .and_then(|turns| turns.first())
-            .and_then(|turn| turn.get("preview"))
-            .and_then(|value| value.as_str())
-            == Some("(assistant) No edits made.")
-    });
+    assert_eq!(
+        linked,
+        vec![("call_P0iOvU7IErNYYbRM5pseMyPT".to_string(), child)]
+    );
+    let child_previews: Vec<(String,)> =
+        sqlx::query_as("SELECT preview FROM timeline_turns WHERE session_uuid = $1")
+            .bind(child)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
     assert!(
-        found_subagent_preview,
-        "parent projection should include child subagent turn"
+        child_previews
+            .iter()
+            .any(|(preview,)| preview == "(assistant) No edits made."),
+        "child turns: {child_previews:?}"
     );
 }
 
@@ -1010,42 +1095,6 @@ async fn incremental_projection_preserves_unchanged_operation_embeddings() {
     .await
     .unwrap();
 
-    sqlx::query(
-        "INSERT INTO timeline_operations \
-            (session_uuid, turn_id, operation_ord, pair_id, name) \
-         VALUES ($1, $2, 99, 'stale-operation', 'Edit')",
-    )
-    .bind(fx.session_uuid)
-    .bind(turn_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-    let stale_key = format!("operation:{}:{turn_id}:99:call", fx.session_uuid);
-    sqlx::query(
-        "INSERT INTO retrieval_embedding_sources \
-            (source_family, source_kind, source_key, session_uuid, turn_id, operation_ord, \
-             content_hash, index_status, indexed_at) \
-         VALUES ('operation_call', 'tool_call', $1, $2, $3, 99, 'stale', 'indexed', NOW())",
-    )
-    .bind(&stale_key)
-    .bind(fx.session_uuid)
-    .bind(turn_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO retrieval_embeddings \
-            (source_kind, source_key, session_uuid, turn_id, operation_ord, content_hash, \
-             embedding_model, embedding_dimensions, embedding_vector) \
-         VALUES ('tool_call', $1, $2, $3, 99, 'stale', 'test-model', 768, array_fill(0.5::REAL, ARRAY[768])::vector)",
-    )
-    .bind(&stale_key)
-    .bind(fx.session_uuid)
-    .bind(turn_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-
     fx.append(
         r#"{"type":"user","timestamp":"2025-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_edit_1","content":"updated src/lib.rs","is_error":false}]}}"#,
     );
@@ -1078,18 +1127,6 @@ async fn incremental_projection_preserves_unchanged_operation_embeddings() {
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM timeline_operations \
-              WHERE session_uuid = $1 AND turn_id = $2 AND operation_ord = 99",
-        )
-        .bind(fx.session_uuid)
-        .bind(turn_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap(),
-        0
-    );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM retrieval_embeddings WHERE source_key = $1",
         )
         .bind(&call_key)
@@ -1109,25 +1146,6 @@ async fn incremental_projection_preserves_unchanged_operation_embeddings() {
     .await
     .unwrap();
     assert_eq!(result_source_count, 0);
-
-    let stale_status: String = sqlx::query_scalar(
-        "SELECT index_status FROM retrieval_embedding_sources WHERE source_key = $1",
-    )
-    .bind(&stale_key)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(stale_status, "deleted");
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM retrieval_embeddings WHERE source_key = $1",
-        )
-        .bind(&stale_key)
-        .fetch_one(&pool)
-        .await
-        .unwrap(),
-        0
-    );
 }
 
 #[tokio::test]

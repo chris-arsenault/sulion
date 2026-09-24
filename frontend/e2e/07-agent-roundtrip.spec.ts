@@ -22,7 +22,9 @@ const roundtripCases = [
     label: "Atlas Codex Mock Agent",
     command: "sulion-agent --type codex --mode mock --",
     prompt: "validate codex ingest parity",
-    totalEvents: 14,
+    // The parent's own events from its first prompt on; the spawned child's
+    // transcript is referenced, not counted into the parent.
+    totalEvents: 8,
     assistantText: "Codex mock assistant processed: validate codex ingest parity",
     subagentText: "Subagent report: Codex mock parity validated.",
     sidechainPrompt: "Inspect parity findings in a subagent",
@@ -73,30 +75,28 @@ for (const scenario of roundtripCases) {
 
     await expect(page.locator('[data-testid="tool-pair-row"][data-tool-type="edit"]')).toBeVisible();
 
-    if (!("sidechainPrompt" in scenario)) {
-      await expect(
-        page.locator('[data-testid="tool-pair-row"][data-tool-type="web_search"]'),
-      ).toBeVisible();
-      await expect(
-        page.locator('[data-testid="tool-pair-row"][data-tool-type="task"]'),
-      ).toBeVisible();
+    await expect(
+      page.locator('[data-testid="tool-pair-row"][data-tool-type="web_search"]'),
+    ).toBeVisible();
+    await expect(page.locator('[data-testid="tool-pair-row"][data-tool-type="task"]')).toBeVisible();
 
-      await page.getByRole("button", { name: /View agent log/i }).click();
-      await expect(page.getByTestId("subagent-modal")).toContainText(scenario.subagentText);
-      return;
-    }
+    // The spawning call references its transcript; the modal reads it.
+    await page.getByRole("button", { name: /View agent log/i }).click();
+    await expect(page.getByTestId("subagent-modal")).toContainText(scenario.subagentText);
+    if (!("sidechainPrompt" in scenario)) return;
 
+    // A spawned Codex session is its own transcript. The sidechain filter, in
+    // the timeline settings flyout, lists its turns beside the parent's, and
+    // its turn detail is read from the child session.
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Timeline settings" }).click();
     await page.getByRole("button", { name: "sidechain" }).click();
+    await page.getByRole("button", { name: "Close timeline settings" }).click();
     await page
       .getByTestId("turn-row")
       .filter({ hasText: scenario.sidechainPrompt })
       .first()
       .click();
-    await expect(
-      page.locator('[data-testid="tool-pair-row"][data-tool-type="web_search"]'),
-    ).toBeVisible();
-    await expect(page.locator('[data-testid="tool-pair-row"][data-tool-type="task"]')).toBeVisible();
-    await page.getByRole("button", { name: /View agent log/i }).click();
-    await expect(page.getByTestId("subagent-modal")).toContainText(scenario.subagentText);
+    await expect(page.getByTestId("turn-detail")).toContainText(scenario.subagentText);
   });
 }

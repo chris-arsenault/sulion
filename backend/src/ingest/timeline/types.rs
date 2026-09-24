@@ -29,7 +29,8 @@ pub(crate) fn is_local_command_text(text: &str) -> bool {
 /// System-record subtypes that are turn telemetry, not conversation:
 /// hook execution summaries and turn timing. Hidden with the rest of
 /// the bookkeeping.
-pub(crate) const BOOKKEEPING_SYSTEM_SUBTYPES: &[&str] = &["stop_hook_summary", "turn_duration"];
+pub(crate) const BOOKKEEPING_SYSTEM_SUBTYPES: &[&str] =
+    &["stop_hook_summary", "turn_duration", "runtime_evidence"];
 
 pub(crate) fn is_bookkeeping_system_subtype(subtype: Option<&str>) -> bool {
     subtype.is_some_and(|subtype| BOOKKEEPING_SYSTEM_SUBTYPES.contains(&subtype))
@@ -197,6 +198,14 @@ pub struct TimelineTurnDetailResponse {
     pub turn: TimelineTurn,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<DateTime<Utc>>,
+    /// The session's projected byte offset this read reflects; pass it back
+    /// as `since`.
+    #[serde(default)]
+    pub through: i64,
+    /// Set when the read asked for changes after this offset: `turn` then
+    /// holds only the items and tool pairs changed after it, and no digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -221,7 +230,9 @@ pub struct TimelineTurn {
     #[serde(default)]
     pub output_tokens: i64,
     pub markdown: String,
-    pub chunks: Vec<TimelineChunk>,
+    /// One entry per visible event, in order; readers group consecutive
+    /// assistant items.
+    pub items: Vec<TimelineItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pty_session_id: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -271,11 +282,26 @@ pub struct TimelineToolResult {
     pub is_error: bool,
 }
 
+/// A spawning call's transcript, by reference: a whole child session, or
+/// sidechain turns of this one. Readers fetch its turns on demand.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineSubagent {
     pub title: String,
     pub event_count: usize,
-    pub turns: Vec<TimelineTurn>,
+    #[serde(default)]
+    pub turn_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_uuid: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turn_ids: Vec<i64>,
+}
+
+/// One visible event of a turn, keyed by its byte offset.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineItem {
+    pub offset: i64,
+    #[serde(flatten)]
+    pub chunk: TimelineChunk,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -284,9 +310,6 @@ pub enum TimelineChunk {
     Assistant {
         items: Vec<TimelineAssistantItem>,
         thinking: Vec<String>,
-    },
-    Tool {
-        pair_id: String,
     },
     Summary {
         subtype: Option<String>,

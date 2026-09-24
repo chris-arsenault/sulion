@@ -2,7 +2,8 @@
 //!
 //! Everything a person can still do with archived history (search it, read a
 //! turn, see which turns touched a file, report cost and churn) is served by
-//! what this leaves behind: the `timeline_turns` rows with their markdown,
+//! what this leaves behind: the `timeline_turns` rows with their markdown
+//! (composed here from the turn's items and operations),
 //! prompt, timestamps, tokens, and a `files_json` list; one `turn_digest`
 //! embedding source per turn; and two daily rollups. Everything else the
 //! session owned is deleted in one transaction, after its S3 object was
@@ -138,6 +139,9 @@ pub async fn purge_session(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<Pu
     outcome.usage_rollup_rows =
         roll_up_usage(&mut tx, session_uuid, repo.as_deref().unwrap_or_default()).await?;
     outcome.file_activity_rows = roll_up_file_activity(&mut tx, session_uuid).await?;
+    crate::ingest::store_turn_digests(&mut tx, session_uuid)
+        .await
+        .context("store turn digests")?;
     outcome.turns_kept = fold_touches_into_digest(&mut tx, session_uuid).await?;
     outcome.digest_sources =
         replace_embedding_sources(&mut tx, session_uuid, repo.as_deref()).await?;
@@ -289,8 +293,7 @@ async fn fold_touches_into_digest(tx: &mut Tx<'_>, session_uuid: Uuid) -> anyhow
                            'kind', ft.touch_kind, 'write', ft.is_write)) \
                   FROM timeline_file_touches ft \
                  WHERE ft.session_uuid = tt.session_uuid AND ft.turn_id = tt.turn_id \
-            ), '[]'::jsonb), \
-                chunks_json = '[]'::jsonb \
+            ), '[]'::jsonb) \
           WHERE tt.session_uuid = $1",
     )
     .bind(session_uuid)
@@ -352,7 +355,9 @@ async fn delete_session_rows(
         "agent_usage_daily",
         "agent_session_usage",
         "agent_model_switches",
-        "timeline_activity_signals",
+        "timeline_items",
+        "timeline_message_usage",
+        "timeline_child_links",
     ] {
         sqlx::query(&format!("DELETE FROM {table} WHERE session_uuid = $1"))
             .bind(session_uuid)

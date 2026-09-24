@@ -44,6 +44,12 @@ pub async fn rebuild_ingest_derivatives(pool: &Pool) -> anyhow::Result<ReindexSt
     .execute(&mut *tx)
     .await?;
     sqlx::query(
+        "UPDATE timeline_session_state SET projection_version = 0 \
+          WHERE session_uuid IN (SELECT session_uuid FROM claude_sessions WHERE purged_at IS NULL)",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
         "DELETE FROM event_blocks \
           WHERE session_uuid IN (SELECT session_uuid FROM claude_sessions WHERE purged_at IS NULL)",
     )

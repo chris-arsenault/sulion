@@ -21,6 +21,8 @@ interface Props {
    * orphan turn. */
   hideUserPrompt?: boolean;
   onOpenSubagent?: (pair: ToolPair) => void;
+  /** Reads the turn's current digest for "copy as markdown". */
+  loadMarkdown?: () => Promise<string>;
   /** When true, render as a full-screen overlay modal with a backdrop;
    * when false, render as an inline pane. */
   asOverlay: boolean;
@@ -40,6 +42,7 @@ export function SessionInspectorPane({
   showThinking,
   hideUserPrompt = false,
   onOpenSubagent,
+  loadMarkdown,
   asOverlay,
   onClose,
   focusPairId,
@@ -61,6 +64,7 @@ export function SessionInspectorPane({
       showThinking={showThinking}
       hideUserPrompt={hideUserPrompt}
       onOpenSubagent={onOpenSubagent}
+      loadMarkdown={loadMarkdown}
       focusPairId={focusPairId ?? null}
       focusKey={focusKey ?? null}
       fileTarget={fileTarget}

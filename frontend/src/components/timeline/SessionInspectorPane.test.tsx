@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { SessionInspectorPane } from "./SessionInspectorPane";
-import { assistantChunk, makeTurn } from "./test-helpers";
+import { assistantChunk, itemsOf, makeTurn } from "./test-helpers";
 
 const noop = () => {};
 
@@ -29,7 +29,7 @@ describe("SessionInspectorPane", () => {
       <SessionInspectorPane
         turn={makeTurn({
           user_prompt_text: "my prompt",
-          chunks: [assistantChunk([{ kind: "text", text: "reply" }])],
+          items: itemsOf(assistantChunk([{ kind: "text", text: "reply" }])),
         })}
         showThinking={true}
         asOverlay={false}

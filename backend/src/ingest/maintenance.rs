@@ -32,7 +32,9 @@ const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // v10: the turn digest (`markdown`) no longer embeds tool inputs, diffs,
 // or result bodies; every session is reprojected so stored digests match.
 // v11: current harness input, lineage, runtime evidence and latest Claude usage.
-const TIMELINE_PROJECTION_VERSION: i32 = 11;
+// v12: the incremental reducer: stored items, child references and resumable
+// session state; every retained session is rebuilt through it.
+const TIMELINE_PROJECTION_VERSION: i32 = 12;
 const USAGE_PROJECTION_KEY: &str = "usage_projection";
 // v2: include Codex per-response usage, including compaction, and retain the
 // legacy prefix before a session first supplies response records.

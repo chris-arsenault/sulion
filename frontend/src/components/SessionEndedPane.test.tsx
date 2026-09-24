@@ -72,8 +72,8 @@ function installFetchMock(state: FetchState) {
           201,
         );
       }
-      if (url.startsWith("/api/sessions/") && method === "DELETE") {
-        const id = url.split("/").pop()!;
+      if (url.startsWith("/api/sessions/") && url.endsWith("/delete") && method === "POST") {
+        const id = url.split("/")[3]!;
         state.deletedIds.push(id);
         return new Response(null, { status: 204 });
       }
@@ -310,7 +310,7 @@ describe("SessionEndedPane", () => {
     expect(state.createSessionCalls[0]).not.toHaveProperty("working_dir");
   });
 
-  it("clicking Delete fires DELETE against the session id", async () => {
+  it("clicking Delete posts the delete action for the session id", async () => {
     setup(orphanedSession);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /delete/i }));

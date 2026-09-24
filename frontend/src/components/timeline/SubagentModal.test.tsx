@@ -2,16 +2,42 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import type { Turn } from "./grouping";
 import { SubagentModal } from "./SubagentModal";
-import { assistantChunk, makeSubagent, makeTurn } from "./test-helpers";
+import { assistantChunk, itemsOf, makeSubagent, makeTurn, toolChunk } from "./test-helpers";
 
 const noop = () => {};
+const NO_TURNS: Turn[] = [];
+const NESTED_TASK_TURNS: Turn[] = [
+  makeTurn({
+    tool_pairs: [
+      {
+        id: "task-2",
+        name: "Task",
+        operation_type: "task",
+        is_error: false,
+        is_pending: false,
+        file_touches: [],
+        subagent: makeSubagent({ title: "inner agent" }),
+      },
+    ],
+    items: itemsOf(toolChunk("task-2")),
+  }),
+];
+const REPLY_TURNS: Turn[] = [
+  makeTurn({
+    user_prompt_text: "subagent task",
+    preview: "subagent task",
+    items: itemsOf(assistantChunk([{ kind: "text", text: "subagent reply" }])),
+  }),
+];
 
 describe("SubagentModal", () => {
   it("renders empty copy when there are no subagent turns", () => {
     render(
       <SubagentModal
-        subagent={makeSubagent({ event_count: 0, turns: [] })}
+        subagent={makeSubagent({ event_count: 0 })}
+        turns={NO_TURNS}
         showThinking={true}
         onClose={noop}
       />,
@@ -21,12 +47,26 @@ describe("SubagentModal", () => {
     ).toBeDefined();
   });
 
+  it("shows the reference's counts while its turns load", () => {
+    render(
+      <SubagentModal
+        subagent={makeSubagent({ event_count: 7, turn_count: 2 })}
+        turns={null}
+        showThinking={true}
+        onClose={noop}
+      />,
+    );
+    expect(screen.getByText(/loading subagent turns/i)).toBeDefined();
+    expect(screen.getByText(/7 events · 2 turns/)).toBeDefined();
+  });
+
   it("Escape fires onClose", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
     render(
       <SubagentModal
         subagent={makeSubagent()}
+        turns={NO_TURNS}
         showThinking={true}
         onClose={onClose}
       />,
@@ -41,6 +81,7 @@ describe("SubagentModal", () => {
     const { container } = render(
       <SubagentModal
         subagent={makeSubagent({ title: "Agent log" })}
+        turns={NO_TURNS}
         showThinking={true}
         onClose={onClose}
       />,
@@ -63,6 +104,7 @@ describe("SubagentModal", () => {
     const { rerender } = render(
       <SubagentModal
         subagent={makeSubagent()}
+        turns={NO_TURNS}
         showThinking={true}
         onClose={noop}
       />,
@@ -71,6 +113,7 @@ describe("SubagentModal", () => {
     rerender(
       <SubagentModal
         subagent={makeSubagent()}
+        turns={NO_TURNS}
         showThinking={true}
         onClose={noop}
         onBack={onBack}
@@ -81,27 +124,10 @@ describe("SubagentModal", () => {
   });
 
   it("nested task pairs expose their own agent log link", () => {
-    const nested = makeSubagent({ title: "inner agent" });
     render(
       <SubagentModal
-        subagent={makeSubagent({
-          turns: [
-            makeTurn({
-              tool_pairs: [
-                {
-                  id: "task-2",
-                  name: "Task",
-                  operation_type: "task",
-                  is_error: false,
-                  is_pending: false,
-                  file_touches: [],
-                  subagent: nested,
-                },
-              ],
-              chunks: [{ kind: "tool", pair_id: "task-2" }],
-            }),
-          ],
-        })}
+        subagent={makeSubagent()}
+        turns={NESTED_TASK_TURNS}
         showThinking={true}
         onClose={noop}
         onOpenSubagent={noop}
@@ -110,19 +136,11 @@ describe("SubagentModal", () => {
     expect(screen.getByText(/view agent log/i)).toBeDefined();
   });
 
-  it("renders projected turns", () => {
+  it("renders the referenced turns", () => {
     render(
       <SubagentModal
-        subagent={makeSubagent({
-          event_count: 2,
-          turns: [
-            makeTurn({
-              user_prompt_text: "subagent task",
-              preview: "subagent task",
-              chunks: [assistantChunk([{ kind: "text", text: "subagent reply" }])],
-            }),
-          ],
-        })}
+        subagent={makeSubagent({ event_count: 2 })}
+        turns={REPLY_TURNS}
         showThinking={true}
         onClose={noop}
       />,

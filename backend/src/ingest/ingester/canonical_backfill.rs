@@ -1,5 +1,9 @@
 use anyhow::Context as _;
 
+use super::codex_lineage::{
+    detect_codex_parent_session, update_codex_context, CodexSessionContext,
+};
+use super::insert::{insert_blocks, parse_canonical_event};
 use super::*;
 
 async fn rewrite_canonical_event(

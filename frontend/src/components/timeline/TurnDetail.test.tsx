@@ -12,6 +12,7 @@ import {
   assistantItems,
   makePair,
   makeSubagent,
+  itemsOf,
   makeTurn,
   toolChunk,
 } from "./test-helpers";
@@ -61,10 +62,7 @@ describe("TurnDetail", () => {
           user_prompt_text: "my prompt",
           tool_pairs: [pair],
           operation_count: 1,
-          chunks: [
-            assistantChunk(assistantItems("before", { tool: "t1" }, "after")),
-            toolChunk("t1"),
-          ],
+          items: itemsOf(assistantChunk(assistantItems("before", { tool: "t1" }, "after"))),
         })}
         showThinking={true}
       />,
@@ -105,7 +103,7 @@ describe("TurnDetail", () => {
         user_prompt_text: "rename the helper",
         markdown:
           "**Prompt**\n\n> rename the helper\n\nRenamed it in `src/widget.rs`.",
-        chunks: [],
+        items: [],
       }),
       archived_at: "2026-09-01T00:00:00Z",
       session_uuid: "11111111-2222-3333-4444-555555555555",
@@ -122,7 +120,7 @@ describe("TurnDetail", () => {
   it("renders a live turn without the archived banner", () => {
     renderWithContextMenu(
       <TurnDetail
-        turn={makeTurn({ chunks: [assistantChunk(assistantItems("reply"))] })}
+        turn={makeTurn({ items: itemsOf(assistantChunk(assistantItems("reply"))) })}
         showThinking={true}
       />,
     );
@@ -134,7 +132,7 @@ describe("TurnDetail", () => {
       <TurnDetail
         turn={makeTurn({
           thinking_count: 1,
-          chunks: [assistantChunk(assistantItems("reply"), ["private thought"])],
+          items: itemsOf(assistantChunk(assistantItems("reply"), ["private thought"])),
         })}
         showThinking={false}
       />,
@@ -157,7 +155,7 @@ describe("TurnDetail", () => {
           tool_pairs: [pair],
           has_errors: true,
           operation_count: 1,
-          chunks: [toolChunk("e1")],
+          items: itemsOf(toolChunk("e1")),
         })}
         showThinking={true}
       />,
@@ -191,7 +189,7 @@ describe("TurnDetail", () => {
         turn={makeTurn({
           tool_pairs: [pair],
           operation_count: 1,
-          chunks: [toolChunk("edit-1")],
+          items: itemsOf(toolChunk("edit-1")),
         })}
         showThinking={true}
       />,
@@ -210,7 +208,7 @@ describe("TurnDetail", () => {
       makeTurn({
         tool_pairs: pairs,
         operation_count: pairs.length,
-        chunks: pairs.map((pair) => toolChunk(pair.id)),
+        items: itemsOf(...pairs.map((pair) => toolChunk(pair.id))),
       });
 
     const { rerender } = renderWithContextMenu(
@@ -268,7 +266,7 @@ describe("TurnDetail", () => {
         turn={makeTurn({
           tool_pairs: [normal, error, pending],
           operation_count: 3,
-          chunks: [toolChunk("t1"), toolChunk("t2"), toolChunk("t3")],
+          items: itemsOf(toolChunk("t1"), toolChunk("t2"), toolChunk("t3")),
         })}
         showThinking={true}
         focusPairId="t1"
@@ -317,7 +315,7 @@ describe("TurnDetail", () => {
         turn={makeTurn({
           tool_pairs: [pair],
           operation_count: 1,
-          chunks: [toolChunk("b1")],
+          items: itemsOf(toolChunk("b1")),
         })}
         showThinking={true}
       />,
@@ -342,7 +340,7 @@ describe("TurnDetail", () => {
         turn={makeTurn({
           tool_pairs: [pair],
           operation_count: 1,
-          chunks: [toolChunk("task-1")],
+          items: itemsOf(toolChunk("task-1")),
         })}
         showThinking={true}
         onOpenSubagent={onOpen}
@@ -403,7 +401,7 @@ describe("TurnDetail", () => {
     renderWithContextMenu(
       <TurnDetail
         turn={makeTurn({
-          chunks: [assistantChunk(assistantItems("before"))],
+          items: itemsOf(assistantChunk(assistantItems("before"))),
         })}
         showThinking={true}
       />,
@@ -444,7 +442,7 @@ describe("TurnDetail", () => {
         turn={makeTurn({
           tool_pairs: [focused, sibling],
           operation_count: 2,
-          chunks: [toolChunk("tool_focus"), toolChunk("tool_other")],
+          items: itemsOf(toolChunk("tool_focus"), toolChunk("tool_other")),
         })}
         showThinking={true}
         focusPairId="tool_focus"

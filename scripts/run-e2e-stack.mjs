@@ -819,9 +819,12 @@ async function ensureDb() {
 async function waitForPostgres(containerName, timeoutMs) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
+    // Probe over TCP: the image's init phase runs a temporary server on the
+    // Unix socket only and then restarts, so a socket probe can succeed just
+    // before that server shuts down.
     const probe = spawnSync(
       "docker",
-      ["exec", containerName, "pg_isready", "-U", "postgres", "-d", "sulion"],
+      ["exec", containerName, "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "sulion"],
       { stdio: "ignore" },
     );
     if (probe.status === 0) {

@@ -32,6 +32,7 @@ import {
 import { ThinkingFlyout } from "./ThinkingFlyout";
 import { ToolHoverCard } from "./ToolHoverCard";
 import { ToolCallRenderer } from "./tools/renderers";
+import { groupItems } from "./turnDetailCache";
 import { Tooltip } from "../ui";
 import "./TurnDetail.css";
 
@@ -42,6 +43,9 @@ interface Props {
    * explicit filtered label instead of showing it. */
   hideUserPrompt?: boolean;
   onOpenSubagent?: (pair: ToolPair) => void;
+  /** Reads the turn's current digest for "copy as markdown". Without it
+   * the copy uses `turn.markdown`. */
+  loadMarkdown?: () => Promise<string>;
   /** Optional tool-call id to focus inside this turn. When set and
    * matched, that row renders expanded (others collapsed) and carries
    * a persistent outline; `focusKey` identifies the focus request so a
@@ -69,6 +73,7 @@ export function TurnDetail({
   showThinking,
   hideUserPrompt = false,
   onOpenSubagent,
+  loadMarkdown,
   focusPairId = null,
   focusKey = null,
   fileTarget = null,
@@ -78,6 +83,7 @@ export function TurnDetail({
     () => new Map(turn.tool_pairs.map((pair) => [pair.id, pair] as const)),
     [turn.tool_pairs],
   );
+  const blocks = useMemo(() => groupItems(turn.items), [turn.items]);
 
   // Card expansion lives here, not in the rows: the newest card arrives
   // expanded and collapses again when the next one lands, manual toggles
@@ -111,7 +117,7 @@ export function TurnDetail({
     atBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 48;
   }, []);
   const scrollTurnRef = useRef(turnIdentity);
-  const growthKey = `${turn.event_count}:${turn.chunks.length}:${turn.tool_pairs.length}`;
+  const growthKey = `${turn.event_count}:${turn.items.length}:${turn.tool_pairs.length}`;
   useLayoutEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
@@ -236,11 +242,16 @@ export function TurnDetail({
         id: "copy-turn",
         label: "Copy turn as markdown",
         onSelect: () => {
-          void copyToClipboard(formatTurn(turn));
+          void (async () => {
+            const markdown = loadMarkdown
+              ? await loadMarkdown().catch(() => formatTurn(turn))
+              : formatTurn(turn);
+            await copyToClipboard(markdown);
+          })();
         },
       },
     ],
-    [turn],
+    [loadMarkdown, turn],
   );
   const headerTriggerProps = useMemo(
     () => contextMenuTriggerProps(openCtx, buildHeaderMenu),
@@ -374,12 +385,12 @@ export function TurnDetail({
             </span>
           </div>
         )}
-        {turn.archived_at && turn.chunks.length === 0 && (
+        {turn.archived_at && turn.items.length === 0 && (
           <div className="td__archived-markdown">
             <Markdown source={turn.markdown} fileTarget={fileTarget} />
           </div>
         )}
-        {turn.chunks.map((chunk, idx) => {
+        {blocks.map((chunk, idx) => {
           if (chunk.kind === "assistant") {
             return (
               <AssistantBlock

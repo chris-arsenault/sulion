@@ -222,15 +222,37 @@ async fn codex_started_activity_links_the_actual_child_to_the_spawn_pair() {
         json!({"type":"function_call_output","call_id":"inspect","output":"/repo"}),
     );
     Ingester::new().tick(&pool, &child.config()).await.unwrap();
-    let (name, raw, input, subagent): (String,Option<String>,Value,Value) = sqlx::query_as(
-        "SELECT name,raw_name,input,subagent_json FROM timeline_operations WHERE session_uuid=$1 AND pair_id='spawn'")
+    let (name, raw, input, turn_id): (String, Option<String>, Value, i64) = sqlx::query_as(
+        "SELECT name,raw_name,input,turn_id FROM timeline_operations WHERE session_uuid=$1 AND pair_id='spawn'")
         .bind(parent.session_uuid).fetch_one(&pool).await.unwrap();
     assert_eq!(name, "task");
     assert_eq!(raw.as_deref(), Some("collaboration.spawn_agent"));
     assert_eq!(input["prompt"], "inspect parser");
     assert_eq!(input["description"], "worker");
-    assert!(subagent.to_string().contains("child findings"));
-    assert!(subagent.to_string().contains("inspect"));
+
+    // The spawn references the child session; its turns stay the child's.
+    let shown = sulion::ingest::ProjectionFilters {
+        show_sidechain: true,
+        ..Default::default()
+    };
+    let turn =
+        sulion::ingest::load_timeline_turn_detail(&pool, parent.session_uuid, turn_id, &shown)
+            .await
+            .unwrap()
+            .unwrap();
+    let pair = turn
+        .tool_pairs
+        .iter()
+        .find(|pair| pair.id == "spawn")
+        .unwrap();
+    let subagent = pair.subagent.as_ref().expect("spawn references its child");
+    assert_eq!(subagent.session_uuid, Some(child.session_uuid));
+    let child_turns = sulion::ingest::load_timeline_response(&pool, child.session_uuid, &shown)
+        .await
+        .unwrap();
+    let child_text = serde_json::to_string(&child_turns.turns).unwrap();
+    assert!(child_text.contains("child findings"));
+    assert!(child_text.contains("inspect"));
 }
 
 fn codex(fx: &CodexFixture, ordinal: u64, kind: &str, payload: Value) {
@@ -304,13 +326,19 @@ async fn codex_inherited_history_never_overwrites_child_lineage_after_restart_or
             .all(|r| r.2.as_deref() == Some("inherited_history")));
         assert_eq!(rows[7].1.as_deref(), Some("child-turn"));
         assert!(rows[7].0);
-        let markdown: String = sqlx::query_scalar(
-            "SELECT string_agg(markdown,'\n') FROM timeline_turns WHERE session_uuid=$1",
-        )
-        .bind(fx.session_uuid)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let shown = sulion::ingest::ProjectionFilters {
+            show_sidechain: true,
+            ..Default::default()
+        };
+        let markdown: String =
+            sulion::ingest::load_timeline_response(&pool, fx.session_uuid, &shown)
+                .await
+                .unwrap()
+                .turns
+                .into_iter()
+                .map(|turn| turn.markdown)
+                .collect::<Vec<_>>()
+                .join("\n");
         assert!(!markdown.contains("inherited prompt"));
         assert!(markdown.contains("inspect the parser"));
         assert!(markdown.contains("Encrypted agent message"));

@@ -21,24 +21,25 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
-use ring::digest;
+use chrono::Utc;
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::db::Pool;
 
-use super::activity_projection::project_from_event_best_effort;
-use super::canonical::{BlockKind, Speaker};
 use super::file_scan::{dirty_transcript_files, DirtyTranscriptFile};
 
 mod canonical_backfill;
+mod codex_lineage;
+mod insert;
 mod replay;
 
 pub use replay::{replay_session_lines, ReplayLine, ReplayStats};
 
 pub use canonical_backfill::backfill_canonical_blocks;
-use canonical_backfill::{detect_compaction_parent, set_parent_session};
+use canonical_backfill::set_parent_session;
+use codex_lineage::load_codex_context;
+use insert::{insert_event, InsertError};
 
 /// Heartbeat interval for the "I'm alive, here's what I've done" log.
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(60);
@@ -49,34 +50,32 @@ const HEARTBEAT_EVERY: Duration = Duration::from_secs(60);
 /// stalled ingester.
 const CATCHUP_JOB_THRESHOLD: usize = 10;
 
-/// How long a session's timeline projection may lag behind its transcript
-/// while events keep arriving. A live turn is re-upserted whole on every
-/// projection, and a long turn's markdown and chunks run to megabytes, so
-/// projecting on every 500 ms tick rewrites that payload once per event.
-/// With a debounce, a stream of events costs one rewrite per interval; a
-/// session that goes quiet is projected on the next tick regardless, so a
-/// finished turn shows within a tick.
-pub const LIVE_PROJECTION_DEBOUNCE: Duration = Duration::from_secs(5);
+/// Lines one file may insert per tick, and the time it may spend doing so. A
+/// busy transcript's backlog drains over several ticks instead of holding
+/// every other file behind it; files with the least pending go first.
+pub const ADMIT_LINES_PER_TICK: usize = 2000;
+const ADMIT_TIME_PER_TICK: Duration = Duration::from_millis(250);
 
-/// Projection work owed to a session after its transcript grew.
-#[derive(Debug, Clone, Copy)]
-struct PendingProjection {
-    source: TranscriptSource,
-    /// Lowest offset inserted since the last projection: the incremental
-    /// rebuild re-derives from the turn containing it.
-    first_inserted_offset: i64,
-    /// The file is a subagent transcript, so the parent's projection
-    /// follows the child's.
-    has_subagent_parent: bool,
-    /// Grew during the current tick. Cleared at the end of each tick so
-    /// a session that stops growing flushes on the next one.
-    touched_this_tick: bool,
+/// Sessions whose transcripts are ahead of their timeline, served one batch
+/// at a time in arrival order so a long backlog cannot starve a quiet one.
+#[derive(Debug, Default)]
+struct ProjectionQueue {
+    order: std::collections::VecDeque<Uuid>,
+    queued: std::collections::HashSet<Uuid>,
 }
 
-#[derive(Debug, Default)]
-struct ProjectionState {
-    last_projected_at: Option<Instant>,
-    pending: Option<PendingProjection>,
+impl ProjectionQueue {
+    fn push(&mut self, session_uuid: Uuid) {
+        if self.queued.insert(session_uuid) {
+            self.order.push_back(session_uuid);
+        }
+    }
+
+    fn pop(&mut self) -> Option<Uuid> {
+        let session_uuid = self.order.pop_front()?;
+        self.queued.remove(&session_uuid);
+        Some(session_uuid)
+    }
 }
 
 use super::tail::{next_line_boundary, MAX_READ_BYTES};
@@ -86,10 +85,6 @@ pub struct IngesterConfig {
     pub claude_projects_dir: PathBuf,
     pub codex_sessions_dir: Option<PathBuf>,
     pub poll_interval: Duration,
-    /// Minimum interval between projections of one session while it keeps
-    /// growing. Zero projects on every tick, which tests rely on; the
-    /// binaries pass [`LIVE_PROJECTION_DEBOUNCE`].
-    pub projection_debounce: Duration,
 }
 
 impl IngesterConfig {
@@ -98,17 +93,11 @@ impl IngesterConfig {
             claude_projects_dir,
             codex_sessions_dir: None,
             poll_interval: Duration::from_millis(500),
-            projection_debounce: Duration::ZERO,
         }
     }
 
     pub fn with_codex_sessions_dir(mut self, codex_sessions_dir: PathBuf) -> Self {
         self.codex_sessions_dir = Some(codex_sessions_dir);
-        self
-    }
-
-    pub fn with_projection_debounce(mut self, debounce: Duration) -> Self {
-        self.projection_debounce = debounce;
         self
     }
 }
@@ -141,8 +130,10 @@ pub struct Ingester {
     catchup_jobs:
         tokio::sync::Mutex<std::collections::HashMap<&'static str, super::jobs::JobHandle>>,
     interrupted_stale_jobs: std::sync::atomic::AtomicBool,
-    /// Per-session projection timing and deferred work, for the debounce.
-    projections: tokio::sync::Mutex<std::collections::HashMap<Uuid, ProjectionState>>,
+    projections: std::sync::Mutex<ProjectionQueue>,
+    projection_wake: tokio::sync::Notify,
+    /// Sessions left behind by a previous process have been queued.
+    projections_recovered: std::sync::atomic::AtomicBool,
 }
 
 impl Ingester {
@@ -205,13 +196,24 @@ impl Ingester {
             }
         }
 
+        // Reading transcripts and projecting them run side by side: a slow
+        // projection never holds up the next file read.
+        tokio::join!(
+            self.ingest_loop(&pool, &cfg),
+            self.projection_loop(&pool, &cfg)
+        );
+    }
+
+    async fn ingest_loop(&self, pool: &Pool, cfg: &IngesterConfig) {
         let mut last_heartbeat = Instant::now();
 
         loop {
             self.last_tick_started_at_unix
                 .store(Utc::now().timestamp(), Ordering::Relaxed);
-            match self.tick(&pool, &cfg).await {
+            let mut backlogged = false;
+            match self.ingest(pool, cfg).await {
                 Ok(summary) => {
+                    backlogged = summary.backlogged;
                     if summary.events_inserted > 0 || summary.parse_errors > 0 {
                         self.last_progress_at_unix
                             .store(Utc::now().timestamp(), Ordering::Relaxed);
@@ -249,14 +251,31 @@ impl Ingester {
                 last_heartbeat = Instant::now();
             }
 
-            tokio::time::sleep(cfg.poll_interval).await;
+            // A backlog keeps reading at once; its slices already bound how
+            // long any other file waits.
+            if backlogged {
+                tokio::task::yield_now().await;
+            } else {
+                tokio::time::sleep(cfg.poll_interval).await;
+            }
         }
     }
 
-    /// Run one pass over every JSONL file in the projects dir. Returns
-    /// a summary of what happened this tick. Exposed so tests can drive
-    /// the ingester synchronously.
+    /// Run one pass over every JSONL file, then project everything it
+    /// queued. Exposed so tests and one-shot callers can drive the ingester
+    /// synchronously; the long-running loop projects in parallel instead.
     pub async fn tick(&self, pool: &Pool, cfg: &IngesterConfig) -> anyhow::Result<TickSummary> {
+        let summary = self.ingest(pool, cfg).await?;
+        self.recover_projections(pool).await;
+        while let Some(session_uuid) = self.next_projection() {
+            self.project_one_batch(pool, session_uuid).await;
+        }
+        Ok(summary)
+    }
+
+    /// One pass over every JSONL file: insert new lines and queue their
+    /// sessions for projection.
+    async fn ingest(&self, pool: &Pool, cfg: &IngesterConfig) -> anyhow::Result<TickSummary> {
         // A previous process may have died mid-drain and left its
         // catch-up rows running; close them once before the first tick.
         if !self.interrupted_stale_jobs.swap(true, Ordering::Relaxed) {
@@ -273,99 +292,101 @@ impl Ingester {
             pool,
             &cfg.claude_projects_dir,
             TranscriptSource::ClaudeCode,
-            cfg.projection_debounce,
             &mut summary,
         )
         .await;
         if let Some(codex_dir) = &cfg.codex_sessions_dir {
-            self.tick_root(
-                pool,
-                codex_dir,
-                TranscriptSource::Codex,
-                cfg.projection_debounce,
-                &mut summary,
-            )
-            .await;
+            self.tick_root(pool, codex_dir, TranscriptSource::Codex, &mut summary)
+                .await;
         }
-        self.flush_projections(pool, cfg.projection_debounce).await;
         Ok(summary)
     }
 
-    /// Project the session now, or fold the work into what it already
-    /// owes when it was projected less than `debounce` ago.
-    async fn schedule_projection(
-        &self,
-        pool: &Pool,
-        session_uuid: Uuid,
-        pending: PendingProjection,
-        debounce: Duration,
-    ) {
-        let deferred = {
-            let mut projections = self.projections.lock().await;
-            let state = projections.entry(session_uuid).or_default();
-            let recent = state
-                .last_projected_at
-                .is_some_and(|at| at.elapsed() < debounce);
-            if recent {
-                state.pending = Some(match state.pending {
-                    Some(existing) => PendingProjection {
-                        first_inserted_offset: existing
-                            .first_inserted_offset
-                            .min(pending.first_inserted_offset),
-                        has_subagent_parent: existing.has_subagent_parent
-                            || pending.has_subagent_parent,
-                        touched_this_tick: true,
-                        ..pending
-                    },
-                    None => pending,
-                });
-                true
-            } else {
-                state.last_projected_at = Some(Instant::now());
-                state.pending = None;
-                false
+    fn queue_projection(&self, session_uuid: Uuid) {
+        self.projections
+            .lock()
+            .expect("projection queue lock")
+            .push(session_uuid);
+        self.projection_wake.notify_one();
+    }
+
+    fn next_projection(&self) -> Option<Uuid> {
+        self.projections
+            .lock()
+            .expect("projection queue lock")
+            .pop()
+    }
+
+    /// Serve queued sessions one batch at a time, round robin, until the
+    /// process exits.
+    async fn projection_loop(&self, pool: &Pool, cfg: &IngesterConfig) {
+        self.recover_projections(pool).await;
+        loop {
+            match self.next_projection() {
+                Some(session_uuid) => self.project_one_batch(pool, session_uuid).await,
+                None => {
+                    let _ =
+                        tokio::time::timeout(cfg.poll_interval, self.projection_wake.notified())
+                            .await;
+                }
             }
-        };
-        if !deferred {
-            project_session(pool, session_uuid, pending).await;
         }
     }
 
-    /// End of tick: project every deferred session whose interval has
-    /// passed or that received nothing this tick, and forget sessions
-    /// that have been idle for a long time.
-    async fn flush_projections(&self, pool: &Pool, debounce: Duration) {
-        let due: Vec<(Uuid, PendingProjection)> = {
-            let mut projections = self.projections.lock().await;
-            let mut due = Vec::new();
-            for (session_uuid, state) in projections.iter_mut() {
-                let Some(pending) = state.pending else {
-                    continue;
-                };
-                let interval_passed = state
-                    .last_projected_at
-                    .is_none_or(|at| at.elapsed() >= debounce);
-                if interval_passed || !pending.touched_this_tick {
-                    state.pending = None;
-                    state.last_projected_at = Some(Instant::now());
-                    due.push((*session_uuid, pending));
-                } else {
-                    state.pending = Some(PendingProjection {
-                        touched_this_tick: false,
-                        ..pending
-                    });
+    /// One batch for the session; it goes to the back of the queue while it
+    /// has more waiting.
+    async fn project_one_batch(&self, pool: &Pool, session_uuid: Uuid) {
+        match super::projection::project_batch(pool, session_uuid, super::projection::BATCH_EVENTS)
+            .await
+        {
+            Ok(outcome) => {
+                if outcome.more {
+                    self.queue_projection(session_uuid);
                 }
             }
-            projections.retain(|_, state| {
-                state.pending.is_some()
-                    || state
-                        .last_projected_at
-                        .is_some_and(|at| at.elapsed() < Duration::from_secs(3600))
-            });
-            due
-        };
-        for (session_uuid, pending) in due {
-            project_session(pool, session_uuid, pending).await;
+            Err(err) => {
+                // Left unqueued: its next insert, or the next process start,
+                // retries from the committed cursor.
+                tracing::warn!(
+                    error = format!("{err:#}"),
+                    session = %session_uuid,
+                    "timeline projection batch failed",
+                );
+            }
+        }
+    }
+
+    /// Queue sessions a previous process inserted events for but did not
+    /// project. Sessions below the reducer version wait for the maintenance
+    /// rebuild unless new events arrive for them first.
+    async fn recover_projections(&self, pool: &Pool) {
+        if self.projections_recovered.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let owed: Result<Vec<(Uuid,)>, sqlx::Error> = sqlx::query_as(
+            "SELECT i.session_uuid \
+               FROM ingester_state i \
+               JOIN claude_sessions cs ON cs.session_uuid = i.session_uuid AND cs.purged_at IS NULL \
+               LEFT JOIN timeline_session_state s ON s.session_uuid = i.session_uuid \
+              WHERE (s.session_uuid IS NULL OR s.projection_version = $1) \
+                AND EXISTS (SELECT 1 FROM events e \
+                             WHERE e.session_uuid = i.session_uuid \
+                               AND e.byte_offset > COALESCE(s.projected_through, -1)) \
+              ORDER BY i.updated_at DESC",
+        )
+        .bind(super::projection::REDUCER_VERSION)
+        .fetch_all(pool)
+        .await;
+        match owed {
+            Ok(owed) => {
+                for (session_uuid,) in owed {
+                    self.queue_projection(session_uuid);
+                }
+            }
+            Err(err) => {
+                self.projections_recovered.store(false, Ordering::Relaxed);
+                tracing::warn!(%err, "owed timeline projection scan failed");
+            }
         }
     }
 
@@ -374,13 +395,12 @@ impl Ingester {
         pool: &Pool,
         root: &Path,
         source: TranscriptSource,
-        debounce: Duration,
         summary: &mut TickSummary,
     ) {
         if !root.exists() {
             return;
         }
-        let dirty_files = match dirty_transcript_files(pool, root, source).await {
+        let mut dirty_files = match dirty_transcript_files(pool, root, source).await {
             Ok(files) => files,
             Err(err) => {
                 tracing::warn!(
@@ -392,6 +412,8 @@ impl Ingester {
                 return;
             }
         };
+        // A few new lines are read before a long backlog's slice.
+        dirty_files.sort_by_key(|file| file.file_len - file.committed_offset);
         let job = self
             .catchup_job_for_tick(pool, source, dirty_files.len())
             .await;
@@ -400,6 +422,7 @@ impl Ingester {
                 Ok(file_result) => {
                     summary.events_inserted += file_result.events_inserted;
                     summary.parse_errors += file_result.parse_errors;
+                    summary.backlogged |= file_result.backlogged;
                     self.events_inserted_total
                         .fetch_add(file_result.events_inserted, Ordering::Relaxed);
                     self.parse_errors_total
@@ -416,9 +439,8 @@ impl Ingester {
                             "ingested events from file",
                         );
                     }
-                    if let Some(pending) = file_result.projection {
-                        self.schedule_projection(pool, file.session_uuid, pending, debounce)
-                            .await;
+                    if file_result.events_inserted > 0 {
+                        self.queue_projection(file.session_uuid);
                     }
                 }
                 Err(err) => {
@@ -491,6 +513,8 @@ fn unix_timestamp_from_atomic(value: &AtomicI64) -> Option<i64> {
 pub struct TickSummary {
     pub events_inserted: u64,
     pub parse_errors: u64,
+    /// Some file still had complete lines waiting when its admission ended.
+    pub backlogged: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -498,41 +522,8 @@ struct FileResult {
     events_inserted: u64,
     parse_errors: u64,
     committed_offset: i64,
-    /// Set when events were inserted: the projection this file's session
-    /// now owes, scheduled by the caller under the debounce.
-    projection: Option<PendingProjection>,
-}
-
-#[derive(Debug, Clone)]
-struct CodexSessionContext {
-    session_id: String,
-    parent_session_id: Option<String>,
-    current_turn_id: Option<String>,
-    history_start_ordinal: Option<u64>,
-}
-
-impl CodexSessionContext {
-    fn new(session_uuid: Uuid) -> Self {
-        Self {
-            session_id: session_uuid.to_string(),
-            parent_session_id: None,
-            current_turn_id: None,
-            history_start_ordinal: None,
-        }
-    }
-
-    fn is_inherited(&self, value: &Value) -> bool {
-        let foreign_meta = super::canonical::codex_record_kind(value) == Some("session_meta")
-            && value
-                .pointer("/payload/id")
-                .and_then(Value::as_str)
-                .is_some_and(|id| id != self.session_id);
-        foreign_meta
-            || self
-                .history_start_ordinal
-                .zip(value.get("ordinal").and_then(Value::as_u64))
-                .is_some_and(|(start, ordinal)| ordinal > 0 && ordinal < start)
-    }
+    /// Admission stopped with complete lines still waiting.
+    backlogged: bool,
 }
 
 async fn process_file(
@@ -595,11 +586,18 @@ async fn process_file(
         TranscriptSource::Codex => Some(load_codex_context(pool, file.session_uuid).await?),
         TranscriptSource::ClaudeCode => None,
     };
+    let mut admitted = 0usize;
+    let admission_started = Instant::now();
 
     for (i, &b) in buf.iter().enumerate() {
         if b != b'\n' {
             continue;
         }
+        if admission_closed(admitted, admission_started) {
+            result.backlogged = true;
+            break;
+        }
+        admitted += 1;
         let line = &buf[line_start..i];
         let byte_offset = file.committed_offset + line_start as i64;
         match insert_event(
@@ -633,36 +631,8 @@ async fn process_file(
 
     // Any tail after the last newline is a partial line. Left in the
     // file; will be re-read on the next tick once it's newline-terminated.
-    //
-    // Unless it is longer than a whole tick's read: then it is not a partial
-    // line we can wait out, because waiting re-reads the cap every tick
-    // forever. Skip past it to the next newline and resynchronise on a line
-    // boundary. Nothing is committed for the skipped bytes, so the malformed
-    // region is dropped rather than half-parsed.
     if next_committed == file.committed_offset && buf.len() >= MAX_READ_BYTES {
-        let scanned_to = file.committed_offset + buf.len() as i64;
-        match next_line_boundary(&file.path, scanned_to)? {
-            Some(resume) => {
-                tracing::warn!(
-                    path = %file.path.display(),
-                    from = file.committed_offset,
-                    resume,
-                    "oversized transcript line; skipping to the next line boundary",
-                );
-                result.parse_errors += 1;
-                set_offset(pool, file.session_uuid, &file.path, resume).await?;
-                result.committed_offset = resume;
-            }
-            None => {
-                // Still being written. The read is capped, so this costs a
-                // bounded read per tick rather than unbounded growth.
-                tracing::warn!(
-                    path = %file.path.display(),
-                    from = file.committed_offset,
-                    "transcript line exceeds the read cap and is not yet terminated",
-                );
-            }
-        }
+        skip_oversized_line(pool, file, buf.len(), &mut result).await?;
         return Ok(result);
     }
 
@@ -670,31 +640,78 @@ async fn process_file(
         set_offset(pool, file.session_uuid, &file.path, next_committed).await?;
         result.committed_offset = next_committed;
     }
-    if let Some(first_inserted_offset) = first_inserted_offset {
-        result.projection = Some(PendingProjection {
-            source,
-            first_inserted_offset,
-            has_subagent_parent: file.subagent_parent.is_some(),
-            touched_this_tick: true,
-        });
-    }
+    rebuild_if_inserted_behind(pool, file.session_uuid, first_inserted_offset).await?;
     Ok(result)
 }
 
-/// Bring a session's timeline projection up to date with its transcript.
-async fn project_session(pool: &Pool, session_uuid: Uuid, pending: PendingProjection) {
-    rebuild_projections_after_insert(
-        pool,
-        session_uuid,
-        pending.source,
-        pending.first_inserted_offset,
-    )
-    .await;
-    // Subagent events surface in the parent's timeline (subagent modal,
-    // badges), so the parent's projection must follow.
-    if pending.has_subagent_parent {
-        rebuild_ancestor_projections(pool, session_uuid, pending.source).await;
+/// A line longer than a whole tick's read is not a partial line we can wait
+/// out, because waiting re-reads the cap every tick forever. Skip past it to
+/// the next newline and resynchronise on a line boundary. Nothing is
+/// committed for the skipped bytes, so the malformed region is dropped rather
+/// than half-parsed.
+async fn skip_oversized_line(
+    pool: &Pool,
+    file: &DirtyTranscriptFile,
+    scanned: usize,
+    result: &mut FileResult,
+) -> anyhow::Result<()> {
+    let scanned_to = file.committed_offset + scanned as i64;
+    match next_line_boundary(&file.path, scanned_to)? {
+        Some(resume) => {
+            tracing::warn!(
+                path = %file.path.display(),
+                from = file.committed_offset,
+                resume,
+                "oversized transcript line; skipping to the next line boundary",
+            );
+            result.parse_errors += 1;
+            set_offset(pool, file.session_uuid, &file.path, resume).await?;
+            result.committed_offset = resume;
+        }
+        None => {
+            // Still being written. The read is capped, so this costs a
+            // bounded read per tick rather than unbounded growth.
+            tracing::warn!(
+                path = %file.path.display(),
+                from = file.committed_offset,
+                "transcript line exceeds the read cap and is not yet terminated",
+            );
+        }
     }
+    Ok(())
+}
+
+/// A file's slice of this tick is spent; at least one line always goes in.
+fn admission_closed(admitted: usize, started: Instant) -> bool {
+    admitted == ADMIT_LINES_PER_TICK || (admitted > 0 && started.elapsed() >= ADMIT_TIME_PER_TICK)
+}
+
+/// A replaced transcript can insert lines at offsets the timeline has
+/// already passed. The reducer only moves forward, so the session is
+/// rebuilt from its canonical events instead.
+async fn rebuild_if_inserted_behind(
+    pool: &Pool,
+    session_uuid: Uuid,
+    first_inserted_offset: Option<i64>,
+) -> anyhow::Result<()> {
+    let Some(first_inserted_offset) = first_inserted_offset else {
+        return Ok(());
+    };
+    let projected_through: Option<i64> = sqlx::query_scalar(
+        "SELECT projected_through FROM timeline_session_state WHERE session_uuid = $1",
+    )
+    .bind(session_uuid)
+    .fetch_optional(pool)
+    .await?;
+    if projected_through.is_some_and(|through| first_inserted_offset <= through) {
+        tracing::warn!(
+            session = %session_uuid,
+            first_inserted_offset,
+            "events inserted behind the timeline cursor; rebuilding the session",
+        );
+        super::projection::request_rebuild(pool, session_uuid).await?;
+    }
+    Ok(())
 }
 
 /// Best-effort read of the spawn linkage from the transcript's sibling
@@ -706,62 +723,6 @@ fn read_subagent_tool_use_id(path: &Path) -> Option<String> {
     meta.get("toolUseId")
         .and_then(Value::as_str)
         .map(|id| id.to_string())
-}
-
-async fn rebuild_projections_after_insert(
-    pool: &Pool,
-    session_uuid: Uuid,
-    source: TranscriptSource,
-    first_inserted_offset: i64,
-) {
-    if let Err(err) = super::projection::rebuild_session_projection_after_insert(
-        pool,
-        session_uuid,
-        first_inserted_offset,
-    )
-    .await
-    {
-        tracing::warn!(
-            %err,
-            session = %session_uuid,
-            agent = source.agent_id(),
-            "timeline projection rebuild failed",
-        );
-    }
-    if source == TranscriptSource::Codex {
-        rebuild_ancestor_projections(pool, session_uuid, source).await;
-    }
-}
-
-async fn rebuild_ancestor_projections(pool: &Pool, session_uuid: Uuid, _source: TranscriptSource) {
-    match codex_parent_session_chain(pool, session_uuid).await {
-        Ok(ancestors) => {
-            for ancestor in ancestors {
-                if let Err(err) =
-                    super::projection::reconcile_session_projection(pool, ancestor).await
-                {
-                    tracing::warn!(
-                        %err,
-                        session = %session_uuid,
-                        ancestor = %ancestor,
-                        "ancestor timeline projection rebuild failed",
-                    );
-                }
-            }
-        }
-        Err(err) => {
-            tracing::warn!(
-                %err,
-                session = %session_uuid,
-                "codex ancestor projection lookup failed",
-            );
-        }
-    }
-}
-
-enum InsertError {
-    ParseFailed,
-    Db(sqlx::Error),
 }
 
 pub(super) fn parse_session_uuid(path: &Path, source: TranscriptSource) -> Option<Uuid> {
@@ -841,650 +802,6 @@ async fn set_offset(
     .execute(pool)
     .await?;
     Ok(())
-}
-
-async fn load_codex_context(
-    pool: &Pool,
-    session_uuid: Uuid,
-) -> anyhow::Result<CodexSessionContext> {
-    let mut ctx = CodexSessionContext::new(session_uuid);
-
-    let meta_row: Option<(Value,)> = sqlx::query_as(
-        "SELECT payload \
-         FROM events \
-         WHERE session_uuid = $1 AND agent = 'codex' AND kind = 'session_meta' \
-           AND payload #>> '{payload,id}' = $1::TEXT \
-         ORDER BY byte_offset ASC \
-         LIMIT 1",
-    )
-    .bind(session_uuid)
-    .fetch_optional(pool)
-    .await?;
-    if let Some((payload,)) = meta_row {
-        update_codex_context(&mut ctx, &payload, session_uuid);
-    }
-
-    let turn_row: Option<(Value,)> = sqlx::query_as(
-        "SELECT payload \
-         FROM events \
-         WHERE session_uuid = $1 AND agent = 'codex' AND kind IN ('turn_context', 'task_started') \
-           AND subtype IS DISTINCT FROM 'inherited_history' \
-         ORDER BY byte_offset DESC \
-         LIMIT 1",
-    )
-    .bind(session_uuid)
-    .fetch_optional(pool)
-    .await?;
-    if let Some((payload,)) = turn_row {
-        update_codex_context(&mut ctx, &payload, session_uuid);
-    }
-
-    Ok(ctx)
-}
-
-async fn codex_parent_session_chain(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<Vec<Uuid>> {
-    let mut chain = Vec::new();
-    let mut current = session_uuid;
-    loop {
-        let row: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT parent_session_uuid \
-               FROM claude_sessions \
-              WHERE session_uuid = $1 AND parent_session_uuid IS NOT NULL",
-        )
-        .bind(current)
-        .fetch_optional(pool)
-        .await?;
-        let Some((parent,)) = row else {
-            break;
-        };
-        chain.push(parent);
-        current = parent;
-    }
-    Ok(chain)
-}
-
-/// Returns Ok(true) if an event row was inserted (i.e. not a dedupe
-/// skip); Ok(false) if the line was blank/malformed and silently
-/// skipped with the parse-error counter already bumped via Err at the
-/// call site.
-///
-/// Eight parameters: the file path and the archive replay share this one
-/// insert, and the two extras (`subagent_tool_use_id`, `fallback_timestamp`)
-/// are the columns only one of those callers can supply.
-#[allow(clippy::too_many_arguments)]
-async fn insert_event(
-    pool: &Pool,
-    session_uuid: Uuid,
-    source: TranscriptSource,
-    byte_offset: i64,
-    line: &[u8],
-    codex_ctx: Option<&mut CodexSessionContext>,
-    subagent_tool_use_id: Option<&str>,
-    fallback_timestamp: Option<DateTime<Utc>>,
-) -> Result<bool, InsertError> {
-    if line.iter().all(|b| b.is_ascii_whitespace()) {
-        return Ok(false);
-    }
-
-    let value: Value = match serde_json::from_slice(line) {
-        Ok(v) => v,
-        Err(err) => {
-            tracing::warn!(
-                %err,
-                session = %session_uuid,
-                byte_offset,
-                "malformed JSONL line, skipping",
-            );
-            return Err(InsertError::ParseFailed);
-        }
-    };
-
-    // Parse the line into the canonical block representation up-front
-    // so the transaction below can write events + event_blocks atomically
-    // (same commit). If the parser ever starts failing for a shape it
-    // doesn't recognise, we log and fall back to storing the raw row
-    // with no blocks — the frontend will render via `unknown` blocks or
-    // the legacy payload path.
-    let codex_ctx_ref = codex_ctx.as_deref();
-    let mut parsed = parse_canonical_event(
-        source.agent_id(),
-        &value,
-        session_uuid,
-        byte_offset,
-        codex_ctx_ref,
-    );
-    // Subagent transcripts link every unclaimed record back to the
-    // parent's spawning tool pair so the timeline's lineage walk finds
-    // the whole sidechain.
-    if let Some(tool_use_id) = subagent_tool_use_id {
-        if parsed.related_tool_use_id.is_none() {
-            parsed.related_tool_use_id = Some(tool_use_id.to_string());
-        }
-    }
-    let kind = stored_event_kind(source, &value, &parsed);
-    let timestamp = parse_event_timestamp(&value)
-        .or(fallback_timestamp)
-        .unwrap_or_else(Utc::now);
-
-    if kind == "unknown" {
-        tracing::debug!(
-            session = %session_uuid,
-            byte_offset,
-            agent = source.agent_id(),
-            "event without explicit type — stored as 'unknown'",
-        );
-    }
-
-    let search_text = parsed.search_text();
-    let mut tx = pool.begin().await.map_err(InsertError::Db)?;
-
-    let result = sqlx::query(
-        "INSERT INTO events \
-             (session_uuid, byte_offset, timestamp, kind, payload, agent, speaker, content_kind, \
-              event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype, search_text) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
-         ON CONFLICT (session_uuid, byte_offset) DO NOTHING",
-    )
-    .bind(session_uuid)
-    .bind(byte_offset)
-    .bind(timestamp)
-    .bind(&kind)
-    .bind(&value)
-    .bind(parsed.agent)
-    .bind(parsed.speaker.as_str())
-    .bind(parsed.content_kind.as_str())
-    .bind(parsed.event_uuid.as_deref())
-    .bind(parsed.parent_event_uuid.as_deref())
-    .bind(parsed.related_tool_use_id.as_deref())
-    .bind(parsed.is_sidechain)
-    .bind(parsed.is_meta)
-    .bind(parsed.subtype.as_deref())
-    .bind(&search_text)
-    .execute(&mut *tx)
-    .await
-    .map_err(InsertError::Db)?;
-
-    let inserted = result.rows_affected() > 0;
-    if inserted {
-        insert_event_derivatives(
-            &mut tx,
-            session_uuid,
-            source,
-            byte_offset,
-            timestamp,
-            &value,
-            &parsed,
-        )
-        .await?;
-    }
-
-    tx.commit().await.map_err(InsertError::Db)?;
-
-    if inserted && parsed.subtype.as_deref() != Some("inherited_history") {
-        project_after_insert(pool, session_uuid, source, &value, byte_offset, timestamp).await;
-    }
-
-    if let Some(ctx) = codex_ctx {
-        update_codex_context(ctx, &value, session_uuid);
-    }
-
-    link_parent_session(pool, source, &value, session_uuid).await;
-
-    Ok(inserted)
-}
-
-/// If this event hints that the current session is a compaction or
-/// subagent continuation of another, record the parent linkage. Best-effort:
-/// format drift is tolerated by checking several field names.
-async fn link_parent_session(
-    pool: &Pool,
-    source: TranscriptSource,
-    value: &Value,
-    session_uuid: Uuid,
-) {
-    let parent = match source {
-        TranscriptSource::ClaudeCode => detect_compaction_parent(value, session_uuid),
-        TranscriptSource::Codex => detect_codex_parent_session(value, session_uuid),
-    };
-    if let Some(parent) = parent {
-        if let Err(err) = set_parent_session(pool, session_uuid, parent).await {
-            tracing::warn!(%err, session = %session_uuid, parent = %parent, "set_parent_session failed");
-        }
-    }
-}
-
-/// Projections that follow a committed event row and must not fail the
-/// ingest: session metadata, model-switch detection, and activity state.
-/// Each is best-effort and logged on failure.
-async fn project_after_insert(
-    pool: &Pool,
-    session_uuid: Uuid,
-    source: TranscriptSource,
-    value: &Value,
-    byte_offset: i64,
-    timestamp: DateTime<Utc>,
-) {
-    if let Err(err) =
-        super::metadata::upsert_from_event(pool, session_uuid, source.agent_id(), value).await
-    {
-        tracing::warn!(
-            %err,
-            session = %session_uuid,
-            agent = source.agent_id(),
-            byte_offset,
-            "agent session metadata upsert failed",
-        );
-    }
-    // After the metadata upsert: the switch detector keeps its own
-    // baselines on the same row and reads the record's model only through
-    // its own extraction.
-    if let Err(err) = crate::model_switches::observe_event(
-        pool,
-        session_uuid,
-        source.agent_id(),
-        value,
-        byte_offset,
-        timestamp,
-    )
-    .await
-    {
-        tracing::warn!(
-            %err,
-            session = %session_uuid,
-            agent = source.agent_id(),
-            byte_offset,
-            "model switch observation failed",
-        );
-    }
-    project_from_event_best_effort(pool, session_uuid, source, value, byte_offset).await;
-}
-
-async fn insert_event_derivatives(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    session_uuid: Uuid,
-    source: TranscriptSource,
-    byte_offset: i64,
-    timestamp: DateTime<Utc>,
-    value: &Value,
-    parsed: &super::canonical::CanonicalEvent,
-) -> Result<(), InsertError> {
-    if parsed.subtype.as_deref() == Some("inherited_history") {
-        return Ok(());
-    }
-    if !parsed.blocks.is_empty() {
-        insert_blocks(
-            tx,
-            session_uuid,
-            byte_offset,
-            parsed.speaker,
-            &parsed.blocks,
-        )
-        .await
-        .map_err(InsertError::Db)?;
-    }
-    super::usage::upsert_from_event(tx, session_uuid, source, byte_offset, timestamp, value)
-        .await
-        .map_err(InsertError::Db)
-}
-
-fn parse_canonical_event(
-    agent: &str,
-    value: &Value,
-    session_uuid: Uuid,
-    byte_offset: i64,
-    codex_ctx: Option<&CodexSessionContext>,
-) -> super::canonical::CanonicalEvent {
-    use super::canonical::EventParser;
-    let mut parsed = match agent {
-        "codex" => super::canonical::CodexParser.parse(value),
-        _ => super::canonical::ClaudeParser.parse(value),
-    };
-    if agent == "codex" {
-        enrich_codex_lineage(&mut parsed, value, session_uuid, byte_offset, codex_ctx);
-    }
-    parsed
-}
-
-fn stored_event_kind(
-    source: TranscriptSource,
-    value: &Value,
-    _parsed: &super::canonical::CanonicalEvent,
-) -> String {
-    match source {
-        TranscriptSource::ClaudeCode => value
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string(),
-        TranscriptSource::Codex => {
-            let outer = super::canonical::codex_record_kind(value).unwrap_or("");
-            let subtype = value
-                .pointer("/payload/type")
-                .and_then(Value::as_str)
-                .filter(|kind| !kind.is_empty())
-                .unwrap_or("unknown");
-            match outer {
-                "response_item" | "event_msg" => subtype.to_string(),
-                "" => subtype.to_string(),
-                _ => outer.to_string(),
-            }
-        }
-    }
-}
-
-fn enrich_codex_lineage(
-    parsed: &mut super::canonical::CanonicalEvent,
-    value: &Value,
-    session_uuid: Uuid,
-    byte_offset: i64,
-    codex_ctx: Option<&CodexSessionContext>,
-) {
-    let payload = value.get("payload").unwrap_or(&Value::Null);
-    let outer = super::canonical::codex_record_kind(value).unwrap_or("");
-    let subtype = parsed.subtype.as_deref().unwrap_or("");
-    let session_id = codex_ctx
-        .map(|ctx| ctx.session_id.clone())
-        .unwrap_or_else(|| session_uuid.to_string());
-    let session_parent = codex_ctx.and_then(|ctx| ctx.parent_session_id.clone());
-    let current_turn_id = codex_ctx.and_then(|ctx| ctx.current_turn_id.clone());
-    let synthetic_id = format!("codex:{session_uuid}:{byte_offset}");
-
-    if codex_ctx.is_some_and(|ctx| ctx.is_inherited(value)) {
-        parsed.event_uuid = Some(synthetic_id);
-        parsed.parent_event_uuid = None;
-        parsed.related_tool_use_id = None;
-        parsed.is_sidechain = session_parent.is_some();
-        parsed.is_meta = true;
-        parsed.speaker = super::canonical::Speaker::System;
-        parsed.content_kind = super::canonical::ContentKind::None;
-        parsed.subtype = Some("inherited_history".into());
-        parsed.blocks.clear();
-        return;
-    }
-
-    match outer {
-        "session_meta" => {
-            parsed.event_uuid = codex_string_at_path(payload, &["id"])
-                .map(ToString::to_string)
-                .or(Some(session_id.clone()));
-            parsed.parent_event_uuid = codex_parent_session_string(value).map(ToString::to_string);
-            parsed.is_sidechain = parsed.parent_event_uuid.is_some();
-        }
-        "turn_context" => {
-            parsed.event_uuid = codex_string_at_path(payload, &["turn_id"])
-                .map(ToString::to_string)
-                .or(Some(synthetic_id));
-            parsed.parent_event_uuid = Some(session_id);
-            parsed.is_sidechain = session_parent.is_some();
-        }
-        "response_item" => {
-            let parent = current_turn_id.or(Some(session_id));
-            parsed.parent_event_uuid = parent;
-            parsed.is_sidechain = session_parent.is_some();
-            parsed.event_uuid = match subtype {
-                "agent_message" => payload
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .or(Some(synthetic_id)),
-                "function_call" | "custom_tool_call" => parsed
-                    .blocks
-                    .iter()
-                    .find_map(|block| block.tool_id.clone())
-                    .or(Some(synthetic_id)),
-                "function_call_output" | "custom_tool_call_output" => parsed
-                    .related_tool_use_id
-                    .as_ref()
-                    .map(|id| format!("{id}:output:{byte_offset}"))
-                    .or(Some(synthetic_id)),
-                _ => Some(synthetic_id),
-            };
-        }
-        "event_msg" => {
-            parsed.related_tool_use_id = parsed
-                .related_tool_use_id
-                .clone()
-                .or_else(|| codex_string_at_path(payload, &["call_id"]).map(ToString::to_string));
-            parsed.is_sidechain = session_parent.is_some();
-            match subtype {
-                "item_completed"
-                    if payload.pointer("/item/type").and_then(Value::as_str)
-                        == Some("SubAgentActivity")
-                        && payload.pointer("/item/kind").and_then(Value::as_str)
-                            == Some("started") =>
-                {
-                    parsed.event_uuid = payload
-                        .pointer("/item/agent_thread_id")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                        .or(Some(synthetic_id));
-                    parsed.related_tool_use_id = payload
-                        .pointer("/item/id")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
-                    parsed.parent_event_uuid = current_turn_id.or(Some(session_id));
-                    parsed.is_sidechain = false;
-                }
-                "task_started" => {
-                    parsed.event_uuid = codex_string_at_path(payload, &["turn_id"])
-                        .map(ToString::to_string)
-                        .or(Some(synthetic_id));
-                    parsed.parent_event_uuid = Some(session_id);
-                }
-                "collab_agent_spawn_end" => {
-                    parsed.event_uuid = codex_string_at_path(payload, &["new_thread_id"])
-                        .map(ToString::to_string)
-                        .or(Some(synthetic_id));
-                    parsed.parent_event_uuid = current_turn_id.or(Some(session_id));
-                    parsed.is_sidechain = false;
-                }
-                _ => {
-                    parsed.event_uuid = Some(synthetic_id);
-                    parsed.parent_event_uuid = codex_string_at_path(payload, &["turn_id"])
-                        .map(ToString::to_string)
-                        .or(current_turn_id)
-                        .or(Some(session_id));
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn update_codex_context(ctx: &mut CodexSessionContext, value: &Value, session_uuid: Uuid) {
-    if ctx.is_inherited(value) {
-        return;
-    }
-    let payload = value.get("payload").unwrap_or(&Value::Null);
-    match super::canonical::codex_record_kind(value).unwrap_or("") {
-        "session_meta" => {
-            ctx.session_id = codex_string_at_path(payload, &["id"])
-                .map(ToString::to_string)
-                .unwrap_or_else(|| session_uuid.to_string());
-            ctx.parent_session_id = codex_parent_session_string(value).map(ToString::to_string);
-            ctx.history_start_ordinal = payload
-                .get("subagent_history_start_ordinal")
-                .and_then(Value::as_u64);
-        }
-        "turn_context" => {
-            ctx.current_turn_id =
-                codex_string_at_path(payload, &["turn_id"]).map(ToString::to_string);
-        }
-        "event_msg" if payload.get("type").and_then(|v| v.as_str()) == Some("task_started") => {
-            ctx.current_turn_id =
-                codex_string_at_path(payload, &["turn_id"]).map(ToString::to_string);
-        }
-        _ => {}
-    }
-}
-
-fn codex_parent_session_string(value: &Value) -> Option<&str> {
-    let payload = value.get("payload").unwrap_or(&Value::Null);
-    codex_string_at_path(payload, &["forked_from_id"]).or_else(|| {
-        codex_string_at_path(
-            payload,
-            &["source", "subagent", "thread_spawn", "parent_thread_id"],
-        )
-    })
-}
-
-fn detect_codex_parent_session(value: &Value, current: Uuid) -> Option<Uuid> {
-    if value.pointer("/payload/id").and_then(Value::as_str) != Some(current.to_string().as_str()) {
-        return None;
-    }
-    codex_parent_session_string(value)
-        .and_then(|raw| Uuid::parse_str(raw).ok())
-        .filter(|uuid| *uuid != current)
-}
-
-fn codex_string_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
-    let mut current = value;
-    for key in path {
-        current = current.get(*key)?;
-    }
-    current.as_str()
-}
-
-fn parse_event_timestamp(value: &Value) -> Option<DateTime<Utc>> {
-    value
-        .get("timestamp")
-        .or_else(|| value.get("ts"))
-        .and_then(|v| v.as_str())
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&Utc))
-}
-
-async fn insert_blocks(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    session_uuid: Uuid,
-    byte_offset: i64,
-    speaker: Speaker,
-    blocks: &[super::canonical::Block],
-) -> sqlx::Result<()> {
-    for b in blocks {
-        sqlx::query(
-            "INSERT INTO event_blocks \
-                 (session_uuid, byte_offset, ord, kind, text, \
-                  tool_id, tool_name, tool_name_canonical, tool_input, tool_output, is_error, raw) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
-             ON CONFLICT (session_uuid, byte_offset, ord) DO UPDATE SET \
-                 kind = EXCLUDED.kind, \
-                 text = EXCLUDED.text, \
-                 tool_id = EXCLUDED.tool_id, \
-                 tool_name = EXCLUDED.tool_name, \
-                 tool_name_canonical = EXCLUDED.tool_name_canonical, \
-                 tool_input = EXCLUDED.tool_input, \
-                 tool_output = EXCLUDED.tool_output, \
-                 is_error = EXCLUDED.is_error, \
-                 raw = EXCLUDED.raw",
-        )
-        .bind(session_uuid)
-        .bind(byte_offset)
-        .bind(b.ord)
-        .bind(b.kind.as_str())
-        .bind(b.text.as_deref())
-        .bind(b.tool_id.as_deref())
-        .bind(b.tool_name.as_deref())
-        .bind(b.tool_name_canonical.as_deref())
-        .bind(b.tool_input.as_ref())
-        .bind(b.tool_output.as_ref())
-        .bind(b.is_error)
-        .bind(b.raw.as_ref())
-        .execute(&mut **tx)
-        .await?;
-        enqueue_event_embedding_source(tx, session_uuid, byte_offset, speaker, b).await?;
-    }
-    Ok(())
-}
-
-async fn enqueue_event_embedding_source(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    session_uuid: Uuid,
-    byte_offset: i64,
-    speaker: Speaker,
-    block: &super::canonical::Block,
-) -> sqlx::Result<()> {
-    let source_key = format!("event:{session_uuid}:{byte_offset}:{}", block.ord);
-    let Some((source_kind, text)) = event_embedding_source(speaker, block) else {
-        mark_embedding_source_deleted(tx, &source_key).await?;
-        return Ok(());
-    };
-    let text = text.trim();
-    if text.is_empty() {
-        mark_embedding_source_deleted(tx, &source_key).await?;
-        return Ok(());
-    }
-    sqlx::query(
-        "INSERT INTO retrieval_embedding_sources \
-            (source_family, source_kind, source_key, session_uuid, byte_offset, block_ord, \
-             content_hash, index_status, index_error, last_seen_at, dirty_at, deleted_at, updated_at) \
-         VALUES ('event_block', $1, $2, $3, $4, $5, $6, 'pending', NULL, NOW(), NOW(), NULL, NOW()) \
-         ON CONFLICT (source_key) DO UPDATE SET \
-             source_family = 'event_block', \
-             source_kind = EXCLUDED.source_kind, \
-             session_uuid = EXCLUDED.session_uuid, \
-             byte_offset = EXCLUDED.byte_offset, \
-             block_ord = EXCLUDED.block_ord, \
-             turn_id = NULL, \
-             operation_ord = NULL, \
-             content_hash = EXCLUDED.content_hash, \
-             index_status = 'pending', \
-             index_error = NULL, \
-             dirty_at = NOW(), \
-             deleted_at = NULL, \
-             updated_at = NOW()",
-    )
-    .bind(source_kind)
-    .bind(&source_key)
-    .bind(session_uuid)
-    .bind(byte_offset)
-    .bind(block.ord)
-    .bind(hash_text(text))
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
-fn event_embedding_source(
-    speaker: Speaker,
-    block: &super::canonical::Block,
-) -> Option<(&'static str, &str)> {
-    match (speaker, block.kind) {
-        (Speaker::Assistant, BlockKind::Text) => Some(("assistant_text", block.text.as_deref()?)),
-        (Speaker::User, BlockKind::Text) => Some(("user_prompt", block.text.as_deref()?)),
-        (Speaker::Summary, BlockKind::Text) => Some(("summary", block.text.as_deref()?)),
-        (_, BlockKind::ToolResult) if block.is_error.unwrap_or(false) => {
-            Some(("tool_error", block.text.as_deref()?))
-        }
-        _ => None,
-    }
-}
-
-async fn mark_embedding_source_deleted(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    source_key: &str,
-) -> sqlx::Result<()> {
-    sqlx::query("DELETE FROM retrieval_embeddings WHERE source_key = $1")
-        .bind(source_key)
-        .execute(&mut **tx)
-        .await?;
-    sqlx::query(
-        "UPDATE retrieval_embedding_sources \
-            SET index_status = 'deleted', deleted_at = NOW(), updated_at = NOW() \
-          WHERE source_key = $1",
-    )
-    .bind(source_key)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
-fn hash_text(text: &str) -> String {
-    let hash = digest::digest(&digest::SHA256, text.as_bytes());
-    hash.as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 #[cfg(test)]

@@ -300,13 +300,24 @@ async fn purge_keeps_the_digest_rollups_and_every_consumer_working() {
         .await
         .unwrap();
     assert!(!trace_before.is_empty());
-    let markdown_before: String = sqlx::query_scalar(
-        "SELECT markdown FROM timeline_turns WHERE session_uuid = $1 ORDER BY turn_id LIMIT 1",
+    // A live turn composes its digest on read; the purge stores that text.
+    let first_turn: i64 = sqlx::query_scalar(
+        "SELECT turn_id FROM timeline_turns WHERE session_uuid = $1 ORDER BY turn_id LIMIT 1",
     )
     .bind(fx.session_uuid)
     .fetch_one(&pool)
     .await
     .unwrap();
+    let markdown_before = sulion::ingest::load_timeline_turn_detail(
+        &pool,
+        fx.session_uuid,
+        first_turn,
+        &Default::default(),
+    )
+    .await
+    .unwrap()
+    .expect("first turn")
+    .markdown;
     assert!(markdown_before.contains("widget_helper"));
 
     // With purging off a zero-grace cycle still deletes nothing.
@@ -392,17 +403,16 @@ async fn purge_keeps_the_digest_rollups_and_every_consumer_working() {
         count(&pool, "timeline_turns", fx.session_uuid).await,
         turns_before
     );
-    let (markdown_after, files_json, chunks): (String, serde_json::Value, serde_json::Value) =
-        sqlx::query_as(
-            "SELECT markdown, files_json, chunks_json FROM timeline_turns \
-              WHERE session_uuid = $1 ORDER BY turn_id LIMIT 1",
-        )
-        .bind(fx.session_uuid)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let (markdown_after, files_json): (String, serde_json::Value) = sqlx::query_as(
+        "SELECT markdown, files_json FROM timeline_turns \
+          WHERE session_uuid = $1 ORDER BY turn_id LIMIT 1",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(markdown_after, markdown_before);
-    assert_eq!(chunks, serde_json::json!([]));
+    assert_eq!(count(&pool, "timeline_items", fx.session_uuid).await, 0);
     let files = files_json.as_array().expect("files_json array");
     assert!(
         files

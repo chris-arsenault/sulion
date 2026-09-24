@@ -36,6 +36,7 @@ const TimelinePane = (props: { sessionId?: string; repo?: string }) => (
 
 const transcriptSessionUuid = "00000000-0000-0000-0000-000000000001";
 const sessionStartedAt = "2026-05-02T00:00:00Z";
+const CLAUDE = "claude-code";
 
 function sessionView(
   timelineRevision = 0,
@@ -50,7 +51,7 @@ function sessionView(
     ended_at: null,
     exit_code: null,
     current_session_uuid: transcriptSessionUuid,
-    current_session_agent: "claude-code",
+    current_session_agent: CLAUDE,
     last_event_at: null,
     timeline_revision: timelineRevision,
     label: null,
@@ -140,7 +141,9 @@ function timelinePayload(overrides: Partial<Record<string, unknown>> = {}) {
         thinking_count: 0,
         has_errors: false,
         markdown: "**Prompt**\n\n> hello",
-        chunks: [{ kind: "assistant", items: [{ kind: "text", text: "hi there" }], thinking: [] }],
+        items: [
+          { offset: 1, kind: "assistant", items: [{ kind: "text", text: "hi there" }], thinking: [] },
+        ],
         turn_key: `${transcriptSessionUuid}:1`,
         pty_session_id: "abc",
         session_uuid: transcriptSessionUuid,
@@ -157,8 +160,9 @@ function timelineDetailBody(turn: Record<string, unknown>) {
   return JSON.stringify({
     session_uuid:
       turn.session_uuid ?? transcriptSessionUuid,
-    session_agent: turn.session_agent ?? "claude-code",
+    session_agent: turn.session_agent ?? CLAUDE,
     turn,
+    through: 1,
   });
 }
 
@@ -195,8 +199,9 @@ describe("TimelinePane", () => {
   it("opens a relative markdown link in turn detail as a file tab for the session repo", async () => {
     const payload = timelinePayload();
     const turn = payload.turns[0] as Record<string, unknown>;
-    turn.chunks = [
+    turn.items = [
       {
+        offset: 1,
         kind: "assistant",
         items: [{ kind: "text", text: "Start with the [brief](docs/BRIEF.md)." }],
         thinking: [],
@@ -272,46 +277,53 @@ describe("TimelinePane", () => {
   });
 
   it("opens the subagent modal, drills into a nested subagent, and returns", async () => {
+    // Pairs reference their child transcripts; the modal reads the turns.
     const nested = {
       title: "inner agent",
       event_count: 1,
-      turns: [
-        {
-          ...timelinePayload().turns[0],
-          id: 3,
-          preview: "inner prompt",
-          user_prompt_text: "inner prompt",
-          tool_pairs: [],
-          chunks: [],
-          turn_key: `${transcriptSessionUuid}:3`,
-        },
-      ],
+      turn_count: 1,
+      session_uuid: "child-inner",
     };
+    const nestedTurns = [
+      {
+        ...timelinePayload().turns[0],
+        id: 3,
+        preview: "inner prompt",
+        user_prompt_text: "inner prompt",
+        tool_pairs: [],
+        items: [],
+        turn_key: "child-inner:3",
+      },
+    ];
     const outer = {
       title: "outer agent",
       event_count: 2,
-      turns: [
-        {
-          ...timelinePayload().turns[0],
-          id: 2,
-          preview: "outer prompt",
-          user_prompt_text: "outer prompt",
-          tool_pairs: [
-            {
-              id: "task-2",
-              name: "Task",
-              operation_type: "task",
-              is_error: false,
-              is_pending: false,
-              file_touches: [],
-              subagent: nested,
-            },
-          ],
-          chunks: [{ kind: "tool", pair_id: "task-2" }],
-          turn_key: `${transcriptSessionUuid}:2`,
-        },
-      ],
+      turn_count: 1,
+      session_uuid: "child-outer",
     };
+    const outerTurns = [
+      {
+        ...timelinePayload().turns[0],
+        id: 2,
+        preview: "outer prompt",
+        user_prompt_text: "outer prompt",
+        tool_pairs: [
+          {
+            id: "task-2",
+            name: "Task",
+            operation_type: "task",
+            is_error: false,
+            is_pending: false,
+            file_touches: [],
+            subagent: nested,
+          },
+        ],
+        items: [
+          { offset: 1, kind: "assistant", items: [{ kind: "tool", pair_id: "task-2" }], thinking: [] },
+        ],
+        turn_key: "child-outer:2",
+      },
+    ];
     const turn = {
       ...timelinePayload().turns[0],
       operation_count: 1,
@@ -326,18 +338,26 @@ describe("TimelinePane", () => {
           subagent: outer,
         },
       ],
-      chunks: [{ kind: "tool", pair_id: "task-1" }],
+      items: [
+        { offset: 1, kind: "assistant", items: [{ kind: "tool", pair_id: "task-1" }], thinking: [] },
+      ],
     };
     const payload = timelinePayload({ turns: [turn] });
-    stubFetch((url) =>
-      new Response(
-        url.includes("/timeline/turns/") ? timelineDetailBody(turn) : JSON.stringify(payload),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
-    );
+    const sessionTurns = (turns: unknown[]) =>
+      JSON.stringify({ session_uuid: "child", session_agent: CLAUDE, through: 1, turns });
+    stubFetch((url) => {
+      const body = url.includes("/api/timeline/sessions/child-outer/")
+        ? sessionTurns(outerTurns)
+        : url.includes("/api/timeline/sessions/child-inner/")
+          ? sessionTurns(nestedTurns)
+          : url.includes("/timeline/turns/")
+            ? timelineDetailBody(turn)
+            : JSON.stringify(payload);
+      return new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
 
     render(<TimelinePane sessionId="abc" />);
     const user = userEvent.setup();
@@ -352,8 +372,10 @@ describe("TimelinePane", () => {
 
     // Drill into the nested Task's agent log; back returns to the parent.
     const modal = screen.getByTestId("subagent-modal");
+    await waitFor(() => expect(within(modal).getByText(/view agent log/i)).toBeDefined());
     await user.click(within(modal).getByText(/view agent log/i));
     await waitFor(() => expect(screen.getByText("inner agent")).toBeDefined());
+    await waitFor(() => expect(screen.getByText(/inner prompt/)).toBeDefined());
     await user.click(screen.getByRole("button", { name: /parent agent/i }));
     await waitFor(() => expect(screen.getByText("outer agent")).toBeDefined());
   });
@@ -948,8 +970,9 @@ describe("TimelinePane", () => {
       thinking_count: 0,
       has_errors: false,
       markdown: `**Prompt**\n\n> ${preview}`,
-      chunks: [
+      items: [
         {
+          offset: 1,
           kind: "assistant",
           items: [{ kind: "text", text: assistantText }],
           thinking: [],
@@ -1010,8 +1033,9 @@ describe("TimelinePane", () => {
     const makeTurn = (text: string, eventCount: number) => ({
       ...((timelinePayload().turns[0] as Record<string, unknown>) ?? {}),
       event_count: eventCount,
-      chunks: [
+      items: [
         {
+          offset: 1,
           kind: "assistant",
           items: [{ kind: "text", text }],
           thinking: [],
@@ -1047,7 +1071,8 @@ describe("TimelinePane", () => {
       useSessionStore.setState({ sessions: [sessionView(1)] });
     });
 
-    await waitFor(() => expect(screen.getByText("detail 2")).toBeDefined());
+    // The revision tick and the changed summary each read the turn again.
+    await waitFor(() => expect(screen.getByText(/^detail [2-9]$/)).toBeDefined());
     expect(detailCalls).toBeGreaterThan(1);
   });
 

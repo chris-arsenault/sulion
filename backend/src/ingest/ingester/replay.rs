@@ -8,10 +8,7 @@ use uuid::Uuid;
 
 use crate::db::Pool;
 
-use super::{
-    insert_event, load_codex_context, rebuild_ancestor_projections, DirtyTranscriptFile,
-    InsertError, TranscriptSource,
-};
+use super::{insert_event, load_codex_context, DirtyTranscriptFile, InsertError, TranscriptSource};
 
 pub(super) async fn session_is_purged(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<bool> {
     let purged: Option<bool> = sqlx::query_scalar(
@@ -81,7 +78,6 @@ pub async fn replay_session_lines(
     pool: &Pool,
     session_uuid: Uuid,
     agent: &str,
-    parent_session_uuid: Option<Uuid>,
     lines: Vec<ReplayLine>,
 ) -> anyhow::Result<ReplayStats> {
     let source = match agent {
@@ -117,12 +113,11 @@ pub async fn replay_session_lines(
             }
         }
     }
+    // A parent reads this session through its child references, so only
+    // this session is rebuilt.
     stats.turns_projected =
         crate::ingest::projection::rebuild_session_projection(pool, session_uuid)
             .await
             .context("rebuild projection after replay")?;
-    if parent_session_uuid.is_some() {
-        rebuild_ancestor_projections(pool, session_uuid, source).await;
-    }
     Ok(stats)
 }

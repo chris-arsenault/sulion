@@ -349,7 +349,10 @@ hostname or crosses the LAN in the clear.
 ## Networking
 
 The public path is shared Ahara ALB/WAF → EC2 nginx → WireGuard → the frontend
-published on `192.168.66.3:30080`. The direct LAN URL remains available for
+published on `192.168.66.3:30080`. The browser deletes sessions with
+`POST /api/sessions/:id/delete` for networks that filter the `DELETE` method.
+`DELETE /api/sessions/:id` remains supported; both routes use the same
+authenticated handler. The direct LAN URL remains available for
 operations and rollback. Development-node pairing does not use that path at
 all: the frontend returns 404 for `/ws/nodes`, and nodes instead reach the
 backend directly on `192.168.66.3:30081`, which no upstream registration points

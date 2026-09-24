@@ -638,10 +638,15 @@ export interface TimelineFileTouch {
   is_write: boolean;
 }
 
+/** A spawning call's transcript, by reference: a whole child session, or
+ * the listed sidechain turns of one. Fetch the turns with
+ * `getSessionTurns`. */
 export interface TimelineSubagent {
   title: string;
   event_count: number;
-  turns: TimelineTurn[];
+  turn_count: number;
+  session_uuid?: string | null;
+  turn_ids?: number[];
 }
 
 export interface TimelineToolPair {
@@ -664,7 +669,6 @@ export type TimelineAssistantItem =
 
 export type TimelineChunk =
   | { kind: "assistant"; items: TimelineAssistantItem[]; thinking: string[] }
-  | { kind: "tool"; pair_id: string }
   | { kind: "summary"; subtype: string | null; text: string }
   | { kind: "system"; subtype: string | null; text: string; is_meta: boolean }
   | {
@@ -680,6 +684,11 @@ export type TimelineChunk =
         blocks: TimelineBlock[];
       };
     };
+
+/** One visible event of a turn, keyed by its transcript byte offset. Items
+ * are written once and never change; consecutive assistant items render as
+ * one block (see `groupItems`). */
+export type TimelineItem = TimelineChunk & { offset: number };
 
 export interface TimelineTurn {
   id: number;
@@ -698,14 +707,14 @@ export interface TimelineTurn {
   input_tokens?: number;
   output_tokens?: number;
   markdown: string;
-  chunks: TimelineChunk[];
+  items: TimelineItem[];
   pty_session_id?: string | null;
   session_uuid?: string | null;
   session_agent?: string | null;
   session_label?: string | null;
   session_state?: SessionState | null;
   /** Set by the client from the detail response when the session was
-   * purged to its turn digest: `chunks` is empty and `markdown` is the
+   * purged to its turn digest: `items` is empty and `markdown` is the
    * whole record until the session is restored. */
   archived_at?: string | null;
 }
@@ -746,6 +755,18 @@ export interface TimelineTurnDetailResponse {
   session_agent: string | null;
   turn: TimelineTurn;
   archived_at?: string | null;
+  /** Transcript offset the read reflects; pass it back as `since`. */
+  through: number;
+  /** Set on a `since` read: `turn` holds only the items and tool pairs
+   * changed by events after that offset, and no markdown. */
+  since?: number | null;
+}
+
+export interface SessionTurnsResponse {
+  session_uuid: string;
+  session_agent: string | null;
+  through: number;
+  turns: TimelineTurn[];
 }
 
 export interface MonitorSessionTurn {

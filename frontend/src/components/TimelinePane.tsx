@@ -41,7 +41,6 @@ import type {
   AgentLaunchType,
   SessionView,
   TimelineQuery,
-  TimelineSubagent,
   TimelineSummaryResponse,
 } from "../api/types";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -54,11 +53,13 @@ import { useTabs } from "../state/TabStore";
 import { useDisplay } from "../state/DisplayStore";
 import { useTimelineFilters } from "./timeline/filters";
 import { gateText, promptGateFor } from "./timeline/promptGate";
-import { type ToolPair, type Turn, type TurnSummary } from "./timeline/grouping";
+import { type Turn, type TurnSummary } from "./timeline/grouping";
 import type { FileLinkTarget } from "./timeline/markdownLinks";
 import { ModelSwitchGuard } from "./timeline/ModelSwitchModal";
 import { SessionInspectorPane } from "./timeline/SessionInspectorPane";
 import { SubagentModal } from "./timeline/SubagentModal";
+import { applyTurnDetail, type TurnDetailEntry } from "./timeline/turnDetailCache";
+import { useSubagentStack } from "./timeline/useSubagentStack";
 import { TimelineControlsFlyout } from "./timeline/TimelineControlsFlyout";
 import { TurnGridFlyout } from "./timeline/TurnGridFlyout";
 import { TurnRow } from "./timeline/TurnRow";
@@ -71,13 +72,12 @@ const DEFAULT_INSPECTOR_FRACTION = 0.55;
 const MIN_INSPECTOR_FRACTION = 0.28;
 const MAX_INSPECTOR_FRACTION = 0.78;
 
-interface CachedTurnDetail {
+interface CachedTurnDetail extends TurnDetailEntry {
   fingerprint: string;
-  /** Resource revision at fetch time. While the subagent modal is open the
-   * detail refetches on every revision tick, because subagent (sidechain)
-   * events don't move the parent turn's summary fingerprint. */
-  revision: number;
-  turn: Turn;
+  /** App-state timeline revision the entry was read at. A newer one asks
+   * for the records changed since: a late result can change an older turn
+   * without moving its summary. */
+  resourceRevision: number;
 }
 
 export function TimelinePane({
@@ -106,10 +106,6 @@ export function TimelinePane({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const virtuoso = useRef<VirtuosoHandle | null>(null);
-  // Pair ids from the selected turn down through nested Task pairs. The
-  // subagent shown in the modal is re-derived from the (live) detail cache
-  // on every render, so it updates as the subagent emits events.
-  const [subagentPath, setSubagentPath] = useState<string[]>([]);
   const [selectedTurnKey, setSelectedTurnKey] = useState<string | null>(null);
   const appliedFocusKeyRef = useRef<string | null>(null);
   const loadedSummaryKeyRef = useRef<string | null>(null);
@@ -182,6 +178,8 @@ export function TimelinePane({
       }),
     [filters],
   );
+  const subagents = useSubagentStack(query, resourceRevision, active);
+  const { close: closeSubagent } = subagents;
 
   useEffect(() => {
     setTimeline(null);
@@ -190,11 +188,11 @@ export function TimelinePane({
     setLoadError(null);
     setDetailError(null);
     setDetailCache(new Map());
-    setSubagentPath([]);
+    closeSubagent();
     setSelectedTurnKey(null);
     appliedFocusKeyRef.current = null;
     loadedSummaryKeyRef.current = null;
-  }, [sessionId, repo]);
+  }, [sessionId, repo, closeSubagent]);
 
   useEffect(() => {
     setDetailCache(new Map());
@@ -274,43 +272,52 @@ export function TimelinePane({
   const detailPending =
     selectedSummary != null && selectedTurn == null && !detailError;
 
-  const subagentOpen = subagentPath.length > 0;
+  // A turn listed from a child session (the sidechain view) is read from
+  // that session, not the pane's.
+  const readSelectedTurn = useCallback(
+    (summary: TurnSummary, since?: number) => {
+      if (sessionId) {
+        const childSession =
+          summary.session_uuid && summary.session_uuid !== currentSessionUuid
+            ? summary.session_uuid
+            : undefined;
+        const turnQuery = childSession ? { ...query, session: childSession } : query;
+        return getTimelineTurn(sessionId, summary.id, turnQuery, since);
+      }
+      return getRepoTimelineTurn(repo!, summary.session_uuid!, summary.id, query, since);
+    },
+    [currentSessionUuid, query, repo, sessionId],
+  );
+
   useEffect(() => {
     if (!active || !selectedSummary || !selectedTurnKey) return;
     if (selectedFingerprint == null) return;
     const cached = detailCache.get(selectedTurnKey);
     const cacheFresh =
       cached?.fingerprint === selectedFingerprint &&
-      (!subagentOpen || cached.revision === resourceRevision);
+      cached.resourceRevision === resourceRevision;
     if (cacheFresh) return;
     if (!sessionId && (!repo || !selectedSummary.session_uuid)) return;
 
     let cancelled = false;
     const fetchDetail = async () => {
       try {
-        const resp = sessionId
-          ? await getTimelineTurn(sessionId, selectedSummary.id, query)
-          : await getRepoTimelineTurn(
-              repo!,
-              selectedSummary.session_uuid!,
-              selectedSummary.id,
-              query,
-            );
+        const resp = await readSelectedTurn(selectedSummary, cached?.through);
         if (cancelled) return;
         setDetailCache((prev) => {
           const entry = prev.get(selectedTurnKey);
-          if (
-            entry?.fingerprint === selectedFingerprint &&
-            entry.revision === resourceRevision
-          ) {
-            return prev;
-          }
           const next = new Map(prev);
-          next.set(selectedTurnKey, {
-            fingerprint: selectedFingerprint,
-            revision: resourceRevision,
-            turn: { ...resp.turn, archived_at: resp.archived_at ?? null },
-          });
+          const applied = applyTurnDetail(entry, resp);
+          if (applied) {
+            next.set(selectedTurnKey, {
+              ...applied,
+              fingerprint: selectedFingerprint,
+              resourceRevision,
+            });
+          } else {
+            // Asked against a base that has since moved: read it whole.
+            next.delete(selectedTurnKey);
+          }
           return next;
         });
         setDetailError(null);
@@ -328,47 +335,25 @@ export function TimelinePane({
   }, [
     detailCache,
     active,
-    query,
+    readSelectedTurn,
     repo,
     resourceRevision,
     selectedFingerprint,
     selectedSummary,
     selectedTurnKey,
     sessionId,
-    subagentOpen,
   ]);
 
-  // Resolve the open subagent by walking pair ids from the selected turn
-  // through nested Task pairs. Derived (not stored) so a detail refetch
-  // refreshes the modal in place.
-  const subagent = useMemo<TimelineSubagent | null>(() => {
-    if (!selectedTurn || subagentPath.length === 0) return null;
-    let pairs = selectedTurn.tool_pairs;
-    let current: TimelineSubagent | null = null;
-    for (const pairId of subagentPath) {
-      current = pairs.find((pair) => pair.id === pairId)?.subagent ?? null;
-      if (!current) return null;
-      pairs = current.turns.flatMap((turn) => turn.tool_pairs);
-    }
-    return current;
-  }, [selectedTurn, subagentPath]);
+  // A merged turn keeps the digest of its last whole read; copying reads
+  // the current one.
+  const loadSelectedMarkdown = useCallback(async () => {
+    if (!selectedSummary) return "";
+    const resp = await readSelectedTurn(selectedSummary);
+    return resp.turn.markdown;
+  }, [readSelectedTurn, selectedSummary]);
 
-  const handleSubagent = useCallback((pair: ToolPair) => {
-    if (pair.subagent) setSubagentPath((prev) => [...prev, pair.id]);
-  }, []);
-  const closeSubagent = useCallback(() => setSubagentPath([]), []);
-  const backSubagent = useCallback(
-    () => setSubagentPath((prev) => prev.slice(0, -1)),
-    [],
-  );
-
-  // The path can stop resolving when a filter change or refetch drops the
-  // pair it pointed at; drop it rather than let later opens append to it.
-  useEffect(() => {
-    if (subagentPath.length > 0 && selectedTurn && !subagent) {
-      setSubagentPath([]);
-    }
-  }, [subagent, selectedTurn, subagentPath.length]);
+  const handleSubagent = subagents.open;
+  const backSubagent = subagents.back;
 
   // A manual click in the turn list is the user overriding whatever
   // focus the tab was opened with. Strip the focus fields from the
@@ -380,11 +365,11 @@ export function TimelinePane({
   const handleTurnSelect = useCallback(
     (key: string) => {
       setSelectedTurnKey(key);
-      setSubagentPath([]);
+      closeSubagent();
       if (tabId) clearTimelineFocus(tabId);
       if (filters.followLatest) setFollowLatest(false);
     },
-    [tabId, clearTimelineFocus, filters.followLatest, setFollowLatest],
+    [tabId, clearTimelineFocus, closeSubagent, filters.followLatest, setFollowLatest],
   );
 
   // Follow-latest: while the filter is on, keep the selection pinned
@@ -526,6 +511,7 @@ export function TimelinePane({
               showThinking={filters.showThinking}
               hideUserPrompt={filters.hiddenSpeakers.has("user")}
               onOpenSubagent={handleSubagent}
+              loadMarkdown={loadSelectedMarkdown}
               asOverlay={false}
               focusPairId={focusPairId ?? null}
               focusKey={focusKey ?? null}
@@ -552,6 +538,7 @@ export function TimelinePane({
                 showThinking={filters.showThinking}
                 hideUserPrompt={filters.hiddenSpeakers.has("user")}
                 onOpenSubagent={handleSubagent}
+                loadMarkdown={loadSelectedMarkdown}
                 asOverlay
                 onClose={clearSelectedTurn}
                 focusPairId={focusPairId ?? null}
@@ -569,6 +556,7 @@ export function TimelinePane({
             showThinking={filters.showThinking}
             hideUserPrompt={filters.hiddenSpeakers.has("user")}
             onOpenSubagent={handleSubagent}
+            loadMarkdown={loadSelectedMarkdown}
             asOverlay={false}
             focusPairId={focusPairId ?? null}
             focusKey={focusKey ?? null}
@@ -608,6 +596,7 @@ export function TimelinePane({
             showThinking={filters.showThinking}
             hideUserPrompt={filters.hiddenSpeakers.has("user")}
             onOpenSubagent={handleSubagent}
+            loadMarkdown={loadSelectedMarkdown}
             asOverlay={false}
             focusPairId={focusPairId ?? null}
             focusKey={focusKey ?? null}
@@ -625,14 +614,15 @@ export function TimelinePane({
           onSelectTurn={handleTurnSelect}
         />
       )}
-      {subagent && (
+      {subagents.subagent && (
         <SubagentModal
-          subagent={subagent}
+          subagent={subagents.subagent}
+          turns={subagents.turns}
           showThinking={filters.showThinking}
           hideUserPrompt={filters.hiddenSpeakers.has("user")}
           onClose={closeSubagent}
           onOpenSubagent={handleSubagent}
-          onBack={subagentPath.length > 1 ? backSubagent : undefined}
+          onBack={subagents.depth > 1 ? backSubagent : undefined}
           fileTarget={fileTarget}
         />
       )}

@@ -1308,8 +1308,8 @@ function defaultActivitySummary(state: SessionActivityState): string {
 }
 
 function latestAssistantText(turn: TimelineTurn): string | null {
-  for (let i = turn.chunks.length - 1; i >= 0; i -= 1) {
-    const chunk = turn.chunks[i];
+  for (let i = turn.items.length - 1; i >= 0; i -= 1) {
+    const chunk = turn.items[i];
     if (chunk?.kind !== "assistant") continue;
     const text = chunk.items
       .filter((item) => item.kind === "text")

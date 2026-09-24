@@ -93,8 +93,9 @@ describe("MonitorPane", () => {
                 thinking_count: 0,
                 has_errors: false,
                 markdown: "",
-                chunks: [
+                items: [
                   {
+                    offset: 0,
                     kind: "assistant",
                     items: [{ kind: "text", text: "latest assistant output" }],
                     thinking: [],
@@ -590,7 +591,7 @@ describe("MonitorPane", () => {
                 thinking_count: 0,
                 has_errors: false,
                 markdown: "",
-                chunks: [],
+                items: [],
               },
             },
           ],

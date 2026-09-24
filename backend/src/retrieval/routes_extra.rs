@@ -246,11 +246,29 @@ pub(super) async fn turn_route(
     .fetch_optional(&state.pool)
     .await?
     .ok_or_else(|| RetrievalError::bad_request("turn not found"))?;
+    // Only a purged turn stores its digest; a live one composes it.
+    let mut markdown: String = row.try_get("markdown").unwrap_or_default();
+    if markdown.is_empty() {
+        let unfiltered = crate::ingest::ProjectionFilters {
+            show_bookkeeping: true,
+            show_sidechain: true,
+            ..Default::default()
+        };
+        markdown = crate::ingest::load_timeline_turn_detail(
+            &state.pool,
+            query.agent_session_uuid,
+            query.turn_id,
+            &unfiltered,
+        )
+        .await?
+        .map(|turn| turn.markdown)
+        .unwrap_or_default();
+    }
     Ok(Json(TurnResponse {
         agent_session_uuid: query.agent_session_uuid,
         turn_id: query.turn_id,
         preview: row.try_get("preview").unwrap_or_default(),
-        markdown: row.try_get("markdown").unwrap_or_default(),
+        markdown,
         evidence: load_evidence(&state.pool, query.agent_session_uuid, query.turn_id, true).await?,
         archived: row.try_get("archived").unwrap_or(false),
     }))

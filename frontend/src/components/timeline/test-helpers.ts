@@ -4,6 +4,7 @@ import type {
   TimelineBlock,
   TimelineChunk,
   TimelineEvent,
+  TimelineItem,
   TimelineSubagent,
   TimelineToolPair,
   TimelineTurn,
@@ -125,8 +126,14 @@ export function assistantChunk(
   return { kind: "assistant", items, thinking };
 }
 
+/** An assistant event that only made the call. */
 export function toolChunk(pairId: string): TimelineChunk {
-  return { kind: "tool", pair_id: pairId };
+  return assistantChunk([{ kind: "tool", pair_id: pairId }]);
+}
+
+/** Items at successive offsets. */
+export function itemsOf(...chunks: TimelineChunk[]): TimelineItem[] {
+  return chunks.map((chunk, offset) => ({ ...chunk, offset }));
 }
 
 export function makeTurn(
@@ -147,7 +154,7 @@ export function makeTurn(
     input_tokens: overrides.input_tokens ?? 0,
     output_tokens: overrides.output_tokens ?? 0,
     markdown: overrides.markdown ?? "**Prompt**\n\n> prompt",
-    chunks: overrides.chunks ?? [],
+    items: overrides.items ?? [],
   };
 }
 
@@ -157,6 +164,8 @@ export function makeSubagent(
   return {
     title: overrides.title ?? "Agent log",
     event_count: overrides.event_count ?? 0,
-    turns: overrides.turns ?? [],
+    turn_count: overrides.turn_count ?? 0,
+    session_uuid: overrides.session_uuid ?? "child-session",
+    turn_ids: overrides.turn_ids,
   };
 }

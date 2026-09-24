@@ -95,10 +95,10 @@ describe("api client", () => {
     expect(s.state).toBe("live");
   });
 
-  it("deleteSession returns void on 204", async () => {
+  it("deleteSession POSTs to the delete action and returns void on 204", async () => {
     stubFetch(async (url, init) => {
-      expect(init?.method).toBe("DELETE");
-      expect(url).toBe("/api/sessions/abc");
+      expect(init?.method).toBe("POST");
+      expect(url).toBe("/api/sessions/abc/delete");
       return new Response(null, { status: 204 });
     });
     await expect(deleteSession("abc")).resolves.toBeUndefined();

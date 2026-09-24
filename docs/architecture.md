@@ -154,8 +154,8 @@ Code boundary:
 
 - `backend/src/ingest/ingester.rs` — transcript polling + orchestration
 - `backend/src/ingest/canonical/` — source-specific (Claude, Codex) translation into the canonical event schema
-- `backend/src/ingest/timeline/` — app-shaped timeline projection
-- `backend/src/ingest/projection.rs` — materialization into `timeline_*` tables
+- `backend/src/ingest/timeline/` — event interpretation and the incremental timeline reducer
+- `backend/src/ingest/projection.rs` — the projection batch writer and `timeline_*` readers
 - `backend/src/ingest/usage.rs` — cache-aware session spend, exact daily model attribution, and latest context-pressure projection
 
 ## Invariants — do not break

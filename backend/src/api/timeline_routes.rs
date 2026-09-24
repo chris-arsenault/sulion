@@ -33,6 +33,12 @@ pub(super) struct TimelineQuery {
     show_sidechain: Option<bool>,
     #[serde(default)]
     file_path: Option<String>,
+    /// Turn detail only: return the records changed after this revision.
+    #[serde(default)]
+    since: Option<i64>,
+    /// Session turns only: the turn ids to return (comma-separated).
+    #[serde(default)]
+    ids: Option<String>,
 }
 
 pub(super) async fn session_timeline(
@@ -81,23 +87,68 @@ pub(super) async fn session_timeline_turn(
         }
     };
 
-    let Some(mut turn) = ingest::load_timeline_turn_detail(
-        &state.pool,
-        resolved.session_uuid,
-        turn_id,
-        &filters_for(q),
-    )
-    .await?
+    turn_detail_response(&state, resolved.session_uuid, turn_id, q).await
+}
+
+/// One turn, whole or as its changes after `since`.
+async fn turn_detail_response(
+    state: &AppState,
+    session_uuid: Uuid,
+    turn_id: i64,
+    q: TimelineQuery,
+) -> ApiResult<Json<TimelineTurnDetailResponse>> {
+    let since = q.since;
+    let Some(mut view) =
+        ingest::load_timeline_turn_view(&state.pool, session_uuid, turn_id, &filters_for(q), since)
+            .await?
     else {
         return Err(ApiError::NotFound);
     };
-    let meta = ingest::load_timeline_session_meta(&state.pool, resolved.session_uuid).await?;
-    ingest::annotate_timeline_turns(std::slice::from_mut(&mut turn), &meta);
+    let meta = ingest::load_timeline_session_meta(&state.pool, session_uuid).await?;
+    ingest::annotate_timeline_turns(std::slice::from_mut(&mut view.turn), &meta);
     Ok(Json(TimelineTurnDetailResponse {
-        session_uuid: resolved.session_uuid,
-        session_agent: resolved.session_agent,
-        turn,
+        session_uuid,
+        session_agent: meta.session_agent,
+        turn: view.turn,
         archived_at: meta.archived_at,
+        through: view.through,
+        since,
+    }))
+}
+
+#[derive(Serialize)]
+pub(super) struct SessionTurnsResponse {
+    session_uuid: Uuid,
+    session_agent: Option<String>,
+    through: i64,
+    turns: Vec<TimelineTurn>,
+}
+
+/// A child transcript by reference: a whole spawned session, or the listed
+/// sidechain turns of one. Sidechain turns are always included.
+pub(super) async fn session_turns(
+    State(state): State<Arc<AppState>>,
+    Path(session_uuid): Path<Uuid>,
+    Query(q): Query<TimelineQuery>,
+) -> ApiResult<Json<SessionTurnsResponse>> {
+    let ids: Option<Vec<i64>> = q.ids.as_deref().map(|raw| {
+        raw.split(',')
+            .filter_map(|id| id.trim().parse().ok())
+            .collect()
+    });
+    let mut filters = filters_for(q);
+    filters.show_sidechain = true;
+    let meta = ingest::load_timeline_session_meta(&state.pool, session_uuid)
+        .await
+        .map_err(|_| ApiError::NotFound)?;
+    let (through, mut turns) =
+        ingest::load_session_turns(&state.pool, session_uuid, ids.as_deref(), &filters).await?;
+    ingest::annotate_timeline_turns(&mut turns, &meta);
+    Ok(Json(SessionTurnsResponse {
+        session_uuid,
+        session_agent: meta.session_agent,
+        through,
+        turns,
     }))
 }
 
@@ -119,21 +170,7 @@ pub(super) async fn repo_timeline_turn(
 ) -> ApiResult<Json<TimelineTurnDetailResponse>> {
     let _ = repo_path(&state, &name)?;
     ensure_session_belongs_to_repo(&state, session_uuid, &name).await?;
-
-    let Some(mut turn) =
-        ingest::load_timeline_turn_detail(&state.pool, session_uuid, turn_id, &filters_for(q))
-            .await?
-    else {
-        return Err(ApiError::NotFound);
-    };
-    let meta = ingest::load_timeline_session_meta(&state.pool, session_uuid).await?;
-    ingest::annotate_timeline_turns(std::slice::from_mut(&mut turn), &meta);
-    Ok(Json(TimelineTurnDetailResponse {
-        session_uuid,
-        session_agent: meta.session_agent,
-        turn,
-        archived_at: meta.archived_at,
-    }))
+    turn_detail_response(&state, session_uuid, turn_id, q).await
 }
 
 #[derive(Deserialize)]
@@ -286,12 +323,21 @@ async fn ensure_session_belongs_to_repo(
     session_uuid: Uuid,
     repo_name: &str,
 ) -> ApiResult<()> {
+    // A repo session, or a session one of them spawned: the sidechain view
+    // lists child turns beside their parent's.
     let exists: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT cs.session_uuid \
-           FROM claude_sessions cs \
+        "WITH RECURSIVE up(session_uuid) AS ( \
+             SELECT $1::UUID \
+             UNION \
+             SELECT l.session_uuid FROM timeline_child_links l \
+               JOIN up ON l.child_session_uuid = up.session_uuid \
+              WHERE l.child_turn_id < 0 \
+         ) \
+         SELECT cs.session_uuid \
+           FROM up \
+           JOIN claude_sessions cs ON cs.session_uuid = up.session_uuid \
            JOIN pty_sessions ps ON ps.id = cs.pty_session_id \
-          WHERE cs.session_uuid = $1 \
-            AND ps.repo = $2 \
+          WHERE ps.repo = $2 \
             AND NOT EXISTS ( \
                 SELECT 1 \
                   FROM events meta \
@@ -299,7 +345,8 @@ async fn ensure_session_belongs_to_repo(
                    AND meta.agent = 'codex' \
                    AND meta.kind = 'session_meta' \
                    AND meta.payload #> '{payload,source,subagent}' IS NOT NULL \
-            )",
+            ) \
+          LIMIT 1",
     )
     .bind(session_uuid)
     .bind(repo_name)

@@ -148,6 +148,15 @@ async fn legacy_ambient_poll_contracts_are_removed() {
 
 #[tokio::test]
 async fn sessions_crud_roundtrip() {
+    sessions_crud_with_delete_method(reqwest::Method::DELETE, "").await;
+}
+
+#[tokio::test]
+async fn sessions_crud_roundtrip_post_delete() {
+    sessions_crud_with_delete_method(reqwest::Method::POST, "/delete").await;
+}
+
+async fn sessions_crud_with_delete_method(method: reqwest::Method, suffix: &str) {
     let h = Harness::new().await;
     // Create a repo dir so working_dir is valid.
     let repo_name = "testrepo";
@@ -172,10 +181,9 @@ async fn sessions_crud_roundtrip() {
     let sessions = list["sessions"].as_array().unwrap();
     assert!(sessions.iter().any(|s| s["id"] == created["id"]));
 
-    // DELETE /api/sessions/:id
     let resp = h
         .client
-        .delete(format!("{}/api/sessions/{}", h.base, id))
+        .request(method, format!("{}/api/sessions/{}{suffix}", h.base, id))
         .send()
         .await
         .unwrap();
@@ -1126,8 +1134,90 @@ async fn timeline_returns_projected_turns() {
         turn["tool_pairs"][0]["file_touches"][0]["path"],
         "src/lib.rs"
     );
-    assert_eq!(turn["chunks"][0]["kind"], "assistant");
-    assert_eq!(turn["chunks"][1]["kind"], "tool");
+    assert_eq!(turn["items"].as_array().unwrap().len(), 1);
+    assert_eq!(turn["items"][0]["offset"], 120);
+    assert_eq!(turn["items"][0]["kind"], "assistant");
+    assert_eq!(detail["through"], 240);
+    assert!(turn["markdown"]
+        .as_str()
+        .unwrap()
+        .contains("**Tool:** `read` `src/lib.rs`"));
+
+    // Nothing changed since that read: the delta is empty but the header
+    // stays current.
+    let through = detail["through"].as_i64().unwrap();
+    let delta: serde_json::Value = h
+        .client
+        .get(format!(
+            "{}/api/sessions/{}/timeline/turns/0?since={through}",
+            h.base, pty_id
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(delta["since"], through);
+    assert_eq!(delta["turn"]["items"], json!([]));
+    assert_eq!(delta["turn"]["tool_pairs"], json!([]));
+    assert_eq!(delta["turn"]["event_count"], 3);
+
+    // The session route serves a transcript by reference.
+    let referenced: serde_json::Value = h
+        .client
+        .get(format!(
+            "{}/api/timeline/sessions/{}/turns?ids=0",
+            h.base, session_uuid
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(referenced["turns"].as_array().unwrap().len(), 1);
+    assert_eq!(referenced["turns"][0]["preview"], "hello");
+}
+
+/// Uploads are capped by the handler at 50 MiB, not by the framework's
+/// default request body limit.
+#[tokio::test]
+async fn repo_upload_accepts_files_past_the_default_body_limit() {
+    let h = Harness::new().await;
+    std::fs::create_dir_all(h.repos_root().join("r")).unwrap();
+    let payload = vec![b'x'; 3 * 1024 * 1024];
+    let boundary = "sulion-upload-boundary";
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"big.bin\"\r\n\
+         Content-Type: application/octet-stream\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(&payload);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    let response = h
+        .client
+        .post(format!("{}/api/repos/r/upload?path=uploads", h.base))
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    assert_eq!(
+        status,
+        reqwest::StatusCode::OK,
+        "{}",
+        response.text().await.unwrap()
+    );
+    assert_eq!(
+        std::fs::read(h.repos_root().join("r/uploads/big.bin")).unwrap(),
+        payload
+    );
 }
 
 #[tokio::test]

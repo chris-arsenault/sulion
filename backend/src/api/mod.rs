@@ -64,7 +64,7 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     let device_authed = Router::new()
         .route(
             "/api/repos/:name/ingest",
-            post(repo_routes::post_repo_ingest),
+            post(repo_routes::post_repo_ingest).layer(repo_routes::upload_body_limit()),
         )
         .route("/api/repos/:name/raw", get(repo_routes::get_repo_raw))
         .route_layer(middleware::from_fn_with_state(

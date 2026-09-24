@@ -17,10 +17,13 @@ test("walks timeline details, filters, hover cards, and file trace links", async
   );
   await page.getByLabel("Close thinking").click();
 
+  // The filters live in the timeline settings flyout.
+  await page.getByRole("button", { name: "Timeline settings" }).click();
   const fileFilter = page.getByLabel("Filter to turns referencing file path");
   await fileFilter.fill("missing.txt");
   await expect(page.getByText("No turns match current filters.")).toBeVisible();
   await page.getByRole("button", { name: "Show all" }).click();
+  await page.getByRole("button", { name: "Close timeline settings" }).click();
   await expect(firstTurn).toBeVisible();
 
   const readTool = page.locator('[data-testid="tool-pair-row"][data-tool-type="read"]');

@@ -32,6 +32,10 @@ pub fn router() -> Router<Arc<AppState>> {
             delete(session_routes::delete_session).patch(session_routes::patch_session),
         )
         .route(
+            "/api/sessions/:id/delete",
+            post(session_routes::delete_session),
+        )
+        .route(
             "/api/sessions/:id/upgrade",
             post(session_routes::upgrade_session),
         )
@@ -62,6 +66,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/sessions/:id/timeline/turns/:turn_id",
             get(timeline_routes::session_timeline_turn),
+        )
+        .route(
+            "/api/timeline/sessions/:session_uuid/turns",
+            get(timeline_routes::session_turns),
         )
         .route(
             "/api/sessions/:id/future-prompts",
@@ -141,7 +149,7 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route(
             "/api/repos/:name/upload",
-            post(repo_routes::post_repo_upload),
+            post(repo_routes::post_repo_upload).layer(repo_routes::upload_body_limit()),
         )
         .route(
             "/api/library/:kind",
@@ -220,7 +228,7 @@ fn workspace_router() -> Router<Arc<AppState>> {
         )
         .route(
             "/api/workspaces/:id/upload",
-            post(workspace_routes::post_workspace_upload),
+            post(workspace_routes::post_workspace_upload).layer(repo_routes::upload_body_limit()),
         )
 }
 

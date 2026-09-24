@@ -95,8 +95,8 @@ function installFetchMock(): MockState {
         state.deletedWorkspaceRequests.push({ id, query });
         return new Response(null, { status: 204 });
       }
-      if (url.startsWith("/api/sessions/") && method === "DELETE") {
-        const id = url.split("/").pop()!;
+      if (url.startsWith("/api/sessions/") && url.endsWith("/delete") && method === "POST") {
+        const id = url.split("/")[3]!;
         state.sessions = state.sessions.filter((s) => s.id !== id);
         state.deletedIds.push(id);
         return new Response(null, { status: 204 });

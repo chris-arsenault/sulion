@@ -40,7 +40,6 @@ struct PurgedSession {
     agent: String,
     archive_key: Option<String>,
     archive_sha256: Option<String>,
-    parent_session_uuid: Option<Uuid>,
 }
 
 /// Purged sessions matching the scope, oldest archive month first, so a
@@ -82,7 +81,7 @@ pub async fn restore_session(
     purge_after: bool,
 ) -> anyhow::Result<RestoreOutcome> {
     let session: PurgedSession = sqlx::query_as(
-        "SELECT agent, archive_key, archive_sha256, parent_session_uuid \
+        "SELECT agent, archive_key, archive_sha256 \
            FROM claude_sessions WHERE session_uuid = $1 AND purged_at IS NOT NULL",
     )
     .bind(session_uuid)
@@ -114,15 +113,9 @@ pub async fn restore_session(
             payload: serde_json::to_vec(&line.p).unwrap_or_default(),
         })
         .collect();
-    let stats = replay_session_lines(
-        pool,
-        session_uuid,
-        &session.agent,
-        session.parent_session_uuid,
-        replay,
-    )
-    .await
-    .with_context(|| format!("replay {key}"))?;
+    let stats = replay_session_lines(pool, session_uuid, &session.agent, replay)
+        .await
+        .with_context(|| format!("replay {key}"))?;
 
     let tokens_after: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(input_tokens + cached_input_tokens + cache_write_input_tokens \
@@ -228,6 +221,11 @@ async fn withdraw_and_clear(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<i
             .await
             .with_context(|| format!("clear {table} before replay"))?;
     }
+    // The timeline is rebuilt from the replayed events, never resumed.
+    sqlx::query("UPDATE timeline_session_state SET projection_version = 0 WHERE session_uuid = $1")
+        .bind(session_uuid)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("UPDATE claude_sessions SET purged_at = NULL WHERE session_uuid = $1")
         .bind(session_uuid)
         .execute(&mut *tx)

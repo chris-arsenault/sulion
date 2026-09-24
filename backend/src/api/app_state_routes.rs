@@ -592,7 +592,8 @@ async fn load_sessions(pool: &crate::db::Pool) -> ApiResult<Vec<AppSessionView>>
                 ws.base_sha AS workspace_base_sha, ws.merge_target AS workspace_merge_target, \
                 ps.meta_repo_id, mr.name AS meta_repo_name, \
                 tss.latest_event_at AS last_event_at, \
-                COALESCE(tss.revision, 0)::BIGINT AS timeline_revision, \
+                (COALESCE(tss.revision, 0) + COALESCE(crev.revision, 0))::BIGINT \
+                    AS timeline_revision, \
                 ps.label, ps.agent_label, ps.pinned, ps.color, \
                 ps.agent_runtime_agent, ps.agent_runtime_state, ps.agent_runtime_started_at, \
                 ps.agent_runtime_ended_at, ps.agent_runtime_exit_code, \
@@ -636,6 +637,14 @@ async fn load_sessions(pool: &crate::db::Pool) -> ApiResult<Vec<AppSessionView>>
            LEFT JOIN workspaces ws ON ws.id = ps.workspace_id \
            LEFT JOIN meta_repos mr ON mr.id = ps.meta_repo_id \
            LEFT JOIN timeline_session_state tss ON tss.session_uuid = ps.current_session_uuid \
+           LEFT JOIN LATERAL ( \
+               SELECT SUM(cs.revision) AS revision \
+                 FROM timeline_session_state cs \
+                WHERE cs.session_uuid IN ( \
+                          SELECT l.child_session_uuid FROM timeline_child_links l \
+                           WHERE l.session_uuid = ps.current_session_uuid \
+                             AND l.child_session_uuid <> l.session_uuid) \
+           ) crev ON TRUE \
            LEFT JOIN future_prompt_session_state fps ON fps.session_uuid = ps.current_session_uuid \
            LEFT JOIN agent_session_metadata asm ON asm.session_uuid = ps.current_session_uuid \
            LEFT JOIN agent_session_usage aus ON aus.session_uuid = ps.current_session_uuid \

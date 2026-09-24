@@ -13,75 +13,44 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::ingest::canonical::BlockKind;
+use super::{TimelineAssistantItem, TimelineChunk, TimelineItem, TimelineToolPair};
 
-use super::project::{is_assistant_event, is_tool_result_event, user_prompt_text};
-use super::{StoredEvent, TimelineToolPair};
-
-pub(crate) fn format_turn_markdown(
-    user_prompt: Option<&StoredEvent>,
-    events: &[&StoredEvent],
-    pair_by_id: &HashMap<&str, &TimelineToolPair>,
+/// The digest of a stored turn: its prompt, then each item's assistant text
+/// and tool calls, and agent messages, in order.
+pub(crate) fn compose_turn_markdown(
+    user_prompt_text: Option<&str>,
+    items: &[TimelineItem],
+    pairs: &[TimelineToolPair],
 ) -> String {
+    let pair_by_id: HashMap<&str, &TimelineToolPair> =
+        pairs.iter().map(|pair| (pair.id.as_str(), pair)).collect();
     let mut parts = Vec::new();
-    if let Some(prompt) = user_prompt {
-        let prompt_text = user_prompt_text(prompt);
-        if !prompt_text.trim().is_empty() {
-            parts.push(format_prompt(&prompt_text));
-        }
+    if let Some(text) = user_prompt_text.filter(|text| !text.trim().is_empty()) {
+        parts.push(format_prompt(text));
     }
-
-    for event in events.iter().copied() {
-        if user_prompt.is_some_and(|prompt| std::ptr::eq(prompt, event)) {
-            continue;
-        }
-        if is_tool_result_event(event) {
-            continue;
-        }
-        if is_assistant_event(event)
-            || matches!(
-                event.subtype.as_deref(),
-                Some("agent_message" | "runtime_evidence")
-            )
-        {
-            let formatted = format_assistant_event_markdown(event, pair_by_id);
-            if !formatted.is_empty() {
-                parts.push(formatted);
-            }
-        }
-    }
-
-    parts.join("\n\n")
-}
-
-fn format_assistant_event_markdown(
-    event: &StoredEvent,
-    pair_by_id: &HashMap<&str, &TimelineToolPair>,
-) -> String {
-    let mut parts = Vec::new();
-    for block in &event.blocks {
-        match block.kind {
-            BlockKind::Text => {
-                if let Some(text) = block
-                    .text
-                    .as_ref()
-                    .map(|text| text.trim())
-                    .filter(|text| !text.is_empty())
-                {
-                    parts.push(text.to_string());
+    for item in items {
+        match &item.chunk {
+            TimelineChunk::Assistant { items, .. } => {
+                for part in items {
+                    match part {
+                        TimelineAssistantItem::Text { text } => parts.push(text.trim().to_string()),
+                        TimelineAssistantItem::Tool { pair_id } => {
+                            if let Some(pair) = pair_by_id.get(pair_id.as_str()) {
+                                parts.push(format_tool_pair_markdown(pair));
+                            }
+                        }
+                    }
                 }
             }
-            BlockKind::ToolUse => {
-                let Some(tool_id) = block.tool_id.as_deref() else {
-                    continue;
-                };
-                if let Some(pair) = pair_by_id.get(tool_id) {
-                    parts.push(format_tool_pair_markdown(pair));
-                }
-            }
+            TimelineChunk::System {
+                subtype: Some(subtype),
+                text,
+                ..
+            } if subtype == "agent_message" => parts.push(text.trim().to_string()),
             _ => {}
         }
     }
+    parts.retain(|part| !part.is_empty());
     parts.join("\n\n")
 }
 

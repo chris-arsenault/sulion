@@ -80,78 +80,24 @@ pub async fn load_session_events(
     let after = filter.after.unwrap_or(-1);
     let limit = filter.limit.map(|value| value.clamp(1, 5000));
 
-    let rows: Vec<HistoryRow> = match (&filter.kind, limit) {
-        (Some(kind), Some(limit)) => {
-            sqlx::query_as(
-                "SELECT byte_offset, timestamp, kind, agent, speaker, content_kind, \
-                        event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype, \
-                        CASE WHEN agent = 'codex' THEN payload #> '{payload,info,total_token_usage}' \
-                             ELSE payload #> '{message,usage}' END, \
-                        payload #>> '{message,id}' \
-                   FROM events \
-                  WHERE session_uuid = $1 AND byte_offset > $2 AND kind = $3 \
-                  ORDER BY byte_offset ASC \
-                  LIMIT $4",
-            )
-            .bind(session_uuid)
-            .bind(after)
-            .bind(kind)
-            .bind(limit)
-            .fetch_all(pool)
-            .await?
-        }
-        (Some(kind), None) => {
-            sqlx::query_as(
-                "SELECT byte_offset, timestamp, kind, agent, speaker, content_kind, \
-                        event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype, \
-                        CASE WHEN agent = 'codex' THEN payload #> '{payload,info,total_token_usage}' \
-                             ELSE payload #> '{message,usage}' END, \
-                        payload #>> '{message,id}' \
-                   FROM events \
-                  WHERE session_uuid = $1 AND byte_offset > $2 AND kind = $3 \
-                  ORDER BY byte_offset ASC",
-            )
-            .bind(session_uuid)
-            .bind(after)
-            .bind(kind)
-            .fetch_all(pool)
-            .await?
-        }
-        (None, Some(limit)) => {
-            sqlx::query_as(
-                "SELECT byte_offset, timestamp, kind, agent, speaker, content_kind, \
-                        event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype, \
-                        CASE WHEN agent = 'codex' THEN payload #> '{payload,info,total_token_usage}' \
-                             ELSE payload #> '{message,usage}' END, \
-                        payload #>> '{message,id}' \
-                   FROM events \
-                  WHERE session_uuid = $1 AND byte_offset > $2 \
-                  ORDER BY byte_offset ASC \
-                  LIMIT $3",
-            )
-            .bind(session_uuid)
-            .bind(after)
-            .bind(limit)
-            .fetch_all(pool)
-            .await?
-        }
-        (None, None) => {
-            sqlx::query_as(
-                "SELECT byte_offset, timestamp, kind, agent, speaker, content_kind, \
-                        event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype, \
-                        CASE WHEN agent = 'codex' THEN payload #> '{payload,info,total_token_usage}' \
-                             ELSE payload #> '{message,usage}' END, \
-                        payload #>> '{message,id}' \
-                   FROM events \
-                  WHERE session_uuid = $1 AND byte_offset > $2 \
-                  ORDER BY byte_offset ASC",
-            )
-            .bind(session_uuid)
-            .bind(after)
-            .fetch_all(pool)
-            .await?
-        }
-    };
+    // A NULL kind matches every kind; LIMIT NULL is no limit.
+    let rows: Vec<HistoryRow> = sqlx::query_as(
+        "SELECT byte_offset, timestamp, kind, agent, speaker, content_kind, \
+                event_uuid, parent_event_uuid, related_tool_use_id, is_sidechain, is_meta, subtype, \
+                CASE WHEN agent = 'codex' THEN payload #> '{payload,info,total_token_usage}' \
+                     ELSE payload #> '{message,usage}' END, \
+                payload #>> '{message,id}' \
+           FROM events \
+          WHERE session_uuid = $1 AND byte_offset > $2 AND ($3::TEXT IS NULL OR kind = $3) \
+          ORDER BY byte_offset ASC \
+          LIMIT $4",
+    )
+    .bind(session_uuid)
+    .bind(after)
+    .bind(filter.kind.as_deref())
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
 
     let blocks_by_offset =
         load_event_blocks(pool, session_uuid, rows.iter().map(|row| row.0)).await?;
@@ -197,22 +143,6 @@ pub async fn load_session_events(
             },
         )
         .collect())
-}
-
-pub async fn load_all_session_events(
-    pool: &Pool,
-    session_uuid: Uuid,
-) -> Result<Vec<StoredEvent>, sqlx::Error> {
-    load_session_events(
-        pool,
-        session_uuid,
-        &SessionEventFilter {
-            after: None,
-            limit: None,
-            kind: None,
-        },
-    )
-    .await
 }
 
 #[derive(FromRow)]

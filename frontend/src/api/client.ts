@@ -1,5 +1,6 @@
 // Typed REST client. Stateless — callers do their own caching/polling.
 import { getAccessToken } from "../auth/cognito";
+import type { Maybe } from "../lib/types";
 
 import type {
   AppStateResponse,
@@ -41,6 +42,7 @@ import type {
   TimelineQuery,
   TimelineSummaryResponse,
   TimelineTurnDetailResponse,
+  SessionTurnsResponse,
   UpdateSessionRequest,
   UpdateFuturePromptInput,
   UpdatePlanInput,
@@ -164,7 +166,7 @@ export function createSession(body: CreateSessionRequest): Promise<SessionView> 
 }
 
 export function deleteSession(id: string): Promise<void> {
-  return request<void>(`/api/sessions/${id}`, { method: "DELETE" });
+  return request<void>(`/api/sessions/${id}/delete`, { method: "POST" });
 }
 
 /** Restarts the session's shell on the current toolset, in place. */
@@ -261,10 +263,12 @@ export function getTimelineTurn(
   sessionId: string,
   turnId: number,
   query: TimelineQuery = {},
+  since?: number,
 ): Promise<TimelineTurnDetailResponse> {
   const params = new URLSearchParams();
   if (query.session) params.set("session", query.session);
   appendTimelineFilterParams(params, query);
+  if (since != null) params.set("since", String(since));
   const qs = params.toString();
   const suffix = qs ? `?${qs}` : "";
   return request<TimelineTurnDetailResponse>(
@@ -290,13 +294,32 @@ export function getRepoTimelineTurn(
   sessionUuid: string,
   turnId: number,
   query: TimelineQuery = {},
+  since?: number,
 ): Promise<TimelineTurnDetailResponse> {
   const params = new URLSearchParams();
   appendTimelineFilterParams(params, query);
+  if (since != null) params.set("since", String(since));
   const qs = params.toString();
   const suffix = qs ? `?${qs}` : "";
   return request<TimelineTurnDetailResponse>(
     `/api/repos/${encodeURIComponent(repo)}/timeline/turns/${sessionUuid}/${turnId}${suffix}`,
+  );
+}
+
+/** A child transcript's turns: a whole spawned session, or the listed
+ * sidechain turns of one. */
+export function getSessionTurns(
+  sessionUuid: string,
+  turnIds: Maybe<number[]>,
+  query: TimelineQuery = {},
+): Promise<SessionTurnsResponse> {
+  const params = new URLSearchParams();
+  appendTimelineFilterParams(params, query);
+  if (turnIds?.length) params.set("ids", turnIds.join(","));
+  const qs = params.toString();
+  const suffix = qs ? `?${qs}` : "";
+  return request<SessionTurnsResponse>(
+    `/api/timeline/sessions/${sessionUuid}/turns${suffix}`,
   );
 }
 

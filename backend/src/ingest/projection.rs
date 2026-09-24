@@ -11,20 +11,25 @@ use crate::db::Pool;
 use crate::ingest::canonical::OperationCategory;
 
 use super::timeline::{
-    load_all_session_events, FileTouchContext, ProjectionFilters, StoredEvent, TimelineFileTouch,
-    TimelineOperationBadge, TimelineResponse, TimelineSubagent, TimelineSummaryResponse,
-    TimelineToolPair, TimelineToolResult, TimelineTurn, TimelineTurnSummary,
+    compose_turn_markdown, subagent_title, FileTouchContext, ProjectionFilters, TimelineFileTouch,
+    TimelineItem, TimelineOperationBadge, TimelineResponse, TimelineSubagent,
+    TimelineSummaryResponse, TimelineToolPair, TimelineToolResult, TimelineTurn,
+    TimelineTurnSummary,
 };
 
 mod file_trace;
 mod filters;
+mod store;
+mod view;
 mod write;
+
+pub use view::{load_session_turns, load_timeline_turn_view, TurnView};
 
 pub use file_trace::{load_repo_file_trace, RepoFileTraceTouch};
 use filters::apply_projection_filters;
 pub use write::{
-    rebuild_session_projection, rebuild_session_projection_after_insert,
-    reconcile_session_projection,
+    backfill_timeline_projection, project_batch, project_until_caught_up,
+    rebuild_session_projection, request_rebuild, store_turn_digests, BATCH_EVENTS, REDUCER_VERSION,
 };
 
 #[derive(FromRow)]
@@ -39,8 +44,8 @@ struct ProjectedTurnRow {
     operation_count: i32,
     thinking_count: i32,
     has_errors: bool,
+    /// The stored digest; empty until the archive purge writes it.
     markdown: String,
-    chunks_json: Value,
     is_sidechain_turn: bool,
     input_tokens: i64,
     output_tokens: i64,
@@ -77,7 +82,6 @@ struct ProjectedOperationRow {
     result_is_error: bool,
     is_error: bool,
     is_pending: bool,
-    subagent_json: Option<Value>,
 }
 
 #[derive(FromRow)]
@@ -134,211 +138,6 @@ async fn load_file_touch_context(
         repo_root: PathBuf::from(repo_root),
         working_dir: PathBuf::from(working_dir),
     }))
-}
-
-async fn load_projection_source_events(
-    pool: &Pool,
-    session_uuid: Uuid,
-) -> anyhow::Result<Vec<StoredEvent>> {
-    let mut events = load_all_session_events(pool, session_uuid)
-        .await
-        .context("load root projection events")?;
-    let mut known_ids: HashSet<String> = events
-        .iter()
-        .filter_map(|event| event.event_uuid.clone())
-        .collect();
-
-    for descendant in descendant_session_ids(pool, session_uuid).await? {
-        let descendant_events = load_all_session_events(pool, descendant)
-            .await
-            .with_context(|| format!("load descendant projection events for {descendant}"))?;
-        let mut filtered =
-            filter_descendant_projection_events(&descendant_events, &known_ids, descendant);
-        for event in &mut filtered {
-            event.source_session = Some(descendant);
-        }
-        known_ids.extend(filtered.iter().filter_map(|event| event.event_uuid.clone()));
-        events.extend(filtered);
-    }
-
-    events.sort_by(|left, right| {
-        left.timestamp
-            .cmp(&right.timestamp)
-            .then_with(|| left.byte_offset.cmp(&right.byte_offset))
-    });
-    Ok(events)
-}
-
-async fn descendant_session_ids(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<Vec<Uuid>> {
-    let rows: Vec<(Uuid, i32)> = sqlx::query_as(
-        "WITH RECURSIVE descendants AS ( \
-             SELECT session_uuid, 0::INT AS depth \
-               FROM claude_sessions \
-              WHERE session_uuid = $1 \
-             UNION ALL \
-             SELECT child.session_uuid, descendants.depth + 1 \
-               FROM claude_sessions child \
-               JOIN descendants ON child.parent_session_uuid = descendants.session_uuid \
-         ) \
-         SELECT session_uuid, depth \
-           FROM descendants \
-          WHERE depth > 0 \
-          ORDER BY depth ASC, session_uuid ASC",
-    )
-    .bind(session_uuid)
-    .fetch_all(pool)
-    .await
-    .context("load descendant projection sessions")?;
-    Ok(rows.into_iter().map(|(uuid, _)| uuid).collect())
-}
-
-fn filter_descendant_projection_events(
-    events: &[StoredEvent],
-    known_ids: &HashSet<String>,
-    descendant_session_uuid: Uuid,
-) -> Vec<StoredEvent> {
-    let descendant_session_id = descendant_session_uuid.to_string();
-    // Chain roots differ by agent: codex child events reference their
-    // session id as parent; claude subagent transcripts start with a
-    // parentless sidechain record.
-    let mut included_ids: HashSet<String> = events
-        .iter()
-        .filter(|event| event.is_sidechain)
-        .filter(|event| {
-            event.parent_event_uuid.as_deref() == Some(descendant_session_id.as_str())
-                || event.parent_event_uuid.is_none()
-        })
-        .filter_map(|event| event.event_uuid.clone())
-        .filter(|id| !known_ids.contains(id))
-        .collect();
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for event in events {
-            let parent_included = event
-                .parent_event_uuid
-                .as_ref()
-                .map(|parent| included_ids.contains(parent))
-                .unwrap_or(false);
-            if !parent_included {
-                continue;
-            }
-            if let Some(event_id) = &event.event_uuid {
-                changed |= included_ids.insert(event_id.clone());
-            }
-        }
-    }
-
-    events
-        .iter()
-        .filter(|event| {
-            event
-                .event_uuid
-                .as_ref()
-                .map(|id| included_ids.contains(id))
-                .unwrap_or(false)
-                || event
-                    .parent_event_uuid
-                    .as_ref()
-                    .map(|parent| included_ids.contains(parent))
-                    .unwrap_or(false)
-        })
-        .cloned()
-        .collect()
-}
-
-pub async fn backfill_timeline_projection(
-    pool: &Pool,
-    job: Option<&super::jobs::JobHandle>,
-) -> anyhow::Result<usize> {
-    let sessions: Vec<(Uuid,)> = sqlx::query_as(
-        "WITH sessions_to_rebuild AS ( \
-             SELECT DISTINCT session_uuid FROM events \
-             UNION \
-             SELECT DISTINCT e.session_uuid \
-               FROM events e \
-              WHERE NOT EXISTS ( \
-                    SELECT 1 \
-                      FROM timeline_turns tt \
-                     WHERE tt.session_uuid = e.session_uuid \
-              ) \
-             UNION \
-             SELECT DISTINCT e.session_uuid \
-               FROM events e \
-              WHERE e.agent = 'claude-code' \
-                AND e.kind = 'user' \
-                AND e.payload #>> '{origin,kind}' = 'task-notification' \
-             UNION \
-             SELECT DISTINCT o.session_uuid \
-               FROM timeline_operations o \
-              WHERE COALESCE(o.raw_name, o.name) = 'exec' \
-                AND o.name = 'exec' \
-                AND ( \
-                    jsonb_typeof(o.input) = 'string' OR \
-                    ( \
-                        jsonb_typeof(o.input) = 'object' \
-                        AND COALESCE(o.input ->> 'code', '') LIKE '%tools.%' \
-                    ) \
-                ) \
-             UNION \
-             SELECT DISTINCT tt.session_uuid \
-               FROM timeline_turns tt \
-              WHERE tt.preview LIKE '<command-%' \
-                 OR tt.preview LIKE '<local-command-%' \
-             UNION \
-             SELECT tt.session_uuid \
-               FROM timeline_turns tt \
-              GROUP BY tt.session_uuid \
-             HAVING SUM(tt.input_tokens + tt.output_tokens) = 0 \
-             UNION \
-             SELECT DISTINCT tt.session_uuid \
-               FROM timeline_turns tt \
-              WHERE tt.preview = '(no user prompt)' \
-             UNION \
-             SELECT DISTINCT o.session_uuid \
-               FROM timeline_operations o \
-              WHERE o.name = 'agent' \
-             UNION \
-             SELECT DISTINCT cs.parent_session_uuid \
-               FROM claude_sessions cs \
-              WHERE cs.parent_session_uuid IS NOT NULL \
-             UNION \
-             SELECT DISTINCT tt.session_uuid \
-               FROM timeline_turns tt \
-              WHERE tt.markdown LIKE '%```%' OR tt.markdown LIKE '%_Result_%' \
-                 OR tt.markdown LIKE '%_Result (error)_%' \
-             UNION \
-             SELECT DISTINCT tf.session_uuid \
-               FROM timeline_file_touches tf \
-              WHERE tf.repo_rel_path !~ '^[A-Za-z0-9_./+@-]+$' \
-                 OR (tf.repo_rel_path !~ '/' \
-                     AND tf.repo_rel_path !~ '^[A-Za-z0-9_.-]*[A-Za-z][A-Za-z0-9_.-]*\\.[A-Za-z0-9]{1,5}$') \
-             UNION \
-             SELECT DISTINCT o.session_uuid \
-               FROM timeline_operations o \
-              WHERE jsonb_typeof(o.input) = 'object' \
-                AND o.input ? 'file_edits' \
-                AND (o.input ? 'command' OR o.input ? 'cmd') \
-         ) \
-         SELECT session_uuid \
-           FROM sessions_to_rebuild \
-          ORDER BY session_uuid ASC",
-    )
-    .fetch_all(pool)
-    .await
-    .context("list sessions requiring timeline projection rebuild")?;
-
-    if let Some(job) = job {
-        job.set_total(sessions.len() as i64).await;
-    }
-    for (session_uuid,) in &sessions {
-        rebuild_session_projection(pool, *session_uuid).await?;
-        if let Some(job) = job {
-            job.advance(Some(&session_uuid.to_string())).await;
-        }
-    }
-    Ok(sessions.len())
 }
 
 fn empty_timeline_response(total_event_count: i64) -> TimelineResponse {
@@ -476,8 +275,13 @@ pub async fn load_repo_timeline_summary_response(
     })
 }
 
+/// Annotates the session's own turns. Child-session turns shown beside them
+/// already carry their own session.
 pub fn annotate_timeline_summaries(turns: &mut [TimelineTurnSummary], meta: &TimelineSessionMeta) {
-    for turn in turns {
+    for turn in turns.iter_mut().filter(|turn| {
+        turn.session_uuid
+            .is_none_or(|uuid| uuid == meta.session_uuid)
+    }) {
         turn.turn_key = Some(format!("{}:{}", meta.session_uuid, turn.id));
         turn.pty_session_id = meta.pty_session_id;
         turn.session_uuid = Some(meta.session_uuid);
@@ -538,7 +342,7 @@ async fn load_projected_turn_rows(
     sqlx::query_as(
         "SELECT turn_id, preview, user_prompt_text, start_timestamp, end_timestamp, duration_ms, \
                 event_count, operation_count, thinking_count, has_errors, markdown, \
-                chunks_json, is_sidechain_turn, input_tokens, output_tokens \
+                is_sidechain_turn, input_tokens, output_tokens \
            FROM timeline_turns \
           WHERE session_uuid = $1 \
             AND ($2 OR turn_id = ANY($3)) \
@@ -593,7 +397,7 @@ async fn load_projected_turn_row(
     sqlx::query_as(
         "SELECT turn_id, preview, user_prompt_text, start_timestamp, end_timestamp, duration_ms, \
                 event_count, operation_count, thinking_count, has_errors, markdown, \
-                chunks_json, is_sidechain_turn, input_tokens, output_tokens \
+                is_sidechain_turn, input_tokens, output_tokens \
            FROM timeline_turns \
           WHERE session_uuid = $1 \
             AND turn_id = $2 \
@@ -618,7 +422,7 @@ async fn load_projected_operation_rows(
     sqlx::query_as(
         "SELECT turn_id, operation_ord, pair_id, name, raw_name, operation_type, \
                 operation_category, input, result_content, result_payload, result_is_error, \
-                is_error, is_pending, subagent_json \
+                is_error, is_pending \
            FROM timeline_operations \
           WHERE session_uuid = $1 AND turn_id = ANY($2) \
           ORDER BY turn_id ASC, operation_ord ASC",
@@ -628,6 +432,36 @@ async fn load_projected_operation_rows(
     .fetch_all(pool)
     .await
     .context("load projected timeline operations")
+}
+
+async fn load_projected_items(
+    pool: &Pool,
+    session_uuid: Uuid,
+    turn_ids: &[i64],
+) -> anyhow::Result<HashMap<i64, Vec<TimelineItem>>> {
+    if turn_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(i64, i64, Value)> = sqlx::query_as(
+        "SELECT turn_id, byte_offset, body FROM timeline_items \
+          WHERE session_uuid = $1 AND turn_id = ANY($2) \
+          ORDER BY turn_id ASC, byte_offset ASC",
+    )
+    .bind(session_uuid)
+    .bind(turn_ids)
+    .fetch_all(pool)
+    .await
+    .context("load projected timeline items")?;
+    let mut items: HashMap<i64, Vec<TimelineItem>> = HashMap::new();
+    for (turn_id, offset, body) in rows {
+        let chunk = serde_json::from_value(body)
+            .with_context(|| format!("decode timeline item of turn {turn_id}"))?;
+        items
+            .entry(turn_id)
+            .or_default()
+            .push(TimelineItem { offset, chunk });
+    }
+    Ok(items)
 }
 
 async fn load_projected_operation_badge_rows(
@@ -747,14 +581,8 @@ fn build_operation_pair(
         result_is_error,
         is_error,
         is_pending,
-        subagent_json,
     } = row;
 
-    let subagent = subagent_json
-        .map(serde_json::from_value::<TimelineSubagent>)
-        .transpose()
-        .with_context(|| format!("deserialize projected subagent for {pair_id}"))?
-        .map(Box::new);
     let result = if result_content.is_some() || result_payload.is_some() {
         Some(TimelineToolResult {
             content: result_content,
@@ -780,7 +608,7 @@ fn build_operation_pair(
         file_touches: touches_by_operation
             .remove(&(turn_id, operation_ord))
             .unwrap_or_default(),
-        subagent,
+        subagent: None,
     })
 }
 
@@ -812,12 +640,22 @@ fn build_projected_turn_summary(
     }
 }
 
+/// A stored turn with its items and operations. The digest is composed
+/// from them unless the archive purge already stored it.
 fn build_projected_turn(
     row: ProjectedTurnRow,
     operations_by_turn: &mut HashMap<i64, Vec<TimelineToolPair>>,
-) -> anyhow::Result<TimelineTurn> {
+    items_by_turn: &mut HashMap<i64, Vec<TimelineItem>>,
+) -> TimelineTurn {
     let turn_id = row.turn_id;
-    Ok(TimelineTurn {
+    let tool_pairs = operations_by_turn.remove(&turn_id).unwrap_or_default();
+    let items = items_by_turn.remove(&turn_id).unwrap_or_default();
+    let markdown = if row.markdown.is_empty() {
+        compose_turn_markdown(row.user_prompt_text.as_deref(), &items, &tool_pairs)
+    } else {
+        row.markdown
+    };
+    TimelineTurn {
         id: turn_id,
         turn_key: None,
         preview: row.preview,
@@ -827,24 +665,45 @@ fn build_projected_turn(
         duration_ms: row.duration_ms,
         event_count: row.event_count.max(0) as usize,
         operation_count: row.operation_count.max(0) as usize,
-        tool_pairs: operations_by_turn.remove(&turn_id).unwrap_or_default(),
+        tool_pairs,
         thinking_count: row.thinking_count.max(0) as usize,
         has_errors: row.has_errors,
         is_sidechain: row.is_sidechain_turn,
         input_tokens: row.input_tokens,
         output_tokens: row.output_tokens,
-        markdown: row.markdown,
-        chunks: serde_json::from_value(row.chunks_json)
-            .with_context(|| format!("deserialize projected timeline chunks for turn {turn_id}"))?,
+        markdown,
+        items,
         pty_session_id: None,
         session_uuid: None,
         session_agent: None,
         session_label: None,
         session_state: None,
-    })
+    }
 }
 
+/// The session's turn summaries. The sidechain view adds the turns of the
+/// sessions it spawned, read from their own timelines.
 pub async fn load_timeline_summary_response(
+    pool: &Pool,
+    session_uuid: Uuid,
+    filters: &ProjectionFilters,
+) -> anyhow::Result<TimelineSummaryResponse> {
+    let mut response = load_own_timeline_summary(pool, session_uuid, filters).await?;
+    if filters.show_sidechain {
+        response
+            .turns
+            .extend(view::load_child_turn_summaries(pool, session_uuid, filters).await?);
+        response.turns.sort_by(|left, right| {
+            left.start_timestamp
+                .cmp(&right.start_timestamp)
+                .then_with(|| left.session_uuid.cmp(&right.session_uuid))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+    }
+    Ok(response)
+}
+
+async fn load_own_timeline_summary(
     pool: &Pool,
     session_uuid: Uuid,
     filters: &ProjectionFilters,
@@ -896,31 +755,34 @@ pub async fn load_timeline_turn_detail(
     turn_id: i64,
     filters: &ProjectionFilters,
 ) -> anyhow::Result<Option<TimelineTurn>> {
-    let referenced_turn_ids =
-        load_referenced_turn_ids(pool, session_uuid, &filters.file_path).await?;
-    if referenced_turn_ids
-        .as_ref()
-        .is_some_and(|ids| !ids.contains(&turn_id))
-    {
-        return Ok(None);
-    }
+    Ok(
+        load_timeline_turn_view(pool, session_uuid, turn_id, filters, None)
+            .await?
+            .map(|view| view.turn),
+    )
+}
 
-    let Some(row) =
-        load_projected_turn_row(pool, session_uuid, turn_id, filters.errors_only).await?
-    else {
-        return Ok(None);
-    };
-    if !filters.show_sidechain && row.is_sidechain_turn {
-        return Ok(None);
-    }
-
-    let turn_ids = [turn_id];
-    let operation_rows = load_projected_operation_rows(pool, session_uuid, &turn_ids).await?;
-    let touch_rows = load_projected_touch_rows(pool, session_uuid, &turn_ids).await?;
+/// Turns with their items, operations, file touches and child references.
+async fn load_full_turns(
+    pool: &Pool,
+    session_uuid: Uuid,
+    rows: Vec<ProjectedTurnRow>,
+    turn_ids: &[i64],
+) -> anyhow::Result<Vec<TimelineTurn>> {
+    let operation_rows = load_projected_operation_rows(pool, session_uuid, turn_ids).await?;
+    let touch_rows = load_projected_touch_rows(pool, session_uuid, turn_ids).await?;
     let mut operations_by_turn = build_operations_by_turn(operation_rows, touch_rows)?;
-    let mut turn = build_projected_turn(row, &mut operations_by_turn)?;
-    apply_projection_filters(&mut turn, filters);
-    Ok(Some(turn))
+    let mut items_by_turn = load_projected_items(pool, session_uuid, turn_ids).await?;
+    let mut turns: Vec<TimelineTurn> = rows
+        .into_iter()
+        .map(|row| build_projected_turn(row, &mut operations_by_turn, &mut items_by_turn))
+        .collect();
+    let mut pairs: Vec<&mut TimelineToolPair> = turns
+        .iter_mut()
+        .flat_map(|turn| turn.tool_pairs.iter_mut())
+        .collect();
+    view::attach_subagents(pool, session_uuid, &mut pairs).await?;
+    Ok(turns)
 }
 
 pub async fn load_timeline_response(
@@ -949,27 +811,20 @@ pub async fn load_timeline_response(
         filters.errors_only,
     )
     .await?;
+    let rows: Vec<ProjectedTurnRow> = rows
+        .into_iter()
+        .filter(|row| filters.show_sidechain || !row.is_sidechain_turn)
+        .filter(|row| {
+            referenced_turn_ids
+                .as_ref()
+                .is_none_or(|allowed| allowed.contains(&row.turn_id))
+        })
+        .filter(|row| !filters.errors_only || row.has_errors)
+        .collect();
     let turn_ids = rows.iter().map(|row| row.turn_id).collect::<Vec<_>>();
-    let operation_rows = load_projected_operation_rows(pool, session_uuid, &turn_ids).await?;
-    let touch_rows = load_projected_touch_rows(pool, session_uuid, &turn_ids).await?;
-    let mut operations_by_turn = build_operations_by_turn(operation_rows, touch_rows)?;
-
-    let mut turns = Vec::new();
-    for row in rows {
-        if !filters.show_sidechain && row.is_sidechain_turn {
-            continue;
-        }
-        if let Some(allowed) = &referenced_turn_ids {
-            if !allowed.contains(&row.turn_id) {
-                continue;
-            }
-        }
-        if filters.errors_only && !row.has_errors {
-            continue;
-        }
-        let mut turn = build_projected_turn(row, &mut operations_by_turn)?;
-        apply_projection_filters(&mut turn, filters);
-        turns.push(turn);
+    let mut turns = load_full_turns(pool, session_uuid, rows, &turn_ids).await?;
+    for turn in &mut turns {
+        apply_projection_filters(turn, filters);
     }
 
     Ok(TimelineResponse {

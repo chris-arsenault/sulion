@@ -4,6 +4,12 @@ Prepared 2026-09-24. Read [the replacement contract](incremental-timeline-projec
 before implementation. The user rejected the previous attempt as overcomplicated
 and requested that it be stashed, the environment reset, and a fresh handoff made.
 
+Update, same day: the replacement is implemented in the working tree (uncommitted,
+undeployed), then simplified to append-only per-event items, targeted operation
+updates and byte-offset deltas; the contract records its data map, decisions
+and measurements. The parser fix below was recovered with it. The rest of this
+document describes the state before that implementation.
+
 ## Starting point
 
 - Repository: `/home/sulion/repos/sulion`; branch: `main`.

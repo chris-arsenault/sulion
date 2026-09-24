@@ -361,6 +361,13 @@ pub(super) struct UploadQuery {
 
 const UPLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024; // 50 MiB
 
+/// Request body limit for the upload routes: one file at the cap plus the
+/// multipart envelope, matching nginx's `client_max_body_size 51m`. Axum's
+/// 2 MiB default would reject a large upload before the handler's own cap.
+pub(super) fn upload_body_limit() -> axum::extract::DefaultBodyLimit {
+    axum::extract::DefaultBodyLimit::max(UPLOAD_MAX_BYTES as usize + 1024 * 1024)
+}
+
 pub(super) async fn read_uploads(
     multipart: &mut Multipart,
     directory: &str,

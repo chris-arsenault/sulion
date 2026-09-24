@@ -19,8 +19,7 @@ async fn main() -> anyhow::Result<()> {
     let pool = sulion::db::connect_and_wait_for_migrations(&config.db_url, "ingester").await?;
     let ingester = Arc::new(Ingester::new());
     let ingester_config = IngesterConfig::new(config.claude_projects_dir)
-        .with_codex_sessions_dir(config.codex_sessions_dir)
-        .with_projection_debounce(sulion::ingest::LIVE_PROJECTION_DEBOUNCE);
+        .with_codex_sessions_dir(config.codex_sessions_dir);
     tracing::info!("starting node-local transcript ingester");
 
     loop {

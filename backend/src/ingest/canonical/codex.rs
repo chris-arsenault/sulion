@@ -85,16 +85,8 @@ fn parse_codex_response_item(value: &Value) -> CanonicalEvent {
                 }
             }
             CanonicalEvent {
-                agent: "codex",
-                speaker: Speaker::System,
-                content_kind: content_kind_of(&blocks),
                 event_uuid: payload.get("id").and_then(Value::as_str).map(str::to_owned),
-                parent_event_uuid: None,
-                related_tool_use_id: None,
-                is_sidechain: false,
-                is_meta: false,
-                subtype: Some(subtype.into()),
-                blocks,
+                ..codex_event(Speaker::System, subtype, blocks)
             }
         }
         "message" => {
@@ -115,33 +107,13 @@ fn parse_codex_response_item(value: &Value) -> CanonicalEvent {
                 _ => Vec::new(),
             };
             CanonicalEvent {
-                agent: "codex",
-                speaker,
-                content_kind: content_kind_of(&blocks),
-                event_uuid: None,
-                parent_event_uuid: None,
-                related_tool_use_id: None,
-                is_sidechain: false,
                 is_meta,
-                subtype: Some(subtype.to_string()),
-                blocks,
+                ..codex_event(speaker, subtype, blocks)
             }
         }
         "reasoning" => {
             let text = codex_reasoning_text(payload).unwrap_or_default();
-            let blocks = vec![Block::thinking(0, text)];
-            CanonicalEvent {
-                agent: "codex",
-                speaker: Speaker::Assistant,
-                content_kind: content_kind_of(&blocks),
-                event_uuid: None,
-                parent_event_uuid: None,
-                related_tool_use_id: None,
-                is_sidechain: false,
-                is_meta: false,
-                subtype: Some(subtype.to_string()),
-                blocks,
-            }
+            codex_event(Speaker::Assistant, subtype, vec![Block::thinking(0, text)])
         }
         "function_call" | "custom_tool_call" => {
             let call_id = payload
@@ -167,18 +139,7 @@ fn parse_codex_response_item(value: &Value) -> CanonicalEvent {
                 payload.get("input").cloned().unwrap_or(Value::Null)
             };
             let blocks = vec![Block::tool_use(0, call_id, name, input)];
-            CanonicalEvent {
-                agent: "codex",
-                speaker: Speaker::Assistant,
-                content_kind: content_kind_of(&blocks),
-                event_uuid: None,
-                parent_event_uuid: None,
-                related_tool_use_id: None,
-                is_sidechain: false,
-                is_meta: false,
-                subtype: Some(subtype.to_string()),
-                blocks,
-            }
+            codex_event(Speaker::Assistant, subtype, blocks)
         }
         "function_call_output" | "custom_tool_call_output" => {
             let call_id = payload
@@ -193,30 +154,30 @@ fn parse_codex_response_item(value: &Value) -> CanonicalEvent {
                 .unwrap_or(false);
             let blocks = vec![Block::tool_result(0, call_id.clone(), text, is_error, None)];
             CanonicalEvent {
-                agent: "codex",
-                speaker: Speaker::System,
-                content_kind: content_kind_of(&blocks),
-                event_uuid: None,
-                parent_event_uuid: None,
                 related_tool_use_id: Some(call_id),
-                is_sidechain: false,
-                is_meta: false,
-                subtype: Some(subtype.to_string()),
-                blocks,
+                ..codex_event(Speaker::System, subtype, blocks)
             }
         }
         _ => CanonicalEvent {
-            agent: "codex",
-            speaker: Speaker::System,
-            content_kind: ContentKind::None,
-            event_uuid: None,
-            parent_event_uuid: None,
-            related_tool_use_id: None,
-            is_sidechain: false,
             is_meta: true,
-            subtype: Some(subtype.to_string()),
-            blocks: Vec::new(),
+            ..codex_event(Speaker::System, subtype, Vec::new())
         },
+    }
+}
+
+/// A Codex event with no identity links, outside any sidechain.
+fn codex_event(speaker: Speaker, subtype: &str, blocks: Vec<Block>) -> CanonicalEvent {
+    CanonicalEvent {
+        agent: "codex",
+        speaker,
+        content_kind: content_kind_of(&blocks),
+        event_uuid: None,
+        parent_event_uuid: None,
+        related_tool_use_id: None,
+        is_sidechain: false,
+        is_meta: false,
+        subtype: Some(subtype.to_string()),
+        blocks,
     }
 }
 

@@ -1,30 +1,200 @@
+//! The reducer against an in-memory store. Every scenario is applied one
+//! event per batch and as a single batch, and both must agree.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 use crate::ingest::canonical::{Block, OperationCategory};
 
+use super::reduce::{
+    Backend, Changes, ChildLink, MessageUsage, OpRow, Reducer, SessionState, TurnRow,
+};
 use super::*;
+
+#[derive(Default)]
+struct MemDb {
+    state: SessionState,
+    turns: BTreeMap<i64, TurnRow>,
+    items: BTreeMap<(i64, i64), TimelineChunk>,
+    ops: BTreeMap<(i64, i32), OpRow>,
+    usage: HashMap<String, MessageUsage>,
+    links: BTreeSet<ChildLink>,
+}
+
+impl MemDb {
+    fn apply(&mut self, changes: Changes) {
+        self.state = changes.state;
+        for turn in changes.turns {
+            self.turns.insert(turn.turn_id, turn);
+        }
+        for (turn, offset, chunk) in changes.items {
+            self.items.insert((turn, offset), chunk);
+        }
+        for op in changes.new_ops {
+            self.ops.insert(op.key(), op);
+        }
+        for (op, _) in changes.updated_ops {
+            self.ops.insert(op.key(), op);
+        }
+        self.usage.extend(changes.usage);
+        self.links.extend(changes.links);
+    }
+
+    fn timeline(&self) -> Vec<TimelineTurn> {
+        let mut turns: Vec<&TurnRow> = self.turns.values().collect();
+        turns.sort_by_key(|turn| turn.turn_ord);
+        turns
+            .into_iter()
+            .map(|turn| {
+                let items: Vec<TimelineItem> = self
+                    .items
+                    .range((turn.turn_id, i64::MIN)..=(turn.turn_id, i64::MAX))
+                    .map(|((_, offset), chunk)| TimelineItem {
+                        offset: *offset,
+                        chunk: chunk.clone(),
+                    })
+                    .collect();
+                let pairs: Vec<TimelineToolPair> = self
+                    .ops
+                    .range((turn.turn_id, i32::MIN)..=(turn.turn_id, i32::MAX))
+                    .map(|(_, op)| op.pair())
+                    .collect();
+                TimelineTurn {
+                    id: turn.turn_id,
+                    turn_key: None,
+                    preview: turn.preview.clone(),
+                    user_prompt_text: turn.user_prompt_text.clone(),
+                    start_timestamp: turn.start_timestamp,
+                    end_timestamp: turn.end_timestamp,
+                    duration_ms: turn.duration_ms,
+                    event_count: turn.event_count as usize,
+                    operation_count: turn.operation_count as usize,
+                    thinking_count: turn.thinking_count as usize,
+                    has_errors: turn.has_errors,
+                    is_sidechain: turn.is_sidechain,
+                    input_tokens: turn.input_tokens,
+                    output_tokens: turn.output_tokens,
+                    markdown: compose_turn_markdown(
+                        turn.user_prompt_text.as_deref(),
+                        &items,
+                        &pairs,
+                    ),
+                    items,
+                    tool_pairs: pairs,
+                    pty_session_id: None,
+                    session_uuid: None,
+                    session_agent: None,
+                    session_label: None,
+                    session_state: None,
+                }
+            })
+            .collect()
+    }
+}
+
+impl Backend for &mut MemDb {
+    async fn turn(&mut self, turn_id: i64) -> anyhow::Result<Option<TurnRow>> {
+        Ok(self.turns.get(&turn_id).cloned())
+    }
+
+    async fn ops_by_pair(&mut self, pair_id: &str, before: i64) -> anyhow::Result<Vec<OpRow>> {
+        Ok(self
+            .ops
+            .values()
+            .filter(|op| op.pair_id == pair_id && op.call_offset < before)
+            .cloned()
+            .collect())
+    }
+
+    async fn prompt_seen(&mut self, event_uuid: &str) -> anyhow::Result<bool> {
+        Ok(self
+            .turns
+            .values()
+            .any(|turn| turn.prompt_event_uuid.as_deref() == Some(event_uuid)))
+    }
+
+    async fn message_usage(&mut self, message_id: &str) -> anyhow::Result<Option<MessageUsage>> {
+        Ok(self.usage.get(message_id).cloned())
+    }
+
+    async fn exec_candidates(
+        &mut self,
+        before: i64,
+        _started: Option<DateTime<Utc>>,
+    ) -> anyhow::Result<Vec<OpRow>> {
+        Ok(self
+            .ops
+            .values()
+            .filter(|op| op.call_offset < before)
+            .cloned()
+            .collect())
+    }
+
+    async fn ops_by_running_cell(&mut self, cell: &str) -> anyhow::Result<Vec<OpRow>> {
+        Ok(self
+            .ops
+            .values()
+            .filter(|op| op.running_cell.as_deref() == Some(cell))
+            .cloned()
+            .collect())
+    }
+}
+
+fn session() -> Uuid {
+    Uuid::from_u128(0x5e55_1011)
+}
+
+fn reduce_batches(events: &[StoredEvent], batch: usize) -> MemDb {
+    let mut db = MemDb::default();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    for chunk in events.chunks(batch.max(1)) {
+        let state = db.state.clone();
+        let changes = runtime.block_on(async {
+            let mut reducer = Reducer::new(&mut db, session(), state, None, None);
+            for event in chunk {
+                reducer.apply(event.clone()).await.unwrap();
+            }
+            reducer.into_changes().1
+        });
+        db.apply(changes);
+    }
+    db
+}
+
+/// The session's turns, checked to be the same one event at a time.
+fn project(events: &[StoredEvent]) -> Vec<TimelineTurn> {
+    let whole = reduce_batches(events, events.len());
+    let stepped = reduce_batches(events, 1);
+    let turns = whole.timeline();
+    assert_eq!(
+        serde_json::to_value(&turns).unwrap(),
+        serde_json::to_value(stepped.timeline()).unwrap(),
+        "per-event batches diverged from one batch",
+    );
+    turns
+}
 
 fn ts(sec: i64) -> DateTime<Utc> {
     Utc.timestamp_opt(sec, 0).single().unwrap()
 }
 
-fn text(ord: i32, value: &str) -> Block {
-    Block::text(ord, value)
+fn text(value: &str) -> Block {
+    Block::text(0, value)
 }
 
-fn thinking(ord: i32, value: &str) -> Block {
-    Block::thinking(ord, value)
-}
-
-fn tool_use(ord: i32, id: &str, name: &str, category: OperationCategory, input: Value) -> Block {
-    let mut block = Block::tool_use(ord, id, name, input);
-    block.operation_category = Some(category);
+fn call(id: &str, name: &str, input: Value) -> Block {
+    let mut block = Block::tool_use(0, id, name, input);
+    block.operation_category = Some(OperationCategory::Utility);
     block
 }
 
-fn tool_result(ord: i32, id: &str, text: &str, is_error: bool) -> Block {
-    Block::tool_result(ord, id, Some(text.to_string()), is_error, None)
+fn result(id: &str, text: &str, is_error: bool) -> Block {
+    Block::tool_result(0, id, Some(text.to_string()), is_error, None)
 }
 
 fn event(byte_offset: i64, kind: &str, blocks: Vec<Block>) -> StoredEvent {
@@ -35,10 +205,7 @@ fn event(byte_offset: i64, kind: &str, blocks: Vec<Block>) -> StoredEvent {
         agent: "claude-code".to_string(),
         speaker: Some(
             match kind {
-                "assistant" => "assistant",
-                "user" => "user",
-                "system" => "system",
-                "summary" => "summary",
+                "assistant" | "user" | "system" | "summary" => kind,
                 _ => "other",
             }
             .to_string(),
@@ -57,521 +224,292 @@ fn event(byte_offset: i64, kind: &str, blocks: Vec<Block>) -> StoredEvent {
     }
 }
 
-#[test]
-fn projects_turns_and_pairs() {
-    let events = vec![
-        event(1, "user", vec![text(0, "hello")]),
-        event(
-            2,
-            "assistant",
-            vec![
-                text(0, "working"),
-                thinking(1, "step"),
-                tool_use(
-                    2,
-                    "t1",
-                    "bash",
-                    OperationCategory::Utility,
-                    json!({"command": "ls -la"}),
-                ),
-            ],
-        ),
-        event(3, "user", vec![tool_result(0, "t1", "done", false)]),
-    ];
+fn codex(mut event: StoredEvent) -> StoredEvent {
+    event.agent = "codex".to_string();
+    event
+}
 
-    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
-    assert_eq!(projected.turns.len(), 1);
-    let turn = &projected.turns[0];
-    assert_eq!(turn.preview, "hello");
-    assert_eq!(turn.tool_pairs.len(), 1);
-    assert_eq!(turn.tool_pairs[0].name, "bash");
-    assert_eq!(
-        turn.tool_pairs[0]
-            .result
-            .as_ref()
-            .unwrap()
-            .content
-            .as_deref(),
-        Some("done")
+fn runtime(offset: i64, id: &str, item: Value, failed: bool) -> StoredEvent {
+    let mut evidence = event(
+        offset,
+        "system",
+        vec![Block::tool_result(0, id, None, failed, Some(item))],
     );
-    assert_eq!(turn.thinking_count, 1);
+    evidence.is_meta = true;
+    codex(evidence)
+}
+
+#[test]
+fn prompts_open_turns_that_collect_calls_results_and_items() {
+    let mut thought = event(
+        2,
+        "assistant",
+        vec![
+            text("working"),
+            call("t1", "bash", json!({"command": "ls"})),
+        ],
+    );
+    thought.blocks.insert(1, Block::thinking(1, "step"));
+    let turns = project(&[
+        event(1, "user", vec![text("hello")]),
+        thought,
+        event(3, "user", vec![result("t1", "done", false)]),
+        event(4, "user", vec![text("next")]),
+    ]);
+    assert_eq!(turns.len(), 2);
+    let turn = &turns[0];
+    assert_eq!(turn.preview, "hello");
+    assert_eq!((turn.event_count, turn.thinking_count), (3, 1));
+    assert!(!turn.tool_pairs[0].is_pending);
+    assert_eq!(turn.items.len(), 1, "a tool result shows on its call");
     assert!(turn
-        .chunks
-        .iter()
-        .any(|chunk| matches!(chunk, TimelineChunk::Tool { pair_id } if pair_id == "t1")));
+        .markdown
+        .contains("**Prompt**\n\n> hello\n\nworking\n\n**Tool:** `bash` `ls`"));
 }
 
 #[test]
-fn claude_task_notifications_stay_inside_the_primary_turn() {
-    let events = vec![
-        event(1, "user", vec![text(0, "start the background work")]),
-        event(2, "assistant", vec![text(0, "started")]),
-        event(
-            3,
-            "user",
-            vec![text(
-                0,
-                "<task-notification>\n<task-id>bg-1</task-id>\n<status>completed</status>\n</task-notification>",
-            )],
-        ),
-        event(4, "assistant", vec![text(0, "the background work completed")]),
-        event(5, "user", vec![text(0, "summarize the result")]),
-        event(6, "assistant", vec![text(0, "summary")]),
-    ];
-
-    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
-
-    assert_eq!(projected.turns.len(), 2);
-    assert_eq!(projected.turns[0].preview, "start the background work");
-    assert_eq!(projected.turns[0].event_count, 4);
-    assert!(projected.turns[0]
-        .chunks
-        .iter()
-        .any(|chunk| matches!(chunk, TimelineChunk::Generic { label, .. } if label == "user")));
-    assert_eq!(projected.turns[1].preview, "summarize the result");
-}
-
-#[test]
-fn codex_task_lifecycle_bookkeeping_does_not_start_turns() {
-    let mut started = event(2, "system", Vec::new());
-    started.agent = "codex".to_string();
+fn notifications_commands_and_lifecycle_records_do_not_open_turns() {
+    let mut started = codex(event(3, "system", vec![]));
     started.is_meta = true;
     started.subtype = Some("task_started".to_string());
-
-    let mut complete = event(4, "system", Vec::new());
-    complete.agent = "codex".to_string();
-    complete.is_meta = true;
-    complete.subtype = Some("task_complete".to_string());
-
-    let mut prompt = event(1, "user", vec![text(0, "do the work")]);
-    prompt.agent = "codex".to_string();
-    let mut reply = event(3, "assistant", vec![text(0, "done")]);
-    reply.agent = "codex".to_string();
-
-    let events = vec![prompt, started, reply, complete];
-    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
-
-    assert_eq!(projected.turns.len(), 1);
-    assert_eq!(projected.turns[0].preview, "do the work");
-    assert_eq!(projected.turns[0].event_count, 2);
-}
-
-#[test]
-fn hidden_categories_merge_assistant_chunks() {
-    let events = vec![
-        event(1, "user", vec![text(0, "prompt")]),
+    let turns = project(&[
+        event(1, "user", vec![text("start")]),
         event(
             2,
-            "assistant",
-            vec![
-                text(0, "before"),
-                tool_use(
-                    1,
-                    "t1",
-                    "edit",
-                    OperationCategory::CreateContent,
-                    json!({"path": "/tmp/x"}),
-                ),
-                text(2, "after"),
-            ],
-        ),
-    ];
-
-    let mut filters = ProjectionFilters::default();
-    filters
-        .hidden_operation_categories
-        .insert(OperationCategory::CreateContent);
-
-    let projected = project_timeline(&events, events.len() as i64, &filters);
-    let turn = &projected.turns[0];
-    assert_eq!(turn.tool_pairs.len(), 1);
-    assert_eq!(turn.chunks.len(), 1);
-    match &turn.chunks[0] {
-        TimelineChunk::Assistant { items, .. } => {
-            assert_eq!(items.len(), 2);
-        }
-        other => panic!("unexpected chunk: {other:?}"),
-    }
-}
-
-/// Codex code-mode exec pairs summarize by their extracted shell
-/// command, exactly like bash pairs.
-#[test]
-fn exec_pairs_summarize_their_command_in_markdown() {
-    let events = vec![
-        event(1, "user", vec![text(0, "prompt")]),
-        event(
-            2,
-            "assistant",
-            vec![tool_use(
-                0,
-                "call-1",
-                "exec",
-                OperationCategory::Utility,
-                json!({"command": "git status --short", "code": "const r = ..."}),
-            )],
-        ),
-    ];
-
-    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
-    assert!(
-        projected.turns[0].markdown.contains("`git status --short`"),
-        "markdown lacks command summary: {}",
-        projected.turns[0].markdown,
-    );
-}
-
-/// Local slash-command plumbing (`/model`, `/login`, …) arrives as user
-/// records wrapped in command tags. It must not seed turns of its own,
-/// and it hides with the rest of the bookkeeping.
-#[test]
-fn local_command_records_do_not_seed_turns() {
-    let events = vec![
-        event(1, "user", vec![text(0, "real prompt")]),
-        event(2, "assistant", vec![text(0, "reply")]),
-        event(
-            3,
             "user",
             vec![text(
-                0,
-                "<command-name>/model</command-name> <command-message>model</command-message>",
+                "<task-notification>\n<task-id>bg</task-id>\n</task-notification>",
             )],
         ),
-        event(
-            4,
-            "user",
-            vec![text(
-                0,
-                "<local-command-stdout>Set model to X</local-command-stdout>",
-            )],
-        ),
-        event(5, "user", vec![text(0, "second real prompt")]),
-    ];
-
-    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
-    let previews: Vec<&str> = projected
-        .turns
-        .iter()
-        .map(|turn| turn.preview.as_str())
-        .collect();
-    assert_eq!(previews, vec!["real prompt", "second real prompt"]);
-    // Hidden by default alongside the rest of the bookkeeping.
-    assert!(
-        projected.turns[0]
-            .chunks
-            .iter()
-            .all(|chunk| !matches!(chunk, TimelineChunk::Generic { .. })),
-        "local command records leaked into chunks: {:?}",
-        projected.turns[0].chunks,
-    );
+        started,
+        event(4, "user", vec![text("<command-name>/model</command-name>")]),
+        event(5, "user", vec![text("second")]),
+    ]);
+    let previews: Vec<&str> = turns.iter().map(|turn| turn.preview.as_str()).collect();
+    assert_eq!(previews, vec!["start", "second"]);
+    assert_eq!(turns[0].event_count, 4);
 }
 
-/// Claude stamps attachment records a few ms before their prompt.
-/// Sorted by timestamp they precede it — they must join the prompt's
-/// turn, not seed a decoy orphan that later work attaches to.
 #[test]
-fn pre_prompt_bookkeeping_joins_the_first_real_turn() {
-    let mut attachment = event(2, "attachment", vec![]);
-    attachment.timestamp = ts(0);
-    let mut prompt = event(1, "user", vec![text(0, "real prompt")]);
-    prompt.timestamp = ts(1);
-    let mut reply = event(3, "assistant", vec![text(0, "reply")]);
-    reply.timestamp = ts(2);
+fn bookkeeping_before_the_first_turn_is_not_projected() {
+    let turns = project(&[
+        event(1, "attachment", vec![]),
+        event(2, "user", vec![text("prompt")]),
+        event(3, "assistant", vec![text("reply")]),
+    ]);
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].event_count, 2);
+}
 
-    // Timestamp order: attachment, prompt, reply. show_bookkeeping so
-    // the attachment stays in the grouped stream, as it always does on
-    // the projection write path.
-    let events = vec![attachment, prompt, reply];
-    let filters = ProjectionFilters {
-        show_bookkeeping: true,
-        ..Default::default()
+#[test]
+fn a_repeated_prompt_is_skipped() {
+    let mut repeat = event(3, "user", vec![text("first")]);
+    repeat.event_uuid = Some("evt-1".into());
+    let turns = project(&[
+        event(1, "user", vec![text("first")]),
+        event(2, "assistant", vec![text("reply")]),
+        repeat,
+    ]);
+    assert_eq!(turns.len(), 1);
+}
+
+#[test]
+fn a_turn_without_a_prompt_previews_its_first_assistant_text() {
+    let turns = project(&[event(1, "assistant", vec![text(&"я".repeat(400))])]);
+    assert!(turns[0].preview.starts_with("(assistant) я"));
+}
+
+#[test]
+fn a_late_result_completes_its_call_in_the_earlier_turn() {
+    let turns = project(&[
+        event(1, "user", vec![text("first")]),
+        event(2, "assistant", vec![call("c1", "bash", json!({}))]),
+        event(3, "user", vec![text("second")]),
+        event(4, "user", vec![result("c1", "late", true)]),
+    ]);
+    let op = &turns[0].tool_pairs[0];
+    assert!(!op.is_pending && op.is_error);
+    assert!(turns[0].has_errors);
+    assert_eq!(turns[1].event_count, 2);
+}
+
+#[test]
+fn claude_usage_charges_each_response_once_with_its_latest_receipt() {
+    let receipt = |offset, output| {
+        let mut receipt = event(offset, "assistant", vec![text("part")]);
+        receipt.usage_json = Some(json!({"input_tokens": 100, "cache_read_input_tokens": 900,
+            "cache_creation_input_tokens": 50, "output_tokens": output}));
+        receipt.usage_message_id = Some("msg".to_string());
+        receipt
     };
-    let projected = project_timeline(&events, events.len() as i64, &filters);
+    let turns = project(&[
+        event(1, "user", vec![text("one")]),
+        receipt(2, 40),
+        event(3, "user", vec![text("two")]),
+        receipt(4, 268),
+    ]);
+    assert_eq!((turns[0].input_tokens, turns[0].output_tokens), (1050, 268));
+    assert_eq!((turns[1].input_tokens, turns[1].output_tokens), (0, 0));
+}
+
+#[test]
+fn codex_usage_is_each_turns_share_of_the_cumulative_totals() {
+    let total = |offset, input, output| {
+        let mut count = codex(event(offset, "token_count", vec![]));
+        count.is_meta = true;
+        count.usage_json = Some(json!({"input_tokens": input, "output_tokens": output}));
+        count
+    };
+    let turns = project(&[
+        codex(event(1, "user", vec![text("first")])),
+        total(2, 1_000, 100),
+        codex(event(3, "user", vec![text("second")])),
+        total(4, 1_600, 180),
+    ]);
     assert_eq!(
-        projected.turns.len(),
-        1,
-        "turns: {:?}",
-        projected
-            .turns
-            .iter()
-            .map(|turn| &turn.preview)
-            .collect::<Vec<_>>()
+        (turns[0].input_tokens, turns[0].output_tokens),
+        (1_000, 100)
     );
-    assert_eq!(projected.turns[0].preview, "real prompt");
-}
-
-/// Two subagents running concurrently interleave by timestamp. Each
-/// must keep its own turn (keyed by origin session), main-line events
-/// arriving mid-flight must stay in the main turn, and the turn ids
-/// must differ even though both subagent transcripts start at offset 0.
-#[test]
-fn concurrent_subagents_group_into_separate_turns() {
-    let child_a = uuid::Uuid::from_u128(0xaaaa_0000_0000_0000_0000_0000_0000_0001);
-    let child_b = uuid::Uuid::from_u128(0xbbbb_0000_0000_0000_0000_0000_0000_0002);
-
-    let sidechain = |offset: i64, kind: &str, body: &str, source: uuid::Uuid, ts_at: i64| {
-        let mut e = event(offset, kind, vec![text(0, body)]);
-        e.is_sidechain = true;
-        e.source_session = Some(source);
-        e.event_uuid = Some(format!("{source}-{offset}"));
-        e.timestamp = ts(ts_at);
-        e
-    };
-    let mut main_prompt = event(100, "user", vec![text(0, "spawn two agents")]);
-    main_prompt.timestamp = ts(0);
-    let mut late_main = event(200, "assistant", vec![text(0, "main keeps working")]);
-    late_main.timestamp = ts(4);
-
-    let events = vec![
-        main_prompt,
-        sidechain(0, "user", "survey repo A", child_a, 1),
-        sidechain(0, "user", "survey repo B", child_b, 2),
-        sidechain(30, "assistant", "A finds things", child_a, 3),
-        late_main,
-        sidechain(30, "assistant", "B finds things", child_b, 5),
-    ];
-    let refs: Vec<&StoredEvent> = events.iter().collect();
-    let seeds = super::project::group_into_turns(&refs);
-
-    let previews: Vec<Option<String>> = seeds
-        .iter()
-        .map(|seed| seed.user_prompt.map(|e| e.byte_offset.to_string()))
-        .collect();
-    assert_eq!(seeds.len(), 3, "seeds: {previews:?}");
-
-    // Main turn holds the prompt plus the interleaved main-line event.
-    assert_eq!(seeds[0].user_prompt.unwrap().byte_offset, 100);
-    assert!(seeds[0]
-        .events
-        .iter()
-        .any(|event| event.byte_offset == 200 && !event.is_sidechain));
-
-    // Each subagent turn holds exactly its own session's events.
-    for (seed, child) in [(&seeds[1], child_a), (&seeds[2], child_b)] {
-        assert_eq!(seed.events.len(), 2);
-        assert!(seed
-            .events
-            .iter()
-            .all(|event| event.source_session == Some(child)));
-    }
-
-    // Distinct, stable turn identities despite shared byte offsets.
-    assert_eq!(seeds[0].id, 100);
-    assert_ne!(seeds[1].id, seeds[2].id);
-    assert!(seeds[1].id > u32::MAX as i64);
-    assert!(seeds[2].id > u32::MAX as i64);
-}
-
-/// Claude usage sums per turn, deduped by message id across streamed
-/// repeats of the same message.
-#[test]
-fn turn_token_usage_dedupes_claude_messages() {
-    let usage = json!({
-        "input_tokens": 100,
-        "cache_read_input_tokens": 900,
-        "cache_creation_input_tokens": 50,
-        "output_tokens": 40
-    });
-    let mut first = event(2, "assistant", vec![text(0, "part one")]);
-    first.usage_json = Some(usage.clone());
-    first.usage_message_id = Some("msg-1".to_string());
-    let mut repeat = event(3, "assistant", vec![text(0, "part two")]);
-    repeat.usage_json = Some(usage);
-    repeat.usage_json.as_mut().unwrap()["output_tokens"] = json!(268);
-    repeat.usage_message_id = Some("msg-1".to_string());
-
-    let events = vec![event(1, "user", vec![text(0, "prompt")]), first, repeat];
-    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
-    assert_eq!(projected.turns[0].input_tokens, 1050);
-    assert_eq!(projected.turns[0].output_tokens, 268);
+    assert_eq!((turns[1].input_tokens, turns[1].output_tokens), (600, 80));
 }
 
 #[test]
-fn runtime_items_enrich_one_operation_and_report_runtime_failures() {
-    let mut runtime = event(
-        3,
-        "system",
-        vec![Block::tool_result(
-            0,
-            "exec-runtime",
-            None,
-            true,
-            Some(
-                json!({"runtime_item":{"type":"CommandExecution","id":"exec-runtime","command":["bash","-lc","false"],
-            "cwd":"file:///repo","exit_code":1,"stdout":"","stderr":"failure","duration":{"secs":1,"nanos":0}},"started_at_ms":2500}),
-            ),
-        )],
-    );
-    runtime.is_meta = true;
-    let mut change = event(
-        4,
-        "system",
-        vec![Block::tool_result(
-            0,
-            "edit-runtime",
-            None,
-            false,
-            Some(
-                json!({"runtime_item":{"type":"FileChange","id":"edit-runtime","changes":{
-            "/repo/src/main.rs":{"type":"update","unified_diff":"@@ -1 +1 @@\n-old\n+new"}}},"started_at_ms":2600}),
-            ),
-        )],
-    );
-    change.is_meta = true;
-    let events = vec![
-        event(1, "user", vec![text(0, "fix")]),
-        event(
+fn runtime_evidence_folds_into_its_call_and_reports_failures() {
+    let turns = project(&[
+        event(1, "user", vec![text("fix")]),
+        codex(event(
             2,
             "assistant",
-            vec![Block::tool_use(
-                0,
+            vec![call(
                 "call",
                 "exec",
-                json!("await tools.exec_command(args); await tools.apply_patch(patch);"),
+                json!("await tools.exec_command(args)"),
             )],
+        )),
+        runtime(
+            3,
+            "exec-runtime",
+            json!({"runtime_item":{"type":"CommandExecution","id":"exec-runtime",
+            "command":["bash","-lc","false"],"cwd":"/repo","stderr":"failure"},"started_at_ms":2500}),
+            true,
         ),
-        runtime,
-        change,
-        event(5, "system", vec![tool_result(0, "call", "finished", false)]),
-    ];
-    let projected = project_timeline(&events, 5, &ProjectionFilters::default());
-    let turn = &projected.turns[0];
-    assert_eq!(turn.operation_count, 1);
-    assert!(turn.has_errors);
+        runtime(
+            4,
+            "edit-runtime",
+            json!({"runtime_item":{"type":"FileChange","id":"edit-runtime","changes":{
+            "/repo/src/main.rs":{"type":"update","unified_diff":"-old\n+new"}}},"started_at_ms":2600}),
+            false,
+        ),
+        event(5, "system", vec![result("call", "finished", false)]),
+    ]);
+    let turn = &turns[0];
     let pair = &turn.tool_pairs[0];
-    assert!(pair.is_error);
-    assert_eq!(
-        pair.input.as_ref().unwrap()["runtime_items"]
-            .as_array()
-            .unwrap()
-            .len(),
-        2
-    );
-    assert_eq!(
-        pair.input.as_ref().unwrap()["file_edits"][0]["path"],
-        "/repo/src/main.rs"
-    );
+    assert!(turn.has_errors && pair.is_error);
+    let input = pair.input.as_ref().unwrap();
+    assert_eq!(input["runtime_items"].as_array().unwrap().len(), 2);
+    assert_eq!(input["file_edits"][0]["path"], "/repo/src/main.rs");
     assert_eq!(
         pair.result.as_ref().unwrap().payload.as_ref().unwrap()["runtime_items"][0]["runtime_item"]
             ["stderr"],
         "failure"
     );
-    assert!(!turn.markdown.contains("failure"));
-    assert_eq!(
-        build_session_projection(&events, None)[0].operations.len(),
-        1
-    );
 }
 
 #[test]
-fn ambiguous_runtime_evidence_is_visible_without_an_extra_operation() {
-    let runtime = event(
-        4,
-        "system",
-        vec![Block::tool_result(
-            0,
-            "runtime",
-            None,
+fn ambiguous_runtime_evidence_stays_as_bookkeeping() {
+    let turns = project(&[
+        event(1, "user", vec![text("look")]),
+        codex(event(
+            2,
+            "assistant",
+            vec![call("a", "exec", json!("view"))],
+        )),
+        codex(event(
+            3,
+            "assistant",
+            vec![call("b", "exec", json!("view"))],
+        )),
+        runtime(
+            4,
+            "img",
+            json!({"runtime_item":{"type":"ImageView","id":"img"},"started_at_ms":3500}),
             false,
-            Some(
-                json!({"runtime_item":{"type":"ImageView","id":"runtime","path":"file:///image.png"},"started_at_ms":3500}),
-            ),
-        )],
-    );
-    let events = vec![
-        event(1, "user", vec![text(0, "look")]),
-        event(
-            2,
-            "assistant",
-            vec![Block::tool_use(
-                0,
-                "a",
-                "exec",
-                json!("await tools.view_image(args)"),
-            )],
         ),
-        event(
-            3,
-            "assistant",
-            vec![Block::tool_use(
-                0,
-                "b",
-                "exec",
-                json!("await tools.view_image(args)"),
-            )],
-        ),
-        runtime,
-    ];
-    let projected = project_timeline(&events, 4, &ProjectionFilters::default());
-    assert_eq!(projected.turns[0].operation_count, 2);
-    assert!(projected.turns[0]
-        .markdown
-        .contains("Uncorrelated runtime evidence"));
-    assert!(projected.turns[0].tool_pairs.iter().all(|p| p.is_pending));
+    ]);
+    assert!(turns[0].tool_pairs.iter().all(|pair| pair.is_pending));
+    assert!(turns[0].items.iter().any(|item| matches!(&item.chunk,
+        TimelineChunk::System { subtype, is_meta: true, .. } if subtype.as_deref() == Some("runtime_evidence"))));
+    assert!(!turns[0].markdown.contains("Uncorrelated"));
 }
 
 #[test]
-fn runtime_after_yield_attaches_to_exec_and_wait_completion_closes_its_interval() {
-    let runtime = |offset, id, start| {
-        event(
-            offset,
-            "system",
-            vec![Block::tool_result(
-                0,
-                id,
-                None,
-                false,
-                Some(
-                    json!({"runtime_item":{"type":"CommandExecution","id":id,"command":["pwd"]},"started_at_ms":start}),
-                ),
-            )],
-        )
-    };
-    let events = vec![
-        event(1, "user", vec![text(0, "run")]),
-        event(
+fn a_quoted_running_header_does_not_keep_an_exec_open() {
+    let turns = project(&[
+        event(1, "user", vec![text("edit")]),
+        codex(event(
             2,
             "assistant",
-            vec![Block::tool_use(
-                0,
-                "a",
-                "exec",
-                json!("await tools.exec_command(args)"),
-            )],
-        ),
+            vec![call("read", "exec", json!("read"))],
+        )),
         event(
             3,
             "system",
-            vec![tool_result(
-                0,
-                "a",
-                "Script running with cell ID cell-a",
+            vec![result(
+                "read",
+                "Script completed\n\"Script running with cell ID \"",
                 false,
             )],
         ),
-        event(
+        codex(event(
             4,
             "assistant",
-            vec![Block::tool_use(0, "w", "wait", json!({"cell_id":"cell-a"}))],
+            vec![call("edit", "exec", json!("patch"))],
+        )),
+        runtime(
+            5,
+            "fc",
+            json!({"runtime_item":{"type":"FileChange","id":"fc"},"started_at_ms":4500}),
+            false,
         ),
-        runtime(5, "runtime-a", 4500),
-        event(6, "system", vec![tool_result(0, "w", "finished", false)]),
+        event(6, "system", vec![result("edit", "Script completed", false)]),
+    ]);
+    let edit = &turns[0].tool_pairs[1];
+    assert_eq!(
+        edit.input.as_ref().unwrap()["runtime_items"][0]["runtime_item"]["id"],
+        "fc"
+    );
+}
+
+#[test]
+fn a_completed_wait_closes_the_cell_it_waited_on() {
+    let evidence = |offset, id: &str, start| {
+        runtime(
+            offset,
+            id,
+            json!({"runtime_item":{"type":"CommandExecution","id":id},"started_at_ms":start}),
+            false,
+        )
+    };
+    let turns = project(&[
+        event(1, "user", vec![text("run")]),
+        codex(event(2, "assistant", vec![call("a", "exec", json!("run"))])),
         event(
-            7,
-            "assistant",
-            vec![Block::tool_use(
-                0,
-                "b",
-                "exec",
-                json!("await tools.exec_command(args)"),
-            )],
+            3,
+            "system",
+            vec![result("a", "Script running with cell ID cell-a", false)],
         ),
-        runtime(8, "runtime-b", 7500),
-        event(9, "system", vec![tool_result(0, "b", "finished", false)]),
-    ];
-    let projected = project_timeline(&events, 9, &ProjectionFilters::default());
-    let pairs = &projected.turns[0].tool_pairs;
-    assert_eq!(pairs.len(), 3);
+        codex(event(
+            4,
+            "assistant",
+            vec![call("w", "wait", json!({"cell_id": "cell-a"}))],
+        )),
+        evidence(5, "runtime-a", 4500),
+        event(6, "system", vec![result("w", "finished", false)]),
+        codex(event(7, "assistant", vec![call("b", "exec", json!("run"))])),
+        evidence(8, "runtime-b", 7500),
+        event(9, "system", vec![result("b", "finished", false)]),
+    ]);
+    let pairs = &turns[0].tool_pairs;
     assert_eq!(
         pairs[0].input.as_ref().unwrap()["runtime_items"][0]["runtime_item"]["id"],
         "runtime-a"
@@ -580,251 +518,86 @@ fn runtime_after_yield_attaches_to_exec_and_wait_completion_closes_its_interval(
         pairs[2].input.as_ref().unwrap()["runtime_items"][0]["runtime_item"]["id"],
         "runtime-b"
     );
-    assert!(!projected.turns[0].markdown.contains("Uncorrelated"));
-}
-
-/// Codex reports cumulative session totals; a turn's usage is the
-/// clamped delta against the last totals before it.
-#[test]
-fn turn_token_usage_deltas_codex_cumulative_totals() {
-    let mut early = event(2, "token_count", vec![]);
-    early.agent = "codex".to_string();
-    early.usage_json = Some(json!({"input_tokens": 1_000, "output_tokens": 100}));
-    let mut late = event(4, "token_count", vec![]);
-    late.agent = "codex".to_string();
-    late.usage_json = Some(json!({"input_tokens": 1_600, "output_tokens": 180}));
-
-    let events = vec![
-        event(1, "user", vec![text(0, "first prompt")]),
-        early,
-        event(3, "user", vec![text(0, "second prompt")]),
-        late,
-    ];
-    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
-    assert_eq!(projected.turns[0].input_tokens, 1_000);
-    assert_eq!(projected.turns[0].output_tokens, 100);
-    assert_eq!(projected.turns[1].input_tokens, 600);
-    assert_eq!(projected.turns[1].output_tokens, 80);
-}
-
-/// Codex world-model snapshots (`world_state`) and any meta-flagged
-/// record hide with the bookkeeping.
-#[test]
-fn codex_world_state_records_hide_with_bookkeeping() {
-    let mut world_state = event(2, "world_state", vec![]);
-    world_state.is_meta = true;
-    let events = vec![
-        event(1, "user", vec![text(0, "prompt")]),
-        world_state,
-        event(3, "assistant", vec![text(0, "reply")]),
-    ];
-
-    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
-    assert!(
-        projected.turns[0]
-            .chunks
-            .iter()
-            .all(|chunk| !matches!(chunk, TimelineChunk::Generic { .. })),
-        "world_state leaked: {:?}",
-        projected.turns[0].chunks,
-    );
-}
-
-/// The 2026-09 Codex build writes a `token_usage_record` per model response.
-/// They are telemetry and arrive several times a turn, so they must not reach
-/// the timeline as generic rows.
-#[test]
-fn codex_token_usage_records_hide_with_bookkeeping() {
-    let mut usage_record = event(2, "token_usage_record", vec![]);
-    usage_record.is_meta = true;
-    let events = vec![
-        event(1, "user", vec![text(0, "prompt")]),
-        usage_record,
-        event(3, "assistant", vec![text(0, "reply")]),
-    ];
-
-    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
-    assert!(
-        projected.turns[0]
-            .chunks
-            .iter()
-            .all(|chunk| !matches!(chunk, TimelineChunk::Generic { .. })),
-        "token_usage_record leaked: {:?}",
-        projected.turns[0].chunks,
-    );
-}
-
-/// Newer Claude Code builds write bookkeeping record kinds (`mode`,
-/// `ai-title`, `file-history-delta`, …) that must not surface as generic
-/// timeline rows when bookkeeping is hidden.
-#[test]
-fn newer_bookkeeping_kinds_stay_hidden_by_default() {
-    let events = vec![
-        event(1, "user", vec![text(0, "prompt")]),
-        event(2, "mode", vec![]),
-        event(3, "ai-title", vec![]),
-        event(4, "file-history-delta", vec![]),
-        // Claude Code 2.1.268+ session-state latch, no content of its own.
-        event(5, "atis-latch", vec![]),
-        event(6, "assistant", vec![text(0, "reply")]),
-    ];
-
-    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
-    let turn = &projected.turns[0];
-    assert!(
-        turn.chunks
-            .iter()
-            .all(|chunk| !matches!(chunk, TimelineChunk::Generic { .. })),
-        "bookkeeping kinds leaked into chunks: {:?}",
-        turn.chunks,
-    );
 }
 
 #[test]
-fn task_pairs_capture_subagent_turns() {
-    let mut root = event(
-        1,
-        "assistant",
-        vec![tool_use(
-            0,
-            "task-1",
-            "task",
-            OperationCategory::Delegate,
-            json!({"description": "investigate"}),
-        )],
-    );
-    root.event_uuid = Some("asst-1".to_string());
-
-    let mut sub_prompt = event(2, "user", vec![text(0, "sub prompt")]);
+fn spawned_transcripts_are_linked_not_copied() {
+    let mut sub_prompt = event(2, "user", vec![text("sub prompt")]);
     sub_prompt.is_sidechain = true;
-    sub_prompt.parent_event_uuid = Some("asst-1".to_string());
-
-    let mut sub_reply = event(3, "assistant", vec![text(0, "sub reply")]);
-    sub_reply.is_sidechain = true;
-    sub_reply.parent_event_uuid = Some("evt-2".to_string());
-
-    let events = vec![root, sub_prompt, sub_reply];
-    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
-    let pair = &projected.turns[0].tool_pairs[0];
-    let subagent = pair.subagent.as_ref().expect("subagent projected");
-    assert_eq!(subagent.event_count, 2);
-    assert_eq!(subagent.turns.len(), 1);
-    assert_eq!(subagent.turns[0].preview, "sub prompt");
-    assert!(subagent.turns[0].is_sidechain);
+    sub_prompt.related_tool_use_id = Some("task-1".into());
+    let child = Uuid::from_u128(0xc41d);
+    let mut spawn = codex(event(4, "system", vec![]));
+    spawn.is_meta = true;
+    spawn.subtype = Some("collab_agent_spawn_end".into());
+    spawn.event_uuid = Some(child.to_string());
+    spawn.related_tool_use_id = Some("call-spawn".into());
+    let events = [
+        event(
+            1,
+            "assistant",
+            vec![call("task-1", "Agent", json!({"description": "look"}))],
+        ),
+        sub_prompt,
+        event(3, "assistant", vec![text("sub reply")]),
+        spawn,
+    ];
+    let db = reduce_batches(&events, 1);
+    let links: Vec<(&str, Uuid, i64)> = db
+        .links
+        .iter()
+        .map(|link| {
+            (
+                link.pair_id.as_str(),
+                link.child_session_uuid,
+                link.child_turn_id,
+            )
+        })
+        .collect();
+    assert_eq!(
+        links,
+        vec![("call-spawn", child, -1), ("task-1", session(), 2)]
+    );
+    assert!(db.turns[&2].is_sidechain);
 }
 
 #[test]
-fn subagent_turns_link_their_own_nested_tasks_one_level_deep() {
-    let mut root = event(
-        1,
-        "assistant",
-        vec![tool_use(
-            0,
-            "task-1",
-            "task",
-            OperationCategory::Delegate,
-            json!({"description": "outer"}),
-        )],
-    );
-    root.event_uuid = Some("asst-1".to_string());
-
-    let mut sub_prompt = event(2, "user", vec![text(0, "sub prompt")]);
-    sub_prompt.is_sidechain = true;
-    sub_prompt.parent_event_uuid = Some("asst-1".to_string());
-
-    let mut sub_task = event(
-        3,
-        "assistant",
-        vec![tool_use(
-            0,
-            "task-2",
-            "task",
-            OperationCategory::Delegate,
-            json!({"description": "inner"}),
-        )],
-    );
-    sub_task.is_sidechain = true;
-    sub_task.parent_event_uuid = Some("evt-2".to_string());
-    sub_task.event_uuid = Some("asst-2".to_string());
-
-    let mut inner_prompt = event(4, "user", vec![text(0, "inner prompt")]);
-    inner_prompt.is_sidechain = true;
-    inner_prompt.parent_event_uuid = Some("asst-2".to_string());
-
-    let events = vec![root, sub_prompt, sub_task, inner_prompt];
-    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
-    let outer = projected.turns[0].tool_pairs[0]
-        .subagent
-        .as_ref()
-        .expect("outer subagent projected");
-    let inner_pair = outer
-        .turns
-        .iter()
-        .flat_map(|turn| turn.tool_pairs.iter())
-        .find(|pair| pair.id == "task-2")
-        .expect("nested task pair present");
-    let inner = inner_pair
-        .subagent
-        .as_ref()
-        .expect("nested subagent linked one level deep");
-    assert!(
-        inner
-            .turns
-            .iter()
-            .any(|turn| turn.preview == "inner prompt"),
-        "inner prompt turn projected: {:?}",
-        inner
-            .turns
-            .iter()
-            .map(|turn| &turn.preview)
-            .collect::<Vec<_>>(),
-    );
-    // Depth stops there: the nested subagent's own pairs never link further.
-    assert!(inner
-        .turns
-        .iter()
-        .flat_map(|turn| turn.tool_pairs.iter())
-        .all(|pair| pair.subagent.is_none()));
-}
-
-/// The preview truncates at a character count, not a byte index. Slicing bytes
-/// panicked on any prompt whose cut landed inside a multi-byte character, which
-/// killed the projection for that session and restarted the ingester on every
-/// subsequent line.
-#[test]
-fn previews_truncate_multibyte_prompts_without_panicking() {
-    fn preview_of(prompt: &str) -> String {
-        let events = vec![
-            event(1, "user", vec![text(0, prompt)]),
-            event(2, "assistant", vec![text(0, "ok")]),
-        ];
-        let projected =
-            project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
-        projected.turns[0].preview.clone()
+fn an_append_writes_only_its_own_rows() {
+    let mut events = vec![event(1, "user", vec![text("long")])];
+    for n in 0..200 {
+        events.push(event(
+            2 + n * 2,
+            "assistant",
+            vec![call(&format!("c{n}"), "bash", json!({}))],
+        ));
+        events.push(event(
+            3 + n * 2,
+            "user",
+            vec![result(&format!("c{n}"), "ok", false)],
+        ));
     }
-
-    // The original panic: 200 Cyrillic characters is 400 bytes, so a byte-index
-    // cut at 279 landed inside 'я'. It is under the 280-character limit, so the
-    // correct result is the prompt returned whole.
-    let under_limit = "я".repeat(200);
-    assert_eq!(preview_of(&under_limit), under_limit);
-
-    // Over the limit it truncates on a character boundary.
-    let over_limit = "я".repeat(400);
-    let preview = preview_of(&over_limit);
-    assert!(preview.ends_with('…'), "expected ellipsis, got {preview:?}");
-    assert_eq!(preview.chars().count(), 280);
-
-    // Emoji are 4 bytes, so they straddle a different set of boundaries.
-    let emoji = preview_of(&"🙂".repeat(400));
-    assert!(emoji.ends_with('…'));
-    assert_eq!(emoji.chars().count(), 280);
-
-    // The assistant fallback preview uses a different limit (260) and the same
-    // truncation path.
-    let events = vec![event(1, "assistant", vec![text(0, &"я".repeat(400))])];
-    let projected = project_timeline(&events, events.len() as i64, &ProjectionFilters::default());
-    let preview = &projected.turns[0].preview;
-    assert!(preview.starts_with("(assistant) "));
-    assert!(preview.ends_with('…'));
+    let mut db = reduce_batches(&events, 50);
+    let state = db.state.clone();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let changes = runtime.block_on(async {
+        let mut reducer = Reducer::new(&mut db, session(), state, None, None);
+        reducer
+            .apply(event(
+                1000,
+                "assistant",
+                vec![call("tail", "bash", json!({}))],
+            ))
+            .await
+            .unwrap();
+        reducer
+            .apply(event(1001, "user", vec![result("tail", "ok", false)]))
+            .await
+            .unwrap();
+        reducer.into_changes().1
+    });
+    assert_eq!(changes.turns.len(), 1);
+    assert_eq!(changes.items.len(), 1);
+    assert_eq!(changes.new_ops.len(), 1);
+    assert!(changes.updated_ops.is_empty());
 }

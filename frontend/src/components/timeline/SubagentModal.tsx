@@ -1,13 +1,15 @@
 import type { TimelineSubagent } from "../../api/types";
 import { Icon } from "../../icons";
 import { Overlay } from "../ui";
-import type { ToolPair } from "./grouping";
+import type { ToolPair, Turn } from "./grouping";
 import type { FileLinkTarget } from "./markdownLinks";
 import { TurnDetail } from "./TurnDetail";
 import "./SubagentModal.css";
 
 interface Props {
   subagent: TimelineSubagent;
+  /** The referenced transcript's turns; null while they load. */
+  turns: Turn[] | null;
   showThinking: boolean;
   hideUserPrompt?: boolean;
   onClose: () => void;
@@ -21,6 +23,7 @@ interface Props {
 
 export function SubagentModal({
   subagent,
+  turns,
   showThinking,
   hideUserPrompt = false,
   onClose,
@@ -28,9 +31,12 @@ export function SubagentModal({
   onBack,
   fileTarget = null,
 }: Props) {
+  const eventCount = turns
+    ? turns.reduce((sum, turn) => sum + turn.event_count, 0)
+    : subagent.event_count;
+  const turnCount = turns ? turns.length : subagent.turn_count;
   const subtitle =
-    `${subagent.event_count} events · ` +
-    `${subagent.turns.length} turn${subagent.turns.length === 1 ? "" : "s"}`;
+    `${eventCount} events · ` + `${turnCount} turn${turnCount === 1 ? "" : "s"}`;
 
   return (
     <Overlay
@@ -50,13 +56,14 @@ export function SubagentModal({
           <Icon name="arrow-left" size={14} /> parent agent
         </button>
       )}
-      {subagent.turns.length === 0 && (
+      {turns == null && <div className="sm__empty">Loading subagent turns…</div>}
+      {turns?.length === 0 && (
         <div className="sm__empty">
           No subagent events found for this Task. The subagent may not have
           emitted yet.
         </div>
       )}
-      {subagent.turns.map((turn) => (
+      {turns?.map((turn) => (
         <div key={turn.id} className="sm__turn">
           <TurnDetail
             turn={turn}
