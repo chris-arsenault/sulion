@@ -23,7 +23,6 @@ import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { connectPty, type ConnectionState } from "../api/ws";
-import { uploadRepoFile } from "../api/client";
 import { useAppCommand } from "../state/AppCommands";
 import { usePromptInjectionTarget } from "../hooks/usePromptInjectionTarget";
 import {
@@ -50,11 +49,9 @@ type ExitStatus =
  * Kept in component state instead of a synchronous browser confirm()
  * so the modal is styled, keyboard-accessible, and doesn't steal
  * focus / block the event loop. */
-type PendingPaste =
-  | { kind: "text"; raw: string; size: number; lines: number; repo: string }
-  | { kind: "image"; file: File; repo: string };
+type PendingPaste = PendingAttachment;
 
-import { ConfirmDialog } from "./common/ConfirmDialog";
+import { PasteUploadDialog, type PendingAttachment } from "./common/PasteUploadDialog";
 import {
   copyToClipboard,
   createClipboardImageUpload,
@@ -79,7 +76,10 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
   const [pendingPaste, setPendingPaste] = useState<PendingPaste | null>(null);
   const [pasteError, setPasteError] = useState<string | null>(null);
   const sessions = useSessions((store) => store.sessions);
-  const repoName = sessions.find((s) => s.id === sessionId)?.repo ?? null;
+  const session = sessions.find((s) => s.id === sessionId);
+  const repoName = session?.repo ?? null;
+  const workspaceRef = useRef(session?.workspace?.id);
+  workspaceRef.current = session?.workspace?.id;
   const repoRef = useRef<string | null>(repoName);
   repoRef.current = repoName;
   const exposeTerminalMirror = import.meta.env.VITE_SULION_E2E === "1";
@@ -265,6 +265,8 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
           kind: "image",
           file: createClipboardImageUpload(clipboardImage),
           repo: repoRef.current,
+          sessionId,
+          workspaceId: workspaceRef.current,
         });
         return;
       }
@@ -283,6 +285,8 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
           size: raw.length,
           lines: lineCount,
           repo: repoRef.current,
+          sessionId,
+          workspaceId: workspaceRef.current,
         });
         return;
       }
@@ -376,48 +380,11 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
     termRef.current?.focus();
   });
 
-  const acceptPasteAsFile = useCallback(async () => {
-    const pending = pendingPaste;
-    if (!pending) return;
-    setPendingPaste(null);
-    setPasteError(null);
-    const file =
-      pending.kind === "image"
-        ? pending.file
-        : new File(
-            [pending.raw],
-            `paste-${new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_")}.txt`,
-            { type: "text/plain" },
-          );
-    try {
-      const res = await uploadRepoFile(pending.repo, ".sulion-paste", file);
-      termRef.current?.paste(res.path + " ");
-      termRef.current?.focus();
-    } catch (error) {
-      // Text still has an inline fallback. Binary clipboard content cannot be
-      // represented in the PTY, so keep its upload failure visible instead.
-      if (pending.kind === "text") {
-        termRef.current?.paste(sanitizePaste(pending.raw));
-        termRef.current?.focus();
-      } else {
-        setPasteError(
-          error instanceof Error
-            ? `Clipboard image upload failed: ${error.message}`
-            : "Clipboard image upload failed.",
-        );
-      }
-    }
-  }, [pendingPaste]);
-
-  const cancelPendingPaste = useCallback(() => {
-    const pending = pendingPaste;
-    if (!pending) return;
-    setPendingPaste(null);
-    if (pending.kind === "text") {
-      termRef.current?.paste(sanitizePaste(pending.raw));
-    }
+  const closePaste = useCallback(() => setPendingPaste(null), []);
+  const insertAttachment = useCallback((text: string) => {
+    termRef.current?.paste(sanitizePaste(text));
     termRef.current?.focus();
-  }, [pendingPaste]);
+  }, []);
 
   const decreaseFontSize = useCallback(() => {
     setTerminalFontSize((value) => clampTerminalFontSize(value - 1));
@@ -494,21 +461,12 @@ export function TerminalPane({ sessionId }: { sessionId: string }) {
           {pasteError}
         </div>
       )}
-      {pendingPaste && (
-        <ConfirmDialog
-          title={pendingPaste.kind === "text" ? "Large paste" : "Clipboard image"}
-          message={
-            pendingPaste.kind === "text"
-              ? `Clipboard is ${pendingPaste.size} bytes / ${pendingPaste.lines} lines. ` +
-                "Save it to .sulion-paste/ and inject the path, or paste the raw contents inline? " +
-                "Inline pastes can overwhelm the PTY on large inputs."
-              : `Upload ${pendingPaste.file.name} (${pendingPaste.file.size} bytes) to ` +
-                ".sulion-paste/ and inject its path?"
-          }
-          confirmLabel={pendingPaste.kind === "text" ? "Save as file" : "Upload image"}
-          cancelLabel={pendingPaste.kind === "text" ? "Paste inline" : "Cancel"}
-          onConfirm={acceptPasteAsFile}
-          onCancel={cancelPendingPaste}
+      {pendingPaste?.sessionId === sessionId && (
+        <PasteUploadDialog
+          key={pendingPaste.sessionId}
+          pending={pendingPaste}
+          onInsert={insertAttachment}
+          onClose={closePaste}
         />
       )}
     </div>

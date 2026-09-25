@@ -337,6 +337,7 @@ pub enum NodeWireMessage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeRequestKind {
+    UploadImport,
     ProbeEcho,
     SessionCreate,
     SessionDelete,
@@ -368,8 +369,14 @@ pub enum NodeRequestKind {
 }
 
 impl NodeRequestKind {
+    pub(crate) fn timeout(self) -> std::time::Duration {
+        // The node bounds S3 imports to 220s; control waits below the ALB's 300s.
+        std::time::Duration::from_secs(if self == Self::UploadImport { 240 } else { 60 })
+    }
+
     pub(crate) fn as_str(self) -> &'static str {
         match self {
+            Self::UploadImport => "upload_import",
             Self::ProbeEcho => "probe_echo",
             Self::SessionCreate => "session_create",
             Self::SessionDelete => "session_delete",
@@ -403,6 +410,7 @@ impl NodeRequestKind {
 
     pub fn parse(value: &str) -> Option<Self> {
         Some(match value {
+            "upload_import" => Self::UploadImport,
             "probe_echo" => Self::ProbeEcho,
             "session_create" => Self::SessionCreate,
             "session_delete" => Self::SessionDelete,

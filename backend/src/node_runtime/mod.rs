@@ -29,6 +29,7 @@ use crate::worktree::{WorkspaceManager, WorkspaceRecord};
 mod host;
 mod messages;
 mod requests;
+mod uploads;
 
 pub use host::HostProbe;
 pub use messages::*;
@@ -114,6 +115,7 @@ pub struct NodeRuntime {
     repo_lifecycle_gate: RepoLifecycleGate,
     attachments: Mutex<HashMap<Uuid, watch::Sender<bool>>>,
     host: HostProbe,
+    upload_slots: tokio::sync::Semaphore,
 }
 
 impl NodeRuntime {
@@ -147,6 +149,7 @@ impl NodeRuntime {
             repo_lifecycle_gate,
             attachments: Mutex::new(HashMap::new()),
             host: HostProbe::new(),
+            upload_slots: tokio::sync::Semaphore::new(2),
         })
     }
 

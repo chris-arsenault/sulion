@@ -1,6 +1,7 @@
 // Typed REST client. Stateless — callers do their own caching/polling.
 import { getAccessToken } from "../auth/cognito";
 import type { Maybe } from "../lib/types";
+import type { GrantedUpload, UploadGrant, UploadIntent, UploadTarget } from "./uploadTypes";
 
 import type {
   AppStateResponse,
@@ -64,6 +65,9 @@ export class ApiError extends Error {
 async function parseErrorBody(resp: Response): Promise<string> {
   try {
     const body = await resp.json();
+    if (body?.code === "WAF_LFI_BODY") {
+      return "Security policy blocked this request (LFI_BODY). Review the submitted text before trying again.";
+    }
     if (body && typeof body.error === "string") return body.error;
   } catch {
     // Swallow — not JSON.
@@ -779,8 +783,8 @@ export function stageRepoPath(
 /** Upload files via multipart. `path` is the directory under the repo
  * root to drop into; empty for repo root. Returns the first-written
  * absolute path. */
-export async function uploadRepoFile(
-  name: string,
+export async function uploadLocalFile(
+  target: UploadTarget,
   path: string,
   file: File,
 ): Promise<{ path: string; size: number }> {
@@ -788,7 +792,9 @@ export async function uploadRepoFile(
   form.append("file", file, file.name);
   const qs = path ? `?path=${encodeURIComponent(path)}` : "";
   const resp = await authFetch(
-    `/api/repos/${encodeURIComponent(name)}/upload${qs}`,
+    target.workspaceId
+      ? `/api/workspaces/${encodeURIComponent(target.workspaceId)}/upload${qs}`
+      : `/api/repos/${encodeURIComponent(target.repo)}/upload${qs}`,
     { method: "POST", body: form },
     { json: false },
   );
@@ -796,6 +802,51 @@ export async function uploadRepoFile(
     throw new ApiError(resp.status, await parseErrorBody(resp));
   }
   return resp.json();
+}
+
+export function createUpload(input: UploadIntent): Promise<GrantedUpload> {
+  return request("/api/uploads", { method: "POST", body: JSON.stringify(input) });
+}
+
+/** Preserve the existing upload result and interaction across LAN and public access. */
+export async function uploadFile(target: UploadTarget, directory: string, file: File): Promise<{ path: string; size: number }> {
+  if (file.size > 50 * 1024 * 1024) throw new Error("Files must be 50 MiB or smaller.");
+  const publicOrigin = window.__APP_CONFIG__?.publicUploadOrigin;
+  if (!publicOrigin || window.location.origin !== publicOrigin) return uploadLocalFile(target, directory, file);
+
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()));
+  const input: UploadIntent = {
+    repo: target.workspaceId ? undefined : target.repo, workspace_id: target.workspaceId,
+    directory, filename: file.name, size: file.size, checksum: btoa(String.fromCharCode(...digest)),
+  };
+  const { id, grant } = await createUpload(input);
+  await putStagedFile(grant, file);
+  try {
+    return await request(`/api/uploads/${id}/complete`, {
+      method: "POST", body: JSON.stringify(input), signal: AbortSignal.timeout(270_000),
+    });
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new Error("The upload response was interrupted. Check the destination before retrying.");
+  }
+}
+
+/** This bearer capability must never inherit Sulion authentication or cookies. */
+export async function putStagedFile(grant: UploadGrant, file: File): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(grant.url, {
+      method: "PUT", body: file, headers: grant.headers,
+      credentials: "omit", redirect: "error", referrerPolicy: "no-referrer",
+      signal: AbortSignal.timeout(15 * 60 * 1000),
+    });
+  } catch {
+    // Fetch errors can contain the signed URL; expose only a safe message.
+    throw new Error("File transfer was interrupted. Try uploading again.");
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, `File storage rejected the upload (HTTP ${response.status}).`);
+  }
 }
 
 // ─── global library ──────────────────────────────────────────────────

@@ -82,6 +82,7 @@ services:
       # dumped beside them, and exported sessions are purged down to their
       # turn digest after the grace period. Empty disables the cycle.
       SULION_ARCHIVE_BUCKET: "${SULION_ARCHIVE_BUCKET:-}"
+      SULION_UPLOAD_BUCKET: "${SULION_UPLOAD_BUCKET:-}"
       SULION_ARCHIVE_MIN_IDLE_DAYS: "${SULION_ARCHIVE_MIN_IDLE_DAYS:-30}"
       SULION_ARCHIVE_INTERVAL_DAYS: "${SULION_ARCHIVE_INTERVAL_DAYS:-30}"
       # Grace between a session's export and its purge, in days. A literal:
@@ -295,6 +296,7 @@ services:
     environment:
       SULION_COGNITO_USER_POOL_ID: "${SULION_COGNITO_USER_POOL_ID:-}"
       SULION_COGNITO_CLIENT_ID: "${SULION_COGNITO_CLIENT_ID:-}"
+      SULION_PUBLIC_UPLOAD_ORIGIN: "${SULION_PUBLIC_UPLOAD_ORIGIN:-https://sulion.services.ahara.io}"
       SULION_RETRIEVAL_UPSTREAM: "${SULION_RETRIEVAL_UPSTREAM:-retrieval:8083}"
     networks:
       - sulion

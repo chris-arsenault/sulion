@@ -4,6 +4,16 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Remote uploads
+
+- Remote Explorer uploads and clipboard files use private S3 staging to keep
+  file bodies out of the public application ingress. Uploads return the installed
+  path or an error for manual retry.
+- Failed clipboard uploads retain their content for retry; text is pasted
+  inline only by explicit choice. Attachments follow the session's workspace.
+- Security-policy LFI responses show a specific error while preserving the
+  prompt draft. Enforcement remains unchanged.
+
 ### Plan guidance
 
 - Plans carry an outcome, principles, and assumptions, editable through the CLI

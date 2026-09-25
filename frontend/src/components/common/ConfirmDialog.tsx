@@ -24,6 +24,7 @@ export interface ConfirmDialogProps {
   /** If true, the confirm button is rendered red. Defaults to false. */
   destructive?: boolean;
   secondaryDestructive?: boolean;
+  busy?: boolean;
   /** Gate the confirm button behind a typed-phrase match. When set,
    * the dialog shows a text input and Confirm stays disabled until
    * the input exactly equals this value. Used for destructive,
@@ -42,6 +43,7 @@ export function ConfirmDialog({
   cancelLabel = "Cancel",
   destructive = false,
   secondaryDestructive = false,
+  busy = false,
   requireText,
   onConfirm,
   onSecondaryConfirm,
@@ -51,7 +53,7 @@ export function ConfirmDialog({
   const inputRef = useRef<HTMLInputElement>(null);
   const [typed, setTyped] = useState("");
   const gated = requireText != null && requireText.length > 0;
-  const canConfirm = !gated || typed === requireText;
+  const canConfirm = !busy && (!gated || typed === requireText);
 
   const handleConfirm = useCallback(() => {
     if (!canConfirm) return;

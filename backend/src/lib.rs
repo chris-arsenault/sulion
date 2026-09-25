@@ -45,6 +45,7 @@ pub mod secret_protocol;
 pub mod secret_pty;
 pub mod service;
 pub mod submitted_prompts;
+pub mod uploads;
 pub mod workspace;
 pub mod worktree;
 
@@ -98,6 +99,7 @@ pub struct AppState {
     /// Optional JWT auth validator. Production wiring enables this;
     /// most unit tests keep it unset and exercise handlers directly.
     pub auth: Option<Arc<auth::AuthState>>,
+    pub upload_store: tokio::sync::OnceCell<uploads::store::StagingStore>,
 }
 
 impl AppState {
@@ -156,6 +158,7 @@ impl AppState {
             ws_tickets: Arc::new(api::WsTicketStore::default()),
             node_control,
             auth,
+            upload_store: tokio::sync::OnceCell::new(),
         })
     }
 }

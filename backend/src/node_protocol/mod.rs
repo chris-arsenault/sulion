@@ -247,7 +247,7 @@ impl NodeControl {
             self.request_waiters.write().await.remove(&request_id);
             return Err(err);
         }
-        let response = tokio::time::timeout(std::time::Duration::from_secs(60), response_rx)
+        let response = tokio::time::timeout(kind.timeout(), response_rx)
             .await
             .map_err(|_| NodeProtocolError::Unavailable)?
             .map_err(|_| NodeProtocolError::Unavailable)?;

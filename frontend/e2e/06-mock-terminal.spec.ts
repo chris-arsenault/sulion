@@ -62,7 +62,7 @@ test("supports text and image paste-as-file across a websocket reconnect", async
   // Large pastes park behind the in-app ConfirmDialog (not a native browser
   // dialog): choose the save-as-file path.
   await page.getByRole("button", { name: "Save as file" }).click();
-  await page.waitForTimeout(200);
+  await expect(page.getByRole("dialog")).toBeHidden();
   await runTerminalCommand(page, "");
 
   await expectTerminalToContain(page, ".sulion-paste/paste-");
@@ -79,7 +79,12 @@ test("supports text and image paste-as-file across a websocket reconnect", async
     mediaType: "image/png",
   });
   await page.getByRole("button", { name: "Upload image" }).click();
-  await page.waitForTimeout(200);
+  await expect(page.getByRole("dialog")).toBeHidden();
+  await expectTerminalToContain(page, ".png");
+  await expect.poll(async () => {
+    const listing = await listRepoEntries(request, "atlas", ".sulion-paste", true);
+    return listing.entries.some((entry) => entry.kind === "file" && entry.name.endsWith(".png"));
+  }).toBe(true);
 
   const uploadsWithImage = await listRepoEntries(request, "atlas", ".sulion-paste", true);
   const uploadedImage = uploadsWithImage.entries.find(

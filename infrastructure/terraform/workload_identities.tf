@@ -34,7 +34,7 @@ module "workload_role" {
   prefix = local.prefix
   name   = each.key
 
-  policy_json = each.key == "backend" ? data.aws_iam_policy_document.archive_backend.json : null
+  policy_json = each.key == "backend" ? data.aws_iam_policy_document.backend_storage.json : null
 
   permissions_boundary_arn = (
     "arn:aws:iam::${data.aws_caller_identity.workload.account_id}:policy/pb-${local.prefix}-truenas-workload"

@@ -350,6 +350,32 @@ hostname or crosses the LAN in the clear.
 
 ## Networking
 
+### Remote file uploads
+
+On `https://sulion.services.ahara.io`, the browser uploads file bytes directly
+to private S3. A small authenticated completion request asks the node to fetch,
+verify and install the file before returning the installed path. LAN uploads
+keep their existing multipart routes. WAF enforcement is unchanged.
+
+Deploy the `ahara-infra` upload-bucket provisioning grant before Sulion's
+Terraform changes. Sulion provisions the private bucket, exact-origin CORS,
+scoped backend IAM and two-day object expiration. The existing deployment
+configuration supplies `SULION_UPLOAD_BUCKET` from
+`/ahara/sulion/upload-bucket`; a configured bucket enables the transport.
+`SULION_PUBLIC_UPLOAD_ORIGIN` selects the exact browser origin using S3
+(default `https://sulion.services.ahara.io`). Nodes need no AWS credentials.
+
+There is no upload database, worker or recovery service to operate. A failed
+transfer reports an error for manual retry. If the completion response is lost,
+check the destination before retrying: installation may have succeeded.
+Clipboard dialogs retain pending content while the page remains open.
+
+Normal deployment verification, performed by the implementing agent, checks a
+real S3 PUT and upload through the public hostname. Local tests cover signatures,
+metadata binding, node installation and browser flow, but cannot prove deployed
+IAM or CORS. The companion WAF change returns `WAF_LFI_BODY` for the existing
+LFI Block action so the UI can identify that error.
+
 The public path is shared Ahara ALB/WAF → EC2 nginx → WireGuard → the frontend
 published on `192.168.66.3:30080`. The browser deletes sessions with
 `POST /api/sessions/:id/delete` for networks that filter the `DELETE` method.

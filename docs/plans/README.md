@@ -5,6 +5,12 @@ These files record implementation work and proposals. Current product contracts
 belong in the durable docs linked below; published progress is managed with
 [`sulion plan`](../plans.md).
 
+## In progress
+
+- [Remote file uploads through S3](remote-file-uploads.md): foreground
+  browser-to-S3 transfer and node installation, retaining WAF restrictions.
+  The simplified implementation is locally validated; publication remains pending.
+
 ## Pending proposal
 
 - [Database archive, backup, and monthly purge](transcript-archive-and-purge.md)

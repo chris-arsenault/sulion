@@ -8,6 +8,7 @@ declare global {
     __APP_CONFIG__?: {
       cognitoUserPoolId?: string;
       cognitoClientId?: string;
+      publicUploadOrigin?: string;
     };
   }
 }

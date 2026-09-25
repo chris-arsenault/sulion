@@ -27,7 +27,7 @@ import type {
   WorkspaceView,
 } from "../api/types";
 import { SESSION_COLORS } from "../api/types";
-import { ApiError, stageRepoPath, uploadRepoFile } from "../api/client";
+import { ApiError, stageRepoPath, uploadFile } from "../api/client";
 import { appCommands, useAppCommand } from "../state/AppCommands";
 import {
   useIsMobileLayout,
@@ -2011,7 +2011,7 @@ function TreeRow({
       const files = Array.from(e.target.files ?? []);
       for (const f of files) {
         try {
-          await uploadRepoFile(repoName, fullPath, f);
+          await uploadFile({ repo: repoName }, fullPath, f);
         } catch (err) {
           onError(`Upload failed for ${f.name}: ${messageOf(err)}`);
         }
@@ -2037,7 +2037,7 @@ function TreeRow({
       const files = Array.from(ev.dataTransfer.files);
       for (const f of files) {
         try {
-          await uploadRepoFile(repoName, fullPath, f);
+          await uploadFile({ repo: repoName }, fullPath, f);
         } catch (err) {
           onError(`Upload failed for ${f.name}: ${messageOf(err)}`);
         }

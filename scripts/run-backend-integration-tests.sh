@@ -19,7 +19,18 @@ TEST_TARGETS=(
   node_protocol_integration
   ingester_integration
   archive_integration
+  uploads_integration
 )
+# Permit focused runs while retaining the same isolated database harness.
+if (( $# > 0 )); then
+  for target in "$@"; do
+    if [[ ! " ${TEST_TARGETS[*]} " == *" ${target} "* ]]; then
+      echo "unknown integration target: ${target}" >&2
+      exit 2
+    fi
+  done
+  TEST_TARGETS=("$@")
+fi
 INTEGRATION_FEATURE="integration-tests"
 
 # Hard ceiling on the cargo invocation. The suite's own work is roughly 100

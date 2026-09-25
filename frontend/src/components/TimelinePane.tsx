@@ -28,9 +28,8 @@ import {
   interruptSessionAgent,
   sendSessionPrompt,
   startSessionAgent,
-  uploadRepoFile,
 } from "../api/client";
-import { ConfirmDialog } from "./common/ConfirmDialog";
+import { PasteUploadDialog, type PendingAttachment } from "./common/PasteUploadDialog";
 import {
   createClipboardImageUpload,
   imageFromClipboard,
@@ -838,6 +837,8 @@ function TimelinePromptBar({
           kind: "image",
           file: createClipboardImageUpload(clipboardImage),
           repo,
+          sessionId,
+          workspaceId: session?.workspace?.id,
         });
         return;
       }
@@ -846,52 +847,15 @@ function TimelinePromptBar({
       const lines = (raw.match(/\n/g)?.length ?? 0) + 1;
       if (repo && (raw.length > PASTE_AS_FILE_BYTES || lines > PASTE_AS_FILE_LINES)) {
         e.preventDefault();
-        setPendingPaste({ kind: "text", raw, size: raw.length, lines, repo });
+        setPendingPaste({ kind: "text", raw, size: raw.length, lines, repo, sessionId, workspaceId: session?.workspace?.id });
       }
       // Small text falls through to the browser's default insertion.
     },
-    [repo],
+    [repo, sessionId, session?.workspace?.id],
   );
 
-  const acceptPasteAsFile = useCallback(async () => {
-    const parked = pendingPaste;
-    if (!parked) return;
-    setPendingPaste(null);
-    setPasteError(null);
-    const file =
-      parked.kind === "image"
-        ? parked.file
-        : new File(
-            [parked.raw],
-            `paste-${new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_")}.txt`,
-            { type: "text/plain" },
-          );
-    try {
-      const res = await uploadRepoFile(parked.repo, ".sulion-paste", file);
-      insertText(res.path + " ");
-    } catch (err) {
-      // Text still has an inline fallback; an image cannot be
-      // represented in the textarea, so keep its failure visible.
-      if (parked.kind === "text") {
-        insertText(parked.raw);
-      } else {
-        setPasteError(
-          err instanceof Error
-            ? `Clipboard image upload failed: ${err.message}`
-            : "Clipboard image upload failed.",
-        );
-      }
-    }
-  }, [insertText, pendingPaste]);
+  const closePaste = useCallback(() => setPendingPaste(null), []);
 
-  const cancelPendingPaste = useCallback(() => {
-    const parked = pendingPaste;
-    if (!parked) return;
-    setPendingPaste(null);
-    if (parked.kind === "text") {
-      insertText(parked.raw);
-    }
-  }, [insertText, pendingPaste]);
   const onTextKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -1037,20 +1001,12 @@ function TimelinePromptBar({
           </button>
         </div>
       )}
-      {pendingPaste && (
-        <ConfirmDialog
-          title={pendingPaste.kind === "text" ? "Large paste" : "Clipboard image"}
-          message={
-            pendingPaste.kind === "text"
-              ? `Clipboard is ${pendingPaste.size} bytes / ${pendingPaste.lines} lines. ` +
-                "Save it to .sulion-paste/ and insert the path, or paste the raw contents inline?"
-              : `Upload ${pendingPaste.file.name} (${pendingPaste.file.size} bytes) to ` +
-                ".sulion-paste/ and insert its path?"
-          }
-          confirmLabel={pendingPaste.kind === "text" ? "Save as file" : "Upload image"}
-          cancelLabel={pendingPaste.kind === "text" ? "Paste inline" : "Cancel"}
-          onConfirm={acceptPasteAsFile}
-          onCancel={cancelPendingPaste}
+      {pendingPaste?.sessionId === sessionId && (
+        <PasteUploadDialog
+          key={pendingPaste.sessionId}
+          pending={pendingPaste}
+          onInsert={insertText}
+          onClose={closePaste}
         />
       )}
     </div>
@@ -1146,9 +1102,7 @@ function PromptBarToolbar({
 /** Parked paste in the prompt bar waiting on the user to choose inline
  * vs save-as-file or confirm a clipboard image upload. Mirrors the
  * terminal's paste model. */
-type PendingPromptPaste =
-  | { kind: "text"; raw: string; size: number; lines: number; repo: string }
-  | { kind: "image"; file: File; repo: string };
+type PendingPromptPaste = PendingAttachment;
 
 function promptStatusText(
   session: SessionView | null,
