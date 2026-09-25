@@ -209,8 +209,7 @@ pub async fn next(
         return Ok(Record::Reset);
     }
     let mut items = Vec::new();
-    let operations;
-    if !cursor.items_done {
+    let operations = if !cursor.items_done {
         let rows: Vec<(i64, Value)> = sqlx::query_as(
             "SELECT byte_offset, body FROM timeline_items WHERE session_uuid = $1 AND turn_id = $2 \
              AND byte_offset > $3 AND byte_offset <= $4 ORDER BY byte_offset LIMIT $5"
@@ -228,13 +227,13 @@ pub async fn next(
             .iter()
             .flat_map(|i| super::view::chunk_pair_ids(&i.chunk))
             .collect();
-        operations = if references.is_empty() {
+        if references.is_empty() {
             Vec::new()
         } else {
             load_operations(pool, session, turn, &cursor, Some(&references))
                 .await?
                 .0
-        };
+        }
     } else {
         let (values, last) = load_operations(pool, session, turn, &cursor, None).await?;
         cursor.operation_after = last;
@@ -248,8 +247,8 @@ pub async fn next(
             cursor.items_done = false;
             return Ok(Record::Complete { cursor });
         }
-        operations = values;
-    }
+        values
+    };
     if position(pool, session).await?.0 != cursor.generation {
         return Ok(Record::Reset);
     }
