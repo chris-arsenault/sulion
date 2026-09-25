@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  memo,
 } from "react";
 
 import { saveLibraryEntry } from "../../api/client";
@@ -32,7 +33,9 @@ import {
 import { ThinkingFlyout } from "./ThinkingFlyout";
 import { ToolHoverCard } from "./ToolHoverCard";
 import { ToolCallRenderer } from "./tools/renderers";
-import { groupItems } from "./turnDetailCache";
+import { blockKey, createItemGrouper } from "./turnDetailCache";
+import { TurnBlocks } from "./TurnBlocks";
+import { hydrateOperation } from "../../state/TurnDetailStore";
 import { Tooltip } from "../ui";
 import "./TurnDetail.css";
 
@@ -83,7 +86,8 @@ export function TurnDetail({
     () => new Map(turn.tool_pairs.map((pair) => [pair.id, pair] as const)),
     [turn.tool_pairs],
   );
-  const blocks = useMemo(() => groupItems(turn.items), [turn.items]);
+  const groupItems = useMemo(() => createItemGrouper(), []);
+  const blocks = useMemo(() => groupItems(turn.items), [groupItems, turn.items]);
 
   // Card expansion lives here, not in the rows: the newest card arrives
   // expanded and collapses again when the next one lands, manual toggles
@@ -110,6 +114,11 @@ export function TurnDetail({
   // the bottom, hold position otherwise, and jump back to the top when
   // the selection moves to a different turn.
   const bodyRef = useRef<HTMLDivElement>(null);
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+  const attachScroller = useCallback((node: HTMLDivElement | null) => {
+    bodyRef.current = node;
+    setScroller(node);
+  }, []);
   const atBottomRef = useRef(true);
   const onBodyScroll = useCallback(() => {
     const el = bodyRef.current;
@@ -154,6 +163,20 @@ export function TurnDetail({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [thinking, setThinking] = useState<ThinkingAnchor | null>(null);
   const [hover, setHover] = useState<HoverAnchor | null>(null);
+  const hoverPair = hover ? pairById.get(hover.pair.id) ?? hover.pair : null;
+  const hoverPairId = hoverPair?.id;
+  const hoverBodyLoaded = hoverPair?.body_loaded;
+  const hoverBodyVersion = hoverPair?.body_version;
+  const [hoverError, setHoverError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!hoverPairId || hoverBodyLoaded !== false || !turn.session_uuid) return;
+    const controller = new AbortController();
+    setHoverError(null);
+    void hydrateOperation(turn.session_uuid, turn.id, hoverPairId, controller.signal).catch((error: unknown) => {
+      if (!controller.signal.aborted) setHoverError(error instanceof Error ? error.message : "Tool loading failed");
+    });
+    return () => controller.abort();
+  }, [hoverPairId, hoverBodyLoaded, hoverBodyVersion, turn.session_uuid, turn.id, turn.generation]);
   const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const openCtx = useContextMenu((store) => store.open);
   const sessionBadge = useMemo(() => {
@@ -243,10 +266,12 @@ export function TurnDetail({
         label: "Copy turn as markdown",
         onSelect: () => {
           void (async () => {
-            const markdown = loadMarkdown
-              ? await loadMarkdown().catch(() => formatTurn(turn))
-              : formatTurn(turn);
-            await copyToClipboard(markdown);
+            try {
+              const markdown = loadMarkdown ? await loadMarkdown() : formatTurn(turn);
+              await copyToClipboard(markdown);
+            } catch (error) {
+              setSaveError(error instanceof Error ? error.message : "Copy failed");
+            }
           })();
         },
       },
@@ -366,13 +391,13 @@ export function TurnDetail({
             </span>
           )}
         </div>
-        {saveError && <div className="td__save-error">save failed: {saveError}</div>}
+        {saveError && <div className="td__save-error">{saveError}</div>}
       </div>
 
       <div
         className="td__body"
         data-testid="turn-detail"
-        ref={bodyRef}
+        ref={attachScroller}
         onScroll={onBodyScroll}
       >
         {turn.archived_at && (
@@ -390,11 +415,11 @@ export function TurnDetail({
             <Markdown source={turn.markdown} fileTarget={fileTarget} />
           </div>
         )}
-        {blocks.map((chunk, idx) => {
+        <TurnBlocks key={turnIdentity} blocks={blocks} scroller={scroller} focusPairId={focusPairId} focusKey={focusKey}>{(chunk, idx) => {
           if (chunk.kind === "assistant") {
             return (
               <AssistantBlock
-                key={`a-${idx}`}
+                key={blockKey(idx, chunk)}
                 items={chunk.items}
                 thinking={chunk.thinking}
                 pairById={pairById}
@@ -415,6 +440,9 @@ export function TurnDetail({
               <ToolPairRow
                 key={`t-${pair.id || idx}`}
                 pair={pair}
+                session={turn.session_uuid ?? null}
+                turnId={turn.id}
+                generation={turn.generation}
                 expanded={isExpanded(pair)}
                 onToggle={toggleExpansion}
                 onOpenSubagent={onOpenSubagent}
@@ -429,7 +457,7 @@ export function TurnDetail({
 
           if (chunk.kind === "summary") {
             return (
-              <div key={`s-${idx}`} className="td__sub td__sub--summary">
+              <div key={blockKey(idx, chunk)} className="td__sub td__sub--summary">
                 <span className="td__sub-label">summary</span>
                 <span>{chunk.text}</span>
               </div>
@@ -438,7 +466,7 @@ export function TurnDetail({
 
           if (chunk.kind === "system") {
             return (
-              <div key={`sy-${idx}`} className="td__sub td__sub--system">
+              <div key={blockKey(idx, chunk)} className="td__sub td__sub--system">
                 <span className="td__sub-label">system</span>
                 <span>
                   {chunk.subtype ?? "system"} {chunk.text}
@@ -448,7 +476,7 @@ export function TurnDetail({
           }
 
           return (
-            <div key={`g-${idx}`} className="td__sub td__sub--generic">
+            <div key={blockKey(idx, chunk)} className="td__sub td__sub--generic">
               <span className="td__sub-label">{chunk.label}</span>
               <details>
                 <summary>details</summary>
@@ -456,7 +484,7 @@ export function TurnDetail({
               </details>
             </div>
           );
-        })}
+        }}</TurnBlocks>
       </div>
 
       {thinking && showThinking && (
@@ -466,10 +494,11 @@ export function TurnDetail({
           onClose={onClearThinking}
         />
       )}
-      {hover && !isMobile && (
+      {hover && hoverPair && !isMobile && (
         <ToolHoverCard
           anchor={hover.el}
-          pair={hover.pair}
+          pair={hoverPair}
+          loadError={hoverError}
           pinned={hover.pinned}
           onPin={onPinHover}
           onClose={onClearHover}
@@ -481,7 +510,7 @@ export function TurnDetail({
   );
 }
 
-function AssistantBlock({
+const AssistantBlock = memo(function AssistantBlock({
   items,
   thinking,
   pairById,
@@ -576,7 +605,7 @@ function AssistantBlock({
       )}
     </div>
   );
-}
+});
 
 function ThinkingChip({
   text,
@@ -624,8 +653,11 @@ function defaultReferenceName(text: string): string {
   return `Reference: ${firstLine.slice(0, 64)}`;
 }
 
-function ToolPairRow({
+const ToolPairRow = memo(function ToolPairRow({
   pair,
+  session,
+  turnId,
+  generation,
   expanded,
   onToggle,
   onOpenSubagent,
@@ -636,6 +668,9 @@ function ToolPairRow({
   focusToken,
 }: {
   pair: ToolPair;
+  session: string | null;
+  turnId: number;
+  generation?: string;
   /** Controlled by TurnDetail: newest-card default, sticky manual
    * toggles, focus rebasing. */
   expanded: boolean;
@@ -647,6 +682,18 @@ function ToolPairRow({
   isFocused: boolean;
   focusToken: string | null;
 }) {
+  const [bodyError, setBodyError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    if (!expanded || pair.body_loaded !== false || !session) return;
+    const controller = new AbortController();
+    setBodyError(null);
+    void hydrateOperation(session, turnId, pair.id, controller.signal).catch((error: unknown) => {
+      if (!controller.signal.aborted) setBodyError(error instanceof Error ? error.message : "Tool loading failed");
+    });
+    return () => controller.abort();
+  }, [expanded, pair.body_loaded, pair.body_version, pair.id, session, turnId, generation, retry]);
+  const retryBody = useCallback(() => setRetry((value) => value + 1), []);
   const rowRef = useRef<HTMLDivElement>(null);
   const enterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const appliedFocusTokenRef = useRef<string | null>(null);
@@ -770,13 +817,14 @@ function ToolPairRow({
       </div>
       {expanded && (
         <div className="td__tool-body">
-          <ToolCallRenderer tool={toolProp} />
+          {bodyError ? <button type="button" onClick={retryBody}>{bodyError} — Retry</button>
+            : pair.body_loaded === false ? <span>Loading tool details…</span> : <ToolCallRenderer tool={toolProp} />}
           {pair.result && <ToolResultRender pair={pair} />}
         </div>
       )}
     </div>
   );
-}
+});
 
 function ToolResultRender({ pair }: { pair: ToolPair }) {
   const result = pair.result!;

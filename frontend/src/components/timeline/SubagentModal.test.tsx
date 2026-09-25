@@ -3,11 +3,15 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { Turn } from "./grouping";
+import type { TimelineTurnSummary } from "../../api/types";
+import { useTurnStream } from "./useTurnStream";
+
+vi.mock("./useTurnStream", () => ({ useTurnStream: vi.fn() }));
 import { SubagentModal } from "./SubagentModal";
 import { assistantChunk, itemsOf, makeSubagent, makeTurn, toolChunk } from "./test-helpers";
 
 const noop = () => {};
-const NO_TURNS: Turn[] = [];
+const NO_TURNS: TimelineTurnSummary[] = [];
 const NESTED_TASK_TURNS: Turn[] = [
   makeTurn({
     tool_pairs: [
@@ -124,10 +128,11 @@ describe("SubagentModal", () => {
   });
 
   it("nested task pairs expose their own agent log link", () => {
+    vi.mocked(useTurnStream).mockReturnValue({ turn: NESTED_TASK_TURNS[0], revision: 0, loading: false });
     render(
       <SubagentModal
         subagent={makeSubagent()}
-        turns={NESTED_TASK_TURNS}
+        turns={NESTED_TASK_TURNS.map((turn) => ({ ...turn, operation_badges: [] }))}
         showThinking={true}
         onClose={noop}
         onOpenSubagent={noop}
@@ -137,10 +142,11 @@ describe("SubagentModal", () => {
   });
 
   it("renders the referenced turns", () => {
+    vi.mocked(useTurnStream).mockReturnValue({ turn: REPLY_TURNS[0], revision: 0, loading: false });
     render(
       <SubagentModal
         subagent={makeSubagent({ event_count: 2 })}
-        turns={REPLY_TURNS}
+        turns={REPLY_TURNS.map((turn) => ({ ...turn, operation_badges: [] }))}
         showThinking={true}
         onClose={noop}
       />,

@@ -14,6 +14,7 @@ No React context stores.
 | `TabStore` | Thin tab registry only. |
 | `DisplayStore` | Persisted desktop display mode and sidebar pin; transient peek visibility. |
 | `TimelineControlsStore` | Shared, persisted timeline filters, turn-navigation mode, and timeline text size. |
+| `TurnDetailStore` | Shared unfiltered turn records, resumable cursors, and coalesced reads for session, repository, and subagent views. Retains at most 24 turns unless active consumers require more. |
 | `ContextMenuStore` | Ephemeral open/close state for the global context-menu layer. |
 
 Each store is a singleton Zustand store with selector-based reads.
@@ -88,6 +89,12 @@ or workspace-scoped routes.
 The open-plan summary list belongs in `SessionStore` because the sidebar,
 overview, command palette, and per-session current-plan projections all consume
 it; full plan detail stays inside the plan modal.
+
+Turn detail records have a concrete cross-surface need: the session timeline,
+repository timeline and subagent modal can show the same turn. `TurnDetailStore`
+shares those records and in-flight reads by transcript UUID and turn ID. Display
+filters derive visible records locally. Selection, scrolling, tool expansion and
+flyouts remain component-local; the store does not own those interactions.
 
 Session selection routes through `useSessionNavigation`. Desktop opens the
 paired terminal and timeline tabs. Mobile opens only the timeline, optionally

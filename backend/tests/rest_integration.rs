@@ -18,6 +18,8 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 mod common;
+#[path = "rest_integration/turn_stream.rs"]
+mod turn_stream_tests;
 
 type RetrievalAdminMockSeen = Arc<Mutex<Vec<(Option<String>, serde_json::Value)>>>;
 

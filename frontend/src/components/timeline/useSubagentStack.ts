@@ -5,15 +5,16 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { getSessionTurns } from "../../api/client";
-import type { TimelineQuery, TimelineSubagent } from "../../api/types";
-import type { ToolPair, Turn } from "./grouping";
+import { getTranscriptSummaries } from "../../api/turnStream";
+import type { TimelineQuery, TimelineSubagent, TimelineTurnSummary } from "../../api/types";
+import type { ToolPair } from "./grouping";
 
 export interface SubagentStack {
   /** The open transcript, or null when the modal is closed. */
   subagent: TimelineSubagent | null;
   /** Its turns; null while the first read is in flight. */
-  turns: Turn[] | null;
+  turns: TimelineTurnSummary[] | null;
+  error: string | null;
   depth: number;
   open: (pair: ToolPair) => void;
   back: () => void;
@@ -25,30 +26,34 @@ function referenceKey(subagent: TimelineSubagent): string {
 }
 
 export function useSubagentStack(
-  query: TimelineQuery,
+  _query: TimelineQuery,
   revision: number,
   active: boolean,
 ): SubagentStack {
   const [stack, setStack] = useState<TimelineSubagent[]>([]);
-  const [loaded, setLoaded] = useState<{ key: string; turns: Turn[] } | null>(null);
+  const [loaded, setLoaded] = useState<{ key: string; turns: TimelineTurnSummary[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const subagent = stack[stack.length - 1] ?? null;
   const key = subagent ? referenceKey(subagent) : null;
 
   useEffect(() => {
     if (!active || !subagent?.session_uuid) return;
     const readKey = referenceKey(subagent);
-    let cancelled = false;
-    void getSessionTurns(subagent.session_uuid, subagent.turn_ids, query)
+    const controller = new AbortController();
+    setError(null);
+    void getTranscriptSummaries(subagent.session_uuid, controller.signal)
       .then((resp) => {
-        if (!cancelled) setLoaded({ key: readKey, turns: resp.turns });
+        if (!controller.signal.aborted) setLoaded({ key: readKey, turns: resp.turns.filter(
+          (turn) => !subagent.turn_ids?.length || subagent.turn_ids.includes(turn.id),
+        ) });
       })
-      .catch(() => {
-        if (!cancelled) setLoaded({ key: readKey, turns: [] });
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "Subagent loading failed");
       });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
-  }, [active, subagent, query, revision]);
+  }, [active, subagent, revision]);
 
   const open = useCallback((pair: ToolPair) => {
     const next = pair.subagent;
@@ -59,6 +64,7 @@ export function useSubagentStack(
 
   return {
     subagent,
+    error,
     turns: loaded && loaded.key === key ? loaded.turns : null,
     depth: stack.length,
     open,

@@ -19,6 +19,10 @@
   overflow: hidden;
 }
 
+.sm__turn-list {
+  height: 60vh;
+}
+
 .sm__turn + .sm__turn {
   margin-top: 4px;
 }

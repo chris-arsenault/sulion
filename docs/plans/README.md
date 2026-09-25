@@ -20,6 +20,11 @@ belong in the durable docs linked below; published progress is managed with
 
 ## Completed implementation records
 
+- [Progressive turn loading](progressive-turn-loading.md): bounded streaming,
+  shared incremental caching, local filters and on-demand tool bodies. Local
+  verification and fixture measurements are recorded; browser and deployed LAN
+  latency/buffering checks remain unverified.
+
 - [PTY survival](archive/pty-survives-deploy.md), with
   [phase 1](archive/pty-survives-deploy-phase1.md),
   [phase 2](archive/pty-survives-deploy-phase2.md), and

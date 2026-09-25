@@ -208,7 +208,7 @@ pub(super) async fn attach_subagents(
     Ok(())
 }
 
-fn chunk_pair_ids(chunk: &TimelineChunk) -> Vec<String> {
+pub(super) fn chunk_pair_ids(chunk: &TimelineChunk) -> Vec<String> {
     match chunk {
         TimelineChunk::Assistant { items, .. } => items
             .iter()

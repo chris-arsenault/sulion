@@ -20,6 +20,7 @@ pub use maintenance::{
     StartupMaintenanceStats,
 };
 pub use metadata::upsert_from_event as upsert_session_metadata_from_event;
+pub use projection::stream as turn_stream;
 pub use projection::{
     annotate_timeline_summaries, annotate_timeline_turns, backfill_timeline_projection,
     load_repo_file_trace, load_repo_timeline_summary_response, load_session_turns,

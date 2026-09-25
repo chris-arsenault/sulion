@@ -29,6 +29,7 @@ mod session_routes;
 mod stats;
 mod submitted_prompt_routes;
 mod timeline_routes;
+mod turn_stream_routes;
 mod upload_routes;
 mod workspace_routes;
 mod ws;
@@ -50,6 +51,7 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/api/app-state", get(app_state_routes::app_state))
         .route("/api/ws-tickets", post(ws::issue_ticket))
         .merge(routes::router())
+        .merge(turn_stream_routes::router())
         .merge(upload_routes::router())
         .merge(crate::node_protocol::admin_router())
         .merge(device_routes::approve_router())

@@ -20,6 +20,7 @@ use super::timeline::{
 mod file_trace;
 mod filters;
 mod store;
+pub mod stream;
 mod view;
 mod write;
 

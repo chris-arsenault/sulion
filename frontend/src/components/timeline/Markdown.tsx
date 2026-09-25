@@ -3,7 +3,7 @@
 // math rendered through KaTeX. Used for user prompts and assistant text in
 // TurnDetail.
 
-import { useCallback, useMemo, type MouseEvent, type ReactNode } from "react";
+import { memo, useCallback, useMemo, type MouseEvent, type ReactNode } from "react";
 import ReactMarkdown, { type Options } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -42,7 +42,7 @@ interface Props {
   fileTarget?: FileLinkTarget | null;
 }
 
-export function Markdown({ source, compact = false, fileTarget = null }: Props) {
+export const Markdown = memo(function Markdown({ source, compact = false, fileTarget = null }: Props) {
   const normalized = useMemo(() => normalizeMathDelimiters(source), [source]);
   const components = useMemo<NonNullable<Options["components"]>>(
     () => ({
@@ -68,7 +68,7 @@ export function Markdown({ source, compact = false, fileTarget = null }: Props) 
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 /** Links never navigate this document. Absolute URLs open a new browser
  * tab; repo-relative paths open a Sulion file tab through the app

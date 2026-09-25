@@ -127,6 +127,14 @@
   gap: 8px;
 }
 
+.td__virtual-list {
+  flex-shrink: 0;
+}
+
+.td__virtual-block {
+  padding-bottom: 8px;
+}
+
 .td__sub {
   font-size: var(--timeline-t-ui);
   line-height: 1.5;

@@ -7,8 +7,10 @@ import { resetRepoStore } from "../state/RepoStore";
 import { resetSecretStore } from "../state/SecretStore";
 import { resetSessionStore } from "../state/SessionStore";
 import { resetTabStore } from "../state/TabStore";
+import { resetTurnDetails } from "../state/TurnDetailStore";
 
 function resetAllStores() {
+  resetTurnDetails();
   resetAppCommands();
   resetContextMenuStore();
   resetRepoStore();

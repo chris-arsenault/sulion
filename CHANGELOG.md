@@ -4,6 +4,14 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Timeline loading
+
+- Turn details arrive in batches and resume interrupted loads. Cached turns show
+  immediately on revisit; display filters no longer reload the full turn.
+- Live updates coalesce into incremental reads, including late tool results and
+  child-agent changes. Large tool bodies load when opened, and long turns mount
+  only nearby rows. Subagent views share the cache; copying fetches a complete digest.
+
 ### Remote uploads
 
 - Remote Explorer uploads and clipboard files use private S3 staging to keep

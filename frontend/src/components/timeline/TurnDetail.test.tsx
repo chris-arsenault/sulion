@@ -72,6 +72,17 @@ describe("TurnDetail", () => {
     expect(screen.getByText("bash")).toBeDefined();
   });
 
+  it("reports digest failures instead of copying an incomplete streamed turn", async () => {
+    const user = userEvent.setup();
+    const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    const load = vi.fn().mockRejectedValue(new Error("Digest unavailable"));
+    renderWithContextMenu(<TurnDetail turn={makeTurn()} showThinking loadMarkdown={load} />);
+    await user.pointer({ keys: "[MouseRight]", target: screen.getByLabelText("Turn actions") });
+    await user.click(screen.getByRole("menuitem", { name: "Copy turn as markdown" }));
+    expect(await screen.findByText("Digest unavailable")).toBeDefined();
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it("labels a filtered prompt distinctly from a genuine orphan turn", () => {
     const { rerender } = renderWithContextMenu(
       <TurnDetail

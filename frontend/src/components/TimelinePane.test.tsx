@@ -24,7 +24,8 @@ import type { RepoView, SessionView } from "../api/types";
 import { appCommands, subscribeToAppCommands } from "../state/AppCommands";
 import { useDisplay } from "../state/DisplayStore";
 import { useSessionStore } from "../state/SessionStore";
-import { resetTimelineControlsStore } from "../state/TimelineControlsStore";
+import { resetTimelineControlsStore, useTimelineControlsStore } from "../state/TimelineControlsStore";
+import { useTurnDetailStore } from "../state/TurnDetailStore";
 import { appStatePayload, jsonResponse } from "../test/appState";
 
 const TimelinePane = (props: { sessionId?: string; repo?: string }) => (
@@ -96,7 +97,18 @@ function stubFetch(
           }),
         );
       }
-      return handler(url, init);
+      const response = handler(url, init);
+      if (!url.includes("/stream") || !response.ok) return response;
+      const payload = await response.json();
+      const id = Number(url.match(/\/turns\/(\d+)/)?.[1]);
+      const turn = payload.turn ?? payload.turns?.find((candidate: { id: number }) => candidate.id === id);
+      if (!turn) throw new Error(`Missing stream fixture for ${url}`);
+      const cursor = { generation: "fixture", since: -1, through: 1, item_after: 1, operation_after: -1, items_done: true };
+      return new Response([
+        { kind: "header", turn: { ...turn, items: [], tool_pairs: [] }, archived_at: payload.archived_at ?? null, cursor, reset: true },
+        { kind: "batch", items: turn.items, operations: turn.tool_pairs, cursor },
+        { kind: "complete", cursor: { ...cursor, since: 1, through: null } },
+      ].map((record) => JSON.stringify(record) + "\n").join(""), { headers: { "Content-Type": "application/x-ndjson" } });
     }),
   );
 }
@@ -167,6 +179,25 @@ function timelineDetailBody(turn: Record<string, unknown>) {
 }
 
 describe("TimelinePane", () => {
+  it("filters already loaded content without another detail request or loading placeholder", async () => {
+    const urls: string[] = [];
+    stubFetch((url) => {
+      urls.push(url);
+      return new Response(timelineBody(), { headers: { "Content-Type": "application/json" } });
+    });
+    render(<TimelinePane sessionId="abc" />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /hello/ }));
+    await screen.findByText("hi there");
+    await waitFor(() => expect(useTurnDetailStore.getState().entries.get(`${transcriptSessionUuid}:1`)?.loading).toBe(false));
+    const count = urls.filter((url) => url.includes("/stream")).length;
+    act(() => useTimelineControlsStore.getState().toggleSpeaker("assistant"));
+    expect(screen.queryByText("hi there")).toBeNull();
+    expect(screen.queryByText(/Loading turn detail/)).toBeNull();
+    act(() => useTimelineControlsStore.getState().toggleSpeaker("assistant"));
+    expect(screen.getByText("hi there")).toBeDefined();
+    expect(urls.filter((url) => url.includes("/stream"))).toHaveLength(count);
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
     window.localStorage.clear();
@@ -179,7 +210,7 @@ describe("TimelinePane", () => {
     const turn = payload.turns[0] as Record<string, unknown>;
     stubFetch((url) =>
       new Response(
-        url.includes("/timeline/turns/") ? timelineDetailBody(turn) : JSON.stringify(payload),
+        url.includes("/turns/") ? timelineDetailBody(turn) : JSON.stringify(payload),
         {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -209,7 +240,7 @@ describe("TimelinePane", () => {
     ];
     stubFetch((url) =>
       new Response(
-        url.includes("/timeline/turns/") ? timelineDetailBody(turn) : JSON.stringify(payload),
+        url.includes("/turns/") ? timelineDetailBody(turn) : JSON.stringify(payload),
         {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -239,7 +270,7 @@ describe("TimelinePane", () => {
     stubFetch(
       (url) =>
         new Response(
-          url.includes("/timeline/turns/")
+          url.includes("/turns/")
             ? timelineDetailBody(turn)
             : JSON.stringify(payload),
           {
@@ -346,11 +377,11 @@ describe("TimelinePane", () => {
     const sessionTurns = (turns: unknown[]) =>
       JSON.stringify({ session_uuid: "child", session_agent: CLAUDE, through: 1, turns });
     stubFetch((url) => {
-      const body = url.includes("/api/timeline/sessions/child-outer/")
+      const body = url.includes("/api/timeline/child-outer/")
         ? sessionTurns(outerTurns)
-        : url.includes("/api/timeline/sessions/child-inner/")
+        : url.includes("/api/timeline/child-inner/")
           ? sessionTurns(nestedTurns)
-          : url.includes("/timeline/turns/")
+          : url.includes("/turns/")
             ? timelineDetailBody(turn)
             : JSON.stringify(payload);
       return new Response(body, {
@@ -988,7 +1019,7 @@ describe("TimelinePane", () => {
 
     let summaryCalls = 0;
     stubFetch((url) => {
-      if (url.includes("/timeline/turns/")) {
+      if (url.includes("/turns/")) {
         return new Response(
           timelineDetailBody(
             turns.find((turn) => url.includes(`/turns/${turn.id}`)) ?? turns[0]!,
@@ -1044,7 +1075,7 @@ describe("TimelinePane", () => {
     });
 
     stubFetch((url) => {
-      if (url.includes("/timeline/turns/")) {
+      if (url.includes("/turns/")) {
         detailCalls += 1;
         return new Response(
           timelineDetailBody(makeTurn(`detail ${detailCalls}`, summaryCalls + 1)),
@@ -1071,9 +1102,9 @@ describe("TimelinePane", () => {
       useSessionStore.setState({ sessions: [sessionView(1)] });
     });
 
-    // The revision tick and the changed summary each read the turn again.
+    // The revision tick refreshes detail once; summary arrival does not restart it.
     await waitFor(() => expect(screen.getByText(/^detail [2-9]$/)).toBeDefined());
-    expect(detailCalls).toBeGreaterThan(1);
+    expect(detailCalls).toBe(2);
   });
 
   it("fetches the repo timeline endpoint in repo mode", async () => {

@@ -57,6 +57,24 @@ calls after it. A spawning call references its child transcript through
 nothing else, into its parent. Every read attaches the child's current totals,
 and the app-state timeline revision of a session adds its direct children's
 revisions, so an open parent view refreshes as a child grows.
+
+Turn detail streams finite NDJSON responses from the existing projection. A
+header arrives before item reads, followed by pages of up to 64 items or changed
+operations. Referenced operations, file touches and child totals are read in
+batches. Cursors bind the turn, projection generation and starting session offset;
+partial page positions remain separate from the completed synchronization offset.
+Rebuilds rotate the generation, and purges also invalidate cursors. Interrupted
+reads resume without advancing past undelivered changes. No database transaction
+is held while waiting on the network.
+
+Operation headers omit large input/result bodies. Expanded or hovered tools
+fetch bodies in batches of up to 16; generation and body versions prevent stale
+responses from replacing newer data. Copying requests a complete digest separately.
+The frontend retains unfiltered turns across navigation and visibility filters,
+coalesces revision refreshes, and virtualizes detail views above 100 content parts.
+Consecutive assistant records form groups of at most 64, so text-only turns also
+retain completed groups as new batches arrive.
+See [state management](state-management.md) for cache ownership.
 `markdown` is the turn digest that `sulion-retrieve turn` returns: the prompt,
 the assistant's text blocks, and one header line per tool call. Live turns
 compose it on read; the archive purge stores it. Tool inputs, diffs, and

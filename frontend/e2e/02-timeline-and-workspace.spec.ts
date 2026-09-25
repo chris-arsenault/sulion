@@ -19,6 +19,17 @@ test("walks timeline details, filters, hover cards, and file trace links", async
 
   // The filters live in the timeline settings flyout.
   await page.getByRole("button", { name: "Timeline settings" }).click();
+  const detailRequests: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/stream")) detailRequests.push(request.url());
+  });
+  const assistant = page.getByTestId("filter-chips").getByRole("button", { name: "assistant", exact: true });
+  await assistant.click();
+  await expect(page.getByTestId("tool-pair-row")).toHaveCount(0);
+  await expect(page.getByTestId("turn-detail")).toBeVisible();
+  await assistant.click();
+  await expect(page.getByTestId("tool-pair-row").first()).toBeVisible();
+  expect(detailRequests).toEqual([]);
   const fileFilter = page.getByLabel("Filter to turns referencing file path");
   await fileFilter.fill("missing.txt");
   await expect(page.getByText("No turns match current filters.")).toBeVisible();

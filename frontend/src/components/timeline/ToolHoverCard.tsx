@@ -22,6 +22,7 @@ import "./ToolHoverCard.css";
 interface Props {
   anchor: HTMLElement | null;
   pair: ToolPair;
+  loadError?: string | null;
   pinned: boolean;
   onPin: () => void;
   onClose: () => void;
@@ -32,6 +33,7 @@ interface Props {
 export function ToolHoverCard({
   anchor,
   pair,
+  loadError,
   pinned,
   onPin,
   onClose,
@@ -76,6 +78,8 @@ export function ToolHoverCard({
   }, [anchor, pair.id]);
 
   const resultText = (() => {
+    if (loadError) return loadError;
+    if (pair.body_loaded === false) return "Loading tool details…";
     if (!pair.result) return pair.is_pending ? "(pending)" : "";
     if (!pair.result.content && pair.result.payload && usesStructuredResult(pair)) {
       return null;

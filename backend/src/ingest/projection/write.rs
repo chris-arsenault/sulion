@@ -127,6 +127,10 @@ pub async fn project_batch(
     .context("lock timeline session state")?;
 
     if row.projection_version != REDUCER_VERSION {
+        sqlx::query("UPDATE timeline_session_state SET generation = gen_random_uuid() WHERE session_uuid = $1")
+            .bind(session_uuid)
+            .execute(&mut *tx)
+            .await?;
         for table in ["timeline_turns", "timeline_message_usage"] {
             // Items, operations and file touches cascade from their turn.
             sqlx::query(&format!("DELETE FROM {table} WHERE session_uuid = $1"))

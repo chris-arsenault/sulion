@@ -650,6 +650,9 @@ export interface TimelineSubagent {
 }
 
 export interface TimelineToolPair {
+  /** Stream metadata omits bodies until a tool is opened. */
+  body_loaded?: boolean;
+  body_version?: number;
   id: string;
   name: string;
   raw_name?: string | null;
@@ -691,6 +694,7 @@ export type TimelineChunk =
 export type TimelineItem = TimelineChunk & { offset: number };
 
 export interface TimelineTurn {
+  generation?: string;
   id: number;
   turn_key?: string | null;
   preview: string;

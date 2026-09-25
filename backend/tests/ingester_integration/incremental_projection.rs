@@ -100,10 +100,22 @@ async fn a_transcript_applied_line_by_line_ends_where_a_rebuild_ends() {
         Ingester::new().tick(&pool, &fx.config()).await.unwrap();
     }
     let incremental = snapshot(&pool, fx.session_uuid).await;
+    let generation = sulion::ingest::turn_stream::position(&pool, fx.session_uuid)
+        .await
+        .unwrap()
+        .0;
     rebuild_session_projection(&pool, fx.session_uuid)
         .await
         .unwrap();
     assert_eq!(snapshot(&pool, fx.session_uuid).await, incremental);
+    assert_ne!(
+        sulion::ingest::turn_stream::position(&pool, fx.session_uuid)
+            .await
+            .unwrap()
+            .0,
+        generation,
+        "a rebuild invalidates cursors even when the final records are identical"
+    );
 
     // The late failure completed the call in the first turn, and the
     // revised receipt replaced that turn's earlier contribution.

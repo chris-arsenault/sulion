@@ -1,7 +1,14 @@
-import type { TimelineSubagent } from "../../api/types";
+import { useCallback, useMemo } from "react";
+import { Virtuoso } from "react-virtuoso";
+import type { TimelineSubagent, TimelineTurnSummary } from "../../api/types";
 import { Icon } from "../../icons";
 import { Overlay } from "../ui";
-import type { ToolPair, Turn } from "./grouping";
+import type { ToolPair } from "./grouping";
+import { useTurnStream } from "./useTurnStream";
+import { useTimelineFilters } from "./filters";
+import { filterTurn } from "./filterTurn";
+import { getTurnDigest } from "../../api/turnStream";
+import { refreshTurn } from "../../state/TurnDetailStore";
 import type { FileLinkTarget } from "./markdownLinks";
 import { TurnDetail } from "./TurnDetail";
 import "./SubagentModal.css";
@@ -9,7 +16,10 @@ import "./SubagentModal.css";
 interface Props {
   subagent: TimelineSubagent;
   /** The referenced transcript's turns; null while they load. */
-  turns: Turn[] | null;
+  turns: TimelineTurnSummary[] | null;
+  revision?: number;
+  active?: boolean;
+  error?: string | null;
   showThinking: boolean;
   hideUserPrompt?: boolean;
   onClose: () => void;
@@ -24,6 +34,9 @@ interface Props {
 export function SubagentModal({
   subagent,
   turns,
+  revision = 0,
+  active = true,
+  error,
   showThinking,
   hideUserPrompt = false,
   onClose,
@@ -31,6 +44,11 @@ export function SubagentModal({
   onBack,
   fileTarget = null,
 }: Props) {
+  const renderTurn = useCallback((_index: number, turn: TimelineTurnSummary) => (
+    <SubagentTurn summary={turn} session={subagent.session_uuid!} revision={revision} active={active}
+      showThinking={showThinking} hideUserPrompt={hideUserPrompt}
+      onOpenSubagent={onOpenSubagent} fileTarget={fileTarget} />
+  ), [subagent.session_uuid, revision, active, showThinking, hideUserPrompt, onOpenSubagent, fileTarget]);
   const eventCount = turns
     ? turns.reduce((sum, turn) => sum + turn.event_count, 0)
     : subagent.event_count;
@@ -56,24 +74,35 @@ export function SubagentModal({
           <Icon name="arrow-left" size={14} /> parent agent
         </button>
       )}
-      {turns == null && <div className="sm__empty">Loading subagent turns…</div>}
+      {error && <div role="alert">{error}</div>}
+      {turns == null && !error && <div className="sm__empty">Loading subagent turns…</div>}
       {turns?.length === 0 && (
         <div className="sm__empty">
           No subagent events found for this Task. The subagent may not have
           emitted yet.
         </div>
       )}
-      {turns?.map((turn) => (
-        <div key={turn.id} className="sm__turn">
-          <TurnDetail
-            turn={turn}
-            showThinking={showThinking}
-            hideUserPrompt={hideUserPrompt}
-            onOpenSubagent={onOpenSubagent}
-            fileTarget={fileTarget}
-          />
-        </div>
-      ))}
+      {turns && (turns.length > 8
+        ? <Virtuoso className="sm__turn-list" data={turns} itemContent={renderTurn} />
+        : turns.map((turn, index) => <div key={turn.id}>{renderTurn(index, turn)}</div>))}
     </Overlay>
   );
+}
+
+function SubagentTurn({ summary, session, revision, active, ...props }: {
+  summary: TimelineTurnSummary; session: string; revision: number; active: boolean;
+  showThinking: boolean; hideUserPrompt: boolean;
+  onOpenSubagent?: (pair: ToolPair) => void; fileTarget: FileLinkTarget | null;
+}) {
+  const detail = useTurnStream(session, summary.id, revision, active);
+  const { filters } = useTimelineFilters();
+  const turn = useMemo(() => detail?.turn ? filterTurn(detail.turn, filters) : null, [detail?.turn, filters]);
+  const loadMarkdown = useCallback(() => getTurnDigest(session, summary.id), [session, summary.id]);
+  const retry = useCallback(() => refreshTurn(session, summary.id, revision, true), [session, summary.id, revision]);
+  return <div className="sm__turn">
+    {detail?.error && <div role="alert">{detail.error}
+      <button type="button" onClick={retry}>Retry</button>
+    </div>}
+    {turn ? <TurnDetail turn={turn} loadMarkdown={loadMarkdown} {...props} /> : <p>Loading turn detail…</p>}
+  </div>;
 }
