@@ -42,6 +42,9 @@ async fn fresh_pool() -> db::Pool {
     .execute(&pool)
     .await
     .expect("reset archive state");
+    sulion::ingest::mark_projection_versions_current(&pool)
+        .await
+        .expect("mark derived data current");
     pool
 }
 
@@ -277,6 +280,59 @@ async fn export_verifies_object_and_records_archive_columns() {
         .await
         .unwrap();
     assert_eq!(live.eligible_for_export, 0);
+}
+
+#[tokio::test]
+async fn purge_waits_for_pending_derived_data_repairs() {
+    let pool = fresh_pool().await;
+    let fx = Fixture::new(&pool).await;
+    fx.write_transcript();
+    ingest(&pool, &fx).await;
+
+    // A startup repair that has not finished holds its version back.
+    sqlx::query(
+        "UPDATE ingest_projection_versions SET version = 0 WHERE name = 'usage_projection'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let deferred = archive::run_cycle(&pool, &fx.purging_config(0), false)
+        .await
+        .unwrap();
+    assert_eq!(deferred.exported, 1, "export still runs");
+    assert_eq!(deferred.purged, 0);
+    assert_eq!(deferred.purge_failures, 0, "deferral is not a failure");
+    assert_eq!(deferred.purge_deferred_for, vec!["usage_projection"]);
+    assert_eq!(count(&pool, "events", fx.session_uuid).await, 4);
+    let err = archive::purge::purge_session(&pool, fx.session_uuid)
+        .await
+        .expect_err("direct purge refuses too");
+    assert!(format!("{err:#}").contains("usage_projection"), "{err:#}");
+
+    // Repairs done, but this session's timeline is behind its events.
+    sulion::ingest::mark_projection_versions_current(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE timeline_session_state SET projected_through = 0 WHERE session_uuid = $1")
+        .bind(fx.session_uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let err = archive::purge::purge_session(&pool, fx.session_uuid)
+        .await
+        .expect_err("a lagging timeline would freeze a partial digest");
+    assert!(format!("{err:#}").contains("caught up"), "{err:#}");
+    assert_eq!(count(&pool, "events", fx.session_uuid).await, 4);
+
+    sulion::ingest::rebuild_session_projection(&pool, fx.session_uuid)
+        .await
+        .unwrap();
+    let purged = archive::run_cycle(&pool, &fx.purging_config(0), false)
+        .await
+        .unwrap();
+    assert!(purged.purge_deferred_for.is_empty());
+    assert_eq!(purged.purged, 1);
+    assert_eq!(count(&pool, "events", fx.session_uuid).await, 0);
 }
 
 #[tokio::test]

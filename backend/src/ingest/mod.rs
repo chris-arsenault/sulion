@@ -16,7 +16,8 @@ pub use ingester::{
     IngesterConfig, ReplayLine, ReplayStats, ADMIT_LINES_PER_TICK,
 };
 pub use maintenance::{
-    mark_projection_versions_current, run_required_startup_maintenance, StartupMaintenanceStats,
+    mark_projection_versions_current, projections_behind, run_required_startup_maintenance,
+    StartupMaintenanceStats,
 };
 pub use metadata::upsert_from_event as upsert_session_metadata_from_event;
 pub use projection::{
@@ -24,8 +25,8 @@ pub use projection::{
     load_repo_file_trace, load_repo_timeline_summary_response, load_session_turns,
     load_timeline_response, load_timeline_session_meta, load_timeline_summary_response,
     load_timeline_turn_detail, load_timeline_turn_view, project_batch, project_until_caught_up,
-    rebuild_session_projection, store_turn_digests, RepoFileTraceTouch, TimelineSessionMeta,
-    TurnView,
+    rebuild_session_projection, session_projection_current, store_turn_digests, RepoFileTraceTouch,
+    TimelineSessionMeta, TurnView,
 };
 pub use reset::{rebuild_ingest_derivatives, ReindexStats};
 

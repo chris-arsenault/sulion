@@ -185,6 +185,12 @@ Three rules follow from the digest having no events behind it:
   grows after its session was purged, `process_file` queues an
   `archive_requests` restore and leaves the offset alone; the next tick after
   the replay ingests the new lines normally.
+- A purge freezes the session's usage and digest as the current projections
+  hold them, so `purge_session` refuses while any startup repair
+  (`canonical_blocks`, `usage_projection`, `timeline_projection` in
+  `ingest_projection_versions`) is behind the binary, or while the session's
+  timeline cursor lags its events. The archive cycle checks the repairs once
+  and defers the whole purge phase to the next cycle.
 - Restore replays the archived envelope lines through the same `insert_event`
   path a file takes (`ingest::replay_session_lines`), then rebuilds the
   projection in full. No transcript file is written and the ingester binary

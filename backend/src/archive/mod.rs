@@ -115,6 +115,9 @@ pub struct CycleOutcome {
     /// False means the purge phase was skipped because the deployment has
     /// `SULION_ARCHIVE_PURGE_ENABLED` off.
     pub purge_enabled: bool,
+    /// Derived-data keys a startup repair has not finished; purging waits
+    /// for the next cycle when this is non-empty.
+    pub purge_deferred_for: Vec<String>,
     pub dump_key: Option<String>,
     pub dump_bytes: i64,
     pub exported: usize,
@@ -351,8 +354,22 @@ async fn run_cycle_phases(
 
     // Selected after the exports so a zero-day grace purges what this cycle
     // just exported; with the production grace the two sets never overlap.
-    // Nothing is selected until the deployment enables purging.
-    let purge_set = if outcome.purge_enabled {
+    // Nothing is selected until the deployment enables purging, nor while a
+    // startup repair is still rebuilding what a purge would freeze.
+    if outcome.purge_enabled {
+        outcome.purge_deferred_for = crate::ingest::projections_behind(pool)
+            .await?
+            .into_iter()
+            .map(String::from)
+            .collect();
+    }
+    let purge_set = if !outcome.purge_deferred_for.is_empty() {
+        tracing::info!(
+            behind = outcome.purge_deferred_for.join(","),
+            "derived data repair pending; exported without purging this cycle"
+        );
+        Vec::new()
+    } else if outcome.purge_enabled {
         purge::purge_candidates(pool, config.purge_after_days).await?
     } else {
         tracing::info!(

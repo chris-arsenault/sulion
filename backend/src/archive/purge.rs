@@ -127,8 +127,18 @@ struct PurgeGuard {
 /// since export, or already purged; those are the invariants the loop's
 /// candidate query enforces, re-checked under the row lock.
 pub async fn purge_session(pool: &Pool, session_uuid: Uuid) -> anyhow::Result<PurgeOutcome> {
+    let behind = crate::ingest::projections_behind(pool).await?;
+    if !behind.is_empty() {
+        anyhow::bail!(
+            "derived data is still being repaired ({}); purging would freeze stale usage and digests",
+            behind.join(", ")
+        );
+    }
     let mut tx = pool.begin().await.context("begin purge tx")?;
     lock_and_check(&mut tx, session_uuid).await?;
+    if !crate::ingest::session_projection_current(&mut tx, session_uuid).await? {
+        anyhow::bail!("session {session_uuid} timeline has not caught up with its events");
+    }
 
     let repo = attributed_repo(&mut tx, session_uuid).await?;
     let mut outcome = PurgeOutcome {

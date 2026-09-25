@@ -215,7 +215,9 @@ Every `SULION_ARCHIVE_INTERVAL_DAYS` (30) the loop:
    `HEAD`;
 3. purges sessions exported `SULION_ARCHIVE_PURGE_AFTER_DAYS` (0: in the
    same cycle, once the upload's hash is confirmed) ago to their turn
-   digest, rolling cost and file churn up first;
+   digest, rolling cost and file churn up first. The phase is deferred to
+   the next cycle while a startup derived-data repair is unfinished, so a
+   failed repair never leaves purged sessions summarised by stale logic;
 4. prunes finished backfill and job rows by age.
 
 Progress is an `ingest_jobs` row in the Jobs panel. `sulion archive status`

@@ -222,6 +222,23 @@ async fn repair_usage_projection_if_behind(
     Ok(())
 }
 
+/// Derived-data keys whose stored version is behind this binary: a startup
+/// repair has not finished rebuilding them. Purging freezes a session's usage
+/// and digest from these projections, so it waits until this is empty.
+pub async fn projections_behind(pool: &Pool) -> anyhow::Result<Vec<&'static str>> {
+    let mut behind = Vec::new();
+    for (key, target) in [
+        (CANONICAL_BLOCKS_KEY, CANONICAL_BLOCKS_VERSION),
+        (USAGE_PROJECTION_KEY, USAGE_PROJECTION_VERSION),
+        (TIMELINE_PROJECTION_KEY, TIMELINE_PROJECTION_VERSION),
+    ] {
+        if projection_version(pool, key).await? < target {
+            behind.push(key);
+        }
+    }
+    Ok(behind)
+}
+
 pub async fn mark_projection_versions_current(pool: &Pool) -> anyhow::Result<()> {
     set_projection_version(pool, CANONICAL_BLOCKS_KEY, CANONICAL_BLOCKS_VERSION).await?;
     set_projection_version(pool, TIMELINE_PROJECTION_KEY, TIMELINE_PROJECTION_VERSION).await?;

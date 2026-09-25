@@ -266,6 +266,27 @@ pub async fn backfill_timeline_projection(
     Ok(sessions.len())
 }
 
+/// The session's timeline is built by this reducer version and has applied
+/// every stored event. A session with no events has nothing to project.
+pub async fn session_projection_current(
+    tx: &mut Transaction<'_, Postgres>,
+    session_uuid: Uuid,
+) -> anyhow::Result<bool> {
+    sqlx::query_scalar(
+        "SELECT NOT EXISTS (SELECT 1 FROM events WHERE session_uuid = $1) \
+             OR EXISTS ( \
+                SELECT 1 FROM timeline_session_state s \
+                 WHERE s.session_uuid = $1 AND s.projection_version = $2 \
+                   AND s.projected_through >= \
+                       (SELECT MAX(byte_offset) FROM events WHERE session_uuid = $1))",
+    )
+    .bind(session_uuid)
+    .bind(REDUCER_VERSION)
+    .fetch_one(&mut **tx)
+    .await
+    .context("check session timeline is current")
+}
+
 /// Write each turn's digest into `timeline_turns.markdown`, composed from its
 /// items and operations. The archive purge calls this before it deletes
 /// them; live turns compose the digest on read instead.
