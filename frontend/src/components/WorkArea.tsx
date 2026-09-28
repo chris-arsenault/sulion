@@ -506,16 +506,16 @@ function TabHandle({
     openTab({ kind: "secrets", sessionId: tab.sessionId }, paneId);
   }, [openTab, paneId, tab.sessionId]);
   const enableSecret = useCallback(
-    (secretId: string, ttlSeconds: number) => {
+    (secretId: string, ttlSeconds: number | null) => {
       if (!tab.sessionId) return;
       void enableGrant(tab.sessionId, secretId, ttlSeconds).catch(() => undefined);
     },
     [enableGrant, tab.sessionId],
   );
   const revokeSecret = useCallback(
-    (secretId: string) => {
+    (secretId: string, repository?: boolean) => {
       if (!tab.sessionId) return;
-      void revokeGrant(tab.sessionId, secretId).catch(() => undefined);
+      void revokeGrant(tab.sessionId, secretId, repository).catch(() => undefined);
     },
     [revokeGrant, tab.sessionId],
   );

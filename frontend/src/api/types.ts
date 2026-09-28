@@ -518,7 +518,8 @@ export interface SecretGrantMetadata {
   secret_id: string;
   granted_by_sub: string;
   granted_by_username: string | null;
-  expires_at: string;
+  expires_at: string | null;
+  repo?: string | null;
 }
 
 export interface CreateRepoRequest {

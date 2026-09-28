@@ -4,6 +4,12 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Repository secrets
+
+- Secret menus offer **Always for this repository** for access without an expiry.
+  Existing and future sessions inherit the grant; revoking it removes repository
+  access while preserving any separate timed terminal grant.
+
 ### Timeline loading
 
 - Turn details arrive in batches and resume interrupted loads. Cached turns show

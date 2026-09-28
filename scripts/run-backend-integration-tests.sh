@@ -20,6 +20,7 @@ TEST_TARGETS=(
   ingester_integration
   archive_integration
   uploads_integration
+  secret_broker_integration
 )
 # Permit focused runs while retaining the same isolated database harness.
 if (( $# > 0 )); then

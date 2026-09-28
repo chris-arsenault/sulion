@@ -439,6 +439,20 @@ describe("api client", () => {
       },
     ]);
   });
+
+  it("keeps permanent and terminal grants for the same secret independently revocable", async () => {
+    const permanent = {
+      secret_id: "status", granted_by_sub: "sub", granted_by_username: "user",
+      expires_at: null, repo: "atlas",
+    };
+    const timed = { ...permanent, repo: null, expires_at: "2026-01-01T00:05:00Z" };
+    stubFetch(async () => jsonResponse([timed, permanent, permanent]));
+    const grants = await listSecretGrants("pty-1");
+    expect(grants).toHaveLength(2);
+    expect(grants[0]).toEqual(permanent);
+    expect(grants[1].expires_at).toBe(timed.expires_at);
+    expect(grants[1].repo).toBeUndefined();
+  });
 });
 
 describe("fileRawUrl", () => {

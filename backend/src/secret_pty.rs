@@ -9,7 +9,10 @@ use uuid::Uuid;
 
 use crate::secret_protocol::RegisterPtyCredentialRequest;
 
-pub async fn prepare_pty_credential(pty_session_id: Uuid) -> anyhow::Result<Option<PathBuf>> {
+pub async fn prepare_pty_credential(
+    pty_session_id: Uuid,
+    repo: &str,
+) -> anyhow::Result<Option<PathBuf>> {
     let Some(client) = broker_registration_client() else {
         tracing::debug!(
             %pty_session_id,
@@ -41,7 +44,41 @@ pub async fn prepare_pty_credential(pty_session_id: Uuid) -> anyhow::Result<Opti
     let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref())
         .map_err(|_| anyhow::anyhow!("load generated PTY secret broker key"))?;
     let public_key = BASE64_STANDARD.encode(key_pair.public_key().as_ref());
+    register_credential(&client, pty_session_id, public_key, repo).await?;
 
+    tokio::fs::write(&key_path, pkcs8.as_ref())
+        .await
+        .with_context(|| format!("write {}", key_path.display()))?;
+    tokio::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
+        .await
+        .with_context(|| format!("chmod {}", key_path.display()))?;
+    tracing::debug!(%pty_session_id, path = %key_path.display(), "PTY broker credential ready");
+    Ok(Some(key_path))
+}
+
+/// Re-register a surviving shell's key without rotating it or restarting the shell.
+pub async fn refresh_pty_credential(pty_session_id: Uuid, repo: &str) -> anyhow::Result<()> {
+    let Some(client) = broker_registration_client() else {
+        return Ok(());
+    };
+    let key = tokio::fs::read(key_path_for(&pty_key_dir(), pty_session_id)).await?;
+    let pair = Ed25519KeyPair::from_pkcs8(&key)
+        .map_err(|_| anyhow::anyhow!("load surviving PTY secret broker key"))?;
+    register_credential(
+        &client,
+        pty_session_id,
+        BASE64_STANDARD.encode(pair.public_key().as_ref()),
+        repo,
+    )
+    .await
+}
+
+async fn register_credential(
+    client: &BrokerRegistrationClient,
+    pty_session_id: Uuid,
+    public_key: String,
+    repo: &str,
+) -> anyhow::Result<()> {
     // Reaching the broker and being refused by it are different problems with
     // different fixes, and the refusal reason is the whole diagnosis. Reported
     // separately, with the broker's own body, because this surfaces to an
@@ -58,6 +95,7 @@ pub async fn prepare_pty_credential(pty_session_id: Uuid) -> anyhow::Result<Opti
         .json(&RegisterPtyCredentialRequest {
             pty_session_id,
             public_key,
+            repo: Some(repo.to_owned()),
         })
         .send()
         .await
@@ -85,14 +123,7 @@ pub async fn prepare_pty_credential(pty_session_id: Uuid) -> anyhow::Result<Opti
         anyhow::bail!("secret broker refused a PTY credential: {status} from {endpoint}: {body}");
     }
 
-    tokio::fs::write(&key_path, pkcs8.as_ref())
-        .await
-        .with_context(|| format!("write {}", key_path.display()))?;
-    tokio::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
-        .await
-        .with_context(|| format!("chmod {}", key_path.display()))?;
-    tracing::debug!(%pty_session_id, path = %key_path.display(), "PTY broker credential ready");
-    Ok(Some(key_path))
+    Ok(())
 }
 
 pub async fn revoke_pty_credential(pty_session_id: Uuid) {

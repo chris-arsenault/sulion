@@ -588,7 +588,8 @@ export function listSecretGrants(ptySessionId: string): Promise<SecretGrantMetad
 export async function unlockSecretGrant(body: {
   pty_session_id: string;
   secret_id: string;
-  ttl_seconds: number;
+  ttl_seconds?: number;
+  scope?: "terminal" | "repository";
 }): Promise<void> {
   await brokerRequest<void>("/broker/v1/grants", {
     method: "POST",
@@ -599,6 +600,7 @@ export async function unlockSecretGrant(body: {
 export async function revokeSecretGrant(body: {
   pty_session_id: string;
   secret_id: string;
+  scope?: "terminal" | "repository";
 }): Promise<void> {
   await brokerRequest<void>("/broker/v1/grants", {
     method: "DELETE",
@@ -606,7 +608,7 @@ export async function revokeSecretGrant(body: {
   });
 }
 
-/// Collapses grants to one row per secret.
+/// Collapses legacy duplicates within each scope, retaining independent grants.
 ///
 /// The broker keyed grants by tool until migration 0003 dropped the column, and
 /// the UI posted one grant per tool name to match. Both sides are single-grant
@@ -620,18 +622,24 @@ function dedupeSecretGrants(grants: SecretGrantMetadata[]): SecretGrantMetadata[
       granted_by_sub: grant.granted_by_sub,
       granted_by_username: grant.granted_by_username,
       expires_at: grant.expires_at,
+      ...(grant.repo != null ? { repo: grant.repo } : {}),
     };
-    const existing = latestBySecret.get(grant.secret_id);
+    const key = JSON.stringify([grant.secret_id, grant.repo ?? null]);
+    const existing = latestBySecret.get(key);
     if (
       !existing ||
-      Date.parse(normalized.expires_at) > Date.parse(existing.expires_at)
+      expiryOrder(normalized) > expiryOrder(existing)
     ) {
-      latestBySecret.set(grant.secret_id, normalized);
+      latestBySecret.set(key, normalized);
     }
   }
   return [...latestBySecret.values()].sort(
-    (left, right) => Date.parse(right.expires_at) - Date.parse(left.expires_at),
+    (left, right) => expiryOrder(right) - expiryOrder(left),
   );
+}
+
+function expiryOrder(grant: SecretGrantMetadata): number {
+  return grant.expires_at == null ? Number.MAX_SAFE_INTEGER : Date.parse(grant.expires_at);
 }
 
 export function getRepoDirtyPaths(name: string): Promise<RepoDirtyPathsResponse> {

@@ -7,6 +7,8 @@ use uuid::Uuid;
 pub struct RegisterPtyCredentialRequest {
     pub pty_session_id: Uuid,
     pub public_key: String,
+    #[serde(default)]
+    pub repo: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

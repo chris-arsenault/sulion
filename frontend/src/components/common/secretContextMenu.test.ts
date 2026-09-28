@@ -50,6 +50,7 @@ describe("buildSecretContextMenu", () => {
       "30m",
       "1h",
       "4h",
+      "Always for this repository",
     ]);
   });
 
@@ -96,6 +97,33 @@ describe("buildSecretContextMenu", () => {
     if (grantItem?.kind === "item") grantItem.onSelect();
 
     expect(onRevoke).toHaveBeenCalledWith(SECRET_ID);
+  });
+
+  it("enables repository access and keeps its revoke distinct from a terminal grant", () => {
+    const onEnable = vi.fn();
+    const onRevoke = vi.fn();
+    const menu = rootMenu(buildSecretContextMenu({
+      secrets: [SECRET],
+      grants: [
+        { secret_id: SECRET_ID, granted_by_sub: "user", granted_by_username: null,
+          expires_at: null, repo: "atlas" },
+        { secret_id: SECRET_ID, granted_by_sub: "user", granted_by_username: null,
+          expires_at: new Date(Date.now() + 600_000).toISOString() },
+      ],
+      onEnable, onRevoke, onOpenManager: vi.fn(),
+    }));
+    const leaves = submenu(submenu(menu.items, "Enable secret").items, SECRET_ID).items;
+    const permanent = leaves.find((item) => item.kind === "item" && item.label === "Always for this repository");
+    if (permanent?.kind !== "item") throw new Error("missing permanent enable");
+    permanent.onSelect();
+    expect(onEnable).toHaveBeenCalledWith(SECRET_ID, null);
+    const active = submenu(menu.items, "Active secrets").items;
+    expect(active).toHaveLength(2);
+    const repositoryGrant = active[0];
+    if (repositoryGrant.kind !== "item") throw new Error("missing repository grant");
+    expect(repositoryGrant.label).toContain("always for atlas");
+    repositoryGrant.onSelect();
+    expect(onRevoke).toHaveBeenCalledWith(SECRET_ID, true);
   });
 
   it("disables enablement when active bundles would conflict", () => {

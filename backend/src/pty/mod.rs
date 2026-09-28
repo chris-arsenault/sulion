@@ -363,6 +363,9 @@ impl PtyManager {
             let Some(output) = link.output_sender(*id).await else {
                 continue;
             };
+            if let Err(err) = crate::secret_pty::refresh_pty_credential(*id, &row.repo).await {
+                tracing::warn!(%id, %err, "refresh adopted session's broker repository failed");
+            }
             let session = Arc::new(PtySession {
                 id: *id,
                 repo: row.repo.clone(),
@@ -419,7 +422,8 @@ impl PtyManager {
             anyhow::bail!("PTY session {id} is already live");
         }
         let link = self.link()?.clone();
-        let secret_broker_key_path = crate::secret_pty::prepare_pty_credential(id).await?;
+        let secret_broker_key_path =
+            crate::secret_pty::prepare_pty_credential(id, &params.repo).await?;
         let repo_roots = session_repo_roots(&params);
         let env = pty_environment(
             id,

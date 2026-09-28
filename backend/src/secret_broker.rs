@@ -91,8 +91,8 @@ impl BrokerState {
     }
 }
 
-pub fn app(state: Arc<BrokerState>) -> Router {
-    let user_routes = Router::new()
+fn user_routes() -> Router<Arc<BrokerState>> {
+    Router::new()
         .route("/v1/secrets", get(list_secrets))
         .route(
             "/v1/secrets/:id",
@@ -102,10 +102,21 @@ pub fn app(state: Arc<BrokerState>) -> Router {
             "/v1/grants",
             get(list_grants).post(unlock_grant).delete(revoke_grant),
         )
-        .route_layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            require_user_auth,
-        ));
+}
+
+/// Integration tests supply a principal while exercising the real management handlers.
+#[cfg(feature = "integration-tests")]
+pub fn management_app_for_tests(state: Arc<BrokerState>) -> Router {
+    user_routes()
+        .layer(Extension(AuthenticatedUser::dev()))
+        .with_state(state)
+}
+
+pub fn app(state: Arc<BrokerState>) -> Router {
+    let user_routes = user_routes().route_layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        require_user_auth,
+    ));
 
     let use_routes = Router::new().route("/v1/use", post(use_secret));
 
@@ -345,7 +356,8 @@ struct GrantMetadata {
     secret_id: String,
     granted_by_sub: String,
     granted_by_username: Option<String>,
-    expires_at: chrono::DateTime<chrono::Utc>,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    repo: Option<String>,
 }
 
 async fn list_grants(
@@ -353,13 +365,13 @@ async fn list_grants(
     Query(query): Query<GrantsQuery>,
 ) -> Result<Json<Vec<GrantMetadata>>, BrokerError> {
     let rows = sqlx::query(
-        "SELECT secret_id, granted_by_sub, granted_by_username, expires_at \
+        "SELECT secret_id, granted_by_sub, granted_by_username, expires_at, repo \
          FROM ( \
-           SELECT DISTINCT ON (secret_id) \
-             secret_id, granted_by_sub, granted_by_username, expires_at \
-           FROM secret_broker.grants \
-           WHERE pty_session_id = $1 AND revoked_at IS NULL AND expires_at > NOW() \
-           ORDER BY secret_id, expires_at DESC \
+           SELECT DISTINCT ON (secret_id, repo) \
+             secret_id, granted_by_sub, granted_by_username, expires_at, repo \
+           FROM secret_broker.effective_grants \
+           WHERE pty_session_id = $1 \
+           ORDER BY secret_id, repo, expires_at DESC \
          ) latest \
          ORDER BY expires_at DESC",
     )
@@ -373,6 +385,7 @@ async fn list_grants(
                 granted_by_sub: row.get("granted_by_sub"),
                 granted_by_username: row.get("granted_by_username"),
                 expires_at: row.get("expires_at"),
+                repo: row.get("repo"),
             })
             .collect(),
     ))
@@ -382,7 +395,28 @@ async fn list_grants(
 struct GrantRequest {
     pty_session_id: Uuid,
     secret_id: String,
-    ttl_seconds: i64,
+    ttl_seconds: Option<i64>,
+    #[serde(default)]
+    scope: GrantScope,
+}
+
+#[derive(Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum GrantScope {
+    #[default]
+    Terminal,
+    Repository,
+}
+
+async fn registered_repo(state: &BrokerState, pty: Uuid) -> Result<String, BrokerError> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT repo FROM secret_broker.pty_credentials \
+         WHERE pty_session_id = $1 AND revoked_at IS NULL AND repo IS NOT NULL",
+    )
+    .bind(pty)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| BrokerError::bad_request("terminal has no registered repository"))
 }
 
 async fn unlock_grant(
@@ -391,7 +425,31 @@ async fn unlock_grant(
     Json(body): Json<GrantRequest>,
 ) -> Result<StatusCode, BrokerError> {
     validate_secret_id(&body.secret_id)?;
-    if !(60..=86_400).contains(&body.ttl_seconds) {
+    if body.scope == GrantScope::Repository {
+        if body.ttl_seconds.is_some() {
+            return Err(BrokerError::bad_request(
+                "repository grants do not expire; omit ttl_seconds",
+            ));
+        }
+        let repo = registered_repo(&state, body.pty_session_id).await?;
+        sqlx::query(
+            "INSERT INTO secret_broker.grants \
+             (id, repo, secret_id, granted_by_sub, granted_by_username) \
+             VALUES ($1, $2, $3, $4, $5) \
+             ON CONFLICT (repo, secret_id) WHERE repo IS NOT NULL AND revoked_at IS NULL \
+             DO NOTHING",
+        )
+        .bind(Uuid::new_v4())
+        .bind(repo)
+        .bind(body.secret_id)
+        .bind(user.sub)
+        .bind(user.username)
+        .execute(&state.pool)
+        .await?;
+        return Ok(StatusCode::CREATED);
+    }
+    let ttl_seconds = body.ttl_seconds.unwrap_or(0);
+    if !(60..=86_400).contains(&ttl_seconds) {
         return Err(BrokerError::bad_request(
             "ttl_seconds must be between 60 and 86400",
         ));
@@ -416,7 +474,7 @@ async fn unlock_grant(
     .bind(&body.secret_id)
     .bind(user.sub)
     .bind(user.username)
-    .bind(body.ttl_seconds as i32)
+    .bind(ttl_seconds as i32)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -427,12 +485,26 @@ async fn unlock_grant(
 struct RevokeGrantRequest {
     pty_session_id: Uuid,
     secret_id: String,
+    #[serde(default)]
+    scope: GrantScope,
 }
 
 async fn revoke_grant(
     State(state): State<Arc<BrokerState>>,
     Json(body): Json<RevokeGrantRequest>,
 ) -> Result<StatusCode, BrokerError> {
+    if body.scope == GrantScope::Repository {
+        let repo = registered_repo(&state, body.pty_session_id).await?;
+        sqlx::query(
+            "UPDATE secret_broker.grants SET revoked_at = NOW() \
+             WHERE repo = $1 AND secret_id = $2 AND revoked_at IS NULL",
+        )
+        .bind(repo)
+        .bind(body.secret_id)
+        .execute(&state.pool)
+        .await?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
     sqlx::query(
         "UPDATE secret_broker.grants \
          SET revoked_at = NOW() \
@@ -455,17 +527,26 @@ async fn register_pty_credential(
     if public_key.len() != 32 {
         return Err(BrokerError::bad_request("invalid public key length"));
     }
+    if body
+        .repo
+        .as_ref()
+        .is_some_and(|repo| repo.trim().is_empty())
+    {
+        return Err(BrokerError::bad_request("repository must not be empty"));
+    }
     sqlx::query(
         "INSERT INTO secret_broker.pty_credentials \
-         (pty_session_id, public_key, created_at, revoked_at) \
-         VALUES ($1, $2, NOW(), NULL) \
+         (pty_session_id, public_key, repo, created_at, revoked_at) \
+         VALUES ($1, $2, $3, NOW(), NULL) \
          ON CONFLICT (pty_session_id) DO UPDATE SET \
            public_key = EXCLUDED.public_key, \
+           repo = EXCLUDED.repo, \
            created_at = NOW(), \
            revoked_at = NULL",
     )
     .bind(body.pty_session_id)
     .bind(body.public_key)
+    .bind(body.repo)
     .execute(&state.pool)
     .await?;
     Ok(StatusCode::CREATED)
@@ -496,12 +577,10 @@ async fn use_secret(
         validate_secret_id(secret_id)?;
         sqlx::query(
             "SELECT s.id, s.ciphertext, s.nonce \
-             FROM secret_broker.grants g \
+             FROM secret_broker.effective_grants g \
              JOIN secret_broker.secrets s ON s.id = g.secret_id \
              WHERE g.pty_session_id = $1 \
                AND g.secret_id = $2 \
-               AND g.revoked_at IS NULL \
-               AND g.expires_at > NOW() \
              ORDER BY g.expires_at DESC \
              LIMIT 1",
         )
@@ -512,11 +591,9 @@ async fn use_secret(
     } else {
         sqlx::query(
             "SELECT DISTINCT ON (s.id) s.id, s.ciphertext, s.nonce, g.expires_at \
-             FROM secret_broker.grants g \
+             FROM secret_broker.effective_grants g \
              JOIN secret_broker.secrets s ON s.id = g.secret_id \
              WHERE g.pty_session_id = $1 \
-               AND g.revoked_at IS NULL \
-               AND g.expires_at > NOW() \
              ORDER BY s.id, g.expires_at DESC",
         )
         .bind(body.pty_session_id)
@@ -804,87 +881,4 @@ fn validate_tool_name(tool: &str) -> Result<(), BrokerError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn secret_crypto_round_trips_encrypted_env_payloads() {
-        let key = Key::from_slice(&[7_u8; 32]);
-        let crypto = SecretCrypto {
-            cipher: ChaCha20Poly1305::new(key),
-        };
-        let env = HashMap::from([
-            ("ANTHROPIC_API_KEY".to_string(), "sk-ant-test".to_string()),
-            ("CLAUDE_API_KEY".to_string(), "claude-test".to_string()),
-            (
-                "SSH_PRIVATE_KEY".to_string(),
-                "-----BEGIN OPENSSH PRIVATE KEY-----\nZmFrZQ==\n-----END OPENSSH PRIVATE KEY-----\n"
-                    .to_string(),
-            ),
-        ]);
-
-        let (ciphertext, nonce) = crypto.encrypt_env(&env).expect("encrypt env");
-
-        assert_eq!(nonce.len(), 12);
-        assert_ne!(ciphertext, serde_json::to_vec(&env).expect("serialize env"));
-        assert_eq!(
-            crypto
-                .decrypt_env(&ciphertext, &nonce)
-                .expect("decrypt env"),
-            env
-        );
-    }
-
-    #[test]
-    fn validation_allows_only_supported_secret_tools() {
-        assert!(validate_tool_name("with-cred").is_ok());
-        assert!(validate_tool_name("aws").is_ok());
-
-        let err = validate_tool_name("shell").expect_err("unsupported tool");
-        assert_eq!(err.status, StatusCode::BAD_REQUEST);
-    }
-
-    #[test]
-    fn validation_rejects_secret_ids_that_cannot_be_path_or_query_safe() {
-        assert!(validate_secret_id("anthropic.api-key_1").is_ok());
-
-        for id in ["", "../aws", "aws default", "aws/default"] {
-            let err = validate_secret_id(id).expect_err("invalid secret id");
-            assert_eq!(err.status, StatusCode::BAD_REQUEST);
-        }
-    }
-
-    #[test]
-    fn unnamed_aws_redemption_matches_aws_shaped_env_bundle() {
-        let aws_env = HashMap::from([
-            ("AWS_ACCESS_KEY_ID".to_string(), "AKIA...".to_string()),
-            ("AWS_SECRET_ACCESS_KEY".to_string(), "secret".to_string()),
-        ]);
-        let unrelated_env = HashMap::from([("OPENAI_API_KEY".to_string(), "sk-test".to_string())]);
-
-        assert!(secret_matches_redemption("aws", None, &aws_env));
-        assert!(!secret_matches_redemption("aws", None, &unrelated_env));
-        assert!(secret_matches_redemption("with-cred", None, &unrelated_env));
-        assert!(secret_matches_redemption(
-            "aws",
-            Some("explicit-secret"),
-            &unrelated_env
-        ));
-    }
-
-    #[test]
-    fn unnamed_aws_redemption_has_specific_forbidden_message() {
-        assert_eq!(
-            redemption_forbidden_message("aws", None),
-            "no AWS credential is enabled for this terminal"
-        );
-        assert_eq!(
-            redemption_forbidden_message("with-cred", None),
-            "secret is not unlocked for this terminal"
-        );
-        assert_eq!(
-            redemption_forbidden_message("aws", Some("AWS")),
-            "secret is not unlocked for this terminal"
-        );
-    }
-}
+mod tests;

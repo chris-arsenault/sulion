@@ -206,7 +206,10 @@ The **plan modal** keeps fetched plan detail and edit state local. Open plan
 summaries are ambient app state because the sidebar, overview, command palette,
 and sessions all consume them.
 
-The **secrets tab** is the env-bundle setup surface. PTY-scoped grants with TTL live in terminal/session context menus, and the actual unlock and storage boundary lives in the broker. See [`secrets.md`](secrets.md).
+The **secrets tab** is the env-bundle setup surface. Timed terminal grants and
+permanent repository grants live in terminal/session context menus. The broker
+owns unlock state and storage, and uses node-registered repository identity for
+permanent access. See [`secrets.md`](secrets.md).
 
 ## Backend surface
 
@@ -248,7 +251,10 @@ The node launches PTYs with Sulion-managed wrapper tools on `PATH`:
 - `aws` as a wrapper over the real AWS CLI
 - `docker` as either the real CLI in direct mode or a constrained runner client
 
-`with-cred` and `aws` are the only supported secret-consumption paths. Credential grants are scoped to a PTY and secret, not to a specific wrapper. The backend does not own the broker master key and does not expose any alternate secret-injection mechanism.
+`with-cred` and `aws` are the only supported secret-consumption paths. Grants
+enable a secret for one PTY with a TTL or for one repository without an expiry.
+Both wrappers redeem either kind. The backend does not own the broker master
+key and does not expose an alternate secret-injection mechanism.
 
 ### Library and future prompts
 
@@ -356,8 +362,8 @@ The broker is a separate Rust service and container. It stores encrypted secret 
 Its responsibilities are intentionally narrow:
 
 - store env-bundle secrets
-- manage PTY-scoped grants with TTL
-- redeem PTY grants through `with-cred` and `aws`
+- manage timed PTY grants and permanent repository grants
+- redeem active grants through `with-cred` and `aws`
 
 It does not run PTYs, ingest transcripts, or serve the main application API.
 

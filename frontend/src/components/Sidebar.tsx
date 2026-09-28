@@ -2394,14 +2394,14 @@ function SessionRow({
     void refreshGrants(s.id).catch(() => undefined);
   }, [refreshSecrets, refreshGrants, s.id]);
   const enableSecret = useCallback(
-    (secretId: string, ttlSeconds: number) => {
+    (secretId: string, ttlSeconds: number | null) => {
       void enableGrant(s.id, secretId, ttlSeconds).catch(() => undefined);
     },
     [enableGrant, s.id],
   );
   const revokeSecret = useCallback(
-    (secretId: string) => {
-      void revokeGrant(s.id, secretId).catch(() => undefined);
+    (secretId: string, repository?: boolean) => {
+      void revokeGrant(s.id, secretId, repository).catch(() => undefined);
     },
     [revokeGrant, s.id],
   );

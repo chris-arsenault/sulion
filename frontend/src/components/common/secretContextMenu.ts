@@ -17,16 +17,18 @@ export function buildSecretContextMenu({
 }: {
   secrets: SecretMetadata[];
   grants: SecretGrantMetadata[];
-  onEnable: (secretId: string, ttlSeconds: number) => void;
-  onRevoke: (secretId: string) => void;
+  onEnable: (secretId: string, ttlSeconds: number | null) => void;
+  onRevoke: (secretId: string, repository?: boolean) => void;
   onOpenManager: () => void;
 }): MenuItem {
   const activeItems = grants.map((grant) => ({
     kind: "item" as const,
-    id: `revoke-${grant.secret_id}`,
-    label: `${grant.secret_id} · ${relativeExpiry(grant.expires_at)}`,
+    id: `revoke-${grant.secret_id}-${grant.repo == null ? "terminal" : "repo-" + grant.repo}`,
+    label: grant.repo != null
+      ? `${grant.secret_id} · always for ${grant.repo} · revoke for repository`
+      : `${grant.secret_id} · ${relativeExpiry(grant.expires_at)}`,
     destructive: true,
-    onSelect: () => onRevoke(grant.secret_id),
+    onSelect: () => grant.repo != null ? onRevoke(grant.secret_id, true) : onRevoke(grant.secret_id),
   }));
 
   return {
@@ -92,14 +94,22 @@ export function buildSecretContextMenu({
 
 function buildEnableLeaves(
   secret: SecretMetadata,
-  onEnable: (secretId: string, ttlSeconds: number) => void,
+  onEnable: (secretId: string, ttlSeconds: number | null) => void,
 ): MenuItem[] {
-  return TTL_PRESETS.map((preset) => ({
-    kind: "item" as const,
-    id: `enable-${secret.id}-${preset.seconds}`,
-    label: preset.label,
-    onSelect: () => onEnable(secret.id, preset.seconds),
-  }));
+  return [
+    ...TTL_PRESETS.map((preset) => ({
+      kind: "item" as const,
+      id: `enable-${secret.id}-${preset.seconds}`,
+      label: preset.label,
+      onSelect: () => onEnable(secret.id, preset.seconds),
+    })),
+    {
+      kind: "item",
+      id: `enable-${secret.id}-repository`,
+      label: "Always for this repository",
+      onSelect: () => onEnable(secret.id, null),
+    },
+  ];
 }
 
 function activeGrantConflict(
@@ -119,7 +129,8 @@ function activeGrantConflict(
   return null;
 }
 
-function relativeExpiry(value: string) {
+function relativeExpiry(value: string | null) {
+  if (value == null) return "no expiry";
   const ms = new Date(value).getTime() - Date.now();
   if (ms <= 0) return "expired";
   const minutes = Math.round(ms / 60_000);

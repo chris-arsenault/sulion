@@ -9,7 +9,9 @@ Nothing else is part of the product contract. There is no general shell-wide sec
 
 ## Purpose
 
-The secrets system exists to let the UI manage credentials and PTY-scoped grants without putting raw secret material into repo files, shell startup files, or the main Sulion database.
+The secrets system lets the UI manage credentials, timed terminal grants, and
+permanent repository grants without putting raw secret material into repo
+files, shell startup files, or the main Sulion database.
 
 The boundary is:
 
@@ -80,7 +82,7 @@ The broker stores the env map encrypted at rest. The UI lists metadata and env k
 
 ## Grant model
 
-Grants are scoped to:
+Timed terminal grants are scoped to:
 
 - `pty_session_id`
 - `secret_id`
@@ -89,6 +91,21 @@ Grants are scoped to:
 That means a PTY can have one or more env bundles enabled, and the same grant
 can be redeemed through either supported wrapper. The wrapper name is
 audit/runtime context, not part of the grant relationship.
+
+Permanent repository grants are scoped to `repo` and `secret_id`, with no
+expiry. They apply to existing and future PTYs registered for that repository
+until explicitly revoked. The node registers the session's repository with
+its public key and refreshes that registration when adopting a surviving
+shell. Wrappers cannot choose a repository through their request or cwd.
+Sessions without a registered repository cannot create or redeem repository
+grants; timed terminal grants still work. Collection sessions use their primary
+repository, not every collection member. Grants use the repository name;
+renaming a repository does not transfer its permanent grants.
+
+A secret may have both a timed terminal grant and a permanent repository grant.
+Both appear in the menu and are revoked separately. Redemption injects each
+secret once. Repository grants do not renew or extend the upstream credential:
+if that credential expires, update its stored value normally.
 
 ### What the grant scope does and does not separate
 
@@ -225,8 +242,10 @@ Grants are managed from terminal/session context menus:
 
 - right-click a terminal or session
 - open **Secrets**
-- use **Enable secret** to choose a secret and TTL
-- use **Active secrets** to see remaining TTL and click a grant to revoke it immediately
+- use **Enable secret** to choose a secret and TTL, or **Always for this repository**
+- use **Active secrets** to see remaining TTL or **always for &lt;repo&gt;**
+- click a timed grant to revoke it for that terminal; click **revoke for repository**
+  to revoke permanent access for all sessions in that repository
 
 ## Broker API
 
@@ -239,6 +258,12 @@ Authenticated browser endpoints:
 - `GET /broker/v1/grants?pty_session_id=<uuid>`
 - `POST /broker/v1/grants`
 - `DELETE /broker/v1/grants`
+
+Grant creation takes `pty_session_id`, `secret_id`, and either `ttl_seconds`
+(60–86400, default scope `terminal`) or `scope: "repository"` with no TTL.
+The broker resolves repository scope from the registered PTY. Revocation takes
+the same identity fields and scope. Grant listings include nullable `repo` and
+`expires_at`, preserving both scopes when both exist.
 
 Authenticated PTY-use endpoint:
 

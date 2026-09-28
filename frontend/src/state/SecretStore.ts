@@ -16,9 +16,9 @@ interface SecretStore {
   enableGrant: (
     sessionId: string,
     secretId: string,
-    ttlSeconds: number,
+    ttlSeconds: number | null,
   ) => Promise<void>;
-  revokeGrant: (sessionId: string, secretId: string) => Promise<void>;
+  revokeGrant: (sessionId: string, secretId: string, repository?: boolean) => Promise<void>;
 }
 
 export const useSecretStore = create<SecretStore>()((set, get) => ({
@@ -41,17 +41,22 @@ export const useSecretStore = create<SecretStore>()((set, get) => ({
     await unlockSecretGrant({
       pty_session_id: sessionId,
       secret_id: secretId,
-      ttl_seconds: ttlSeconds,
+      ...(ttlSeconds == null ? { scope: "repository" as const } : { ttl_seconds: ttlSeconds }),
     });
-    await get().refreshGrants(sessionId);
+    await Promise.all((ttlSeconds == null
+      ? [...new Set([...Object.keys(get().grantsBySession), sessionId])]
+      : [sessionId]).map((id) => get().refreshGrants(id)));
   },
 
-  revokeGrant: async (sessionId, secretId) => {
+  revokeGrant: async (sessionId, secretId, repository) => {
     await revokeSecretGrant({
       pty_session_id: sessionId,
       secret_id: secretId,
+      ...(repository ? { scope: "repository" as const } : {}),
     });
-    await get().refreshGrants(sessionId);
+    await Promise.all((repository
+      ? [...new Set([...Object.keys(get().grantsBySession), sessionId])]
+      : [sessionId]).map((id) => get().refreshGrants(id)));
   },
 }));
 
