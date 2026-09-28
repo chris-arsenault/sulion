@@ -30,6 +30,15 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
+        Self::read_env(AuthConfig::from_env()?)
+    }
+
+    /// Node and ingester binaries do not serve browser requests.
+    pub fn worker_from_env() -> anyhow::Result<Self> {
+        Self::read_env(None)
+    }
+
+    fn read_env(auth: Option<AuthConfig>) -> anyhow::Result<Self> {
         let listen: SocketAddr = std::env::var("SULION_LISTEN")
             .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
             .parse()?;
@@ -79,7 +88,6 @@ impl Config {
                 .unwrap_or_else(|_| "/run/sulion/correlate.sock".to_string()),
         );
         let standalone_node = StandaloneNodeConfig::from_env()?;
-        let auth = AuthConfig::from_env()?;
         Ok(Self {
             listen,
             db_url,
@@ -139,17 +147,90 @@ pub struct AuthConfig {
 
 impl AuthConfig {
     pub fn from_env() -> anyhow::Result<Option<Self>> {
-        let issuer_url = match std::env::var("SULION_AUTH_ISSUER_URL") {
-            Ok(value) => value.trim().trim_end_matches('/').to_string(),
-            Err(_) => return Ok(None),
-        };
-        let client_id = std::env::var("SULION_AUTH_CLIENT_ID").map_err(|_| {
-            anyhow::anyhow!("SULION_AUTH_CLIENT_ID must be set when auth is enabled")
-        })?;
+        Self::parse(
+            env_optional("SULION_DEPLOYMENT_ROLE").as_deref(),
+            env_optional("SULION_AUTH_MODE").as_deref(),
+            env_optional("SULION_AUTH_ISSUER_URL").as_deref(),
+            env_optional("SULION_AUTH_CLIENT_ID").as_deref(),
+        )
+    }
+
+    fn parse(
+        role: Option<&str>,
+        mode: Option<&str>,
+        issuer: Option<&str>,
+        client: Option<&str>,
+    ) -> anyhow::Result<Option<Self>> {
+        let development = matches!(role, Some("development" | "test"));
+        if mode == Some("disabled") && development {
+            return Ok(None);
+        }
+        anyhow::ensure!(
+            mode.is_none() || mode == Some("required"),
+            "authentication bypass requires an explicit development or test role"
+        );
+        let issuer = issuer
+            .filter(|v| !v.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("SULION_AUTH_ISSUER_URL must be set"))?;
+        let client = client
+            .filter(|v| !v.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("SULION_AUTH_CLIENT_ID must be set"))?;
+        let url = url::Url::parse(issuer)?;
+        anyhow::ensure!(
+            url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none(),
+            "invalid auth issuer URL"
+        );
+        anyhow::ensure!(
+            url.scheme() == "https" || (development && url.scheme() == "http"),
+            "auth issuer must use HTTPS in production"
+        );
         Ok(Some(Self {
-            issuer_url,
-            client_id,
+            issuer_url: issuer.trim_end_matches('/').into(),
+            client_id: client.trim().into(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::AuthConfig;
+    #[test]
+    fn production_cannot_accidentally_disable_authentication() {
+        for role in [
+            None,
+            Some("control-plane"),
+            Some("standalone"),
+            Some("broker"),
+            Some("node"),
+            Some("ingester"),
+        ] {
+            assert!(AuthConfig::parse(role, None, None, None).is_err());
+            assert!(AuthConfig::parse(role, Some("disabled"), None, None).is_err());
+            assert!(AuthConfig::parse(role, None, Some(" "), Some("client")).is_err());
+            assert!(AuthConfig::parse(role, None, Some("http://issuer"), Some("client")).is_err());
+            assert!(
+                AuthConfig::parse(role, None, Some("https://issuer"), Some("client"))
+                    .unwrap()
+                    .is_some()
+            );
+        }
+        assert!(
+            AuthConfig::parse(Some("development"), Some("disabled"), None, None)
+                .unwrap()
+                .is_none()
+        );
+        assert!(AuthConfig::parse(
+            Some("test"),
+            None,
+            Some("http://localhost:1234"),
+            Some("test")
+        )
+        .unwrap()
+        .is_some());
     }
 }
 

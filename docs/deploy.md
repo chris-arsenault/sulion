@@ -401,4 +401,24 @@ runner-launched containers join that network automatically. Public listener
 rules apply ALB JWT validation to browser routes. Node pairing approval is a
 browser-authenticated action. The node WebSocket, signed broker redemption/PTY
 registration, and bearer-authenticated retrieval are
-application-authenticated machine routes.
+application-authenticated machine routes available only on the pinned LAN
+listener or internal container network. Public ingress rejects `/retrieval`,
+its descendants, broker redemption and PTY registration. Browser broker
+management continues to require Cognito access tokens.
+
+### Security release configuration
+
+The frontend derives the CSP's S3 origin from `SULION_UPLOAD_BUCKET` and the
+same region used by the backend. CI/CD already resolves that bucket from
+`/ahara/sulion/upload-bucket` through `secret-paths.yml`. The Cognito API origin
+is derived from the existing user pool ID. Neither origin is configured
+independently. With no upload bucket configured, CSP allows no S3 connection.
+The policy permits Shiki's WebAssembly worker, local fonts, React/KaTeX styles
+and image/blob previews, but disallows inline scripts and embedding Sulion.
+HSTS applies to HTTPS responses and does not include unrelated subdomains.
+
+Production backend and broker require nonblank `SULION_AUTH_ISSUER_URL` (HTTPS)
+and `SULION_AUTH_CLIENT_ID`. Missing configuration prevents startup. Device
+tokens, pairing URLs and `SULION_PUBLIC_URL` are retired. See the
+[security release checklist](security/external-remediation-release.md) for
+migration order, revocation behavior and outstanding live checks.

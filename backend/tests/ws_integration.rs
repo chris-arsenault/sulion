@@ -87,6 +87,166 @@ async fn ticketed_request(base: &str, session_id: uuid::Uuid) -> Request<()> {
     request
 }
 
+#[tokio::test]
+async fn authority_expiry_closes_attachment_but_preserves_pty() {
+    let pool = fresh_pool().await;
+    let (base, state, runtime) = start_server(pool.clone()).await;
+    let mgr = runtime.pty();
+    let meta = mgr
+        .spawn(SpawnParams {
+            repo: "r".into(),
+            working_dir: PathBuf::from("/tmp"),
+            shell: PathBuf::from("/bin/sh"),
+            args: vec!["-c".into(), "while :; do sleep 1; done".into()],
+            node_id: Some(runtime.node_id()),
+            node_boot_id: Some(runtime.boot_id()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut user = sulion::auth::AuthenticatedUser::dev();
+    user.expires_at = chrono::Utc::now().timestamp() + 2;
+    let ticket = state
+        .ws_tickets
+        .issue_for_test(meta.id, user)
+        .await
+        .unwrap();
+    let mut request = format!("{base}/ws/sessions/{}", meta.id)
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        SEC_WEBSOCKET_PROTOCOL,
+        format!("sulion.v1, sulion.ticket.{ticket}")
+            .parse()
+            .unwrap(),
+    );
+    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(4), async {
+        while let Some(Ok(message)) = socket.next().await {
+            if matches!(message, Message::Close(_)) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("expired attachment must close");
+    assert_eq!(
+        sulion::pty::read_meta(&pool, meta.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        sulion::pty::PtyState::Live
+    );
+    let (mut fresh, _) = tokio_tungstenite::connect_async(ticketed_request(&base, meta.id).await)
+        .await
+        .unwrap();
+    fresh.close(None).await.unwrap();
+    mgr.delete(meta.id).await.unwrap();
+}
+
+#[tokio::test]
+async fn revocation_closes_an_attached_client_within_eight_seconds() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    let revoked = Arc::new(AtomicBool::new(false));
+    let flag = revoked.clone();
+    let check = axum::Router::new().route(
+        "/v1/auth/check",
+        axum::routing::post(move || {
+            let flag = flag.clone();
+            async move {
+                if flag.load(Ordering::SeqCst) {
+                    axum::http::StatusCode::UNAUTHORIZED
+                } else {
+                    axum::http::StatusCode::NO_CONTENT
+                }
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let check_url = format!("http://{}", listener.local_addr().unwrap());
+    let check_server = tokio::spawn(async move {
+        axum::serve(listener, check).await.unwrap();
+    });
+    let pool = fresh_pool().await;
+    let (base, state, runtime) = start_server(pool.clone()).await;
+    let mgr = runtime.pty();
+    let meta = mgr
+        .spawn(SpawnParams {
+            repo: "r".into(),
+            working_dir: PathBuf::from("/tmp"),
+            shell: PathBuf::from("/bin/sh"),
+            args: vec!["-c".into(), "while :; do sleep 1; done".into()],
+            node_id: Some(runtime.node_id()),
+            node_boot_id: Some(runtime.boot_id()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    struct RestoreEnv(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            for (key, value) in &self.0 {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+    let old_url = std::env::var_os("SULION_SECRET_BROKER_URL");
+    let old_token = std::env::var_os("SULION_SECRET_BROKER_REGISTRATION_TOKEN");
+    std::env::set_var("SULION_SECRET_BROKER_URL", check_url);
+    std::env::set_var("SULION_SECRET_BROKER_REGISTRATION_TOKEN", "test-only");
+    let restore = RestoreEnv(vec![
+        ("SULION_SECRET_BROKER_URL", old_url),
+        ("SULION_SECRET_BROKER_REGISTRATION_TOKEN", old_token),
+    ]);
+    let mut user = sulion::auth::AuthenticatedUser::dev();
+    user.token_use = "access".into();
+    user.expires_at = chrono::Utc::now().timestamp() + 300;
+    let ticket = state
+        .ws_tickets
+        .issue_for_test(meta.id, user.clone())
+        .await
+        .unwrap();
+    let mut req = format!("{base}/ws/sessions/{}", meta.id)
+        .into_client_request()
+        .unwrap();
+    req.headers_mut().insert(
+        SEC_WEBSOCKET_PROTOCOL,
+        format!("sulion.v1, sulion.ticket.{ticket}")
+            .parse()
+            .unwrap(),
+    );
+    let (mut socket, _) = tokio_tungstenite::connect_async(req).await.unwrap();
+    revoked.store(true, Ordering::SeqCst);
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while let Some(Ok(message)) = socket.next().await {
+            if matches!(message, Message::Close(_)) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("revoked socket must close within the bound");
+    assert!(user.check_authority().await.is_err());
+    assert_eq!(
+        sulion::pty::read_meta(&pool, meta.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        sulion::pty::PtyState::Live
+    );
+    drop(restore);
+    mgr.delete(meta.id).await.unwrap();
+    check_server.abort();
+}
+
 /// Read frames from the socket with a timeout; return whatever we got
 /// before the timeout fired. Used to accumulate bytes without blocking
 /// forever when the PTY has gone idle.

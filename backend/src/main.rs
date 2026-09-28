@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(auth_cfg) = cfg.auth.as_ref() {
         tracing::info!(issuer = %auth_cfg.issuer_url, client_id = %auth_cfg.client_id, "jwt auth enabled");
     } else {
-        tracing::warn!("jwt auth disabled; SULION_AUTH_ISSUER_URL not set");
+        tracing::warn!("jwt auth explicitly disabled for development/test role");
     }
 
     let pool = db::connect(&cfg.db_url).await?;

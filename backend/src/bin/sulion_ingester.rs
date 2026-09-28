@@ -15,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config = sulion::config::Config::from_env()?;
+    let config = sulion::config::Config::worker_from_env()?;
     let pool = sulion::db::connect_and_wait_for_migrations(&config.db_url, "ingester").await?;
     let ingester = Arc::new(Ingester::new());
     let ingester_config = IngesterConfig::new(config.claude_projects_dir)

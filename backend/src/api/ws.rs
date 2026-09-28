@@ -32,6 +32,7 @@ const WS_TICKET_TTL: Duration = Duration::from_secs(30);
 
 struct WsTicket {
     session_id: Uuid,
+    user: AuthenticatedUser,
     expires_at: Instant,
 }
 
@@ -41,11 +42,24 @@ pub struct WsTicketStore {
 }
 
 impl WsTicketStore {
-    async fn issue(&self, session_id: Uuid) -> anyhow::Result<String> {
-        self.issue_for(session_id, WS_TICKET_TTL).await
+    #[cfg(feature = "integration-tests")]
+    pub async fn issue_for_test(
+        &self,
+        session_id: Uuid,
+        user: AuthenticatedUser,
+    ) -> anyhow::Result<String> {
+        self.issue(session_id, user).await
+    }
+    async fn issue(&self, session_id: Uuid, user: AuthenticatedUser) -> anyhow::Result<String> {
+        self.issue_for(session_id, user, WS_TICKET_TTL).await
     }
 
-    async fn issue_for(&self, session_id: Uuid, ttl: Duration) -> anyhow::Result<String> {
+    async fn issue_for(
+        &self,
+        session_id: Uuid,
+        user: AuthenticatedUser,
+        ttl: Duration,
+    ) -> anyhow::Result<String> {
         let mut raw = [0_u8; 32];
         SystemRandom::new()
             .fill(&mut raw)
@@ -59,18 +73,23 @@ impl WsTicketStore {
             key,
             WsTicket {
                 session_id,
+                user,
                 expires_at: now + ttl,
             },
         );
         Ok(ticket)
     }
 
-    async fn consume(&self, ticket: &str, session_id: Uuid) -> bool {
+    async fn consume(&self, ticket: &str, session_id: Uuid) -> Option<AuthenticatedUser> {
         let key = hash_ticket(ticket);
         let now = Instant::now();
         let mut tickets = self.tickets.lock().await;
         tickets.retain(|_, record| record.expires_at > now);
-        matches!(tickets.remove(&key), Some(record) if record.session_id == session_id && record.expires_at > now)
+        let record = tickets.remove(&key)?;
+        (record.session_id == session_id
+            && record.expires_at > now
+            && record.user.expires_at > chrono::Utc::now().timestamp())
+        .then_some(record.user)
     }
 }
 
@@ -92,7 +111,7 @@ pub struct IssueTicketResponse {
 
 pub async fn issue_ticket(
     State(state): State<Arc<AppState>>,
-    Extension(_user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthenticatedUser>,
     Json(body): Json<IssueTicketRequest>,
 ) -> ApiResult<Json<IssueTicketResponse>> {
     let metadata = crate::pty::read_meta(&state.pool, body.session_id)
@@ -116,7 +135,7 @@ pub async fn issue_ticket(
     }
     let ticket = state
         .ws_tickets
-        .issue(body.session_id)
+        .issue(body.session_id, user)
         .await
         .map_err(ApiError::Internal)?;
     Ok(Json(IssueTicketResponse {
@@ -160,7 +179,10 @@ pub async fn attach(
     let Some(ticket) = ticket_from_protocols(&headers) else {
         return unauthorized();
     };
-    if !state.ws_tickets.consume(&ticket, id).await {
+    let Some(user) = state.ws_tickets.consume(&ticket, id).await else {
+        return unauthorized();
+    };
+    if user.check_authority().await.is_err() {
         return unauthorized();
     }
     let node_id = match node_proxy::session_node(&state, id).await {
@@ -173,7 +195,7 @@ pub async fn attach(
     };
     let ws_test_hooks = state.ws_test_hooks.clone();
     ws.protocols([WS_PROTOCOL])
-        .on_upgrade(move |socket| handle_node_socket(socket, id, attachment, ws_test_hooks))
+        .on_upgrade(move |socket| handle_node_socket(socket, id, attachment, ws_test_hooks, user))
 }
 
 fn ticket_from_protocols(headers: &HeaderMap) -> Option<String> {
@@ -204,6 +226,7 @@ async fn handle_node_socket(
     session_id: Uuid,
     attachment: TerminalAttachment,
     ws_test_hooks: Arc<crate::WsTestHooks>,
+    user: AuthenticatedUser,
 ) {
     let (sender, mut events) = attachment.into_parts();
     let close_sender = sender.clone();
@@ -289,7 +312,26 @@ async fn handle_node_socket(
 
     let mut outbound = outbound;
     let mut inbound = inbound;
+    let authority = async {
+        let remaining = user
+            .expires_at
+            .saturating_sub(chrono::Utc::now().timestamp())
+            .max(0) as u64;
+        let expiry = tokio::time::sleep(Duration::from_secs(remaining.min(u32::MAX as u64)));
+        tokio::pin!(expiry);
+        let revocation = async {
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                if user.check_authority().await.is_err() {
+                    break;
+                }
+            }
+        };
+        tokio::select! { _ = &mut expiry => {}, _ = revocation => {} }
+    };
     tokio::select! {
+        biased;
+        _ = authority => { inbound.abort(); outbound.abort(); },
         _ = &mut outbound => inbound.abort(),
         _ = &mut inbound => outbound.abort(),
     }
@@ -306,16 +348,31 @@ mod tests {
         let session_id = Uuid::new_v4();
         let other_session_id = Uuid::new_v4();
 
-        let wrong_session_ticket = store.issue(session_id).await.unwrap();
-        assert!(!store.consume(&wrong_session_ticket, other_session_id).await);
-        assert!(!store.consume(&wrong_session_ticket, session_id).await);
+        let wrong_session_ticket = store
+            .issue(session_id, AuthenticatedUser::dev())
+            .await
+            .unwrap();
+        assert!(store
+            .consume(&wrong_session_ticket, other_session_id)
+            .await
+            .is_none());
+        assert!(store
+            .consume(&wrong_session_ticket, session_id)
+            .await
+            .is_none());
 
-        let ticket = store.issue(session_id).await.unwrap();
-        assert!(store.consume(&ticket, session_id).await);
-        assert!(!store.consume(&ticket, session_id).await);
+        let ticket = store
+            .issue(session_id, AuthenticatedUser::dev())
+            .await
+            .unwrap();
+        assert!(store.consume(&ticket, session_id).await.is_some());
+        assert!(store.consume(&ticket, session_id).await.is_none());
 
-        let expired = store.issue_for(session_id, Duration::ZERO).await.unwrap();
-        assert!(!store.consume(&expired, session_id).await);
+        let expired = store
+            .issue_for(session_id, AuthenticatedUser::dev(), Duration::ZERO)
+            .await
+            .unwrap();
+        assert!(store.consume(&expired, session_id).await.is_none());
     }
 
     #[test]

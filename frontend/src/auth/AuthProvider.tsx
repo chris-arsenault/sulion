@@ -22,9 +22,11 @@ import {
   useAuth,
 } from "./context";
 import "./AuthProvider.css";
+import { revokeBrowserSessions } from "../api/client";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ kind: "loading" });
+  const [logoutError, setLogoutError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,14 +93,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signOut();
         setState({ kind: "anonymous", error: null });
       },
-      logout() {
-        signOut();
-        setState({ kind: "anonymous", error: null });
+      async logout() {
+        setLogoutError(null);
+        try {
+          await revokeBrowserSessions();
+          signOut();
+          setState({ kind: "anonymous", error: null });
+        } catch (error) {
+          setLogoutError(error instanceof Error ? error.message : "Sign-out failed. Try again.");
+        }
       },
     };
   }, [state]);
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={value}>
+    {logoutError && <div role="alert">{logoutError}</div>}
+    {children}
+  </AuthContext.Provider>;
 }
 
 export function AuthGate({ children }: { children: ReactNode }) {
@@ -132,7 +143,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
             {state.session.username ?? state.session.email ?? "signed in"}
           </span>
           <button type="button" className="auth-app__logout" onClick={logout}>
-            sign out
+            sign out all Sulion sessions
           </button>
         </div>
         {children}

@@ -536,29 +536,15 @@ export function triggerRetrievalBackfill(
   });
 }
 
-// ─── device pairing ──────────────────────────────────────────────────
-
-export interface ApproveDevicePairingResponse {
-  status: string;
-  client: string;
-  user_code: string;
-}
-
-/** Approve a device-pairing request from the browser `/pair` page. The
- * device polls `/api/devices/pair/token` separately and receives its token
- * once this succeeds. Throws {@link ApiError} (404 unknown code, 400 expired
- * or already used). */
-export function approveDevicePairing(
-  userCode: string,
-): Promise<ApproveDevicePairingResponse> {
-  return request<ApproveDevicePairingResponse>("/api/devices/pair/approve", {
-    method: "POST",
-    body: JSON.stringify({ user_code: userCode }),
-  });
-}
-
 export function listSecrets(): Promise<SecretMetadata[]> {
   return brokerRequest<SecretMetadata[]>("/broker/v1/secrets");
+}
+
+export function revokeBrowserSessions(): Promise<void> {
+  return brokerRequest<void>("/broker/v1/session/revoke", {
+    method: "POST",
+    signal: AbortSignal.timeout(5000),
+  });
 }
 
 export function getSecret(id: string): Promise<SecretEnvelope> {

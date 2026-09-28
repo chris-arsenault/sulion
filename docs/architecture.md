@@ -333,27 +333,11 @@ recorded without being enforced. Routes are `GET` on
 `/api/sessions/:id/model-switches/:switch_id/acknowledge`. Detection lives in
 `backend/src/model_switches.rs`.
 
-### Device pairing
+### Retired device access
 
-An auth surface, distinct from the Cognito login the browser uses. It exists so
-an external tool — the first is the Ableton "Send to Sulion" extension — can
-obtain a long-lived token without ever holding the user's credentials.
-
-The shape is OAuth device authorization:
-
-1. `POST /api/devices/pair` (public) returns a secret `device_code` and a short
-   `user_code` for the human to read out.
-2. `POST /api/devices/pair/approve` (Cognito-authenticated) binds the pairing to
-   the signed-in identity. Approval always happens inside an authenticated
-   browser session, so pairing cannot be completed by the device alone.
-3. `POST /api/devices/pair/token` (public, polled by the device) mints the token
-   once approved.
-
-Only base64 SHA-256 hashes of the `device_code` and the minted token are stored;
-plaintext exists in transit only. Device tokens authenticate a narrow surface —
-repo file ingest and raw read — rather than the whole API. See
-`backend/src/api/device_routes.rs` and the browser approval page
-`frontend/src/components/PairPage.tsx`.
+Device pairing, tokens and device file routes have been removed. Browser file
+access uses Cognito. LAN development-node pairing is a separate signed protocol
+and remains supported. See [the retired Ableton contract](ableton-file-contract.md).
 
 ## Broker surface
 

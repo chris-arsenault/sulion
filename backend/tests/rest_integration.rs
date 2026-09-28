@@ -1223,6 +1223,31 @@ async fn repo_upload_accepts_files_past_the_default_body_limit() {
 }
 
 #[tokio::test]
+async fn multipart_node_upload_does_not_follow_symlinks() {
+    let h = Harness::new().await;
+    let root = h.repos_root().join("r");
+    std::fs::create_dir_all(&root).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
+    std::os::unix::fs::symlink(outside.path().join("absent"), root.join("file")).unwrap();
+    for (directory, success) in [("escape/new", false), ("", true)] {
+        let response = h.client.post(format!("{}/api/repos/r/upload?path={directory}", h.base))
+            .header("content-type", "multipart/form-data; boundary=fixture")
+            .body("--fixture\r\nContent-Disposition: form-data; name=\"file\"; filename=\"file\"\r\n\r\nnew bytes\r\n--fixture--\r\n")
+            .send().await.unwrap();
+        assert_eq!(
+            response.status().is_success(),
+            success,
+            "{}",
+            response.text().await.unwrap()
+        );
+    }
+    assert!(!outside.path().join("new").exists());
+    assert!(!outside.path().join("absent").exists());
+    assert_eq!(std::fs::read(root.join("file")).unwrap(), b"new bytes");
+}
+
+#[tokio::test]
 async fn repo_timeline_returns_merged_turns_across_sessions() {
     let h = Harness::new().await;
 

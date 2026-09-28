@@ -24,9 +24,11 @@ Current specs:
 - `07` = `frontend/e2e/07-agent-roundtrip.spec.ts`
 - `08` = `frontend/e2e/08-secrets.spec.ts`
 - `09` = `frontend/e2e/09-meta-repositories.spec.ts`
+- `10` = `frontend/e2e/10-browser-security.spec.ts`
 
 | Feature Area | Status | Priority | Current Coverage | Next Test To Add |
 |---|---|---|---|---|
+| Browser security policy | Partial | High | `10` exercises production nginx headers, retired/internal route denial, inline-script and framing rejection, exact S3-origin PUT permission with a storage response fixture, and Markdown/math/source/SVG rendering. All specs use the built frontend image. | Real Cognito MFA and real S3 IAM/CORS remain deployed acceptance checks. |
 | Stack boot: backend + frontend + Postgres + seeded ingest | Covered | High | All specs run on the real stack, with Postgres and the backend now isolated in Docker. Claude/Codex JSONL is written, correlated, ingested, and then exercised through the UI. | Add one explicit seed-health smoke assertion so stack failures fail earlier and more readably. |
 | Session discovery and navigation | Covered | High | `01`, `03`, `04`, `05` cover command-palette open, sidebar selection, and mobile drawer selection. | Add direct repo-jump and session unread-state assertions once that behavior is stable enough to test. |
 | Session metadata management | Covered | Medium | `01` covers rename, pin/unpin, and color assign/clear from the sidebar. | Add reload persistence for renamed/pinned/colored session state. |

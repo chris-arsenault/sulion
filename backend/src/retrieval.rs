@@ -368,18 +368,12 @@ async fn health(State(state): State<Arc<RetrievalState>>) -> Json<HealthResponse
     })
 }
 
-#[derive(Debug, Deserialize)]
-struct AccessTokenQuery {
-    access_token: Option<String>,
-}
-
 async fn require_retrieval_auth(
     State(state): State<Arc<RetrievalState>>,
-    query: Query<AccessTokenQuery>,
     req: Request,
     next: Next,
 ) -> Response {
-    let token = bearer_from_request(req.headers(), query.access_token.as_deref());
+    let token = bearer_from_request(req.headers());
     if token != Some(state.config.token.as_str()) {
         return (
             StatusCode::UNAUTHORIZED,
@@ -390,10 +384,7 @@ async fn require_retrieval_auth(
     next.run(req).await
 }
 
-fn bearer_from_request<'a>(
-    headers: &'a HeaderMap,
-    query_token: Option<&'a str>,
-) -> Option<&'a str> {
+fn bearer_from_request(headers: &HeaderMap) -> Option<&str> {
     if let Some(value) = headers.get(header::AUTHORIZATION) {
         if let Ok(value) = value.to_str() {
             if let Some(token) = value.strip_prefix("Bearer ") {
@@ -403,14 +394,7 @@ fn bearer_from_request<'a>(
             }
         }
     }
-    if let Some(value) = headers.get("x-sulion-retrieval-token") {
-        if let Ok(value) = value.to_str() {
-            if !value.trim().is_empty() {
-                return Some(value);
-            }
-        }
-    }
-    query_token.filter(|token| !token.trim().is_empty())
+    None
 }
 
 #[derive(Debug, Serialize)]

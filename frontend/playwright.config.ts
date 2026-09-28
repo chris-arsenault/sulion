@@ -25,6 +25,7 @@ export default defineConfig({
     cwd: __dirname,
     url: FRONTEND_URL,
     reuseExistingServer: !process.env.CI,
+    gracefulShutdown: { signal: "SIGTERM", timeout: 30_000 },
     timeout: 300_000,
   },
   projects: [

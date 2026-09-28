@@ -5,7 +5,7 @@
 # own credentials cannot fill in a connection string built here
 # (ahara-trust ADR-0002).
 x-sulion-aws: &sulion-aws
-  AWS_REGION: "us-east-1"
+  AWS_REGION: &sulion-region "us-east-1"
   AWS_DEFAULT_REGION: "us-east-1"
   AWS_SDK_LOAD_CONFIG: "1"
 
@@ -48,9 +48,6 @@ services:
     environment:
       <<: [*sulion-aws, *sulion-backend-identity]
       SULION_LISTEN: "0.0.0.0:8080"
-      # Public browser-facing origin. Used to build the device-pairing /pair
-      # approval link returned by POST /api/devices/pair.
-      SULION_PUBLIC_URL: "${SULION_PUBLIC_URL:-https://sulion.services.ahara.io}"
       SULION_DEPLOYMENT_ROLE: "control-plane"
       SULION_NODE_TRANSPORT: "remote"
       # LAN a development node may connect from. Nodes reach the port declared
@@ -297,7 +294,8 @@ services:
       SULION_COGNITO_USER_POOL_ID: "${SULION_COGNITO_USER_POOL_ID:-}"
       SULION_COGNITO_CLIENT_ID: "${SULION_COGNITO_CLIENT_ID:-}"
       SULION_PUBLIC_UPLOAD_ORIGIN: "${SULION_PUBLIC_UPLOAD_ORIGIN:-https://sulion.services.ahara.io}"
-      SULION_RETRIEVAL_UPSTREAM: "${SULION_RETRIEVAL_UPSTREAM:-retrieval:8083}"
+      AWS_REGION: *sulion-region
+      SULION_UPLOAD_BUCKET: "${SULION_UPLOAD_BUCKET:-}"
     networks:
       - sulion
     healthcheck:

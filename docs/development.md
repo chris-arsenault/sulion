@@ -83,6 +83,9 @@ SULION_TEST_DB='postgres://postgres:testpass@127.0.0.1:55432/sulion' \
 ## E2E
 
 Real stack + Postgres + seeded ingest data via `scripts/run-e2e-stack.mjs`.
+The frontend runs as its built nginx image, including the production entrypoint,
+proxy routes and security headers. Test servers and containers are temporary
+and are cleaned up when Playwright exits.
 Specs live in `frontend/e2e/`; the meta-repository spec creates and removes its
 own grouping and collection PTY while reusing the seeded repos. Current
 coverage and the prioritized next-test list live in
@@ -93,3 +96,10 @@ coverage and the prioritized next-test list live in
 `.github/workflows/ci.yml` is a minimal caller of the shared ahara workflow at `chris-arsenault/ahara/.github/workflows/ci.yml@main`. Lint / test / build / Docker push / Komodo deploy are driven by `platform.yml`.
 After that job succeeds on `main`, the caller advances `node-release` to the
 same commit for the dedicated host's ordered NixOS-and-application pull deployer.
+# Authentication in local fixtures
+
+Unauthenticated development requires both `SULION_DEPLOYMENT_ROLE=development`
+and `SULION_AUTH_MODE=disabled`. Production roles reject that bypass. The E2E
+harness uses an explicit `test` role and an isolated JWT issuer for broker
+tests; its backend bypass is explicit. The broker never permits disabled auth.
+Ordinary production startup requires a nonblank HTTPS issuer and client ID.

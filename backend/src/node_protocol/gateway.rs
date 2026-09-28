@@ -102,7 +102,7 @@ async fn forward(upstream_env: &str, prefix: &str, request: Request) -> Response
     let upstream = match forwarded.body(body).send().await {
         Ok(response) => response,
         Err(error) => {
-            tracing::warn!(%url, %error, "gateway upstream is unreachable");
+            tracing::warn!(upstream = upstream_env, error = %error.without_url(), "gateway upstream is unreachable");
             return StatusCode::BAD_GATEWAY.into_response();
         }
     };

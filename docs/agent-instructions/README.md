@@ -31,8 +31,9 @@ sections are the environment-load-bearing parts.
 
 ## Section guide
 
-- **File edits through agent tooling** — keeps every write visible to sulion's
-  file-churn tracking; shell-based writes bypass it.
+- **File edits through agent tooling** — keeps agent-authored content edits
+  visible to sulion's file-churn tracking. Formatters may rewrite files;
+  shell scripts must not substitute for native content editing.
 - **No hosted presentation publishing** — keeps user data local unless the
   current request explicitly authorizes external publication.
 - **Secrets via `with-cred`** — brokered, single-command secret injection; see

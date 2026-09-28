@@ -20,11 +20,14 @@ use sqlx::Row;
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
-use crate::auth::{AccessTokenQuery, AuthState, AuthenticatedUser};
+use crate::auth::{AuthState, AuthenticatedUser};
 use crate::db::{self, Pool};
 use crate::secret_protocol::{
     canonical_use_payload, RegisterPtyCredentialRequest, SignedUseSecretRequest, UseSecretResponse,
 };
+
+mod browser_auth;
+use browser_auth::{check_browser_authority, revoke_browser_principal, revoke_browser_session};
 
 #[derive(Debug, Clone)]
 pub struct BrokerConfig {
@@ -48,12 +51,16 @@ impl BrokerConfig {
             std::env::var("SULION_SECRET_BROKER_MASTER_KEY_PATH")
                 .unwrap_or_else(|_| "/var/lib/sulion-broker/master.key".to_string()),
         );
-        let auth_issuer_url = std::env::var("SULION_AUTH_ISSUER_URL")
-            .map_err(|_| anyhow!("SULION_AUTH_ISSUER_URL must be set for broker auth"))?;
-        let auth_client_id = std::env::var("SULION_AUTH_CLIENT_ID")
-            .map_err(|_| anyhow!("SULION_AUTH_CLIENT_ID must be set for broker auth"))?;
+        let auth = crate::config::AuthConfig::from_env()?
+            .ok_or_else(|| anyhow!("broker authentication cannot be disabled"))?;
+        let auth_issuer_url = auth.issuer_url;
+        let auth_client_id = auth.client_id;
         let registration_token = std::env::var("SULION_SECRET_BROKER_REGISTRATION_TOKEN")
             .map_err(|_| anyhow!("SULION_SECRET_BROKER_REGISTRATION_TOKEN must be set"))?;
+        anyhow::ensure!(
+            !registration_token.trim().is_empty(),
+            "broker registration token must not be blank"
+        );
         Ok(Self {
             listen,
             db_url,
@@ -93,6 +100,7 @@ impl BrokerState {
 
 fn user_routes() -> Router<Arc<BrokerState>> {
     Router::new()
+        .route("/v1/session/revoke", post(revoke_browser_session))
         .route("/v1/secrets", get(list_secrets))
         .route(
             "/v1/secrets/:id",
@@ -121,6 +129,8 @@ pub fn app(state: Arc<BrokerState>) -> Router {
     let use_routes = Router::new().route("/v1/use", post(use_secret));
 
     let registration_routes = Router::new()
+        .route("/v1/auth/check", post(check_browser_authority))
+        .route("/v1/auth/revoke", post(revoke_browser_principal))
         .route("/v1/pty-credentials", post(register_pty_credential))
         .route("/v1/pty-credentials/:id", delete(revoke_pty_credential))
         .route_layer(axum::middleware::from_fn_with_state(
@@ -156,16 +166,26 @@ async fn health() -> Json<Health> {
 
 async fn require_user_auth(
     State(state): State<Arc<BrokerState>>,
-    query: Query<AccessTokenQuery>,
     mut req: Request,
     next: Next,
 ) -> Response {
-    let token = bearer_from_request(req.headers(), query.access_token.as_deref());
+    let token = bearer_from_request(req.headers());
     let Some(token) = token else {
         return unauthorized();
     };
     match state.auth.validate_bearer(token).await {
         Ok(user) => {
+            match crate::auth::revocation::allowed(&state.pool, &user.authority()).await {
+                Ok(true) => {}
+                // A lost sign-out response can be retried, but an old token
+                // must never advance the cutoff and revoke a newer login.
+                Ok(false)
+                    if req.method() == Method::POST && req.uri().path() == "/v1/session/revoke" =>
+                {
+                    return StatusCode::NO_CONTENT.into_response();
+                }
+                _ => return unauthorized(),
+            }
             req.extensions_mut().insert(user);
             next.run(req).await
         }
@@ -178,11 +198,10 @@ async fn require_user_auth(
 
 async fn require_registration_auth(
     State(state): State<Arc<BrokerState>>,
-    query: Query<AccessTokenQuery>,
     req: Request,
     next: Next,
 ) -> Response {
-    let token = bearer_from_request(req.headers(), query.access_token.as_deref());
+    let token = bearer_from_request(req.headers());
     if token != Some(state.registration_token.as_str()) {
         return unauthorized();
     }
@@ -836,10 +855,7 @@ impl IntoResponse for BrokerError {
     }
 }
 
-fn bearer_from_request<'a>(
-    headers: &'a axum::http::HeaderMap,
-    query_token: Option<&'a str>,
-) -> Option<&'a str> {
+fn bearer_from_request(headers: &axum::http::HeaderMap) -> Option<&str> {
     if let Some(value) = headers.get(header::AUTHORIZATION) {
         if let Ok(value) = value.to_str() {
             if let Some(token) = value.strip_prefix("Bearer ") {
@@ -849,7 +865,7 @@ fn bearer_from_request<'a>(
             }
         }
     }
-    query_token.filter(|token| !token.trim().is_empty())
+    None
 }
 
 fn unauthorized() -> Response {

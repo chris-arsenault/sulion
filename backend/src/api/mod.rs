@@ -13,7 +13,6 @@ use crate::{db, AppState};
 
 mod admin_routes;
 mod app_state_routes;
-mod device_routes;
 mod file_content;
 mod future_prompt_routes;
 mod library_routes;
@@ -45,8 +44,6 @@ pub use stats::{run_stats_sampler, sample_stats_once, StatsCache};
 pub use ws::WsTicketStore;
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
-    // Cognito-authenticated surface. Device-pairing *approval* lives here so the
-    // approving user's identity is captured.
     let protected = Router::new()
         .route("/api/app-state", get(app_state_routes::app_state))
         .route("/api/ws-tickets", post(ws::issue_ticket))
@@ -54,26 +51,9 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .merge(turn_stream_routes::router())
         .merge(upload_routes::router())
         .merge(crate::node_protocol::admin_router())
-        .merge(device_routes::approve_router())
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_http_auth,
-        ));
-
-    // Public pairing endpoints — the device has no credential yet.
-    let device_public = device_routes::public_router();
-
-    // Device-token-authenticated surface: external tools write content into a
-    // repo on disk. Guarded by its own layer (device tokens, not Cognito JWTs).
-    let device_authed = Router::new()
-        .route(
-            "/api/repos/:name/ingest",
-            post(repo_routes::post_repo_ingest).layer(repo_routes::upload_body_limit()),
-        )
-        .route("/api/repos/:name/raw", get(repo_routes::get_repo_raw))
-        .route_layer(middleware::from_fn_with_state(
-            state,
-            device_routes::require_device_token,
         ));
 
     Router::new()
@@ -81,8 +61,6 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/ws/sessions/:id", get(ws::attach))
         .merge(crate::node_protocol::public_router())
         .merge(protected)
-        .merge(device_public)
-        .merge(device_authed)
 }
 
 #[derive(Serialize)]

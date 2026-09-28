@@ -234,28 +234,29 @@ async fn list_visible_paths(
     .await?
 }
 
-/// Write bytes to a repo-relative path. Rejects symlink targets to
-/// prevent drop-onto-symlink escapes.
+/// Install bytes atomically through directory descriptors, never through a
+/// caller-controlled symlink. Final symlinks are replaced, not followed.
 pub async fn write_file(
     repo_root: PathBuf,
     rel: String,
     bytes: Vec<u8>,
 ) -> anyhow::Result<PathBuf> {
-    let (abs, _) = resolve_in_repo(&repo_root, &rel)?;
-    if let Some(parent) = abs.parent() {
-        if parent.exists() {
-            // Reject if the parent resolves outside the repo via symlink.
-            let parent_real = parent.canonicalize()?;
-            let root_real = repo_root.canonicalize()?;
-            if !parent_real.starts_with(&root_real) {
-                anyhow::bail!("parent escapes repo root");
-            }
-        } else {
-            tokio::fs::create_dir_all(parent).await?;
-        }
+    use crate::uploads::install::Directory;
+    use tokio::io::AsyncWriteExt;
+    if bytes.len() as i64 > crate::uploads::MAX_BYTES {
+        anyhow::bail!("file exceeds upload size limit");
     }
-    tokio::fs::write(&abs, &bytes).await?;
-    Ok(abs)
+    let (parent, filename) = rel.rsplit_once('/').unwrap_or(("", &rel));
+    if !crate::uploads::model::valid_component(filename) || rel.starts_with('/') {
+        anyhow::bail!("invalid upload path");
+    }
+    let directory = Directory::root(&repo_root)?.descend(parent, true)?;
+    let mut temporary = directory.temporary()?;
+    let mut file = tokio::fs::File::from_std(temporary.take_file());
+    file.write_all(&bytes).await?;
+    file.sync_all().await?;
+    temporary.install_at(&repo_root, parent, filename)?;
+    Ok(repo_root.join(rel))
 }
 
 /// Whether a repo name is safe to use as a single path component.
@@ -281,6 +282,26 @@ pub fn looks_binary(bytes: &[u8]) -> bool {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn upload_cannot_escape_via_missing_parent_or_dangling_symlink() {
+        let root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("escape")).unwrap();
+        for path in ["escape/new/file", "../file", "/file"] {
+            assert!(write_file(root.path().into(), path.into(), b"new".to_vec())
+                .await
+                .is_err());
+        }
+        assert!(!outside.path().join("new").exists());
+        std::os::unix::fs::symlink(outside.path().join("absent"), root.path().join("file"))
+            .unwrap();
+        write_file(root.path().into(), "file".into(), b"new".to_vec())
+            .await
+            .unwrap();
+        assert!(!outside.path().join("absent").exists());
+        assert_eq!(std::fs::read(root.path().join("file")).unwrap(), b"new");
+    }
 
     #[test]
     fn resolve_rejects_parent_traversal() {

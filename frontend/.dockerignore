@@ -5,3 +5,4 @@
 !docker-entrypoint.d/
 !docker-entrypoint.d/**
 !nginx.conf
+!security-headers.conf

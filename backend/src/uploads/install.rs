@@ -105,6 +105,13 @@ impl Temporary {
     pub fn take_file(&mut self) -> File {
         self.file.take().expect("temporary file taken once")
     }
+    pub fn install_at(&self, root: &Path, parent: &str, filename: &str) -> io::Result<()> {
+        let current = Directory::root(root)?.descend(parent, false)?;
+        if current.identity()? != self.directory.identity()? {
+            return Err(io::Error::other("upload destination changed"));
+        }
+        self.install(filename)
+    }
     pub fn install(&self, filename: &str) -> io::Result<()> {
         if !super::model::valid_component(filename) {
             return Err(io::Error::new(
@@ -141,6 +148,22 @@ impl Drop for Temporary {
 mod tests {
     use super::*;
     use std::io::Write;
+    #[test]
+    fn changed_destination_is_rejected_before_installation() {
+        let root = tempfile::tempdir().unwrap();
+        let mut temp = Directory::root(root.path())
+            .unwrap()
+            .descend("dir", true)
+            .unwrap()
+            .temporary()
+            .unwrap();
+        temp.take_file().write_all(b"bytes").unwrap();
+        std::fs::rename(root.path().join("dir"), root.path().join("old")).unwrap();
+        std::fs::create_dir(root.path().join("dir")).unwrap();
+        assert!(temp.install_at(root.path(), "dir", "file").is_err());
+        assert!(!root.path().join("dir/file").exists());
+        assert!(!root.path().join("old/file").exists());
+    }
     #[test]
     fn symlinks_cannot_redirect_installation_and_bytes_become_visible_atomically() {
         let root = tempfile::tempdir().unwrap();

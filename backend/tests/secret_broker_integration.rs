@@ -92,11 +92,25 @@ async fn repository_grants_persist_apply_to_future_sessions_and_revoke_independe
         .unwrap();
     let mut broker_url = url::Url::parse(&test_url).unwrap();
     broker_url.set_path(&format!("/{database}"));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let issuer = format!("http://{}", listener.local_addr().unwrap());
+    let jwks = axum::Router::new().route(
+        "/.well-known/jwks.json",
+        axum::routing::get(|| async {
+            axum::Json(
+                serde_json::from_str::<Value>(include_str!("fixtures/auth-test-jwks.json"))
+                    .unwrap(),
+            )
+        }),
+    );
+    let issuer_server = tokio::spawn(async move {
+        axum::serve(listener, jwks).await.unwrap();
+    });
     let config = BrokerConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         db_url: broker_url.to_string(),
         master_key_path: key,
-        auth_issuer_url: "http://unused.invalid".into(),
+        auth_issuer_url: issuer.clone(),
         auth_client_id: "test".into(),
         registration_token: "test-registration".into(),
     };
@@ -107,6 +121,116 @@ async fn repository_grants_persist_apply_to_future_sessions_and_revoke_independe
         .unwrap();
     let app = secret_broker::app(state.clone());
     let management = secret_broker::management_app_for_tests(state.clone());
+    let now = chrono::Utc::now().timestamp();
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
+    header.kid = Some("fixture".into());
+    let token = jsonwebtoken::encode(
+        &header,
+        &json!({
+            "iss":issuer,"sub":"browser-fixture","client_id":"test","token_use":"access",
+            "iat":now,"auth_time":now-10,"exp":now+300
+        }),
+        &jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!("fixtures/auth-test-private.pem"))
+            .unwrap(),
+    )
+    .unwrap();
+    for (method, path, expected) in [
+        ("GET", "/v1/secrets", StatusCode::OK),
+        ("POST", "/v1/session/revoke", StatusCode::NO_CONTENT),
+        ("GET", "/v1/secrets", StatusCode::UNAUTHORIZED),
+        ("POST", "/v1/session/revoke", StatusCode::NO_CONTENT),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{method} {path}");
+    }
+    issuer_server.abort();
+    let now = chrono::Utc::now().timestamp();
+    let authority = json!({"sub":"controlled-test-user", "auth_time":now-10, "expires_at":now+300});
+    assert_eq!(
+        request(
+            app.clone(),
+            "POST",
+            "/v1/auth/check",
+            authority.clone(),
+            true
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        request(
+            app.clone(),
+            "POST",
+            "/v1/auth/revoke",
+            json!({"sub":"controlled-test-user"}),
+            false
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(
+            app.clone(),
+            "POST",
+            "/v1/auth/revoke",
+            json!({"sub":"controlled-test-user"}),
+            true
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    // A new access token obtained by refreshing the old login retains auth_time.
+    assert_eq!(
+        request(
+            app.clone(),
+            "POST",
+            "/v1/auth/check",
+            authority.clone(),
+            true
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let restarted = BrokerState::from_config(&config).await.unwrap();
+    assert_eq!(
+        request(
+            secret_broker::app(restarted),
+            "POST",
+            "/v1/auth/check",
+            authority,
+            true
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(
+            app.clone(),
+            "POST",
+            "/v1/pty-credentials?access_token=test-registration",
+            json!({}),
+            false
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
     let a = Pty::register(&app, Some("atlas")).await;
     let b = Pty::register(&app, Some("other")).await;
     let legacy = Pty::register(&app, None).await;

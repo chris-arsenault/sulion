@@ -37,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
     })
     .await;
 
-    let config = sulion::config::Config::from_env()?;
+    let config = sulion::config::Config::worker_from_env()?;
     let pool = retry_forever("database connection", || {
         sulion::db::connect_and_wait_for_migrations(&config.db_url, "node")
     })

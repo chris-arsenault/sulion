@@ -129,6 +129,13 @@ async fn retrieval_auth_is_required() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let query_credential = h
+        .client
+        .get(format!("{}/v1/context?access_token=test-token", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(query_credential.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

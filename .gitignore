@@ -10,6 +10,7 @@ frontend/playwright-report/
 .env.local
 *.log
 .DS_Store
+.terraform/
 
 # nix build output symlink
 result

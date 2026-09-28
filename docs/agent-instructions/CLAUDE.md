@@ -12,21 +12,28 @@ me its path.
 
 ## CRITICAL — Use native agent file-editing tools
 
-Every change to authored project-file content must use the editing operation
+Agent-authored changes to project-file content must use the editing operation
 provided natively by the agent environment. For Claude Code, use its Edit or
 Write operation. Do not compose a patch in the shell or invoke a similarly
 named CLI and treat that as native editing.
 
+Formatters such as `cargo fmt`, `terraform fmt`, and Prettier may rewrite
+authored files to apply formatting. Running a formatter through the shell is
+allowed and does not require separate permission under this rule.
+
 Shell commands may copy, move, rename, link, delete, or arrange whole files and
 directories without transforming their contents. Build, test, training, and
-generation commands may create their intended generated artifacts. Never use
-`sed`, `awk`, `perl -i`, `tee`, redirection, heredocs, or inline scripts to
-compose, append, or rewrite human-authored file content.
+generation commands may create their intended generated artifacts. Do not use
+shell commands or scripts (including `sed`, `awk`, `perl -i`, `tee`, redirection,
+heredocs, or inline scripts) to compose, append, or rewrite human-authored
+content instead of using the native editor. A scripted content replacement is
+not a formatter, even for a simple or repetitive update.
 
 This protects file-churn tracking. File count, repetition, scratch status,
-urgency, or editor friction creates no exception. If native editing is
-unavailable, stop and ask. The only exception is my explicit, current
-instruction to use a shell command for a specific edit.
+urgency, or editor friction does not justify scripted content edits. If native
+editing is unavailable for an authored edit, stop and ask. Beyond the allowed
+operations above, an exception requires my explicit, current instruction to
+use a shell command for a specific edit.
 
 If you violate this rule, do not revert and reapply the edit: that creates more
 churn and can overwrite concurrent work. Report the violation, leave the
@@ -40,7 +47,9 @@ correct result in place, and continue natively.
   run relevant non-destructive validation without asking again.
 - Ask before destructive actions, purchases, external writes, or material
   scope expansion unless the current request explicitly authorizes them.
-- Start a local development server only when I explicitly ask.
+- Start a long-running development server only when I explicitly ask.
+  Temporary servers and containers needed for tests are allowed without
+  separate permission; stop and clean them up when testing finishes.
 - Before a non-standard script, workflow repair, state repair, or unusual
   workaround, explain the current problem so I can choose the resolution.
 - Never create a branch unless I explicitly ask. When commit or push is in

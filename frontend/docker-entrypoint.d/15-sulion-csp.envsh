@@ -1,0 +1,24 @@
+#!/bin/sh
+# Sourced before nginx's template expansion. These origins are derived from
+# the same infrastructure identifiers used by uploads and browser sign-in.
+export SULION_UPLOAD_STORAGE_ORIGIN=""
+export SULION_COGNITO_CONNECT_ORIGIN=""
+
+if [ -n "${SULION_UPLOAD_BUCKET:-}" ]; then
+    case "$SULION_UPLOAD_BUCKET" in
+        *[!a-z0-9.-]*) echo "Invalid upload bucket name" >&2; exit 1 ;;
+    esac
+    case "${AWS_REGION:-}" in
+        ""|*[!a-z0-9-]*) echo "Upload bucket requires a valid AWS region" >&2; exit 1 ;;
+    esac
+    export SULION_UPLOAD_STORAGE_ORIGIN="https://${SULION_UPLOAD_BUCKET}.s3.${AWS_REGION}.amazonaws.com"
+fi
+
+if [ -n "${SULION_COGNITO_USER_POOL_ID:-}" ]; then
+    sulion_cognito_region="${SULION_COGNITO_USER_POOL_ID%%_*}"
+    case "$sulion_cognito_region" in
+        ""|*[!a-z0-9-]*) echo "Invalid Cognito pool region" >&2; exit 1 ;;
+    esac
+    export SULION_COGNITO_CONNECT_ORIGIN="https://cognito-idp.${sulion_cognito_region}.amazonaws.com"
+    unset sulion_cognito_region
+fi

@@ -1,5 +1,5 @@
 output "cognito_client_id" {
-  value = module.cognito.client_id
+  value = aws_cognito_user_pool_client.sulion.id
 }
 
 output "cognito_issuer_url" {

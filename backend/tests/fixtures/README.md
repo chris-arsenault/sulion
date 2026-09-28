@@ -14,3 +14,9 @@ The source rollouts were:
 
 - `~/.codex/sessions/2026/04/19/rollout-2026-04-19T04-13-03-019da571-ab6d-72e2-94b2-4fc5544f53d2.jsonl`
 - `~/.codex/sessions/2026/04/19/rollout-2026-04-19T13-58-36-019da789-c2a6-7f80-b71b-4dc90c7f1802.jsonl`
+# Authentication fixture
+
+`auth-test-private.pem` and `auth-test-jwks.json` are a generated RSA test keypair.
+They are public test data, never deployment credentials. Auth unit tests sign
+tokens for a disposable loopback issuer with them; production accepts only its
+configured Cognito issuer and keys.

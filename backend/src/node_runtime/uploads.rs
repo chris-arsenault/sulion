@@ -91,15 +91,9 @@ impl NodeRuntime {
             .await
             .map_err(|message| RuntimeError::BadRequest(message.into()))?;
         let current_root = self.upload_root(input).await?;
-        let current = Directory::root(&current_root)?.descend(&input.directory, false)?;
-        if current.identity()? != temporary.directory.identity()? {
-            return Err(RuntimeError::BadRequest(
-                "The upload destination changed. Try again.".into(),
-            ));
-        }
         // No await between replacement and returning the result: cancellation
         // during download drops the temporary without exposing partial content.
-        temporary.install(&input.filename)?;
+        temporary.install_at(&current_root, &input.directory, &input.filename)?;
         Ok(json!({"path": current_root.join(input.relative_path()), "size": input.size}))
     }
 }

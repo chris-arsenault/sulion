@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -48,7 +48,7 @@ let brokerContainerName = "";
 let authContainerName = "";
 let nodeVolumeName = "";
 let nodeKeyVolumeName = "";
-let frontendProcess = null;
+let frontendContainerName = "";
 let shuttingDown = false;
 let e2eAccessToken = "";
 
@@ -118,22 +118,7 @@ async function main() {
     // served — the first specs assert on the sidebar within seconds.
     await waitForSeededRepos(["atlas", "zephyr"], 90_000);
 
-    frontendProcess = startProcess(
-      "frontend",
-      "pnpm",
-      ["--dir", "frontend", "dev", "--host", "127.0.0.1", "--port", String(FRONTEND_PORT)],
-      {
-        cwd: REPO_ROOT,
-        env: {
-          ...process.env,
-          SULION_API_TARGET: BACKEND_BASE_URL,
-          SULION_BROKER_TARGET: BROKER_BASE_URL,
-          SULION_WS_TARGET: BACKEND_BASE_URL.replace("http://", "ws://"),
-          VITE_SULION_E2E: "1",
-          VITE_SULION_E2E_ACCESS_TOKEN: e2eAccessToken,
-        },
-      },
-    );
+    startFrontendContainer();
 
     await waitForHttp(FRONTEND_URL, 120_000);
     console.log(`sulion e2e stack ready: ${FRONTEND_URL}`);
@@ -150,6 +135,7 @@ async function main() {
 
 function dumpContainerLogs() {
   const containers = [
+    ["frontend", frontendContainerName],
     ["db", dbContainerName],
     ["auth", authContainerName],
     ["broker", brokerContainerName],
@@ -174,7 +160,7 @@ function cleanupStaleResources() {
     "bash",
     [
       "-lc",
-      "docker ps -a --format '{{.Names}}' | rg '^sulion-e2e-(auth|backend|broker|db|ingester|node)-' || true",
+      "docker ps -a --format '{{.Names}}' | rg '^sulion-e2e-(auth|backend|broker|db|frontend|ingester|node)-' || true",
     ],
     { cwd: REPO_ROOT, encoding: "utf8" },
   );
@@ -292,6 +278,34 @@ function buildBrokerImage() {
   );
 }
 
+function startFrontendContainer() {
+  // Exercise the shipped nginx routes, entrypoint and CSP rather than Vite's
+  // development proxy. This image contains only the isolated fixture token.
+  const image = `sulion-e2e-frontend:${process.pid}`;
+  runCommand("frontend-build", "pnpm", ["--dir", "frontend", "build"], {
+    cwd: REPO_ROOT,
+    env: {
+      ...process.env,
+      VITE_SULION_E2E: "1",
+      VITE_SULION_E2E_ACCESS_TOKEN: e2eAccessToken,
+    },
+  });
+  runCommand("frontend-image", "docker", ["build", "-t", image, "frontend"], {
+    cwd: REPO_ROOT,
+  });
+  frontendContainerName = `sulion-e2e-frontend-${process.pid}`;
+  runCommand("frontend", "docker", [
+    "run", "-d", "--name", frontendContainerName,
+    "--network", dockerNetworkName,
+    "-p", `127.0.0.1:${FRONTEND_PORT}:80`,
+    "-e", `SULION_BACKEND_UPSTREAM=${backendContainerName}:8080`,
+    "-e", `SULION_BROKER_UPSTREAM=${brokerContainerName}:8081`,
+    "-e", "SULION_UPLOAD_BUCKET=sulion-e2e-uploads",
+    "-e", "AWS_REGION=us-east-1",
+    image,
+  ], { cwd: REPO_ROOT });
+}
+
 function startAuthFixture() {
   authContainerName = `sulion-e2e-auth-${process.pid}`;
   const issuerUrl = `http://${authContainerName}:8099`;
@@ -325,6 +339,7 @@ function startAuthFixture() {
       username: "sulion-e2e",
       exp: Math.floor(Date.now() / 1000) + 60 * 60,
       iat: Math.floor(Date.now() / 1000),
+      auth_time: Math.floor(Date.now() / 1000),
     },
     privateKey,
     kid,
@@ -408,6 +423,8 @@ function startBrokerContainer(dbUrl, authIssuerUrl) {
       "-e",
       "SULION_SECRET_BROKER_LISTEN=0.0.0.0:8081",
       "-e",
+      "SULION_DEPLOYMENT_ROLE=test",
+      "-e",
       // Its own database, as in production: broker and backend each own a
       // sqlx migration history, and sharing one database makes the second
       // migrator refuse the first one's checksums.
@@ -450,7 +467,9 @@ function startBackendContainer(dbUrl) {
     "-e",
     "SULION_LISTEN=0.0.0.0:8080",
     "-e",
-    "SULION_DEPLOYMENT_ROLE=control-plane",
+    "SULION_DEPLOYMENT_ROLE=test",
+    "-e",
+    "SULION_AUTH_MODE=disabled",
     "-e",
     "SULION_NODE_TRANSPORT=remote",
     "-e",
@@ -725,21 +744,6 @@ async function waitForNode(nodeId, timeoutMs) {
   throw new Error(`timed out waiting for development node ${nodeId}`);
 }
 
-function startProcess(label, command, args, options) {
-  const child = spawn(command, args, {
-    ...options,
-    stdio: "inherit",
-  });
-  child.on("exit", (code, signal) => {
-    if (shuttingDown) return;
-    console.error(
-      `${label} exited unexpectedly (code=${code ?? "null"} signal=${signal ?? "null"})`,
-    );
-    void cleanup().finally(() => process.exit(code ?? 1));
-  });
-  return child;
-}
-
 function runCommand(label, command, args, options) {
   const result = spawnSync(command, args, {
     ...options,
@@ -859,12 +863,10 @@ async function cleanup() {
   if (shuttingDown) return;
   shuttingDown = true;
 
-  if (frontendProcess && !frontendProcess.killed) {
-    frontendProcess.kill("SIGTERM");
-    await sleep(500);
-    if (frontendProcess.exitCode === null && frontendProcess.signalCode === null) {
-      frontendProcess.kill("SIGKILL");
-    }
+  if (frontendContainerName) {
+    spawnSync("docker", ["rm", "-f", frontendContainerName], { stdio: "ignore" });
+    frontendContainerName = "";
+    spawnSync("docker", ["image", "rm", `sulion-e2e-frontend:${process.pid}`], { stdio: "ignore" });
   }
 
   if (backendContainerName) {
@@ -920,4 +922,6 @@ process.on("exit", () => {
 });
 
 await main();
-await new Promise(() => {});
+// Docker services are detached; keep the harness alive to own their cleanup
+// until Playwright sends SIGTERM.
+while (!shuttingDown) await sleep(60_000);

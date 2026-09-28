@@ -4,15 +4,13 @@
 
 use std::sync::Arc;
 
-use axum::body::{Body, Bytes};
 use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use axum::{Extension, Json};
+use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::device_routes::DevicePrincipal;
 use super::file_content::{self, FileResponse};
 use super::node_proxy;
 use super::routes::{validate_repo_name, ApiError, ApiResult};
@@ -438,108 +436,4 @@ pub(super) async fn post_repo_upload(
     first
         .map(Json)
         .ok_or_else(|| ApiError::BadRequest("no file field".into()))
-}
-
-#[derive(Deserialize)]
-pub(super) struct IngestQuery {
-    /// Repo-relative destination path, e.g. `clips/verse.mid`. Required.
-    path: String,
-}
-
-#[derive(Serialize)]
-pub(super) struct IngestResponse {
-    path: String,
-    bytes: u64,
-}
-
-/// Device-token-authenticated content drop: write the raw request body to
-/// `path` (a repo-relative path) under repo `name`, creating parent dirs. This
-/// is the HTTP analogue of the terminal's paste-as-file, for external tools
-/// (first consumer: the Ableton "Send to Sulion" extension). It's
-/// content-agnostic — binary or text, the caller chooses the filename.
-///
-/// Path safety (no `..`, no absolute, no symlink escape) is enforced by
-/// `workspace::write_file`.
-pub(super) async fn post_repo_ingest(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-    Query(q): Query<IngestQuery>,
-    Extension(principal): Extension<DevicePrincipal>,
-    body: Bytes,
-) -> ApiResult<Json<IngestResponse>> {
-    let rel = q.path.trim().trim_start_matches('/').to_string();
-    if rel.is_empty() {
-        return Err(ApiError::BadRequest("path is required".into()));
-    }
-    if body.len() as u64 > UPLOAD_MAX_BYTES {
-        return Err(ApiError::BadRequest(format!(
-            "content exceeds {UPLOAD_MAX_BYTES} bytes"
-        )));
-    }
-    let node_id = node_proxy::repo_node(&state, &name).await?;
-    node_proxy::request(
-        &state,
-        node_id,
-        NodeRequestKind::RepoUpload,
-        serde_json::to_value(RepoUploadRequest {
-            repo: name.clone(),
-            upload: UploadRequest::new(rel.clone(), &body),
-        })
-        .map_err(anyhow::Error::from)?,
-    )
-    .await?;
-    tracing::info!(
-        repo = %name,
-        path = %rel,
-        bytes = body.len(),
-        token_id = principal.token_id,
-        user = %principal.user_sub,
-        "repo content ingested",
-    );
-    Ok(Json(IngestResponse {
-        path: rel,
-        bytes: body.len() as u64,
-    }))
-}
-
-#[derive(Deserialize)]
-pub(super) struct RawQuery {
-    /// Repo-relative source path, e.g. `clips/verse.mid`. Required.
-    path: String,
-}
-
-/// Device-token-authenticated raw file read: return the bytes at `path` under
-/// repo `name` as `application/octet-stream`. The counterpart to
-/// `post_repo_ingest`, for pulling content (e.g. a generated `.mid`) back out
-/// to an external tool. `GET /api/repos/:name/file` can't serve this — it's
-/// Cognito-only and nulls binary content. Path-safety (no `..`/absolute/symlink
-/// escape) via `workspace::resolve_in_repo`.
-pub(super) async fn get_repo_raw(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-    Query(q): Query<RawQuery>,
-    Extension(_principal): Extension<DevicePrincipal>,
-) -> ApiResult<Response> {
-    let rel = q.path.trim().trim_start_matches('/').to_string();
-    if rel.is_empty() {
-        return Err(ApiError::BadRequest("path is required".into()));
-    }
-    let node_id = node_proxy::repo_node(&state, &name).await?;
-    let result = node_proxy::request(
-        &state,
-        node_id,
-        NodeRequestKind::RepoFileRaw,
-        serde_json::to_value(RepoPathRequest {
-            repo: name,
-            path: Some(rel),
-            all: false,
-        })
-        .map_err(anyhow::Error::from)?,
-    )
-    .await?;
-    let raw: RawFileResponse = serde_json::from_value(result).map_err(anyhow::Error::from)?;
-    Ok(Response::builder()
-        .header(header::CONTENT_TYPE, "application/octet-stream")
-        .body(Body::from(raw.into_bytes().map_err(ApiError::Internal)?))
-        .expect("octet-stream response is always valid"))
 }
