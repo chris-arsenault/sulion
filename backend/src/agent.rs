@@ -243,11 +243,16 @@ async fn run_real(cfg: LauncherConfig, env: LauncherEnv) -> anyhow::Result<i32> 
 }
 
 fn agent_args_with_additional_dirs(
-    _agent_type: AgentType,
+    agent_type: AgentType,
     args: &[OsString],
     repo_paths: &[PathBuf],
 ) -> Vec<OsString> {
-    let mut scoped = Vec::with_capacity(args.len() + repo_paths.len().saturating_sub(1) * 2);
+    let mut scoped = Vec::with_capacity(args.len() + repo_paths.len().saturating_sub(1) * 2 + 1);
+    if matches!(agent_type, AgentType::Codex | AgentType::Fugu)
+        && !args.iter().any(|arg| arg == "--no-daemon")
+    {
+        scoped.push(OsString::from("--no-daemon"));
+    }
     for path in repo_paths.iter().skip(1) {
         scoped.push(OsString::from("--add-dir"));
         scoped.push(path.as_os_str().to_owned());
@@ -439,7 +444,7 @@ mod tests {
             PathBuf::from("/work/secondary repo"),
             PathBuf::from("/work/third"),
         ];
-        let expected = vec![
+        let expected_claude = vec![
             OsString::from("--add-dir"),
             OsString::from("/work/secondary repo"),
             OsString::from("--add-dir"),
@@ -447,14 +452,42 @@ mod tests {
             OsString::from("--resume"),
             OsString::from("session"),
         ];
-        for agent in [AgentType::Claude, AgentType::Codex] {
+        assert_eq!(
+            agent_args_with_additional_dirs(
+                AgentType::Claude,
+                &[OsString::from("--resume"), OsString::from("session")],
+                &paths,
+            ),
+            expected_claude,
+        );
+        let mut expected_codex = vec![OsString::from("--no-daemon")];
+        expected_codex.extend(expected_claude);
+        for agent in [AgentType::Codex, AgentType::Fugu] {
             assert_eq!(
                 agent_args_with_additional_dirs(
                     agent,
                     &[OsString::from("--resume"), OsString::from("session")],
                     &paths,
                 ),
-                expected,
+                expected_codex,
+            );
+        }
+    }
+
+    #[test]
+    fn codex_launches_without_shared_daemon_once() {
+        for agent in [AgentType::Codex, AgentType::Fugu] {
+            assert_eq!(
+                agent_args_with_additional_dirs(agent, &[OsString::from("--yolo")], &[]),
+                vec![OsString::from("--no-daemon"), OsString::from("--yolo")],
+            );
+            assert_eq!(
+                agent_args_with_additional_dirs(
+                    agent,
+                    &[OsString::from("--no-daemon"), OsString::from("resume")],
+                    &[],
+                ),
+                vec![OsString::from("--no-daemon"), OsString::from("resume")],
             );
         }
     }
