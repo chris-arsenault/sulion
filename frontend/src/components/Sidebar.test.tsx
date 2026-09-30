@@ -95,7 +95,11 @@ function installFetchMock(): MockState {
         state.deletedWorkspaceRequests.push({ id, query });
         return new Response(null, { status: 204 });
       }
-      if (url.startsWith("/api/sessions/") && url.endsWith("/delete") && method === "POST") {
+      if (
+        url.startsWith("/api/sessions/") &&
+        url.endsWith("/delete") &&
+        method === "POST"
+      ) {
         const id = url.split("/")[3]!;
         state.sessions = state.sessions.filter((s) => s.id !== id);
         state.deletedIds.push(id);
@@ -123,7 +127,9 @@ function installFetchMock(): MockState {
         const nextName = body.name;
         state.renameRepoCalls.push({ name, body });
         state.repos = state.repos.map((repo) =>
-          repo.name === name ? { ...repo, name: nextName, path: `/tmp/${nextName}` } : repo,
+          repo.name === name
+            ? { ...repo, name: nextName, path: `/tmp/${nextName}` }
+            : repo,
         );
         state.sessions = state.sessions.map((session) =>
           session.repo === name ? { ...session, repo: nextName } : session,
@@ -145,7 +151,10 @@ function installFetchMock(): MockState {
       if (url.match(/^\/api\/repos\/[^/]+\/files/) && method === "GET") {
         return jsonResp({ path: "", entries: [] });
       }
-      if ((url === "/api/library/references" || url === "/api/library/prompts") && method === "GET") {
+      if (
+        (url === "/api/library/references" || url === "/api/library/prompts") &&
+        method === "GET"
+      ) {
         return jsonResp([]);
       }
       if (url.startsWith("/broker/")) {
@@ -330,14 +339,20 @@ describe("Sidebar", () => {
     );
   }
 
-  async function openSessionContextMenu(user: ReturnType<typeof userEvent.setup>, text: RegExp) {
+  async function openSessionContextMenu(
+    user: ReturnType<typeof userEvent.setup>,
+    text: RegExp,
+  ) {
     await user.pointer({
       keys: "[MouseRight]",
       target: screen.getByText(text),
     });
   }
 
-  async function openRepoContextMenu(user: ReturnType<typeof userEvent.setup>, text: string) {
+  async function openRepoContextMenu(
+    user: ReturnType<typeof userEvent.setup>,
+    text: string,
+  ) {
     await user.pointer({
       keys: "[MouseRight]",
       target: screen.getByText(text),
@@ -422,9 +437,7 @@ describe("Sidebar", () => {
     await user.type(screen.getByLabelText("meta-repository name"), "platform");
     await user.click(screen.getByRole("checkbox", { name: REPO_ALPHA }));
     await user.click(screen.getByRole("checkbox", { name: "beta" }));
-    await user.click(
-      screen.getByLabelText("Use beta as primary repository"),
-    );
+    await user.click(screen.getByLabelText("Use beta as primary repository"));
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(state.metaRepoCalls).toHaveLength(1));
@@ -594,7 +607,9 @@ describe("Sidebar", () => {
     expect(screen.queryByText("— no sessions —")).toBeNull();
     expect(screen.getByText(/11111111/)).toBeDefined();
 
-    await user.click(screen.getByRole("button", { name: "Collapse all repos" }));
+    await user.click(
+      screen.getByRole("button", { name: "Collapse all repos" }),
+    );
     expect(screen.queryByText(/11111111/)).toBeNull();
   });
 
@@ -889,12 +904,79 @@ describe("Sidebar", () => {
 
     await waitFor(() => expect(screen.getByText(REPO_ALPHA)).toBeDefined());
     await openRepoContextMenu(user, REPO_ALPHA);
-    await user.click(screen.getByRole("menuitem", { name: /open repo timeline/i }));
+    await user.click(
+      screen.getByRole("menuitem", { name: /open repo timeline/i }),
+    );
 
     const tab = Object.values(useTabStore.getState().tabs).find(
       (item) => item.kind === "timeline" && item.repo === REPO_ALPHA,
     );
     expect(tab).toBeDefined();
+  });
+
+  it("opens the GitHub repo and latest CI run from the repo context menu", async () => {
+    const state = installFetchMock();
+    state.repos.push({
+      name: REPO_ALPHA,
+      path: REPO_ALPHA_PATH,
+      git: {
+        revision: 1,
+        branch: "main",
+        uncommitted_count: 0,
+        untracked_count: 0,
+        last_commit: null,
+        recent_commits: [],
+        refreshing: false,
+        status_error: null,
+        web_url: "https://github.com/acme/alpha",
+        ci: {
+          state: "failed",
+          updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+          run_url: "https://github.com/acme/alpha/actions/runs/7",
+        },
+      },
+    });
+    const open = vi.fn();
+    vi.stubGlobal("open", open);
+    setup();
+    const user = userEvent.setup();
+
+    const chip = await screen.findByLabelText("CI failed, 5m ago");
+    expect(chip.getAttribute("data-ci-state")).toBe("failed");
+
+    await openRepoContextMenu(user, REPO_ALPHA);
+    await user.click(screen.getByRole("menuitem", { name: "Go to repo" }));
+    expect(open).toHaveBeenLastCalledWith(
+      "https://github.com/acme/alpha",
+      "_blank",
+      "noopener,noreferrer",
+    );
+
+    await openRepoContextMenu(user, REPO_ALPHA);
+    await user.click(
+      screen.getByRole("menuitem", { name: "Open latest CI run" }),
+    );
+    expect(open).toHaveBeenLastCalledWith(
+      "https://github.com/acme/alpha/actions/runs/7",
+      "_blank",
+      "noopener,noreferrer",
+    );
+  });
+
+  it("disables Go to repo without a GitHub remote and shows no CI chip", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    setup();
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(screen.getByText(REPO_ALPHA)).toBeDefined());
+    expect(screen.queryByLabelText(/^CI /)).toBeNull();
+    await openRepoContextMenu(user, REPO_ALPHA);
+    const item = screen.getByRole("menuitem", { name: "Go to repo" });
+    expect((item as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      screen.queryByRole("menuitem", { name: "Open latest CI run" }),
+    ).toBeNull();
   });
 
   it("renames a repo from the repo context menu", async () => {
@@ -932,7 +1014,10 @@ describe("Sidebar", () => {
 
     const confirm = await screen.findByRole("button", { name: "Delete" });
     expect(confirm).toHaveProperty("disabled", true);
-    await user.type(screen.getByLabelText(`Type ${REPO_ALPHA} to confirm`), REPO_ALPHA);
+    await user.type(
+      screen.getByLabelText(`Type ${REPO_ALPHA} to confirm`),
+      REPO_ALPHA,
+    );
     await user.click(confirm);
 
     await waitFor(() =>
@@ -1006,7 +1091,9 @@ describe("Sidebar", () => {
     setup();
     const user = userEvent.setup();
 
-    await waitFor(() => expect(screen.getByText("secret-session")).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByText("secret-session")).toBeDefined(),
+    );
     await openSessionContextMenu(user, /secret-session/);
     await hoverMenuItem(user, "Secrets");
     await hoverMenuItem(user, "Enable secret");
@@ -1014,11 +1101,13 @@ describe("Sidebar", () => {
     await user.click(await screen.findByRole("menuitem", { name: "10m" }));
 
     await waitFor(() => expect(state.unlocks).toHaveLength(1));
-    expect(state.unlocks).toEqual([{
-      pty_session_id: sessionId,
-      secret_id: secretId,
-      ttl_seconds: 600,
-    }]);
+    expect(state.unlocks).toEqual([
+      {
+        pty_session_id: sessionId,
+        secret_id: secretId,
+        ttl_seconds: 600,
+      },
+    ]);
 
     await openSessionContextMenu(user, /secret-session/);
     await hoverMenuItem(user, "Secrets");
@@ -1030,10 +1119,12 @@ describe("Sidebar", () => {
     );
 
     await waitFor(() => expect(state.revokes).toHaveLength(1));
-    expect(state.revokes).toEqual([{
-      pty_session_id: sessionId,
-      secret_id: secretId,
-    }]);
+    expect(state.revokes).toEqual([
+      {
+        pty_session_id: sessionId,
+        secret_id: secretId,
+      },
+    ]);
   });
 
   it("renames a session through the menu", async () => {
@@ -1100,7 +1191,9 @@ describe("Sidebar", () => {
 
     await openSessionContextMenu(user, /66666666/);
     await user.hover(screen.getByRole("menuitem", { name: /colour/i }));
-    await waitFor(() => expect(screen.getByRole("menuitem", { name: /emerald/i })).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByRole("menuitem", { name: /emerald/i })).toBeDefined(),
+    );
     await user.click(screen.getByRole("menuitem", { name: /emerald/i }));
 
     await waitFor(() => expect(state.patches.length).toBe(1));
@@ -1151,9 +1244,9 @@ describe("Sidebar", () => {
       expect(screen.getByText("pinned-one")).toBeDefined();
       expect(screen.getByText(/aaaaaaaa/)).toBeDefined();
     });
-    const ids = Array.from(document.querySelectorAll(".sidebar__session-id")).map(
-      (el) => el.textContent ?? "",
-    );
+    const ids = Array.from(
+      document.querySelectorAll(".sidebar__session-id"),
+    ).map((el) => el.textContent ?? "");
     const pinnedIdx = ids.findIndex((t) => t.includes("pinned-one"));
     const newerIdx = ids.findIndex((t) => t.includes("aaaaaaaa"));
     expect(pinnedIdx).toBeLessThan(newerIdx);
@@ -1164,7 +1257,9 @@ describe("Sidebar", () => {
     setup();
     const user = userEvent.setup();
 
-    await waitFor(() => expect(screen.getByText(/no repos yet/i)).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByText(/no repos yet/i)).toBeDefined(),
+    );
 
     const plus = screen.getByLabelText("New repo");
     await user.click(plus);
@@ -1199,7 +1294,11 @@ describe("Sidebar", () => {
             }),
           );
         }
-        if ((url === "/api/library/references" || url === "/api/library/prompts") && method === "GET") {
+        if (
+          (url === "/api/library/references" ||
+            url === "/api/library/prompts") &&
+          method === "GET"
+        ) {
           return jsonResp([]);
         }
         if (url === "/api/repos/alpha/files" && method === "GET") {

@@ -36,6 +36,7 @@ pub mod node_runtime;
 pub mod plan_cli;
 pub mod plans;
 pub mod pty;
+pub mod repo_ci;
 pub mod repo_lifecycle;
 pub mod repo_state;
 pub mod retrieval;

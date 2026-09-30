@@ -314,6 +314,30 @@
   opacity: 0.7;
 }
 
+/* The CI chip takes the badge's right alignment and the badge follows it. */
+.sidebar__repo-ci {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  padding: 2px 5px;
+  border-radius: var(--r-1);
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  white-space: nowrap;
+  border: 1px solid var(--hairline);
+  color: var(--text-mid);
+}
+
+.sidebar__repo-ci + .sidebar__repo-badge {
+  margin-left: 4px;
+}
+
+.sidebar__repo-ci--failed {
+  border-color: color-mix(in oklab, var(--crit-mark) 50%, transparent);
+  color: var(--crit-fg);
+}
+
 /* ─── Subsections ────────────────────────────────────────────────── */
 
 .sidebar__sub {

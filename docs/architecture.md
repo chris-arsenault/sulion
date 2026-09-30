@@ -226,6 +226,15 @@ Deleting an isolated workspace removes the Git worktree registration, optionally
 deletes its Sulion branch, and marks the workspace row deleted; main workspaces
 are not deletable.
 
+The node's repo-state loop records each checkout's `origin` remote, with any URL
+credentials removed, in `repo_runtime_state`. For GitHub remotes it also polls
+the anonymous GitHub Actions API for the latest run on the checked-out branch
+(`backend/src/repo_ci.rs`). The cadence is sized to GitHub's anonymous budget
+of 60 requests per hour, and a rate-limit response pauses every check until
+reset.
+The control API derives the GitHub web URL from the stored remote when it reads
+the row.
+
 Meta-repository membership lives only in Postgres. Creating a collection
 session loads the current members, records the group id and primary repository
 on `pty_sessions`, and passes secondary canonical repo roots to the node. Group

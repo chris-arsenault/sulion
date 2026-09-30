@@ -224,6 +224,8 @@ impl WorkspaceViewRow {
                 recent_commits,
                 refreshing,
                 status_error: self.status_error,
+                web_url: None,
+                ci: None,
             },
         })
     }

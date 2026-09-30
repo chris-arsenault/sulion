@@ -15,6 +15,7 @@ use uuid::Uuid;
 use super::routes::{ApiError, ApiResult};
 use super::stats;
 use crate::git;
+use crate::repo_ci;
 use crate::repo_state::RepoGitSummary;
 use crate::worktree::WorkspaceView;
 use crate::AppState;
@@ -529,6 +530,11 @@ struct RepoStateRow {
     status_started_at: Option<DateTime<Utc>>,
     status_finished_at: Option<DateTime<Utc>>,
     status_error: Option<String>,
+    origin_url: Option<String>,
+    ci_state: Option<String>,
+    ci_branch: Option<String>,
+    ci_run_url: Option<String>,
+    ci_run_updated_at: Option<DateTime<Utc>>,
 }
 
 pub(super) async fn app_state(
@@ -713,7 +719,8 @@ async fn load_repos(
     let rows: Vec<RepoStateRow> = sqlx::query_as(
         "SELECT repo_name, path, exists, git_revision, branch, head_sha, head_subject, \
                 head_committed_at, recent_commits_json, dirty_count, untracked_count, \
-                status_started_at, status_finished_at, status_error \
+                status_started_at, status_finished_at, status_error, origin_url, \
+                ci_state, ci_branch, ci_run_url, ci_run_updated_at \
            FROM repo_runtime_state \
           WHERE exists = TRUE \
           ORDER BY repo_name ASC",
@@ -776,6 +783,14 @@ fn repo_git_summary(row: &RepoStateRow) -> ApiResult<RepoGitSummary> {
         recent_commits,
         refreshing,
         status_error: row.status_error.clone(),
+        web_url: row.origin_url.as_deref().and_then(repo_ci::github_web_url),
+        ci: repo_ci::StoredCi {
+            state: row.ci_state.as_deref(),
+            branch: row.ci_branch.as_deref(),
+            run_url: row.ci_run_url.as_deref(),
+            run_updated_at: row.ci_run_updated_at,
+        }
+        .view(row.branch.as_deref()),
     })
 }
 

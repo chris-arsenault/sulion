@@ -42,7 +42,15 @@ Collection sessions use canonical checkouts only. The primary repo supplies the
 cwd; Claude and Codex receive the other current member roots as additional
 directories. No member worktrees are created.
 Right-click a repo for repo-level actions (open plans, open
-repo timeline, repo diff). Double-click a session name to rename in place.
+repo timeline, repo diff, go to the GitHub repo, open the latest CI run).
+Double-click a session name to rename in place.
+
+For a public GitHub repo, a chip before the branch badge shows the latest
+GitHub Actions run on the checked-out branch: succeeded, failed, or in
+progress, with its age. The node polls GitHub anonymously: every 10 minutes
+while the repo has a commit from the last 24 hours or a run in progress, and
+every 6 hours otherwise. A new commit or branch switch brings the next check
+within 10 minutes. Private repos show no chip.
 
 ## Command palette
 

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::Pool;
 use crate::git::{self, DiffStat, GitStatus};
 use crate::git_activity::scan_repo_git;
+use crate::repo_ci::{self, GithubCi, RepoCiStatus};
 use crate::repo_lifecycle::RepoLifecycleGate;
 
 const REPO_SCAN_INTERVAL: Duration = Duration::from_secs(30);
@@ -28,6 +29,9 @@ pub struct RepoGitSummary {
     pub recent_commits: Vec<git::Commit>,
     pub refreshing: bool,
     pub status_error: Option<String>,
+    /// GitHub page for the `origin` remote; absent for other hosts.
+    pub web_url: Option<String>,
+    pub ci: Option<RepoCiStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,14 +47,25 @@ pub struct RepoStateManager {
     pool: Pool,
     repos_root: PathBuf,
     lifecycle_gate: RepoLifecycleGate,
+    ci: Arc<GithubCi>,
 }
 
 impl RepoStateManager {
     pub fn new(pool: Pool, repos_root: PathBuf, lifecycle_gate: RepoLifecycleGate) -> Arc<Self> {
+        Self::with_github_ci(pool, repos_root, lifecycle_gate, GithubCi::public())
+    }
+
+    pub fn with_github_ci(
+        pool: Pool,
+        repos_root: PathBuf,
+        lifecycle_gate: RepoLifecycleGate,
+        ci: GithubCi,
+    ) -> Arc<Self> {
         Arc::new(Self {
             pool,
             repos_root,
             lifecycle_gate,
+            ci: Arc::new(ci),
         })
     }
 
@@ -144,12 +159,14 @@ impl RepoStateManager {
 
     pub async fn reconcile_due_once(&self, limit: i64) -> anyhow::Result<usize> {
         let _lifecycle_guard = self.lifecycle_gate.read().await;
-        let rows: Vec<(String, String, bool)> = sqlx::query_as(
-            "SELECT repo_name, path, next_git_activity_at <= NOW() AS git_activity_due \
+        let rows: Vec<(String, String, bool, bool)> = sqlx::query_as(
+            "SELECT repo_name, path, next_git_activity_at <= NOW() AS git_activity_due, \
+                    next_ci_at <= NOW() AS ci_due \
                FROM repo_runtime_state \
               WHERE exists = TRUE \
-                AND (next_status_at <= NOW() OR next_git_activity_at <= NOW()) \
-              ORDER BY LEAST(next_status_at, next_git_activity_at) ASC, repo_name ASC \
+                AND (next_status_at <= NOW() OR next_git_activity_at <= NOW() \
+                     OR next_ci_at <= NOW()) \
+              ORDER BY LEAST(next_status_at, next_git_activity_at, next_ci_at) ASC, repo_name ASC \
               LIMIT $1",
         )
         .bind(limit)
@@ -158,15 +175,21 @@ impl RepoStateManager {
         .context("load due repo state rows")?;
 
         let mut count = 0;
-        for (name, path, git_activity_due) in rows {
-            self.reconcile_repo(name, PathBuf::from(path), git_activity_due)
+        for (name, path, git_activity_due, ci_due) in rows {
+            self.reconcile_repo(name, PathBuf::from(path), git_activity_due, ci_due)
                 .await;
             count += 1;
         }
         Ok(count)
     }
 
-    async fn reconcile_repo(&self, name: String, path: PathBuf, git_activity_due: bool) {
+    async fn reconcile_repo(
+        &self,
+        name: String,
+        path: PathBuf,
+        git_activity_due: bool,
+        ci_due: bool,
+    ) {
         if git_activity_due {
             if let Err(err) = self.reconcile_git_activity(&name, &path).await {
                 tracing::warn!(repo = %name, path = %path.display(), %err, "repo git activity reconcile failed");
@@ -199,6 +222,12 @@ impl RepoStateManager {
             .bind(REPO_STATUS_ERROR_CADENCE_SECS)
             .execute(&self.pool)
             .await;
+        }
+        // After the status refresh, so the check sees the current origin and branch.
+        if ci_due {
+            if let Err(err) = repo_ci::reconcile_repo_ci(&self.pool, &self.ci, &name).await {
+                tracing::warn!(repo = %name, %err, "repo CI status check failed");
+            }
         }
     }
 
@@ -300,6 +329,12 @@ impl RepoStateManager {
                     dirty_count = $8, \
                     untracked_count = $9, \
                     dirty_fingerprint = $2, \
+                    origin_url = $11, \
+                    next_ci_at = CASE \
+                      WHEN head_sha IS DISTINCT FROM $4 OR branch IS DISTINCT FROM $3 \
+                        THEN LEAST(next_ci_at, NOW() + make_interval(secs => $12)) \
+                      ELSE next_ci_at \
+                    END, \
                     status_started_at = NOW(), \
                     status_finished_at = NOW(), \
                     next_status_at = NOW() + make_interval(secs => $10), \
@@ -317,6 +352,8 @@ impl RepoStateManager {
         .bind(status.uncommitted_count as i32)
         .bind(status.untracked_count as i32)
         .bind(REPO_STATUS_CADENCE_SECS)
+        .bind(&status.origin_url)
+        .bind(repo_ci::CHANGED_HEAD_CADENCE_SECS)
         .execute(&mut *tx)
         .await
         .with_context(|| format!("update repo state for {name}"))?;
@@ -400,6 +437,10 @@ async fn discover_repo_dirs(root: &Path) -> anyhow::Result<Vec<(String, PathBuf)
 fn status_fingerprint(status: &GitStatus) -> String {
     let mut parts = Vec::new();
     parts.push(format!("branch={}", status.branch.as_deref().unwrap_or("")));
+    parts.push(format!(
+        "origin={}",
+        status.origin_url.as_deref().unwrap_or("")
+    ));
     parts.push(format!(
         "head={}",
         status

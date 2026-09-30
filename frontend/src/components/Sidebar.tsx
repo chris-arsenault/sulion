@@ -50,6 +50,7 @@ import { buildSecretContextMenu } from "./common/secretContextMenu";
 import { ConfirmDialog } from "./common/ConfirmDialog";
 import { LibraryPanel } from "./LibraryPanel";
 import { ReindexButton } from "./ReindexButton";
+import { RepoCiChip } from "./RepoCiChip";
 import { StatsStrip } from "./StatsStrip";
 import "./Sidebar.css";
 import "./LibrarySection.css";
@@ -177,7 +178,9 @@ export function Sidebar() {
   );
   const collapseTargetRepos = useMemo(() => {
     const emptyExpanded = grouped
-      .filter((group) => group.sessions.length === 0 && expandedByRepo[group.name])
+      .filter(
+        (group) => group.sessions.length === 0 && expandedByRepo[group.name],
+      )
       .map((group) => group.name);
     if (emptyExpanded.length > 0) return emptyExpanded;
     return grouped
@@ -388,10 +391,7 @@ export function Sidebar() {
   );
 
   const onCreateSession = useCallback(
-    async (
-      repoName: string,
-      form: NewSessionFormValue,
-    ) => {
+    async (repoName: string, form: NewSessionFormValue) => {
       setFormError(null);
       try {
         await createSession({
@@ -426,10 +426,7 @@ export function Sidebar() {
     [createSession],
   );
 
-  const requestDelete = useCallback(
-    (id: string) => setPendingDeleteId(id),
-    [],
-  );
+  const requestDelete = useCallback((id: string) => setPendingDeleteId(id), []);
   const confirmDelete = useCallback(async () => {
     const id = pendingDeleteId;
     if (!id) return;
@@ -464,19 +461,22 @@ export function Sidebar() {
     [],
   );
 
-  const deletePendingWorkspace = useCallback(async (force?: boolean) => {
-    const pending = pendingWorkspaceDelete;
-    if (!pending) return;
-    setPendingWorkspaceDelete(null);
-    try {
-      await deleteWorkspace(pending.workspace.id, {
-        force: force ?? pending.force,
-        deleteBranch: true,
-      });
-    } catch (err) {
-      setFormError(messageOf(err));
-    }
-  }, [deleteWorkspace, pendingWorkspaceDelete]);
+  const deletePendingWorkspace = useCallback(
+    async (force?: boolean) => {
+      const pending = pendingWorkspaceDelete;
+      if (!pending) return;
+      setPendingWorkspaceDelete(null);
+      try {
+        await deleteWorkspace(pending.workspace.id, {
+          force: force ?? pending.force,
+          deleteBranch: true,
+        });
+      } catch (err) {
+        setFormError(messageOf(err));
+      }
+    },
+    [deleteWorkspace, pendingWorkspaceDelete],
+  );
   const confirmWorkspaceDelete = useCallback(async () => {
     await deletePendingWorkspace();
   }, [deletePendingWorkspace]);
@@ -496,10 +496,7 @@ export function Sidebar() {
     [updateSession],
   );
 
-  const cancelPendingDelete = useCallback(
-    () => setPendingDeleteId(null),
-    [],
-  );
+  const cancelPendingDelete = useCallback(() => setPendingDeleteId(null), []);
   const cancelPendingWorkspaceDelete = useCallback(
     () => setPendingWorkspaceDelete(null),
     [],
@@ -662,7 +659,8 @@ export function Sidebar() {
                         key={group.name}
                         group={group}
                         expanded={
-                          expandedByRepo[group.name] ?? defaultRepoExpanded(group)
+                          expandedByRepo[group.name] ??
+                          defaultRepoExpanded(group)
                         }
                         newSessionRepoName={newSessionFor}
                         renamingRepoName={renamingRepoName}
@@ -780,7 +778,9 @@ export function Sidebar() {
               ? "This removes the Git worktree, deletes the Sulion branch, and discards uncommitted changes and unmerged commits."
               : "This removes the Git worktree and deletes the Sulion branch if Git can verify the branch is merged."
           }
-          confirmLabel={pendingWorkspaceDelete.force ? "Force delete" : "Delete"}
+          confirmLabel={
+            pendingWorkspaceDelete.force ? "Force delete" : "Delete"
+          }
           secondaryConfirmLabel={
             pendingWorkspaceDelete.force ? undefined : "Force delete"
           }
@@ -788,7 +788,9 @@ export function Sidebar() {
           secondaryDestructive
           onConfirm={confirmWorkspaceDelete}
           onSecondaryConfirm={
-            pendingWorkspaceDelete.force ? undefined : confirmWorkspaceForceDelete
+            pendingWorkspaceDelete.force
+              ? undefined
+              : confirmWorkspaceForceDelete
           }
           onCancel={cancelPendingWorkspaceDelete}
         />
@@ -882,13 +884,22 @@ function groupByRepo(
   for (const g of byName.values()) {
     g.sessions.sort(sessionCompare);
     g.workspaces.sort(workspaceCompare);
-    g.plans.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+    g.plans.sort(
+      (a, b) =>
+        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+    );
   }
-  return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
+  return Array.from(byName.values()).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
 }
 
 function defaultRepoExpanded(group: RepoGroupData): boolean {
-  return group.sessions.length > 0 || group.workspaces.length > 0 || group.plans.length > 0;
+  return (
+    group.sessions.length > 0 ||
+    group.workspaces.length > 0 ||
+    group.plans.length > 0
+  );
 }
 
 function sessionCompare(a: SessionView, b: SessionView): number {
@@ -991,7 +1002,9 @@ function MetaRepoGroup({
           </span>
           <Icon name="layers" size={12} />
           <span className="sidebar__meta-name">{metaRepo.name}</span>
-          <span className="sidebar__group-count">{metaRepo.members.length}</span>
+          <span className="sidebar__group-count">
+            {metaRepo.members.length}
+          </span>
         </button>
         <Tooltip label={`New session in ${metaRepo.name}`}>
           <button
@@ -1029,7 +1042,9 @@ function MetaRepoGroup({
         <div className="sidebar__meta-body">
           {(newSessionOpen || sessions.length > 0) && (
             <div className="sidebar__meta-sessions">
-              <div className="sidebar__ungrouped-label">Collection sessions</div>
+              <div className="sidebar__ungrouped-label">
+                Collection sessions
+              </div>
               {newSessionOpen && (
                 <NewSessionForm
                   repoName={metaRepo.primary_repo_name ?? metaRepo.name}
@@ -1086,10 +1101,7 @@ interface RepoGroupRepoOps {
 
 interface RepoGroupWorkspaceOps {
   onResumeWorkspace: (workspace: WorkspaceView) => void | Promise<void>;
-  onRequestDeleteWorkspace: (
-    workspace: WorkspaceView,
-    force?: boolean,
-  ) => void;
+  onRequestDeleteWorkspace: (workspace: WorkspaceView, force?: boolean) => void;
 }
 
 /** Base handlers — stable at the parent level and curried per-repo by
@@ -1158,13 +1170,11 @@ function RepoGroup({
   );
   const newSessionOpen = newSessionRepoName === group.name;
   const newSessionOnStart = useCallback(
-    () =>
-      setNewSessionFor((prev) => (prev === group.name ? null : group.name)),
+    () => setNewSessionFor((prev) => (prev === group.name ? null : group.name)),
     [setNewSessionFor, group.name],
   );
   const newSessionOnSubmit = useCallback(
-    (form: NewSessionFormValue) =>
-      createSession(group.name, form),
+    (form: NewSessionFormValue) => createSession(group.name, form),
     [createSession, group.name],
   );
   const newSessionOnCancel = useCallback(
@@ -1255,6 +1265,8 @@ function RepoGroup({
     return max > 0 ? max : null;
   }, [group.sessions]);
   const staleness = stalenessFor(git, latestEventAt);
+  const webUrl = git?.web_url ?? null;
+  const ciRunUrl = git?.ci?.run_url ?? null;
   const onRepoContextMenu = useMemo(
     () =>
       contextMenuHandler(openCtx, () => [
@@ -1288,6 +1300,24 @@ function RepoGroup({
         { kind: "separator" as const },
         {
           kind: "item" as const,
+          id: "go-to-repo",
+          label: "Go to repo",
+          disabled: !webUrl,
+          onSelect: () => openExternal(webUrl),
+        },
+        ...(ciRunUrl
+          ? [
+              {
+                kind: "item" as const,
+                id: "open-ci-run",
+                label: "Open latest CI run",
+                onSelect: () => openExternal(ciRunUrl),
+              },
+            ]
+          : []),
+        { kind: "separator" as const },
+        {
+          kind: "item" as const,
           id: "rename-repo",
           label: "Rename repo",
           disabled: !group.exists,
@@ -1302,7 +1332,16 @@ function RepoGroup({
           onSelect: requestRepoDelete,
         },
       ]),
-    [openCtx, openTab, group.name, group.exists, requestRepoDelete, startRepoRename],
+    [
+      openCtx,
+      openTab,
+      group.name,
+      group.exists,
+      requestRepoDelete,
+      startRepoRename,
+      webUrl,
+      ciRunUrl,
+    ],
   );
 
   return (
@@ -1333,6 +1372,9 @@ function RepoGroup({
               <Icon name="chevron-right" size={12} />
             </span>
             <span className="sidebar__group-name">{group.name}</span>
+            {git?.ci && (
+              <RepoCiChip ci={git.ci} branch={git.branch} age={relativeAge} />
+            )}
             {git && <RepoBadge git={git} staleness={staleness} />}
           </button>
         )}
@@ -1368,11 +1410,7 @@ function RepoGroup({
               </button>
             ) : null}
             {group.plans.map((plan) => (
-              <PlanRow
-                key={plan.id}
-                plan={plan}
-                onOpen={openPlans}
-              />
+              <PlanRow key={plan.id} plan={plan} onOpen={openPlans} />
             ))}
           </Subsection>
 
@@ -1438,7 +1476,11 @@ function RepoGroup({
             ))}
           </Subsection>
 
-          <Subsection label="Files" open={subOpen.files} onToggle={toggleFilesSub}>
+          <Subsection
+            label="Files"
+            open={subOpen.files}
+            onToggle={toggleFilesSub}
+          >
             {subOpen.files && (
               <FileTree
                 repoName={group.name}
@@ -1495,7 +1537,7 @@ function PlanRow({
       <span className="sidebar__plan-phase">
         {plan.blocked_phases > 0
           ? `${plan.blocked_phases} blocked`
-          : plan.current_phase_title ?? plan.status}
+          : (plan.current_phase_title ?? plan.status)}
       </span>
     </button>
   );
@@ -1534,9 +1576,7 @@ function Subsection({
             <Icon name="chevron-right" size={12} />
           </span>
           <span className="sidebar__sub-label">{label}</span>
-          {count != null && (
-            <span className="sidebar__sub-count">{count}</span>
-          )}
+          {count != null && <span className="sidebar__sub-count">{count}</span>}
         </button>
         {rightSlot}
       </div>
@@ -1733,16 +1773,17 @@ function FileTree({
   onError: (message: string | null) => void;
   revealRequest: { repo: string; path: string; nonce: number } | null;
 }) {
-  const { state, loadDir, hardRefresh, setShowAll, expandPath, loadDirty } = useRepos(
-    useShallow((store) => ({
-      state: store.repos[repoName],
-      loadDir: store.loadDir,
-      hardRefresh: store.hardRefresh,
-      setShowAll: store.setShowAll,
-      expandPath: store.expandPath,
-      loadDirty: store.loadDirty,
-    })),
-  );
+  const { state, loadDir, hardRefresh, setShowAll, expandPath, loadDirty } =
+    useRepos(
+      useShallow((store) => ({
+        state: store.repos[repoName],
+        loadDir: store.loadDir,
+        hardRefresh: store.hardRefresh,
+        setShowAll: store.setShowAll,
+        expandPath: store.expandPath,
+        loadDirty: store.loadDirty,
+      })),
+    );
 
   useEffect(() => {
     if (state?.tree[""] === undefined) {
@@ -1954,7 +1995,8 @@ function TreeRow({
           kind: "item",
           id: "open-diff",
           label: "Open diff",
-          onSelect: () => appCommands.openDiff({ repo: repoName, path: fullPath }),
+          onSelect: () =>
+            appCommands.openDiff({ repo: repoName, path: fullPath }),
         });
       }
       items.push({ kind: "separator" });
@@ -2060,10 +2102,7 @@ function TreeRow({
 
   const childEntries = state?.tree[fullPath];
 
-  const rowStyle = useMemo(
-    () => ({ paddingLeft: 4 + depth * 12 }),
-    [depth],
-  );
+  const rowStyle = useMemo(() => ({ paddingLeft: 4 + depth * 12 }), [depth]);
   const tooltip = liveDirty ? `${liveDirty.trim()} ${fullPath}` : fullPath;
   return (
     <li className="sidebar__tree-item">
@@ -2165,7 +2204,9 @@ function GitPanel({ git }: { git: RepoGitSummary | null }) {
           <div className="sidebar__git-age">
             last commit · {relativeAge(git.last_commit.committed_at)}
           </div>
-          <div className="sidebar__git-subject">"{git.last_commit.subject}"</div>
+          <div className="sidebar__git-subject">
+            "{git.last_commit.subject}"
+          </div>
         </div>
       ) : (
         <div className="sidebar__muted">no commits yet</div>
@@ -2380,7 +2421,8 @@ function SessionRow({
     void upgradeSession(s.id).catch(() => undefined);
   }, [upgradeSession, s.id]);
   const updateThis = useCallback(
-    (patch: Parameters<SessionRowProps["onUpdate"]>[1]) => onUpdate(s.id, patch),
+    (patch: Parameters<SessionRowProps["onUpdate"]>[1]) =>
+      onUpdate(s.id, patch),
     [onUpdate, s.id],
   );
   const startRenaming = useCallback(() => setRenaming(true), []);
@@ -2452,7 +2494,9 @@ function SessionRow({
     if (s.state === "orphaned") return "orphaned";
     if (s.state === "deleted") return "—";
     if (!s.current_session_uuid) {
-      return s.current_session_agent ? `${s.current_session_agent} starting` : "starting";
+      return s.current_session_agent
+        ? `${s.current_session_agent} starting`
+        : "starting";
     }
     const agent = s.current_session_agent ?? "session";
     return `${agent} ${s.current_session_uuid.slice(0, 6)}`;
@@ -2578,7 +2622,9 @@ function SessionRow({
                 aria-label={`${s.future_prompts_pending_count} queued future prompt${s.future_prompts_pending_count === 1 ? "" : "s"}`}
               >
                 <Icon name="list-checks" size={12} />
-                <span className="tabular">{s.future_prompts_pending_count}</span>
+                <span className="tabular">
+                  {s.future_prompts_pending_count}
+                </span>
               </span>
             )}
             {unread && !selected && (
@@ -2693,24 +2739,24 @@ function MetaRepoForm({
     (event: React.ChangeEvent<HTMLInputElement>) => setName(event.target.value),
     [],
   );
-  const toggleMember = useCallback(
-    (repoName: string, selected: boolean) => {
-      setMembers((current) => {
-        if (selected) {
-          if (current.includes(repoName)) return current;
-          if (current.length === 0) setPrimary(repoName);
-          return [...current, repoName].sort((a, b) => a.localeCompare(b));
-        }
-        const next = current.filter((member) => member !== repoName);
-        setPrimary((currentPrimary) =>
-          currentPrimary === repoName ? (next[0] ?? "") : currentPrimary,
-        );
-        return next;
-      });
-    },
+  const toggleMember = useCallback((repoName: string, selected: boolean) => {
+    setMembers((current) => {
+      if (selected) {
+        if (current.includes(repoName)) return current;
+        if (current.length === 0) setPrimary(repoName);
+        return [...current, repoName].sort((a, b) => a.localeCompare(b));
+      }
+      const next = current.filter((member) => member !== repoName);
+      setPrimary((currentPrimary) =>
+        currentPrimary === repoName ? (next[0] ?? "") : currentPrimary,
+      );
+      return next;
+    });
+  }, []);
+  const selectPrimary = useCallback(
+    (repoName: string) => setPrimary(repoName),
     [],
   );
-  const selectPrimary = useCallback((repoName: string) => setPrimary(repoName), []);
   const cancelOnEscape = useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
       if (event.key === "Escape") onCancel();
@@ -2879,8 +2925,9 @@ function NewSessionForm({
 }) {
   const [workingDir, setWorkingDir] = useState("");
   const [launchAgent, setLaunchAgent] = useState<AgentLaunchType | "">("");
-  const [workspaceMode, setWorkspaceMode] =
-    useState<NewSessionFormValue["workspace_mode"]>(mainOnly ? "main" : "isolated");
+  const [workspaceMode, setWorkspaceMode] = useState<
+    NewSessionFormValue["workspace_mode"]
+  >(mainOnly ? "main" : "isolated");
   const submit = useCallback(
     (e: FormEvent) => {
       e.preventDefault();
@@ -2960,6 +3007,10 @@ function NewSessionForm({
 
 function ageSince(iso: string): string {
   return relativeAge(iso);
+}
+
+function openExternal(url: string | null) {
+  if (url) window.open(url, "_blank", "noopener,noreferrer");
 }
 
 function relativeAge(iso: string): string {

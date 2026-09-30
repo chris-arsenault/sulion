@@ -21,6 +21,8 @@ pub struct Commit {
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct GitStatus {
     pub branch: Option<String>,
+    /// Fetch URL of the `origin` remote, as configured.
+    pub origin_url: Option<String>,
     pub uncommitted_count: usize,
     pub untracked_count: usize,
     pub last_commit: Option<Commit>,
@@ -57,6 +59,7 @@ fn read_status_blocking(repo_path: &Path) -> anyhow::Result<GitStatus> {
     }
 
     status.branch = current_branch(repo_path)?;
+    status.origin_url = origin_url(repo_path)?;
 
     let porcelain = run_git(repo_path, &["status", "--porcelain=v1", "-z"])?;
     parse_porcelain(&porcelain, &mut status);
@@ -73,6 +76,29 @@ fn current_branch(repo_path: &Path) -> anyhow::Result<Option<String>> {
     let out = run_git(repo_path, &["branch", "--show-current"])?;
     let s = String::from_utf8_lossy(&out).trim().to_string();
     Ok(if s.is_empty() { None } else { Some(s) })
+}
+
+fn origin_url(repo_path: &Path) -> anyhow::Result<Option<String>> {
+    let out = run_git(repo_path, &["remote", "get-url", "origin"])?;
+    let s = String::from_utf8_lossy(&out).trim().to_string();
+    Ok(if s.is_empty() {
+        None
+    } else {
+        Some(without_userinfo(&s))
+    })
+}
+
+/// Drop `user[:token]@` from a URL-form remote so embedded credentials are
+/// never persisted. scp-form remotes (`git@host:path`) carry no secret.
+fn without_userinfo(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    match authority.rsplit_once('@') {
+        Some((_, host)) => format!("{scheme}://{host}/{path}"),
+        None => url.to_string(),
+    }
 }
 
 fn run_git(repo_path: &Path, args: &[&str]) -> anyhow::Result<Vec<u8>> {
@@ -304,6 +330,26 @@ pub async fn stage_path(repo_path: PathBuf, rel: String, stage: bool) -> anyhow:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn origin_url_drops_embedded_credentials() {
+        assert_eq!(
+            without_userinfo("https://x-access-token:secret@github.com/o/r.git"),
+            "https://github.com/o/r.git"
+        );
+        assert_eq!(
+            without_userinfo("ssh://git@github.com/o/r.git"),
+            "ssh://github.com/o/r.git"
+        );
+        assert_eq!(
+            without_userinfo("git@github.com:o/r.git"),
+            "git@github.com:o/r.git"
+        );
+        assert_eq!(
+            without_userinfo("https://github.com/o/r"),
+            "https://github.com/o/r"
+        );
+    }
 
     #[test]
     fn porcelain_parse_basic() {

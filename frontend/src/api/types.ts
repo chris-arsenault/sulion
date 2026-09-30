@@ -817,6 +817,18 @@ export interface RepoGitSummary {
   recent_commits: GitCommit[];
   refreshing: boolean;
   status_error: string | null;
+  /** GitHub page for the origin remote; null for other hosts. */
+  web_url?: string | null;
+  ci?: RepoCiStatus | null;
+}
+
+export type RepoCiState = "failed" | "in_progress" | "succeeded";
+
+/** Latest GitHub Actions run on the checked-out branch (public repos). */
+export interface RepoCiStatus {
+  state: RepoCiState;
+  updated_at: string;
+  run_url: string;
 }
 
 export interface RepoDirtyPathsResponse {

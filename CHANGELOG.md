@@ -4,6 +4,13 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Repository links and CI status
+
+- The repo context menu offers **Go to repo**, which opens the GitHub page for
+  the `origin` remote in a new tab, and **Open latest CI run**.
+- Public GitHub repos show the latest Actions run on the checked-out branch
+  (succeeded, failed, or in progress) with its age beside the branch badge.
+
 ### Repository secrets
 
 - Secret menus offer **Always for this repository** for access without an expiry.

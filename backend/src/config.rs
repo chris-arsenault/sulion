@@ -195,6 +195,12 @@ impl AuthConfig {
     }
 }
 
+fn dirs_home() -> PathBuf {
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/home/sulion"))
+}
+
 #[cfg(test)]
 mod auth_tests {
     use super::AuthConfig;
@@ -232,10 +238,4 @@ mod auth_tests {
         .unwrap()
         .is_some());
     }
-}
-
-fn dirs_home() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/home/sulion"))
 }
