@@ -56,17 +56,14 @@ moved {
   from = module.edge.aws_lb_listener_rule.this["4"]
   to   = aws_lb_listener_rule.browser_auth
 }
-moved {
-  from = module.edge.aws_lb_listener_rule.this["5"]
-  to   = aws_lb_listener_rule.public_paths["178"]
-}
 
-# Denial precedes every forward, including the unauthenticated static catch-all.
+# Machine routes under the authenticated prefixes are denied before JWT
+# validation. Paths outside every rule, such as /retrieval, fall through to the
+# shared listener's 404 default.
 resource "aws_lb_listener_rule" "private_paths" {
   for_each = {
-    "172" = ["/broker/v1/auth/*", "/retrieval", "/retrieval/*"]
     "173" = ["/api/devices/*", "/api/repos/*/ingest", "/api/repos/*/raw"]
-    "174" = ["/broker/v1/use", "/broker/v1/pty-credentials", "/broker/v1/pty-credentials/*"]
+    "174" = ["/broker/v1/auth/*", "/broker/v1/use", "/broker/v1/pty-credentials", "/broker/v1/pty-credentials/*"]
   }
   listener_arn = module.ctx.alb.listener_arn
   priority     = tonumber(each.key)
@@ -97,11 +94,13 @@ module "edge" {
   routes = []
 }
 
+# Unauthenticated forwards are an allowlist: the SPA shell and its build output,
+# the ticket-authenticated WebSocket and health. The SPA routes by query string,
+# so no client-side paths need forwarding.
 resource "aws_lb_listener_rule" "public_paths" {
   for_each = {
-    "175" = ["/ws/*"]
-    "176" = ["/health"]
-    "178" = ["/*"]
+    "175" = ["/ws/*", "/health", "/assets/*"]
+    "176" = ["/", "/index.html", "/config.js", "/favicon.svg"]
   }
   listener_arn = module.ctx.alb.listener_arn
   priority     = tonumber(each.key)

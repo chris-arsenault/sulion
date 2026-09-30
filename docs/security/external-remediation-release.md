@@ -14,14 +14,15 @@ only the retained security gates.
 2. After publication authorization, use the existing CI/CD pipeline for Terraform
    planning/application and deployment. It already holds the required AWS identity;
    terminal AWS access is not a prerequisite. Review its Terraform output for
-   shared listener priorities 172–178 and resource moves against deployed state.
-   Static validation cannot establish that these priorities are free or that
-   state matches the source.
+   resource moves against deployed state. Sulion reuses only its existing
+   listener priorities 173–177 and releases 178. The public edge forwards an
+   allowlist; every other path reaches the shared listener's 404 default.
 3. The shared workflow applies Sulion's Terraform before its TrueNAS image
    deployment, closing obsolete device and machine paths before backend/database
    retirement. The Cognito client move preserves
    its existing resource identity and changes token lifetimes; it must not
-   recreate the client. Listener moves preserve the six existing rule resources.
+   recreate the client. Listener moves preserve five existing rule resources and
+   remove the former `/*` catch-all.
    The edge module stays pinned at `7891b157df1cb83167eef2c9dfd8a25a6013cb75`;
    Sulion owns its claim conditions and path rules directly so this release
    does not require publishing a shared-module change.
