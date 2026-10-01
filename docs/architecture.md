@@ -133,8 +133,11 @@ Correlation and activity reporting are best-effort — hook failure is silent;
 the JSONL still ingests.
 
 Codex correlation comes from the launcher's process scan, including the
-per-session thread-writer lock opened at startup and writable rollout handles.
-Fugu uses the same path. Read-only history browsing must not rebind the PTY.
+per-session thread-writer lock acquired at startup and writable rollout handles.
+Lock candidates must carry an exclusive flock owned by the scanned process;
+the scan waits while that process holds the startup cleanup coordination lock.
+Historical lock probes and read-only history browsing must not rebind the PTY.
+Fugu uses the same path.
 
 ### Compaction
 

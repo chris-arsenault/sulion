@@ -185,7 +185,8 @@ pub fn detect_rollout_session_uuid_in_launched_process(
 /// run, while the rollout file itself is only held open once the first turn
 /// is written. Since the timeline input waits for correlation before it
 /// accepts a prompt, the rollout alone would never arrive; the lock is the
-/// signal that exists at startup.
+/// signal that exists at startup. Cleanup also opens historical locks, so
+/// only acquired locks observed outside coordinated cleanup identify a thread.
 fn thread_writer_lock_dir(sessions_dir: &Path) -> Option<PathBuf> {
     sessions_dir
         .parent()
@@ -196,6 +197,7 @@ fn detect_rollout_session_uuid_in_pid(pid: u32, sessions_dir: &Path) -> Option<U
     let fd_dir = PathBuf::from(format!("/proc/{pid}/fd"));
     let entries = std::fs::read_dir(fd_dir).ok()?;
     let lock_dir = thread_writer_lock_dir(sessions_dir);
+    let mut detected = None;
     for entry in entries.flatten() {
         let Ok(target) = std::fs::read_link(entry.path()) else {
             continue;
@@ -206,30 +208,51 @@ fn detect_rollout_session_uuid_in_pid(pid: u32, sessions_dir: &Path) -> Option<U
         if !target.starts_with(sessions_dir) && !in_lock_dir {
             continue;
         }
-        // Codex opens *its own* session's rollout for writing (append), but its
-        // resume/history picker opens *other* projects' rollouts read-only. The
-        // sessions dir is shared across every project, so a read-only peek at an
-        // unrelated session must not become this PTY's binding. Only the
-        // writable fd identifies the session Codex is actually recording.
-        if !fd_is_writable(pid, &entry.file_name()) {
+        let Some(info) = fd_info(pid, &entry.file_name()) else {
+            continue;
+        };
+        // History rollouts are read-only; cleanup lock probes are writable
+        // even when another process owns the lock.
+        if !fd_is_writable(&info) {
             continue;
         }
-        if let Some(uuid) = crate::ingest::parse_codex_session_uuid(&target) {
-            return Some(uuid);
+        if in_lock_dir {
+            if !fd_owns_exclusive_flock(pid, &info) {
+                continue;
+            }
+            // Cleanup can acquire abandoned historical locks before deleting
+            // them. Scan every descriptor before accepting a candidate because
+            // the coordination lock may have a higher descriptor number.
+            if target.file_name() == Some(OsStr::new(".coordination.lock")) {
+                return None;
+            }
+        }
+        if detected.is_none() {
+            if let Some(uuid) = crate::ingest::parse_codex_session_uuid(&target) {
+                detected = Some((entry.path(), target, uuid, in_lock_dir));
+            }
         }
     }
-    None
+    let (fd_path, target, uuid, in_lock_dir) = detected?;
+    // A cleanup descriptor may close while the scan advances to the
+    // coordination descriptor. Recheck the candidate before binding once.
+    if std::fs::read_link(&fd_path).ok().as_ref() != Some(&target) {
+        return None;
+    }
+    let info = fd_info(pid, fd_path.file_name()?)?;
+    if !fd_is_writable(&info) || (in_lock_dir && !fd_owns_exclusive_flock(pid, &info)) {
+        return None;
+    }
+    Some(uuid)
 }
 
-/// Whether `/proc/<pid>/fd/<fd>` was opened with write access (O_WRONLY or
-/// O_RDWR), read from the `flags:` line of `/proc/<pid>/fdinfo/<fd>` (octal).
-fn fd_is_writable(pid: u32, fd_name: &OsStr) -> bool {
-    let Some(fd) = fd_name.to_str() else {
-        return false;
-    };
-    let Ok(info) = std::fs::read_to_string(format!("/proc/{pid}/fdinfo/{fd}")) else {
-        return false;
-    };
+fn fd_info(pid: u32, fd_name: &OsStr) -> Option<String> {
+    let fd = fd_name.to_str()?;
+    std::fs::read_to_string(format!("/proc/{pid}/fdinfo/{fd}")).ok()
+}
+
+/// Write access (O_WRONLY or O_RDWR) from fdinfo's octal `flags:` line.
+fn fd_is_writable(info: &str) -> bool {
     for line in info.lines() {
         if let Some(rest) = line.strip_prefix("flags:") {
             // O_ACCMODE = 0o3: O_RDONLY=0, O_WRONLY=1, O_RDWR=2.
@@ -239,6 +262,21 @@ fn fd_is_writable(pid: u32, fd_name: &OsStr) -> bool {
         }
     }
     false
+}
+
+/// fdinfo reports acquired locks on this descriptor, including their owner.
+/// An inherited lock owned by another process is not this process's thread.
+fn fd_owns_exclusive_flock(pid: u32, info: &str) -> bool {
+    info.lines()
+        .filter_map(|line| line.strip_prefix("lock:"))
+        .any(|lock| {
+            let mut fields = lock.split_whitespace();
+            fields.next(); // lock number
+            fields.next() == Some("FLOCK")
+                && fields.next() == Some("ADVISORY")
+                && fields.next() == Some("WRITE")
+                && fields.next().and_then(|owner| owner.parse::<u32>().ok()) == Some(pid)
+        })
 }
 
 fn process_has_launch_id(pid: u32, launch_id: Uuid) -> bool {
@@ -278,6 +316,7 @@ fn child_pids(pid: u32) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::fd::AsRawFd;
     use std::process::Command as StdCommand;
 
     #[test]
@@ -387,41 +426,98 @@ wait "$child"
 
         let session_uuid = Uuid::new_v4();
         let lock_path = lock_dir.join(format!("{session_uuid}.lock"));
-        std::fs::write(&lock_path, "").unwrap();
-
-        let codex_script = tmp.path().join("codex");
-        std::fs::write(
-            &codex_script,
-            r#"#!/bin/sh
-exec 4<>"$1"
-printf "ready\n"
-sleep 5
-"#,
-        )
-        .unwrap();
-        make_executable(&codex_script);
-
-        let mut child = spawn_script(
-            StdCommand::new(&codex_script)
-                .arg(&lock_path)
-                .env(LAUNCH_ID_ENV, launch_id.to_string())
-                .stdout(std::process::Stdio::piped()),
-        );
-
-        let mut stdout = child.stdout.take().unwrap();
-        let mut buf = [0u8; 6];
-        std::io::Read::read_exact(&mut stdout, &mut buf).unwrap();
+        let lock = open_lock(&lock_path);
+        acquire_lock(&lock, libc::LOCK_EX);
 
         let detected = detect_rollout_session_uuid_in_launched_process(
-            child.id(),
+            std::process::id(),
             &sessions_dir,
             launch_id,
             Duration::ZERO,
         );
         assert_eq!(detected, Some(session_uuid));
+    }
 
-        let _ = child.kill();
-        let _ = child.wait();
+    #[test]
+    fn ignores_unowned_and_shared_thread_writer_locks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions_dir = tmp.path().join("sessions");
+        let lock_dir = tmp.path().join("thread-writer-locks");
+        std::fs::create_dir_all(&lock_dir).unwrap();
+        let session_uuid = Uuid::new_v4();
+        let lock = open_lock(&lock_dir.join(format!("{session_uuid}.lock")));
+        let pid = std::process::id();
+
+        assert_eq!(detect_rollout_session_uuid_in_pid(pid, &sessions_dir), None);
+        acquire_lock(&lock, libc::LOCK_SH);
+        assert_eq!(detect_rollout_session_uuid_in_pid(pid, &sessions_dir), None);
+        acquire_lock(&lock, libc::LOCK_EX);
+        assert_eq!(
+            detect_rollout_session_uuid_in_pid(pid, &sessions_dir),
+            Some(session_uuid)
+        );
+    }
+
+    #[test]
+    fn ignores_busy_historical_lock_opened_during_cleanup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions_dir = tmp.path().join("sessions");
+        let lock_dir = tmp.path().join("thread-writer-locks");
+        std::fs::create_dir_all(&lock_dir).unwrap();
+        let historical_path = lock_dir.join(format!("{}.lock", Uuid::new_v4()));
+        let mut holder = StdCommand::new("flock")
+            .arg("--exclusive")
+            .arg(&historical_path)
+            .args(["sh", "-c", "printf 'ready\\n'; sleep 5"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = [0u8; 6];
+        std::io::Read::read_exact(&mut holder.stdout.take().unwrap(), &mut ready).unwrap();
+
+        let historical = open_lock(&historical_path);
+        // The writable descriptor exists even though this process cannot own
+        // the lock, matching Codex's check of another live thread at startup.
+        let result = unsafe { libc::flock(historical.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        assert_eq!(result, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EAGAIN)
+        );
+        let active_uuid = Uuid::new_v4();
+        let active = open_lock(&lock_dir.join(format!("{active_uuid}.lock")));
+        acquire_lock(&active, libc::LOCK_EX);
+        let detected = detect_rollout_session_uuid_in_pid(std::process::id(), &sessions_dir);
+
+        kill_children(holder.id());
+        let _ = holder.kill();
+        let _ = holder.wait();
+        assert_eq!(detected, Some(active_uuid));
+    }
+
+    #[test]
+    fn waits_for_coordinated_cleanup_before_accepting_owned_thread_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions_dir = tmp.path().join("sessions");
+        let lock_dir = tmp.path().join("thread-writer-locks");
+        std::fs::create_dir_all(&lock_dir).unwrap();
+        let historical = open_lock(&lock_dir.join(format!("{}.lock", Uuid::new_v4())));
+        acquire_lock(&historical, libc::LOCK_EX);
+        let coordination = open_lock(&lock_dir.join(".coordination.lock"));
+        acquire_lock(&coordination, libc::LOCK_EX);
+        let pid = std::process::id();
+        assert_eq!(detect_rollout_session_uuid_in_pid(pid, &sessions_dir), None);
+
+        drop(historical);
+        let active_uuid = Uuid::new_v4();
+        let active = open_lock(&lock_dir.join(format!("{active_uuid}.lock")));
+        acquire_lock(&active, libc::LOCK_EX);
+        assert_eq!(detect_rollout_session_uuid_in_pid(pid, &sessions_dir), None);
+        drop(coordination);
+        assert_eq!(
+            detect_rollout_session_uuid_in_pid(pid, &sessions_dir),
+            Some(active_uuid)
+        );
     }
 
     #[test]
@@ -534,6 +630,21 @@ sleep 5
         let mut perms = std::fs::metadata(path).unwrap().permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(path, perms).unwrap();
+    }
+
+    fn open_lock(path: &Path) -> std::fs::File {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap()
+    }
+
+    fn acquire_lock(file: &std::fs::File, mode: libc::c_int) {
+        let result = unsafe { libc::flock(file.as_raw_fd(), mode | libc::LOCK_NB) };
+        assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
     }
 
     /// Spawn a script this test just wrote. Tests run in parallel threads,

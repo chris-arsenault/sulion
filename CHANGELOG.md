@@ -28,6 +28,8 @@ All notable user-visible changes to Sulion are recorded here.
 
 ### Timeline loading
 
+- New Codex sessions ignore historical thread locks checked during startup
+  cleanup, keeping the terminal timeline on the active conversation.
 - Turn details arrive in batches and resume interrupted loads. Cached turns show
   immediately on revisit; display filters no longer reload the full turn.
 - Live updates coalesce into incremental reads, including late tool results and
