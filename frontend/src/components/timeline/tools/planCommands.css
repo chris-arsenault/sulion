@@ -1,0 +1,52 @@
+.tr-plans {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.tr-plan {
+  border-left: 2px solid var(--cat-plan);
+  background: var(--canvas-2);
+  padding: 8px 12px;
+  overflow-wrap: anywhere;
+}
+
+.tr-plan__heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 6px;
+}
+
+.tr-plan__action {
+  color: var(--cat-plan);
+  font-family: var(--font-mono);
+}
+
+.tr-plan__fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.tr-plan__fields dt,
+.tr-plan__items > span {
+  color: var(--text-lo);
+}
+
+.tr-plan__fields dd {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.tr-plan__items,
+.tr-plan__phases {
+  margin-top: 8px;
+}
+
+.tr-plan__items ul,
+.tr-plan__phases {
+  padding-left: 20px;
+  margin-bottom: 0;
+}

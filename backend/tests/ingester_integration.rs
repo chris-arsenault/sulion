@@ -32,6 +32,9 @@ mod incremental_workload;
 #[path = "ingester_integration/harness_compatibility.rs"]
 mod harness_compatibility;
 
+#[path = "ingester_integration/plan_commands.rs"]
+mod plan_commands;
+
 fn test_db_url() -> Option<String> {
     std::env::var("SULION_TEST_DB").ok()
 }

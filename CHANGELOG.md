@@ -28,6 +28,10 @@ All notable user-visible changes to Sulion are recorded here.
 
 ### Timeline loading
 
+- Recorded `sulion plan` commands have a **plans** filter, distinct badges and
+  styling, and parsed action, phase, status, title, note, and guidance details.
+  Retained history is enriched in place on upgrade. Mixed command cells keep
+  their existing category and show the plan metadata alongside other work.
 - New Codex sessions ignore historical thread locks checked during startup
   cleanup, keeping the terminal timeline on the active conversation.
 - Turn details arrive in batches and resume interrupted loads. Cached turns show

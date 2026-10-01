@@ -19,6 +19,7 @@ use super::timeline::{
 
 mod file_trace;
 mod filters;
+pub(crate) mod plan_commands;
 mod store;
 pub mod stream;
 mod view;

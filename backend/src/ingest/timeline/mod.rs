@@ -8,6 +8,7 @@
 mod events;
 mod file_touches;
 mod load;
+pub(crate) mod plan_commands;
 pub(crate) mod reduce;
 mod render;
 mod runtime;

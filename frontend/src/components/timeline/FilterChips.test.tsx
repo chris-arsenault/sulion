@@ -54,6 +54,16 @@ describe("FilterChips — exclusion UI", () => {
     expect(parsed.hiddenSpeakers).toContain("user");
   });
 
+  it("persists the separate plans filter", async () => {
+    render(<Host />);
+    const chip = screen.getByRole("button", { name: /^plans$/i });
+    expect(chip.className).toContain("fc__chip--plan");
+    await userEvent.setup().click(chip);
+    expect(chip.getAttribute(ARIA_PRESSED)).toBe("true");
+    const stored = JSON.parse(window.localStorage.getItem("sulion.timeline.filters.v3")!);
+    expect(stored.hiddenOperationCategories).toContain("plan");
+  });
+
   it("Show all button appears when anything is hidden, resets state when clicked", async () => {
     const user = userEvent.setup();
     render(<Host />);

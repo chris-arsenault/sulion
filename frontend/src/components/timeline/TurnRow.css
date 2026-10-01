@@ -135,6 +135,12 @@
   border-color: color-mix(in oklab, var(--info-mark) 25%, transparent);
 }
 
+.tr__badge--plan {
+  background: var(--canvas-3);
+  color: var(--cat-plan);
+  border-color: color-mix(in oklab, var(--cat-plan) 30%, transparent);
+}
+
 .tr__badge--task {
   background: var(--atn-bg);
   color: var(--atn-fg);

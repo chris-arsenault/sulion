@@ -24,6 +24,17 @@ test("walks timeline details, filters, hover cards, and file trace links", async
     if (new URL(request.url()).pathname.endsWith("/stream")) detailRequests.push(request.url());
   });
   const assistant = page.getByTestId("filter-chips").getByRole("button", { name: "assistant", exact: true });
+  const planRow = page.locator('[data-testid="tool-pair-row"][data-tool-type="sulion_plan"]');
+  await expect(planRow).toContainText("phase set · phase 2 · completed");
+  await expect(planRow).toContainText("Timeline checks passed");
+  await expect(planRow).toHaveClass(/td__tool--plan/);
+  await expect(firstTurn).toContainText("plan");
+  const plans = page.getByTestId("filter-chips").getByRole("button", { name: "plans", exact: true });
+  await plans.click();
+  await expect(planRow).toHaveCount(0);
+  await expect(page.locator('[data-testid="tool-pair-row"][data-tool-type="read"]')).toBeVisible();
+  await plans.click();
+  await expect(planRow).toBeVisible();
   await assistant.click();
   await expect(page.getByTestId("tool-pair-row")).toHaveCount(0);
   await expect(page.getByTestId("turn-detail")).toBeVisible();

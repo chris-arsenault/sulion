@@ -135,6 +135,14 @@ const COMPACT_INPUT: &str = "jsonb_strip_nulls(jsonb_build_object(\
     'description', left(input->>'description', 240), 'agent', left(input->>'agent', 240), \
     'pattern', left(input->>'pattern', 240), 'url', left(input->>'url', 240), \
     'query', left(input->>'query', 240), \
+    'plan_commands', (SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object( \
+        'action', left(p->>'action', 80), 'title', left(p->>'title', 160), \
+        'plan_id', left(p->>'plan_id', 36), 'phase', left(p->>'phase', 80), \
+        'status', left(p->>'status', 80), \
+        'phase_count', p->'phase_count')) ORDER BY ord) \
+        FROM jsonb_array_elements(CASE WHEN jsonb_typeof(input->'plan_commands') = 'array' \
+            THEN input->'plan_commands' ELSE '[]'::jsonb END) WITH ORDINALITY AS plans(p, ord) \
+        WHERE ord <= 8), \
     'runtime_items', (SELECT jsonb_agg(jsonb_build_object('runtime_item', jsonb_build_object( \
         'type', e #> '{runtime_item,type}', 'status', e #> '{runtime_item,status}', \
         'exit_code', e #> '{runtime_item,exit_code}'))) \

@@ -8,6 +8,29 @@ They are deliberately not an agent's internal working plan. Agents should keep
 using their native detailed planning mechanism for reasoning, dependencies, and
 implementation steps. A published plan is the smaller user-facing projection.
 
+## Plan commands in the timeline
+
+Recorded `sulion plan` shell invocations have a **plans** operation filter,
+plan badges, and dedicated metadata in turn details and hover cards. Collapsed
+rows show the action, title, phase, and requested status when those arguments
+are literal. Expanded details also show supplied plan IDs, notes, guidance,
+branch anchors, and phase definitions alongside the original command and result.
+Requested status describes the command's input; an error result still means the
+operation failed. Metadata never substitutes the plan's current state.
+
+The projection parses Bash syntax and uses the plan CLI's argument grammar.
+Quoted examples, comments, and function declarations do not become plan calls.
+Shell expansions are not evaluated; dynamic arguments retain only literal
+action information and the raw command. Claude Bash calls, Codex shell calls,
+and literal shell calls inside Code Mode use the same projection. A cell that also performs other operations
+keeps its original category and shows plan metadata in its details, so hiding
+plans does not hide unrelated edits or commands.
+
+On upgrade from timeline version 13, retained historical operation rows gain
+the classification and metadata in place. Turn IDs, items, transcript offsets,
+and unrelated operations stay intact; affected session caches are invalidated.
+Purged sessions retain their frozen digests.
+
 ## Data model
 
 A plan has:

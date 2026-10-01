@@ -9,6 +9,7 @@ import {
 } from "../../common/contextMenuStore";
 import { InlineCodeDiff } from "./inlineCodeDiff";
 import { UnifiedDiff } from "./unifiedDiff";
+import { PlanCommandMetadata } from "./planCommands";
 
 export interface ToolUseSummary {
   id?: string;
@@ -20,6 +21,10 @@ export interface ToolUseSummary {
 }
 
 export function ToolCallRenderer({ tool }: { tool: ToolUseSummary }) {
+  return <><PlanCommandMetadata input={tool.input} /><ToolInputRenderer tool={tool} /></>;
+}
+
+function ToolInputRenderer({ tool }: { tool: ToolUseSummary }) {
   const input = record(tool.input);
   const operationType = tool.operationType ?? tool.name;
   const fileTouches = tool.fileTouches ?? [];

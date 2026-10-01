@@ -548,6 +548,7 @@ export type OperationCategory =
   | "research"
   | "delegate"
   | "workflow"
+  | "plan"
   | "other";
 
 /** One canonical content block. Agent-agnostic: same shape whether

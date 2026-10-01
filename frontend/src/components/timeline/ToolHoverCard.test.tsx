@@ -19,6 +19,17 @@ function pair(overrides: Partial<ToolPair> = {}): ToolPair {
 }
 
 describe("ToolHoverCard", () => {
+  it("styles plan commands and preserves a failed result", () => {
+    render(<ToolHoverCard anchor={document.body} pinned={false} onPin={noop} onClose={noop}
+      pair={pair({ operation_type: "sulion_plan", category: "plan", is_error: true,
+        input: { command: "sulion plan close --completed", plan_commands: [{ action: "close", status: "completed" }] },
+        result: { content: "Plan still has pending phases", is_error: true },
+      })} />);
+    expect(screen.getByTestId("tool-hover-card").className).toContain("thc--plan");
+    expect(screen.getByText("Requested status")).toBeDefined();
+    expect(screen.getByText("Plan still has pending phases")).toBeDefined();
+    expect(screen.getByText("error")).toBeDefined();
+  });
   it("renders tool input and result", () => {
     render(
       <ToolHoverCard

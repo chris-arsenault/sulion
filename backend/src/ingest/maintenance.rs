@@ -37,7 +37,8 @@ const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // session state; every retained session is rebuilt through it.
 // v13: content-creating code cells fail only on their file changes and
 // failed scripts; file edits carry their change status.
-const TIMELINE_PROJECTION_VERSION: i32 = 13;
+// v14: classify recorded plan commands and enrich their operation rows in place.
+const TIMELINE_PROJECTION_VERSION: i32 = 14;
 const USAGE_PROJECTION_KEY: &str = "usage_projection";
 // v2: include Codex per-response usage, including compaction, and retain the
 // legacy prefix before a session first supplies response records.
@@ -159,13 +160,22 @@ async fn repair_timeline_projection_if_behind(
     let job = super::jobs::start(
         pool,
         "timeline_backfill",
-        "Timeline projection rebuild",
+        if current == 13 {
+            "Plan command classification"
+        } else {
+            "Timeline projection rebuild"
+        },
         "sessions",
         None,
     )
     .await
     .ok();
-    match super::projection::backfill_timeline_projection(pool, job.as_ref()).await {
+    let result = if current == 13 {
+        super::projection::plan_commands::backfill(pool).await
+    } else {
+        super::projection::backfill_timeline_projection(pool, job.as_ref()).await
+    };
+    match result {
         Ok(rebuilt) => {
             if let Some(job) = &job {
                 job.complete().await;

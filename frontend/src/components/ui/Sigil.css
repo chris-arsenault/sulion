@@ -47,6 +47,10 @@
 .ui-sigil--cat-delegate {
   color: var(--cat-delegate);
 }
+.ui-sigil--cat-plan {
+  color: var(--cat-plan);
+}
+
 .ui-sigil--cat-workflow {
   color: var(--cat-workflow);
 }

@@ -62,8 +62,10 @@ describe("timeline filters", () => {
       "research",
       "delegate",
       "workflow",
+      "plan",
       "other",
     ]);
     expect(OPERATION_CATEGORY_LABELS.create_content).toBe("create content");
+    expect(OPERATION_CATEGORY_LABELS.plan).toBe("plans");
   });
 });

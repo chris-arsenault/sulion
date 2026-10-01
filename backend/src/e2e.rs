@@ -357,7 +357,7 @@ fn write_claude_transcript(cfg: &SeedConfig) -> anyhow::Result<()> {
     std::fs::create_dir_all(&project_dir)?;
     let path = project_dir.join(format!("{session_uuid}.jsonl"));
 
-    let records = vec![
+    let mut records = vec![
         json!({
             "type": "user",
             "timestamp": "2026-04-20T01:00:00Z",
@@ -477,8 +477,21 @@ fn write_claude_transcript(cfg: &SeedConfig) -> anyhow::Result<()> {
         }),
     ];
 
+    records.extend(plan_transcript_records());
     std::fs::write(path, render_jsonl(&records)).context("write claude transcript")?;
     Ok(())
+}
+
+fn plan_transcript_records() -> [serde_json::Value; 2] {
+    [
+        json!({"type":"assistant","timestamp":"2026-04-20T01:00:07Z","message":{"role":"assistant","content":[{
+            "type":"tool_use","id":"toolu_plan_1","name":"Bash",
+            "input":{"command":"sulion plan phase set 2 completed --note 'Timeline checks passed'"}
+        }]}}),
+        json!({"type":"user","timestamp":"2026-04-20T01:00:08Z","message":{"role":"user","content":[{
+            "type":"tool_result","tool_use_id":"toolu_plan_1","content":"2. [completed] Verify — Timeline checks passed","is_error":false
+        }]}}),
+    ]
 }
 
 fn write_codex_transcripts(cfg: &SeedConfig) -> anyhow::Result<()> {

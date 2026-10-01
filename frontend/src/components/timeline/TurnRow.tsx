@@ -117,7 +117,8 @@ function toolBadges(
   badges: TurnSummary["operation_badges"],
 ): Badge[] {
   return badges.map((badge) => {
-    const name = badge.operation_type ?? badge.name;
+    const kind = badge.operation_type ?? badge.name;
+    const name = kind === "sulion_plan" ? "plan" : kind;
     const count = badge.count;
     const pending = badge.pending_count ?? 0;
     const base = count === 1 ? name : `${name}×${count}`;

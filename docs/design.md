@@ -13,7 +13,7 @@ Engineering telemetry. Muted canvas, saturated data, monospace as first-class. S
 Components pick **one** axis for their visual state. Never mix.
 
 - **Semantic** — state-of-the-world: `ok` live/staged, `warn` stale/dirty, `crit` error/dead, `info` utility, `atn` attention/orphan/delegate, `mute` inactive. Every semantic state has `{-bg, -fg, -mark}` triples.
-- **Category** — tool family: `create`, `util`, `delegate`, `workflow`, `inspect`, `research`, `other`. Used for tool-type chips / badges, not for state.
+- **Category** — tool family: `create`, `util`, `delegate`, `workflow`, `plan`, `inspect`, `research`, `other`. Used for tool-type chips / badges, not for state.
 - **Accent** — the single interactive axis (`--accent`). Hover, active tab, focus ring, selection shadow — all the same blue.
 
 ## Tokens
@@ -23,7 +23,7 @@ Dark-only in MVP. Light theme would drop in mechanically via a `[data-theme]` sc
 - **Canvas** — `canvas-0` page, `canvas-1` pane, `canvas-2` panel, `canvas-3` hover, `hairline` 1px separator, `scrim` modal backdrop.
 - **Text** — `text-hi` (headings/active), `text` (body), `text-mid` (secondary), `text-lo` (metadata), `text-dis` (disabled).
 - **Semantic × 6** as above.
-- **Category × 7** as above.
+- **Category × 8** as above.
 
 ## Typography — IBM Plex Sans + IBM Plex Mono
 

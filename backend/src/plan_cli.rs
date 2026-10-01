@@ -136,7 +136,10 @@ fn parse_activity_request(command: &str, args: &mut Vec<String>) -> anyhow::Resu
     Ok(request)
 }
 
-fn parse_plan_request(command: &str, args: &mut Vec<String>) -> anyhow::Result<ControlRequest> {
+pub(crate) fn parse_plan_request(
+    command: &str,
+    args: &mut Vec<String>,
+) -> anyhow::Result<ControlRequest> {
     match command {
         "start" => {
             let title_option = take_option(args, "--title")?;

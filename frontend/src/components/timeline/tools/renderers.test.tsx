@@ -159,9 +159,48 @@ const WHITESPACE_ONLY_EDIT_TOOL = {
   },
 };
 
+const PLAN_TOOL = {
+  name: "sulion",
+  operationType: "sulion_plan",
+  input: {
+    cmd: "sulion plan branch 'Next' --from 2",
+    plan_commands: [{
+      action: "branch", title: "Next", plan_id: "plan-id", from: ["2"],
+      outcome: "Visible progress", principles: ["Preserve history"],
+      phases: [{ title: "Verify", description: "Run checks", size: "m" }],
+    }],
+  },
+};
+const MIXED_PLAN_TOOL = {
+  ...EDIT_TOOL,
+  input: {
+    ...EDIT_TOOL.input,
+    plan_commands: [{ action: "phase set", phase: "2", status: "completed", note: "Verified" }],
+  },
+};
+
 describe("ToolCallRenderer", () => {
   beforeEach(() => {
     resetRepoStore();
+  });
+
+  it("renders plan metadata with raw command evidence and guidance", () => {
+    render(<ToolCallRenderer tool={PLAN_TOOL} />);
+    expect(screen.getByText("plan · branch")).toBeDefined();
+    expect(screen.getByText("Next")).toBeDefined();
+    expect(screen.getByText("plan-id")).toBeDefined();
+    expect(screen.getByText("Visible progress")).toBeDefined();
+    expect(screen.getByText("Preserve history")).toBeDefined();
+    expect(screen.getByText("Run checks")).toBeDefined();
+    expect(screen.getByText(/\$ sulion plan branch/)).toBeDefined();
+  });
+
+  it("keeps file edits visible alongside plan metadata in a mixed cell", () => {
+    render(<ToolCallRenderer tool={MIXED_PLAN_TOOL} />);
+    expect(screen.getByText("Requested status")).toBeDefined();
+    expect(screen.getByText("completed")).toBeDefined();
+    expect(screen.getByText("Verified")).toBeDefined();
+    expect(screen.getByText("/tmp/foo.ts")).toBeDefined();
   });
 
   it("renders an Edit with inline diff content", () => {

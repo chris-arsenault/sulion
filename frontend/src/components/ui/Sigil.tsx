@@ -15,6 +15,7 @@ export type SigilCategory =
   | "util"
   | "delegate"
   | "workflow"
+  | "plan"
   | "inspect"
   | "research"
   | "other";

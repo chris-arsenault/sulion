@@ -4,6 +4,14 @@ import { DEFAULT_FILTERS } from "./filters";
 import { makePair, makeTurn, itemsOf, assistantChunk, assistantItems } from "./test-helpers";
 
 describe("local turn visibility", () => {
+  it("hides plan calls independently while keeping mixed utility calls", () => {
+    const pure = makePair({ id: "plan", category: "plan" });
+    const mixed = makePair({ id: "mixed", category: "utility", input: { plan_commands: [{ action: "current" }] } });
+    const turn = makeTurn({ tool_pairs: [pure, mixed], items: itemsOf(assistantChunk(assistantItems({ tool: "plan" }, { tool: "mixed" }))) });
+    const result = filterTurn(turn, { ...DEFAULT_FILTERS, hiddenOperationCategories: new Set(["plan" as const]) });
+    expect(result.items).toMatchObject([{ items: [{ kind: "tool", pair_id: "mixed" }] }]);
+    expect(turn.items[0]).toMatchObject({ items: [{ pair_id: "plan" }, { pair_id: "mixed" }] });
+  });
   it("hides operation categories while preserving text and the original cached records", () => {
     const pair = makePair({ id: "edit", category: "create_content", result: { content: "done", is_error: false } });
     const turn = makeTurn({ tool_pairs: [pair], items: itemsOf(assistantChunk(assistantItems("reply", { tool: "edit" }))) });

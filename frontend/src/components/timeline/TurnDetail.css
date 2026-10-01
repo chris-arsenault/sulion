@@ -213,6 +213,14 @@
   background: var(--canvas-2);
 }
 
+.td__tool--plan {
+  border-left: 2px solid var(--cat-plan);
+}
+
+.td__tool--plan .td__tool-name {
+  color: var(--cat-plan);
+}
+
 .td__tool--error {
   border-color: var(--crit-bg);
   background: var(--crit-bg);

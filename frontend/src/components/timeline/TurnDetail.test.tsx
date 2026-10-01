@@ -72,6 +72,17 @@ describe("TurnDetail", () => {
     expect(screen.getByText("bash")).toBeDefined();
   });
 
+  it("summarizes plan commands from compact metadata before loading their body", () => {
+    const pair = makePair({ id: "plan", name: "sulion", operation_type: "sulion_plan", category: "plan", body_loaded: false,
+      input: { plan_commands: [{ action: "phase set", phase: "2", status: "completed" }] },
+    });
+    render(<TurnDetail turn={makeTurn({ tool_pairs: [pair], items: itemsOf(toolChunk("plan")) })} showThinking />);
+    const row = screen.getByTestId("tool-pair-row");
+    expect(row.className).toContain("td__tool--plan");
+    expect(screen.getByText("plan")).toBeDefined();
+    expect(screen.getByText("phase set · phase 2 · completed")).toBeDefined();
+  });
+
   it("reports digest failures instead of copying an incomplete streamed turn", async () => {
     const user = userEvent.setup();
     const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();

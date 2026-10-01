@@ -129,7 +129,7 @@ export function ToolHoverCard({
   return createPortal(
     <div
       ref={cardRef}
-      className={`thc ${pinned ? "thc--pinned" : ""} ${
+      className={`thc ${pair.category === "plan" ? "thc--plan" : ""} ${pinned ? "thc--pinned" : ""} ${
         pair.is_error ? "thc--error" : ""
       }`}
       // eslint-disable-next-line local/no-inline-styles -- hover card position is anchor-relative, computed at render time
@@ -141,7 +141,7 @@ export function ToolHoverCard({
       onPointerLeave={onMouseLeave}
     >
       <div className="thc__header">
-        <span className="thc__name">{toolType(pair)}</span>
+        <span className="thc__name">{toolType(pair) === "sulion_plan" ? "plan" : toolType(pair)}</span>
         {pair.is_pending && <span className="thc__status">pending</span>}
         {pair.is_error && <span className="thc__status thc__status--error">error</span>}
         {pinned ? (

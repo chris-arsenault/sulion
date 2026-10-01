@@ -73,6 +73,7 @@ export const KNOWN_OPERATION_CATEGORIES = [
   "research",
   "delegate",
   "workflow",
+  "plan",
   "other",
 ] as const;
 
@@ -83,6 +84,7 @@ export const OPERATION_CATEGORY_LABELS: Record<OperationCategory, string> = {
   research: "research",
   delegate: "delegate",
   workflow: "workflow",
+  plan: "plans",
   other: "other",
 };
 

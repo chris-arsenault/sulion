@@ -97,6 +97,7 @@ pub enum OperationCategory {
     Research,
     Delegate,
     Workflow,
+    Plan,
     Other,
 }
 
@@ -109,6 +110,7 @@ impl OperationCategory {
             OperationCategory::Research => "research",
             OperationCategory::Delegate => "delegate",
             OperationCategory::Workflow => "workflow",
+            OperationCategory::Plan => "plan",
             OperationCategory::Other => "other",
         }
     }
@@ -129,6 +131,7 @@ impl std::str::FromStr for OperationCategory {
             "research" => Ok(OperationCategory::Research),
             "delegate" => Ok(OperationCategory::Delegate),
             "workflow" => Ok(OperationCategory::Workflow),
+            "plan" => Ok(OperationCategory::Plan),
             "other" => Ok(OperationCategory::Other),
             _ => Err(()),
         }

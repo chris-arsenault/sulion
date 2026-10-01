@@ -59,6 +59,11 @@ describe("TurnRow", () => {
     expect(screen.getByText("bash")).toBeDefined();
   });
 
+  it("uses the plan label and category styling for plan calls", () => {
+    render(<TurnRow turn={makeSummary({ operation_badges: [{ name: "bash", operation_type: "sulion_plan", count: 2 }] })} selected={false} showThinking onSelect={noop} />);
+    expect(screen.getByText("plan×2").className).toContain("tr__badge--plan");
+  });
+
   it("marks badges with running operations and shows the running count", () => {
     render(
       <TurnRow

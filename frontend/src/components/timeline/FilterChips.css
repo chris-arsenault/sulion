@@ -88,6 +88,12 @@
   border-color: var(--text-lo);
 }
 
+.fc__chip--visible.fc__chip--plan {
+  background: var(--canvas-3);
+  color: var(--cat-plan);
+  border-color: var(--cat-plan);
+}
+
 .fc__chip:hover {
   filter: brightness(1.15);
 }

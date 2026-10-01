@@ -221,25 +221,35 @@ async fn load_event_blocks(
             "tool_result" => BlockKind::ToolResult,
             _ => BlockKind::Unknown,
         };
+        let mut block = Block {
+            ord: row.ord,
+            kind,
+            text: row.text,
+            tool_id: row.tool_id,
+            tool_name: row.tool_name,
+            tool_name_canonical: row.tool_name_canonical,
+            operation_type: row.operation_type,
+            operation_category: row
+                .operation_category
+                .as_deref()
+                .and_then(OperationCategory::parse),
+            tool_input: row.tool_input,
+            tool_output: row.tool_output,
+            is_error: row.is_error,
+            raw: None,
+        };
+        if kind == BlockKind::ToolUse {
+            if let Some(input) = &mut block.tool_input {
+                super::plan_commands::project(
+                    input,
+                    &mut block.operation_type,
+                    &mut block.operation_category,
+                );
+            }
+        }
         out.entry(row.byte_offset)
             .or_insert_with(Vec::new)
-            .push(Block {
-                ord: row.ord,
-                kind,
-                text: row.text,
-                tool_id: row.tool_id,
-                tool_name: row.tool_name,
-                tool_name_canonical: row.tool_name_canonical,
-                operation_type: row.operation_type,
-                operation_category: row
-                    .operation_category
-                    .as_deref()
-                    .and_then(OperationCategory::parse),
-                tool_input: row.tool_input,
-                tool_output: row.tool_output,
-                is_error: row.is_error,
-                raw: None,
-            });
+            .push(block);
     }
     Ok(out)
 }

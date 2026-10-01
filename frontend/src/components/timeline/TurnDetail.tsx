@@ -33,6 +33,7 @@ import {
 import { ThinkingFlyout } from "./ThinkingFlyout";
 import { ToolHoverCard } from "./ToolHoverCard";
 import { ToolCallRenderer } from "./tools/renderers";
+import { planCommandSummary } from "./tools/planCommandData";
 import { blockKey, createItemGrouper } from "./turnDetailCache";
 import { TurnBlocks } from "./TurnBlocks";
 import { hydrateOperation } from "../../state/TurnDetailStore";
@@ -765,7 +766,7 @@ const ToolPairRow = memo(function ToolPairRow({
   return (
     <div
       ref={rowRef}
-      className={`td__tool ${pair.is_error ? "td__tool--error" : ""} ${
+      className={`td__tool ${pair.category === "plan" ? "td__tool--plan" : ""} ${pair.is_error ? "td__tool--error" : ""} ${
         pair.is_pending ? "td__tool--pending" : ""
       } ${isFocused ? "td__tool--focused" : ""}`}
       data-testid="tool-pair-row"
@@ -796,7 +797,7 @@ const ToolPairRow = memo(function ToolPairRow({
           <span
             className={`td__tool-name td__tool-name--${toolType(pair).toLowerCase()}`}
           >
-            {toolType(pair)}
+            {toolType(pair) === "sulion_plan" ? "plan" : toolType(pair)}
           </span>
           <span className="td__tool-summary">{toolSummary(pair)}</span>
           {pair.is_pending && <span className="td__tool-status">pending</span>}
@@ -869,6 +870,7 @@ function failedCommandCount(pair: ToolPair): number {
 }
 
 function toolSummary(pair: ToolPair): string {
+  if (pair.operation_type === "sulion_plan") return planCommandSummary(pair.input);
   const input = (pair.input ?? {}) as Record<string, unknown>;
   const pick = (key: string) =>
     typeof input[key] === "string" ? (input[key] as string) : undefined;
