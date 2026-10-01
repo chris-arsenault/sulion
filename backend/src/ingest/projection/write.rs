@@ -18,7 +18,7 @@ use super::store::PgBackend;
 
 /// Reducer rules the stored rows were built with. A session below it is
 /// rebuilt from its canonical events before it takes new ones.
-pub const REDUCER_VERSION: i32 = 1;
+pub const REDUCER_VERSION: i32 = 2;
 
 /// Events applied per transaction.
 pub const BATCH_EVENTS: i64 = 500;

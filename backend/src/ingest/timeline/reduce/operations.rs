@@ -239,6 +239,7 @@ impl<B: Backend> Reducer<B> {
                 continue;
             }
             let mut op = candidates.into_iter().next().expect("one candidate");
+            let failed = failed && fails_call(op.category, &evidence);
             op.call_error |= failed;
             attach_to_input(&mut op.input, &evidence);
             if !op.is_pending {

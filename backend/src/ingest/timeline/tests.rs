@@ -416,6 +416,84 @@ fn runtime_evidence_folds_into_its_call_and_reports_failures() {
 }
 
 #[test]
+fn a_content_creating_cell_fails_on_its_file_changes_not_its_commands() {
+    let edit_cell = |offset, id: &str| {
+        let mut block = Block::tool_use(0, id, "exec", json!("patch then build"));
+        block.operation_category = Some(OperationCategory::CreateContent);
+        codex(event(offset, "assistant", vec![block]))
+    };
+    let change = |offset, id: &str, start, status: &str| {
+        runtime(
+            offset,
+            id,
+            json!({"runtime_item":{"type":"FileChange","id":id,"status":status,"changes":{
+            "/repo/src/lib.rs":{"type":"update","unified_diff":"-a\n+b"}}},"started_at_ms":start}),
+            status == "failed",
+        )
+    };
+    let turns = project(&[
+        event(1, "user", vec![text("edit")]),
+        edit_cell(2, "built"),
+        change(3, "fc-built", 2500, "completed"),
+        runtime(
+            4,
+            "cargo",
+            json!({"runtime_item":{"type":"CommandExecution","id":"cargo","status":"failed",
+            "exit_code":101},"started_at_ms":2600}),
+            true,
+        ),
+        event(
+            5,
+            "system",
+            vec![result("built", "Script completed", false)],
+        ),
+        edit_cell(6, "rejected"),
+        change(7, "fc-rejected", 6500, "failed"),
+        event(
+            8,
+            "system",
+            vec![result("rejected", "Script completed", false)],
+        ),
+    ]);
+    let built = &turns[0].tool_pairs[0];
+    assert!(!built.is_error);
+    assert!(!built.result.as_ref().unwrap().is_error);
+    assert_eq!(
+        built.input.as_ref().unwrap()["runtime_items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        built.input.as_ref().unwrap()["file_edits"][0]["status"],
+        "completed"
+    );
+    let rejected = &turns[0].tool_pairs[1];
+    assert!(rejected.is_error && turns[0].has_errors);
+    assert_eq!(
+        rejected.input.as_ref().unwrap()["file_edits"][0]["status"],
+        "failed"
+    );
+}
+
+#[test]
+fn a_failed_script_fails_its_content_creating_cell() {
+    let mut block = Block::tool_use(0, "patch", "exec", json!("patch"));
+    block.operation_category = Some(OperationCategory::CreateContent);
+    let turns = project(&[
+        event(1, "user", vec![text("edit")]),
+        codex(event(2, "assistant", vec![block])),
+        event(
+            3,
+            "system",
+            vec![result("patch", "Script failed\nScript error:", true)],
+        ),
+    ]);
+    assert!(turns[0].tool_pairs[0].is_error && turns[0].has_errors);
+}
+
+#[test]
 fn ambiguous_runtime_evidence_stays_as_bookkeeping() {
     let turns = project(&[
         event(1, "user", vec![text("look")]),

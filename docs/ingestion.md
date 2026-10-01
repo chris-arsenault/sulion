@@ -165,9 +165,13 @@ Completed runtime items enrich an existing operation by ID or a unique enclosing
 code-mode execution, including yielded executions resumed by `wait`. Commands,
 output, exit status, duration, and file changes remain available as operation
 evidence. Ambiguous runtime records stay visible without adding an operation or
-guessing their owner. Canonical version 5 and timeline version 12 repair retained
-history through the same reducer used by live ingest and archive restore; the
-timeline repair rebuilds the most recently active sessions first.
+guessing their owner. A code-mode result whose envelope begins `Script failed`
+is an error. A failed runtime item fails its operation, except that a
+content-creating operation fails only on a failed file change; a build or test
+it also ran stays visible as a failed command in its runtime items, and each
+file edit carries its change status. Canonical version 6 and timeline version 13
+repair retained history through the same reducer used by live ingest and archive
+restore; the timeline repair rebuilds the most recently active sessions first.
 
 ## Retention boundary
 

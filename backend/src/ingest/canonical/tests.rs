@@ -308,6 +308,26 @@ fn codex_function_call_and_output_map_to_tool_blocks() {
     assert_eq!(ev.blocks[0].kind, BlockKind::ToolResult);
     assert_eq!(ev.blocks[0].tool_id.as_deref(), Some("call-1"));
     assert_eq!(ev.blocks[0].text.as_deref(), Some("ok"));
+    assert_eq!(ev.blocks[0].is_error, Some(false));
+}
+
+#[test]
+fn codex_code_mode_results_fail_only_on_the_script_failed_envelope() {
+    let output = |first: &str| {
+        parse_codex(json!({
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "cell",
+                "output": [
+                    {"type": "input_text", "text": format!("{first}\nWall time 0.0 seconds\nOutput:\n")},
+                    {"type": "input_text", "text": "Script failed in quoted output"}
+                ]
+            }
+        }))
+    };
+    assert_eq!(output("Script failed").blocks[0].is_error, Some(true));
+    assert_eq!(output("Script completed").blocks[0].is_error, Some(false));
 }
 
 #[test]

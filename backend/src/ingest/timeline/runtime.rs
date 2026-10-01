@@ -5,7 +5,7 @@
 
 use serde_json::{json, Value};
 
-use crate::ingest::canonical::Block;
+use crate::ingest::canonical::{Block, OperationCategory};
 
 use super::StoredEvent;
 
@@ -15,6 +15,14 @@ pub(crate) fn runtime_evidence(block: &Block) -> Option<&Value> {
         .tool_output
         .as_ref()
         .filter(|value| value.get("runtime_item").is_some())
+}
+
+/// Whether failed evidence fails the call it folds into. A call that
+/// creates content is judged by its file changes: a build or test the same
+/// code cell ran fails on its own runtime item, not on the edit.
+pub(crate) fn fails_call(category: Option<OperationCategory>, evidence: &Value) -> bool {
+    category != Some(OperationCategory::CreateContent)
+        || evidence["runtime_item"]["type"].as_str() == Some("FileChange")
 }
 
 /// Evidence that matched no single call stays on its own event as
@@ -62,7 +70,8 @@ pub(crate) fn attach_to_input(input: &mut Option<Value>, evidence: &Value) {
         for (path, change) in changes {
             let edit = json!({"path": change.get("move_path").and_then(Value::as_str).unwrap_or(path),
                 "old_path": if change.get("move_path").and_then(Value::as_str).is_some() { Some(path) } else { None },
-                "operation": change["type"], "diff": change["unified_diff"], "content": change["content"]});
+                "operation": change["type"], "diff": change["unified_diff"], "content": change["content"],
+                "status": item["status"]});
             let edits = input
                 .as_object_mut()
                 .unwrap()

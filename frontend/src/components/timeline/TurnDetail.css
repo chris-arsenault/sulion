@@ -305,6 +305,11 @@
   color: var(--crit-fg);
 }
 
+.td__tool-status--warn {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+
 .td__tool-subagent {
   background: var(--atn-bg);
   color: var(--atn-fg);

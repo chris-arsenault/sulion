@@ -148,10 +148,16 @@ fn parse_codex_response_item(value: &Value) -> CanonicalEvent {
                 .unwrap_or("")
                 .to_string();
             let text = payload.get("output").and_then(value_to_text);
+            // A Code Mode cell reports its own failure only in the
+            // execution envelope's first line, never as `is_error`.
             let is_error = payload
                 .get("is_error")
                 .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+                .unwrap_or(false)
+                || text
+                    .as_deref()
+                    .and_then(|text| text.lines().next())
+                    .is_some_and(|line| line.trim_end() == "Script failed");
             let blocks = vec![Block::tool_result(0, call_id.clone(), text, is_error, None)];
             CanonicalEvent {
                 related_tool_use_id: Some(call_id),
@@ -195,16 +201,11 @@ fn parse_codex_event_msg(value: &Value) -> CanonicalEvent {
                 Some("CommandExecution" | "FileChange" | "Extension" | "ImageView")
             ) {
                 let id = item.get("id").and_then(Value::as_str).unwrap_or("");
-                let failed = item
-                    .get("exit_code")
-                    .and_then(Value::as_i64)
-                    .is_some_and(|n| n != 0)
-                    || item.get("status").and_then(Value::as_str) == Some("failed");
                 blocks.push(Block::tool_result(
                     0,
                     id,
                     None,
-                    failed,
+                    runtime_item_failed(item),
                     Some(serde_json::json!({
                         "runtime_item": item,
                         "started_at_ms": payload.get("started_at_ms"),
@@ -229,6 +230,14 @@ fn parse_codex_event_msg(value: &Value) -> CanonicalEvent {
         subtype: Some(subtype.to_string()),
         blocks,
     }
+}
+
+/// A completed Codex runtime item failed: a non-zero exit or a failed status.
+fn runtime_item_failed(item: &Value) -> bool {
+    item.get("exit_code")
+        .and_then(Value::as_i64)
+        .is_some_and(|n| n != 0)
+        || item.get("status").and_then(Value::as_str) == Some("failed")
 }
 
 fn parse_codex_message_items(items: &[Value]) -> Vec<Block> {

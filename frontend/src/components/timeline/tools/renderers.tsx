@@ -124,6 +124,8 @@ interface FileEditEntry {
   in_out?: { old_text?: unknown; new_text?: unknown };
   diff?: unknown;
   replace_all?: unknown;
+  // The runtime's change status, when a runtime item reported the edit.
+  status?: unknown;
 }
 
 // Groups contiguous file_edits by path so a single file's N in_out
@@ -189,11 +191,13 @@ function FileEditGroupBlock({ group }: { group: FileEditGroup }) {
   const { path, old_path, operation, entries } = group;
   const visible = entries.slice(0, 5);
   const overflow = entries.length - visible.length;
+  const failed = entries.some((entry) => entry.status === "failed");
   return (
     <div className="tr-fe">
       <div className="tr-fe__header">
         <span className={`tr-fe__op tr-fe__op--${operation}`}>{operation}</span>
         <code className="tr-path__value">{path ?? "(no path)"}</code>
+        {failed && <span className="tr-fe__failed">failed</span>}
         {operation === "move" && old_path && (
           <span className="tr-muted">
             from <code>{old_path}</code>

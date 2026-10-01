@@ -760,6 +760,8 @@ const ToolPairRow = memo(function ToolPairRow({
     ],
   );
 
+  const failedCommands = failedCommandCount(pair);
+
   return (
     <div
       ref={rowRef}
@@ -801,7 +803,12 @@ const ToolPairRow = memo(function ToolPairRow({
           {pair.is_error && (
             <span className="td__tool-status td__tool-status--error">error</span>
           )}
-          {!expanded && !pair.is_error && !pair.is_pending && (
+          {!pair.is_error && failedCommands > 0 && (
+            <span className="td__tool-status td__tool-status--warn">
+              {failedCommands === 1 ? "command failed" : `${failedCommands} commands failed`}
+            </span>
+          )}
+          {!expanded && !pair.is_error && !pair.is_pending && failedCommands === 0 && (
             <span className="td__tool-status td__tool-status--ok">ok</span>
           )}
         </button>
@@ -842,6 +849,23 @@ function ToolResultRender({ pair }: { pair: ToolPair }) {
       <pre>{truncated || "(empty result)"}</pre>
     </div>
   );
+}
+
+// Commands that failed inside a code cell whose own outcome is judged by
+// something else — a cell that edits files fails only on its edits.
+function failedCommandCount(pair: ToolPair): number {
+  const items = ((pair.input ?? {}) as Record<string, unknown>).runtime_items;
+  if (!Array.isArray(items)) return 0;
+  return items.filter((evidence) => {
+    const item = ((evidence ?? {}) as Record<string, unknown>).runtime_item;
+    if (typeof item !== "object" || item === null) return false;
+    const { type, status, exit_code } = item as Record<string, unknown>;
+    if (type !== "CommandExecution") return false;
+    return (
+      status === "failed"
+      || (typeof exit_code === "number" && exit_code !== 0)
+    );
+  }).length;
 }
 
 function toolSummary(pair: ToolPair): string {

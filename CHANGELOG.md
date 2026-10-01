@@ -33,6 +33,10 @@ All notable user-visible changes to Sulion are recorded here.
 - Live updates coalesce into incremental reads, including late tool results and
   child-agent changes. Large tool bodies load when opened, and long turns mount
   only nearby rows. Subagent views share the cache; copying fetches a complete digest.
+- Codex code-mode edits are marked as errors only when an edit or the cell's
+  script failed. A failed build or test in the same cell shows a **command
+  failed** marker instead, and file edits the runtime rejected are tagged
+  **failed**. History is rebuilt on upgrade.
 
 ### Remote uploads
 

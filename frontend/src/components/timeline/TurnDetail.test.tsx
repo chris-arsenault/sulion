@@ -212,6 +212,39 @@ describe("TurnDetail", () => {
     expect(screen.getByText("after")).toBeDefined();
   });
 
+  it("marks a failed command apart from a successful edit and tags failed file edits", () => {
+    const pair = makePair({
+      id: "cell",
+      name: "apply_patch",
+      category: "create_content",
+      input: {
+        file_edits: [
+          { path: "/repo/a.rs", operation: "update", diff: "-a\n+b", status: "completed" },
+          { path: "/repo/b.rs", operation: "add", diff: "+c", status: "failed" },
+        ],
+        runtime_items: [
+          { runtime_item: { type: "FileChange", status: "completed" } },
+          { runtime_item: { type: "CommandExecution", status: "failed", exit_code: 101 } },
+        ],
+      },
+      result: { content: "Script completed", is_error: false },
+      is_error: false,
+    });
+    renderWithContextMenu(
+      <TurnDetail
+        turn={makeTurn({
+          tool_pairs: [pair],
+          operation_count: 1,
+          items: itemsOf(toolChunk("cell")),
+        })}
+        showThinking={true}
+      />,
+    );
+    expect(screen.getByText("command failed")).toBeDefined();
+    expect(screen.queryByText("error")).toBeNull();
+    expect(screen.getAllByText("failed")).toHaveLength(1);
+  });
+
   it("expands the newest card, collapses it when another arrives, and keeps manual toggles", async () => {
     const first = makePair({ id: "t1", name: "bash", input: { command: "one" } });
     const second = makePair({ id: "t2", name: "bash", input: { command: "two" } });

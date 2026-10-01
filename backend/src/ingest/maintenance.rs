@@ -10,7 +10,8 @@ const CANONICAL_BLOCKS_KEY: &str = "canonical_blocks";
 // v4: Codex Code Mode `exec` wrappers canonicalize to their nested tool
 // or shell executable; all historical wrapper blocks get re-derived.
 // v5: queued/pasted Claude input and Codex inheritance, collaboration and runtime items.
-const CANONICAL_BLOCKS_VERSION: i32 = 5;
+// v6: Codex Code Mode results whose envelope reports `Script failed` are errors.
+const CANONICAL_BLOCKS_VERSION: i32 = 6;
 const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // v3: sessions with codex `exec` operations reprojected after their
 // inputs were re-canonicalized into the {command, code} shape.
@@ -34,7 +35,9 @@ const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // v11: current harness input, lineage, runtime evidence and latest Claude usage.
 // v12: the incremental reducer: stored items, child references and resumable
 // session state; every retained session is rebuilt through it.
-const TIMELINE_PROJECTION_VERSION: i32 = 12;
+// v13: content-creating code cells fail only on their file changes and
+// failed scripts; file edits carry their change status.
+const TIMELINE_PROJECTION_VERSION: i32 = 13;
 const USAGE_PROJECTION_KEY: &str = "usage_projection";
 // v2: include Codex per-response usage, including compaction, and retain the
 // legacy prefix before a session first supplies response records.

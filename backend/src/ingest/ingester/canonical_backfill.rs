@@ -72,6 +72,8 @@ pub async fn backfill_canonical_blocks(
          FROM events e \
          WHERE e.agent = 'codex' AND ( \
              e.payload #>> '{payload,type}' IN ('agent_message', 'item_completed') OR \
+             COALESCE(e.payload #>> '{payload,output,0,text}', e.payload #>> '{payload,output}') \
+                 LIKE 'Script failed%' OR \
              e.payload #> '{payload,subagent_history_start_ordinal}' IS NOT NULL OR \
              e.payload #> '{payload,namespace}' IS NOT NULL OR \
              e.speaker IS NULL OR \

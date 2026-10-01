@@ -23,7 +23,8 @@ use super::events::{
 };
 use super::file_touches::{extract_file_touches, FileTouchContext};
 use super::runtime::{
-    attach_to_input, attach_to_output, mark_uncorrelated, running_cell, runtime_evidence,
+    attach_to_input, attach_to_output, fails_call, mark_uncorrelated, running_cell,
+    runtime_evidence,
 };
 use super::{
     StoredEvent, TimelineAssistantItem, TimelineChunk, TimelineFileTouch, TimelineGenericDetails,
@@ -111,7 +112,8 @@ pub(crate) struct OpRow {
     pub call_at: DateTime<Utc>,
     /// Byte offset of the event that last changed the row.
     pub changed_at: i64,
-    /// The call block's own error flag or failed runtime evidence.
+    /// The call block's own error flag or failed runtime evidence that
+    /// fails the call (see [`fails_call`]).
     pub call_error: bool,
     /// Set while the call's result reports a still-running code cell.
     pub running_cell: Option<String>,

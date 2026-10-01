@@ -134,7 +134,15 @@ const COMPACT_INPUT: &str = "jsonb_strip_nulls(jsonb_build_object(\
     'command', left(input->>'command', 240), 'cmd', left(input->>'cmd', 240), \
     'description', left(input->>'description', 240), 'agent', left(input->>'agent', 240), \
     'pattern', left(input->>'pattern', 240), 'url', left(input->>'url', 240), \
-    'query', left(input->>'query', 240)))";
+    'query', left(input->>'query', 240), \
+    'runtime_items', (SELECT jsonb_agg(jsonb_build_object('runtime_item', jsonb_build_object( \
+        'type', e #> '{runtime_item,type}', 'status', e #> '{runtime_item,status}', \
+        'exit_code', e #> '{runtime_item,exit_code}'))) \
+        FROM jsonb_array_elements(CASE WHEN jsonb_typeof(input->'runtime_items') = 'array' \
+            THEN input->'runtime_items' ELSE '[]'::jsonb END) e \
+        WHERE e #>> '{runtime_item,status}' = 'failed' \
+           OR (jsonb_typeof(e #> '{runtime_item,exit_code}') = 'number' \
+               AND (e #>> '{runtime_item,exit_code}')::numeric <> 0))))";
 
 async fn load_operations(
     pool: &Pool,
