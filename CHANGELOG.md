@@ -8,14 +8,23 @@ All notable user-visible changes to Sulion are recorded here.
 
 - The repo context menu offers **Go to repo**, which opens the GitHub page for
   the `origin` remote in a new tab, and **Open latest CI run**.
-- Public GitHub repos show the latest Actions run on the checked-out branch
+- GitHub repos show the latest Actions run on the checked-out branch
   (succeeded, failed, or in progress) with its age beside the branch badge.
+  With an every-terminal `GH_TOKEN`, private repos are included and every repo
+  is checked every 10 minutes.
 
 ### Repository secrets
 
 - Secret menus offer **Always for this repository** for access without an expiry.
   Existing and future sessions inherit the grant; revoking it removes repository
   access while preserving any separate timed terminal grant.
+- The Secrets tab can make a secret a default for every terminal, limited to
+  listed programs such as `gh`. `with-cred` injects it only into those
+  programs; any other command still needs a grant. Terminal and repository
+  grants that set the same variable take precedence over it.
+- `with-cred -- <command>` is the only credential path. It injects everything
+  granted to the terminal. The `aws` wrapper and `with-cred <secret-id>` are
+  removed.
 
 ### Timeline loading
 

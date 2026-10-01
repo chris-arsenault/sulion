@@ -1,21 +1,19 @@
 use std::ffi::OsString;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use base64::prelude::{Engine as _, BASE64_STANDARD};
-use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::Ed25519KeyPair;
 use uuid::Uuid;
 
-use crate::secret_protocol::{canonical_use_payload, SignedUseSecretRequest, UseSecretResponse};
+use crate::secret_protocol::{SignedUseSecretRequest, UseSecretResponse};
 
 pub async fn run(args: &[OsString]) -> anyhow::Result<i32> {
-    let parsed = match HelperArgs::parse(args) {
-        Ok(parsed) => parsed,
+    let command = match parse_command(args) {
+        Ok(command) => command,
         Err(message) => {
-            eprintln!("{message}");
-            eprintln!("usage: sulion credential-helper --tool <with-cred|aws> [--secret <id>] -- <command...>");
+            eprintln!("credential-helper: {message}");
+            eprintln!("usage: with-cred -- <command...>");
             return Ok(64);
         }
     };
@@ -39,30 +37,14 @@ pub async fn run(args: &[OsString]) -> anyhow::Result<i32> {
     };
     let broker_url = std::env::var("SULION_SECRET_BROKER_URL")
         .unwrap_or_else(|_| "http://sulion-broker:8081".to_string());
+    let program = program_name(&command[0]);
 
     let pkcs8 = tokio::fs::read(&key_path)
         .await
         .with_context(|| format!("read PTY secret broker key {}", key_path.display()))?;
     let key_pair = Ed25519KeyPair::from_pkcs8(&pkcs8)
         .map_err(|_| anyhow::anyhow!("invalid PTY secret broker key"))?;
-    let nonce = new_nonce();
-    let timestamp_unix_seconds = chrono::Utc::now().timestamp();
-    let canonical = canonical_use_payload(
-        pty_session_id,
-        parsed.secret_id.as_deref(),
-        &parsed.tool,
-        timestamp_unix_seconds,
-        &nonce,
-    );
-    let signature = BASE64_STANDARD.encode(key_pair.sign(canonical.as_bytes()).as_ref());
-    let request = SignedUseSecretRequest {
-        pty_session_id,
-        secret_id: parsed.secret_id.clone(),
-        tool: parsed.tool.clone(),
-        timestamp_unix_seconds,
-        nonce,
-        signature,
-    };
+    let request = SignedUseSecretRequest::sign(&key_pair, pty_session_id, program);
 
     // Trusts the pinned control certificate in addition to public roots.
     let response = crate::node_protocol::tls::control_http_client()
@@ -75,15 +57,7 @@ pub async fn run(args: &[OsString]) -> anyhow::Result<i32> {
         Ok(response) => {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            eprintln!(
-                "credential-helper: broker denied access for {}{} ({status}): {body}",
-                parsed.tool,
-                parsed
-                    .secret_id
-                    .as_ref()
-                    .map(|id| format!(":{id}"))
-                    .unwrap_or_default()
-            );
+            eprintln!("credential-helper: broker denied access ({status}): {body}");
             return Ok(66);
         }
         Err(err) => {
@@ -96,95 +70,58 @@ pub async fn run(args: &[OsString]) -> anyhow::Result<i32> {
         .await
         .context("invalid broker response")?;
 
-    let mut command = std::process::Command::new(&parsed.command[0]);
-    command.args(&parsed.command[1..]);
-    command.envs(payload.env);
-    Err(command.exec()).context("exec credential command")
+    let mut process = std::process::Command::new(&command[0]);
+    process.args(&command[1..]);
+    process.envs(payload.env);
+    Err(process.exec()).context("exec credential command")
 }
 
-fn new_nonce() -> String {
-    let rng = SystemRandom::new();
-    let mut bytes = [0u8; 24];
-    rng.fill(&mut bytes).expect("system random");
-    BASE64_STANDARD.encode(bytes)
+/// The command's file name, which every-terminal grants are matched against.
+fn program_name(command: &OsString) -> String {
+    Path::new(command)
+        .file_name()
+        .unwrap_or(command)
+        .to_string_lossy()
+        .into_owned()
 }
 
-struct HelperArgs {
-    tool: String,
-    secret_id: Option<String>,
-    command: Vec<OsString>,
-}
-
-impl HelperArgs {
-    fn parse(args: &[OsString]) -> Result<Self, &'static str> {
-        let mut tool: Option<String> = None;
-        let mut secret_id: Option<String> = None;
-        let mut index = 0;
-        while index < args.len() {
-            let arg = args[index].to_string_lossy();
-            if arg == "--" {
-                index += 1;
-                break;
-            }
-            match arg.as_ref() {
-                "--tool" => {
-                    index += 1;
-                    let Some(value) = args.get(index) else {
-                        return Err("credential-helper: --tool requires a value");
-                    };
-                    tool = Some(value.to_string_lossy().into_owned());
-                }
-                "--secret" => {
-                    index += 1;
-                    let Some(value) = args.get(index) else {
-                        return Err("credential-helper: --secret requires a value");
-                    };
-                    secret_id = Some(value.to_string_lossy().into_owned());
-                }
-                _ => return Err("credential-helper: unknown option"),
-            }
-            index += 1;
+/// The command after the leading `--`.
+fn parse_command(args: &[OsString]) -> Result<Vec<OsString>, &'static str> {
+    match args.split_first() {
+        Some((separator, command)) if separator == "--" && !command.is_empty() => {
+            Ok(command.to_vec())
         }
-        let Some(tool) = tool else {
-            return Err("credential-helper: --tool is required");
-        };
-        if !matches!(tool.as_str(), "with-cred" | "aws") {
-            return Err("credential-helper: --tool must be with-cred or aws");
-        }
-        let command = args[index..].to_vec();
-        if command.is_empty() {
-            return Err("credential-helper: missing command");
-        }
-        Ok(Self {
-            tool,
-            secret_id,
-            command,
-        })
+        _ => Err("expected `-- <command...>`"),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::HelperArgs;
-    use std::ffi::OsString;
+    use super::*;
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
     }
 
     #[test]
-    fn aws_helper_can_redeem_active_aws_secret_without_secret_id() {
-        let parsed = HelperArgs::parse(&args(&["--tool", "aws", "--", "aws", "sts"])).unwrap();
-        assert_eq!(parsed.tool, "aws");
-        assert_eq!(parsed.secret_id, None);
-        assert_eq!(parsed.command, args(&["aws", "sts"]));
+    fn runs_the_command_after_the_separator() {
+        assert_eq!(
+            parse_command(&args(&["--", "make", "test"])).unwrap(),
+            args(&["make", "test"])
+        );
+        for invalid in [
+            &["--"][..],
+            &["make"],
+            &["--secret", "x", "--", "make"],
+            &[],
+        ] {
+            assert!(parse_command(&args(invalid)).is_err(), "{invalid:?}");
+        }
     }
 
     #[test]
-    fn explicit_secret_id_remains_supported_for_direct_helper_use() {
-        let parsed =
-            HelperArgs::parse(&args(&["--tool", "aws", "--secret", "AWS", "--", "aws"])).unwrap();
-        assert_eq!(parsed.tool, "aws");
-        assert_eq!(parsed.secret_id.as_deref(), Some("AWS"));
+    fn program_name_is_the_command_file_name() {
+        assert_eq!(program_name(&"gh".into()), "gh");
+        assert_eq!(program_name(&"/usr/bin/gh".into()), "gh");
     }
 }

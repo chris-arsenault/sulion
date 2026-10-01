@@ -39,6 +39,7 @@ import type {
   SessionView,
   SecretEnvelope,
   SecretGrantMetadata,
+  SecretGrantScope,
   SecretMetadata,
   TimelineQuery,
   TimelineSummaryResponse,
@@ -571,11 +572,13 @@ export function listSecretGrants(ptySessionId: string): Promise<SecretGrantMetad
   );
 }
 
+/** `pty_session_id` is omitted for `all_terminals`, which takes `programs`. */
 export async function unlockSecretGrant(body: {
-  pty_session_id: string;
+  pty_session_id?: string;
   secret_id: string;
   ttl_seconds?: number;
-  scope?: "terminal" | "repository";
+  scope?: SecretGrantScope;
+  programs?: string[];
 }): Promise<void> {
   await brokerRequest<void>("/broker/v1/grants", {
     method: "POST",
@@ -584,9 +587,9 @@ export async function unlockSecretGrant(body: {
 }
 
 export async function revokeSecretGrant(body: {
-  pty_session_id: string;
+  pty_session_id?: string;
   secret_id: string;
-  scope?: "terminal" | "repository";
+  scope?: SecretGrantScope;
 }): Promise<void> {
   await brokerRequest<void>("/broker/v1/grants", {
     method: "DELETE",
@@ -609,8 +612,10 @@ function dedupeSecretGrants(grants: SecretGrantMetadata[]): SecretGrantMetadata[
       granted_by_username: grant.granted_by_username,
       expires_at: grant.expires_at,
       ...(grant.repo != null ? { repo: grant.repo } : {}),
+      ...(grant.scope != null ? { scope: grant.scope } : {}),
+      ...(grant.programs != null ? { programs: grant.programs } : {}),
     };
-    const key = JSON.stringify([grant.secret_id, grant.repo ?? null]);
+    const key = JSON.stringify([grant.secret_id, grant.scope ?? grant.repo ?? null]);
     const existing = latestBySecret.get(key);
     if (
       !existing ||

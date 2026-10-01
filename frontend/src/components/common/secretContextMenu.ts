@@ -21,15 +21,27 @@ export function buildSecretContextMenu({
   onRevoke: (secretId: string, repository?: boolean) => void;
   onOpenManager: () => void;
 }): MenuItem {
-  const activeItems = grants.map((grant) => ({
-    kind: "item" as const,
-    id: `revoke-${grant.secret_id}-${grant.repo == null ? "terminal" : "repo-" + grant.repo}`,
-    label: grant.repo != null
-      ? `${grant.secret_id} · always for ${grant.repo} · revoke for repository`
-      : `${grant.secret_id} · ${relativeExpiry(grant.expires_at)}`,
-    destructive: true,
-    onSelect: () => grant.repo != null ? onRevoke(grant.secret_id, true) : onRevoke(grant.secret_id),
-  }));
+  const activeItems = grants.map((grant) =>
+    grant.scope === "all_terminals"
+      ? {
+          // Every-terminal grants are managed in the Secrets tab, not per terminal.
+          kind: "item" as const,
+          id: `all-terminals-${grant.secret_id}`,
+          label: `${grant.secret_id} · every terminal for ${(grant.programs ?? []).join(", ")} · manage`,
+          onSelect: onOpenManager,
+        }
+      : {
+          kind: "item" as const,
+          id: `revoke-${grant.secret_id}-${grant.repo == null ? "terminal" : "repo-" + grant.repo}`,
+          label:
+            grant.repo != null
+              ? `${grant.secret_id} · always for ${grant.repo} · revoke for repository`
+              : `${grant.secret_id} · ${relativeExpiry(grant.expires_at)}`,
+          destructive: true,
+          onSelect: () =>
+            grant.repo != null ? onRevoke(grant.secret_id, true) : onRevoke(grant.secret_id),
+        },
+  );
 
   return {
     kind: "submenu",
@@ -120,6 +132,8 @@ function activeGrantConflict(
   const currentKeys = new Set(secret.env_keys);
   for (const grant of grants) {
     if (grant.secret_id === secret.id) continue;
+    // An explicit grant supersedes every-terminal values instead of conflicting.
+    if (grant.scope === "all_terminals") continue;
     const grantedSecret = secrets.find((item) => item.id === grant.secret_id);
     const overlap = (grantedSecret?.env_keys ?? []).filter((key) =>
       currentKeys.has(key),

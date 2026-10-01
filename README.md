@@ -42,9 +42,9 @@ development node.
 - **Reusable context.** Save templated prompts and references, queue session
   follow-ups, and give agents transcript retrieval and structural code
   navigation through `sulion-retrieve` and `sulion-code`.
-- **Brokered credentials.** Manage encrypted environment bundles and timed
-  PTY grants. `with-cred` injects enabled credentials into one command; the
-  `aws` wrapper uses the same grants.
+- **Brokered credentials.** Manage encrypted environment bundles and grant
+  them to a terminal, a repository, or every terminal. `with-cred --` injects
+  the granted credentials into one command.
 
 ## Docs
 

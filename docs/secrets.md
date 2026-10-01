@@ -1,11 +1,12 @@
 # Secrets
 
-Sulion supports exactly two credential-consumption paths:
+Sulion supports exactly one credential-consumption path: `with-cred --
+<command...>`, which injects every secret granted to the terminal into that
+command's environment.
 
-- `with-cred` for general env-bundle injection
-- `aws` as a wrapper over the real AWS CLI
-
-Nothing else is part of the product contract. There is no general shell-wide secret export, no ad hoc tool wrappers, and no alternate brokered execution path.
+Nothing else is part of the product contract. There is no general shell-wide
+secret export, no tool-specific wrapper, no redemption of a named secret, and
+no alternate brokered execution path.
 
 ## Purpose
 
@@ -16,7 +17,7 @@ files, shell startup files, or the main Sulion database.
 The boundary is:
 
 - the **frontend** manages secret setup and grant actions through the broker
-- the **development node** launches PTYs and ships the wrapper tools
+- the **development node** launches PTYs and ships `with-cred`
 - the **broker** stores encrypted secret bundles and redeems active grants
 
 The host's SSH administration keys are outside this product secret flow. The
@@ -51,24 +52,14 @@ Three components participate:
   - separate service and container
   - stores encrypted secret payloads in the `sulion_broker` database
   - decrypts them with a master key mounted only into the broker container
-  - verifies signed use requests from PTY wrappers
-  - enforces grants for wrapper use
+  - verifies signed use requests from `with-cred`
+  - enforces grants on redemption
 
 ## Data model
 
-A secret is an env bundle: one secret id maps to one set of environment variables.
-
-Examples:
-
-- `claude-api`
-  - `ANTHROPIC_API_KEY=sxxx`
-- `openai-api`
-  - `OPENAI_API_KEY=sk-...`
-- `AWS`
-  - `AWS_ACCESS_KEY_ID=...`
-  - `AWS_SECRET_ACCESS_KEY=...`
-  - `AWS_SESSION_TOKEN=...`
-  - `AWS_REGION=...`
+A secret is an env bundle: one secret id maps to one set of environment
+variables, with any names and values. The id identifies the bundle in the UI
+and in grants; nothing redeems a secret by id.
 
 Each secret also carries metadata:
 
@@ -88,9 +79,8 @@ Timed terminal grants are scoped to:
 - `secret_id`
 - `expires_at`
 
-That means a PTY can have one or more env bundles enabled, and the same grant
-can be redeemed through either supported wrapper. The wrapper name is
-audit/runtime context, not part of the grant relationship.
+That means a PTY can have one or more env bundles enabled; `with-cred --`
+redeems all of them together.
 
 Permanent repository grants are scoped to `repo` and `secret_id`, with no
 expiry. They apply to existing and future PTYs registered for that repository
@@ -106,6 +96,21 @@ A secret may have both a timed terminal grant and a permanent repository grant.
 Both appear in the menu and are revoked separately. Redemption injects each
 secret once. Repository grants do not renew or extend the upstream credential:
 if that credential expires, update its stored value normally.
+
+All-terminals grants carry `secret_id` and a non-empty list of program names:
+no terminal, repository, or expiry. They apply to every registered PTY,
+existing and future, until revoked in the Secrets tab, but only when the
+command `with-cred` runs is one of the listed programs. For any other command
+an all-terminals grant contributes nothing, so a terminal without its own grant
+is still refused. A read-only GitHub token granted for `gh` lets every terminal
+run `with-cred -- gh` for reads without asking, while `with-cred -- terraform`
+still needs a grant.
+
+Terminal and repository grants apply to every program and rank above
+all-terminals grants. When both set the same environment variable, the
+higher-ranked value is injected and the all-terminals value is dropped.
+Granting a write-capable GitHub secret to a terminal or repository therefore
+replaces the read-only `GH_TOKEN` there only.
 
 ### What the grant scope does and does not separate
 
@@ -128,46 +133,40 @@ prompt-injected agent to its own terminal. Per-terminal containment would
 require per-PTY uids or handing the key to the PTY as an inherited descriptor
 rather than a readable path.
 
-Grants are created and revoked from terminal/session context menus. The Secrets tab is only for creating, updating, and deleting secret bundles.
+Terminal and repository grants are created and revoked from terminal/session
+context menus. The Secrets tab creates, updates, and deletes secret bundles and
+turns a bundle's all-terminals grant on or off.
+
+All-terminals grants widen this deliberately: that secret is reachable from
+every PTY, including by any agent in any terminal. Reserve it for credentials
+whose worst case is acceptable everywhere, such as a read-only token. The
+program list keeps the refusal for every other command, so an agent that needs
+more than the defaults is stopped and has to ask; it guards against accidental
+use, not deliberate circumvention.
 
 ## Runtime use
 
-Two wrapper tools are on the PTY `PATH`.
-
-### `with-cred`
-
-General-purpose env injection for one command:
+`with-cred` at `/opt/sulion/bin/with-cred` is on the PTY `PATH`:
 
 ```sh
-with-cred claude-api -- claude
-with-cred openai-api -- codex
-with-cred -- make test
+with-cred -- <command...>
 ```
 
-Rules:
-
-- `with-cred <secret-id> -- <command...>` injects one specific env bundle
-- `with-cred -- <command...>` injects every currently enabled bundle for that PTY
-- `with-cred` uses the PTY's active credential grants, regardless of the target command name
-
-### `aws`
-
-The PTY image ships an `aws` wrapper at `/opt/sulion/bin/aws`. It redeems the active PTY grant for any enabled secret bundle that contains both `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, then execs the real AWS CLI.
-
-From the user or agent perspective:
-
-```sh
-aws s3 ls
-aws sts get-caller-identity
-```
-
-works normally when the PTY has an active grant for an AWS-shaped secret and fails cleanly when it does not.
+It asks the broker for every secret granted to the terminal plus every
+all-terminals secret that lists the command's file name, applies grant
+precedence, and execs the command with those variables added to its
+environment. With nothing applicable it exits `66` with the broker's reason.
 
 ## Conflict handling
 
-`with-cred -- <command...>` may combine multiple unlocked env bundles. If two active bundles define the same environment variable name, the broker rejects the request instead of silently choosing one value.
+`with-cred -- <command...>` may combine multiple unlocked env bundles. If two
+active bundles of the same rank define the same environment variable name, the
+broker rejects the request instead of silently choosing one value.
 
-This is intentional. Secret merges must be explicit, not order-dependent.
+This is intentional. Secret merges must be explicit, not order-dependent. The
+one ordering is by grant kind, not by time: a terminal or repository grant
+replaces an all-terminals value for the same variable. Two all-terminals
+secrets that set the same variable conflict.
 
 ## Runtime wiring
 
@@ -177,7 +176,7 @@ PTYs need these runtime values:
 - `SULION_SECRET_BROKER_URL`
 - `SULION_SECRET_BROKER_KEY_PATH`
 
-The node injects them when it launches the PTY. Wrapper use signs each broker
+The node injects them when it launches the PTY. `with-cred` signs each broker
 request with the PTY private key. The broker verifies that signature against
 the public key registered for that PTY before checking active grants.
 
@@ -232,10 +231,12 @@ It supports:
 - setting metadata such as id, description, scope, and repo
 - adding explicit key/value pairs, including multiline values such as SSH and PEM keys
 - overwriting an existing env value without reading the old value
+- **Every-terminal programs**, which creates, updates, or revokes the secret's
+  all-terminals grant and its program list immediately
 
 Existing secret values are not returned by browser read endpoints. Editing an existing bundle shows only the env key names. Leaving an existing value blank preserves it; entering a new value overwrites it.
 Multiline values preserve embedded and trailing newlines through broker storage
-and wrapper redemption. This does not change the separate host-administration
+and `with-cred` redemption. This does not change the separate host-administration
 SSH key boundary described above.
 
 Grants are managed from terminal/session context menus:
@@ -246,6 +247,9 @@ Grants are managed from terminal/session context menus:
 - use **Active secrets** to see remaining TTL or **always for &lt;repo&gt;**
 - click a timed grant to revoke it for that terminal; click **revoke for repository**
   to revoke permanent access for all sessions in that repository
+- all-terminals grants appear as **every terminal for &lt;programs&gt; · manage**,
+  which opens the Secrets tab; enabling another secret that sets the same
+  variable is allowed and supersedes it
 
 ## Broker API
 
@@ -259,11 +263,18 @@ Authenticated browser endpoints:
 - `POST /broker/v1/grants`
 - `DELETE /broker/v1/grants`
 
-Grant creation takes `pty_session_id`, `secret_id`, and either `ttl_seconds`
-(60–86400, default scope `terminal`) or `scope: "repository"` with no TTL.
-The broker resolves repository scope from the registered PTY. Revocation takes
-the same identity fields and scope. Grant listings include nullable `repo` and
-`expires_at`, preserving both scopes when both exist.
+Grant creation takes `secret_id` and a `scope`:
+
+- `terminal` (default): `pty_session_id` and `ttl_seconds` (60–86400)
+- `repository`: `pty_session_id`, whose registered repository the grant covers
+- `all_terminals`: `programs`, at least one command name such as `gh`
+
+Granting again replaces the active grant for the same secret and target.
+Revocation takes the same fields without `ttl_seconds` or `programs`. Grants
+record their scope; grant listings include `scope` with nullable `repo`,
+`expires_at`, and `programs`, keeping one entry per scope. Secret listings
+include `all_terminal_programs`, null when the secret has no all-terminals
+grant.
 
 Authenticated PTY-use endpoint:
 
@@ -277,6 +288,12 @@ Backend registration endpoints:
 - `DELETE /broker/v1/pty-credentials/:id`
 
 These are authenticated with the backend registration token and are only for registering or revoking PTY public keys.
+
+The node's CI status poller uses the same two paths: it registers its own
+credential without a repository and redeems `/broker/v1/use` for program `gh`.
+With no terminal or repository grant of its own, it receives only the
+all-terminals secrets that list `gh`, exactly what `with-cred -- gh` receives
+in a terminal, and its uses are audited like a terminal's.
 
 ## Non-goals
 

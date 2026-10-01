@@ -11,7 +11,7 @@ use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde_json::json;
 use sulion::db;
-use sulion::repo_ci::GithubCi;
+use sulion::repo_ci::{GithubAuth, GithubCi};
 use sulion::repo_lifecycle::RepoLifecycleGate;
 use sulion::repo_state::RepoStateManager;
 use tokio::net::TcpListener;
@@ -29,20 +29,40 @@ async fn fresh_pool() -> db::Pool {
 
 type Requests = Arc<Mutex<Vec<String>>>;
 
+const READ_TOKEN: &str = "read-token";
+
 /// Mock of `GET /repos/{owner}/{name}/actions/runs`: `acme/app` has an
-/// in-progress run, `acme/private` is not visible anonymously, and
+/// in-progress run, `acme/private` is visible only with `READ_TOKEN`, and
 /// `acme/limited` reports an exhausted rate limit.
 async fn runs(
     State(requests): State<Requests>,
     UrlPath((owner, name)): UrlPath<(String, String)>,
     Query(query): Query<std::collections::HashMap<String, String>>,
+    request_headers: HeaderMap,
 ) -> impl IntoResponse {
     let branch = query.get("branch").cloned().unwrap_or_default();
     requests
         .lock()
         .unwrap()
         .push(format!("{owner}/{name}@{branch}"));
+    let authorized = request_headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        == Some(&format!("Bearer {READ_TOKEN}"));
     match name.as_str() {
+        "private" if authorized => (
+            StatusCode::OK,
+            HeaderMap::new(),
+            Json(json!({
+                "total_count": 1,
+                "workflow_runs": [{
+                    "status": "completed",
+                    "conclusion": "success",
+                    "html_url": "https://github.com/acme/private/actions/runs/9",
+                    "updated_at": "2026-09-30T12:00:00Z"
+                }]
+            })),
+        ),
         "app" => (
             StatusCode::OK,
             HeaderMap::new(),
@@ -150,7 +170,7 @@ async fn node_records_public_actions_status_and_honours_rate_limits() {
         pool.clone(),
         repos_root,
         RepoLifecycleGate::default(),
-        GithubCi::with_api_base(api_base),
+        GithubCi::new(api_base, GithubAuth::Anonymous),
     );
     manager.sync_repos_once().await.unwrap();
     // Due rows tie, so they reconcile in name order: `ylimited` hits the rate
@@ -191,4 +211,33 @@ async fn node_records_public_actions_status_and_honours_rate_limits() {
         vec!["acme/app@main", "acme/limited@main", "acme/private@main"],
         "non-GitHub origins and paused checks make no request"
     );
+}
+
+#[tokio::test]
+async fn node_token_reveals_private_repo_runs() {
+    let pool = fresh_pool().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let repos_root = tmp.path().join("repos");
+    init_repo(
+        &repos_root.join("private"),
+        "git@github.com:acme/private.git",
+    );
+    let (api_base, _) = mock_github().await;
+    let manager = RepoStateManager::with_github_ci(
+        pool.clone(),
+        repos_root,
+        RepoLifecycleGate::default(),
+        GithubCi::new(api_base, GithubAuth::Static(READ_TOKEN.into())),
+    );
+    manager.sync_repos_once().await.unwrap();
+    manager.reconcile_due_once(1).await.unwrap();
+
+    let (_, state, branch, url, next) = ci_row(&pool, "private").await;
+    assert_eq!(state.as_deref(), Some("succeeded"));
+    assert_eq!(branch.as_deref(), Some("main"));
+    assert_eq!(
+        url.as_deref(),
+        Some("https://github.com/acme/private/actions/runs/9")
+    );
+    assert!(next - Utc::now() <= chrono::Duration::minutes(10));
 }

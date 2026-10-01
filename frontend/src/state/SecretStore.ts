@@ -19,6 +19,7 @@ interface SecretStore {
     ttlSeconds: number | null,
   ) => Promise<void>;
   revokeGrant: (sessionId: string, secretId: string, repository?: boolean) => Promise<void>;
+  setAllTerminals: (secretId: string, programs: string[] | null) => Promise<void>;
 }
 
 export const useSecretStore = create<SecretStore>()((set, get) => ({
@@ -57,6 +58,17 @@ export const useSecretStore = create<SecretStore>()((set, get) => ({
     await Promise.all((repository
       ? [...new Set([...Object.keys(get().grantsBySession), sessionId])]
       : [sessionId]).map((id) => get().refreshGrants(id)));
+  },
+
+  setAllTerminals: async (secretId, programs) => {
+    const scope = "all_terminals" as const;
+    await (programs
+      ? unlockSecretGrant({ secret_id: secretId, scope, programs })
+      : revokeSecretGrant({ secret_id: secretId, scope }));
+    await Promise.all([
+      get().refreshSecrets(),
+      ...Object.keys(get().grantsBySession).map((id) => get().refreshGrants(id)),
+    ]);
   },
 }));
 

@@ -158,4 +158,33 @@ describe("buildSecretContextMenu", () => {
 
     expect(openai.disabled).toBe(true);
   });
+
+  it("lets an explicit grant supersede an every-terminal grant", () => {
+    const onRevoke = vi.fn();
+    const onOpenManager = vi.fn();
+    const ghKeys = { scope: "global", repo: null, env_keys: ["GH_TOKEN"], updated_at: "2026-09-30T00:00:00Z" };
+    const menu = rootMenu(buildSecretContextMenu({
+      secrets: [
+        { id: "gh-read", description: "read", all_terminal_programs: ["gh"], ...ghKeys },
+        { id: "gh-write", description: "write", ...ghKeys },
+      ],
+      grants: [
+        { secret_id: "gh-read", granted_by_sub: "user", granted_by_username: null,
+          expires_at: null, repo: null, scope: "all_terminals", programs: ["gh"] },
+      ],
+      onEnable: vi.fn(), onRevoke, onOpenManager,
+    }));
+
+    const enable = menu.items.find((item) => item.kind === "submenu" && item.id === "enable-secret");
+    if (enable?.kind !== "submenu") throw new Error("missing enable submenu");
+    const write = submenu(enable.items, "gh-write");
+    expect(write.disabled).toBe(false);
+
+    const [everyTerminal] = submenu(menu.items, "Active secrets").items;
+    if (everyTerminal?.kind !== "item") throw new Error("missing every-terminal grant");
+    expect(everyTerminal.label).toBe("gh-read · every terminal for gh · manage");
+    everyTerminal.onSelect();
+    expect(onOpenManager).toHaveBeenCalled();
+    expect(onRevoke).not.toHaveBeenCalled();
+  });
 });

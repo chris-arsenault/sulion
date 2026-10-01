@@ -45,12 +45,20 @@ Right-click a repo for repo-level actions (open plans, open
 repo timeline, repo diff, go to the GitHub repo, open the latest CI run).
 Double-click a session name to rename in place.
 
-For a public GitHub repo, a chip before the branch badge shows the latest
-GitHub Actions run on the checked-out branch: succeeded, failed, or in
-progress, with its age. The node polls GitHub anonymously: every 10 minutes
-while the repo has a commit from the last 24 hours or a run in progress, and
-every 6 hours otherwise. A new commit or branch switch brings the next check
-within 10 minutes. Private repos show no chip.
+For a GitHub repo, a chip before the branch badge shows the latest GitHub
+Actions run on the checked-out branch: succeeded, failed, or in progress, with
+its age. When a secret setting `GH_TOKEN` is available to every terminal, the
+node uses it: every repo is checked every 10 minutes, including private repos
+the token can read. Without one, the node polls anonymously, only public repos
+get a chip, and checks run every 10 minutes while the repo has a commit from
+the last 24 hours or a run in progress and every 6 hours otherwise.
+
+To give agents GitHub read access without per-terminal grants, store a
+read-only fine-grained token as a secret with `GH_TOKEN` and enable it for
+every terminal in the Secrets tab with `gh` as its program.
+`with-cred -- gh ...` then works in every terminal for reads, while any other
+command still needs a grant. Granting a write-capable secret that also sets
+`GH_TOKEN` to a terminal or repository replaces the read-only token there.
 
 ## Command palette
 
@@ -257,10 +265,10 @@ working-tree changes. Each file hunk has its own **stage** button.
 ## Secrets manager
 
 The **Secrets** tab is Sulion's credential-management surface. Secrets
-are stored as env bundles such as `ANTHROPIC_API_KEY=...` or AWS
-credential sets. Grants are made from a terminal/session context menu
-with a TTL. A grant enables that credential bundle for the PTY; both
-`with-cred` and the `aws` wrapper redeem the same PTY-scoped grant.
+are stored as env bundles of any variables. Grants are made from a
+terminal/session context menu, for a time or permanently for the
+repository, or from the Secrets tab for every terminal. `with-cred --
+<command>` injects everything granted to the terminal into that command.
 
 The tab supports secret metadata and explicit key/value pairs. Once a
 secret is saved, the UI shows only env key names; blank values on update

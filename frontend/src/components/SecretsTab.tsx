@@ -13,6 +13,7 @@ import {
 } from "../api/client";
 import type { SecretEnvelope, SecretMetadata } from "../api/types";
 import { Icon } from "../icons";
+import { AllTerminalsPrograms } from "./AllTerminalsPrograms";
 import { useSecretStore } from "../state/SecretStore";
 import "./SecretsTab.css";
 
@@ -25,6 +26,7 @@ const EMPTY_SECRET: SecretEnvelope = {
 
 export function SecretsTab() {
   const refreshSecretStore = useSecretStore((store) => store.refreshSecrets);
+  const setAllTerminals = useSecretStore((store) => store.setAllTerminals);
   const [secrets, setSecrets] = useState<SecretMetadata[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draftId, setDraftId] = useState("");
@@ -130,6 +132,26 @@ export function SecretsTab() {
       setError(err instanceof Error ? err.message : "secret delete failed");
     }
   }, [draftId, loadSecrets, refreshSecretStore]);
+  const allTerminalPrograms =
+    secrets.find((secret) => secret.id === selectedId)?.all_terminal_programs ?? null;
+  const applyAllTerminals = useCallback(
+    async (programs: string[] | null) => {
+      if (!selectedId) return;
+      try {
+        await setAllTerminals(selectedId, programs);
+        await loadSecrets();
+        setNotice(
+          programs
+            ? `${selectedId} is injected into ${programs.join(", ")} in every terminal`
+            : `${selectedId} is no longer available to every terminal`,
+        );
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "grant change failed");
+      }
+    },
+    [loadSecrets, selectedId, setAllTerminals],
+  );
   const selectSecret = useCallback((id: string) => setSelectedId(id), []);
   const onDraftIdChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => setDraftId(event.target.value),
@@ -252,6 +274,14 @@ export function SecretsTab() {
                   />
                 </label>
               </div>
+              {selectedId ? (
+                <AllTerminalsPrograms
+                  key={`${selectedId}:${(allTerminalPrograms ?? []).join("\n")}`}
+                  programs={allTerminalPrograms}
+                  disabled={loadingDetail}
+                  onApply={applyAllTerminals}
+                />
+              ) : null}
 
               <div className="secrets-tab__env-head">
                 <div>
@@ -336,6 +366,7 @@ function SecretListItem({
         <span className="secrets-tab__list-title">{secret.id}</span>
         <span className="secrets-tab__list-meta">
           {secret.description || secret.scope}
+          {secret.all_terminal_programs ? " · every terminal" : ""}
         </span>
         <span className="secrets-tab__list-keys">
           {secret.env_keys.join(", ")}

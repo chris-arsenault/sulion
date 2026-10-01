@@ -52,7 +52,7 @@ pub struct RepoStateManager {
 
 impl RepoStateManager {
     pub fn new(pool: Pool, repos_root: PathBuf, lifecycle_gate: RepoLifecycleGate) -> Arc<Self> {
-        Self::with_github_ci(pool, repos_root, lifecycle_gate, GithubCi::public())
+        Self::with_github_ci(pool, repos_root, lifecycle_gate, GithubCi::brokered())
     }
 
     pub fn with_github_ci(

@@ -1,13 +1,16 @@
-//! Public GitHub Actions status for repositories with a GitHub origin.
+//! GitHub Actions status for repositories with a GitHub origin.
 //!
-//! The node polls anonymously, so every repository shares GitHub's
-//! unauthenticated budget of 60 requests per hour for this host. Active
-//! repositories are checked every ten minutes and idle ones every six hours;
-//! private or missing repositories answer 404 and are rechecked daily. A
+//! The node authenticates with the `GH_TOKEN` that the secret broker's
+//! all-terminals grants give the `gh` program, redeemed through the same path
+//! as `with-cred -- gh`. With it, every repository is checked every ten minutes and
+//! private repositories the token can read are included. Without it the node
+//! polls anonymously and shares GitHub's unauthenticated budget of 60 requests
+//! per hour: active repositories are checked every ten minutes and idle ones
+//! every six hours. Repositories that answer 404 are rechecked daily, and a
 //! rate-limit response pauses all polling until GitHub's reset time.
 
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use chrono::{DateTime, TimeZone, Utc};
@@ -25,9 +28,12 @@ const UNAVAILABLE_CADENCE_SECS: i64 = 24 * 3600;
 const ERROR_CADENCE_SECS: i64 = 1800;
 const ACTIVE_WINDOW_HOURS: i64 = 24;
 const DEFAULT_RATE_LIMIT_PAUSE_SECS: i64 = 3600;
+/// How long a token read from the broker is reused before it is read again,
+/// so a rotated or revoked token takes effect within one active cycle.
+const TOKEN_TTL: Duration = Duration::from_secs(600);
 
-/// Head, branch, or origin changes pull the next check to at most this far
-/// out, so a push is picked up on the active cadence even from an idle repo.
+/// Head or branch changes pull the next check to at most this far out, so a
+/// push is picked up on the active cadence even from an idle repo.
 pub const CHANGED_HEAD_CADENCE_SECS: i32 = ACTIVE_CADENCE_SECS as i32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,18 +150,37 @@ struct WorkflowRun {
     updated_at: DateTime<Utc>,
 }
 
+/// The broker credential id the CI poller registers on this host.
+fn service_id() -> uuid::Uuid {
+    let host = std::env::var("HOSTNAME").unwrap_or_default();
+    uuid::Uuid::new_v5(
+        &uuid::Uuid::NAMESPACE_OID,
+        format!("sulion-ci:{host}").as_bytes(),
+    )
+}
+
+/// Where the node's GitHub token comes from.
+pub enum GithubAuth {
+    /// `GH_TOKEN` from the broker grants that apply to `gh`; anonymous when none.
+    Broker,
+    Static(String),
+    Anonymous,
+}
+
 pub struct GithubCi {
     http: reqwest::Client,
     api_base: String,
+    auth: GithubAuth,
+    cached_token: tokio::sync::Mutex<Option<(Option<String>, Instant)>>,
     paused_until: Mutex<Option<DateTime<Utc>>>,
 }
 
 impl GithubCi {
-    pub fn public() -> Self {
-        Self::with_api_base(GITHUB_API_BASE)
+    pub fn brokered() -> Self {
+        Self::new(GITHUB_API_BASE, GithubAuth::Broker)
     }
 
-    pub fn with_api_base(api_base: impl Into<String>) -> Self {
+    pub fn new(api_base: impl Into<String>, auth: GithubAuth) -> Self {
         let http = reqwest::Client::builder()
             .user_agent(concat!("sulion/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(15))
@@ -164,8 +189,39 @@ impl GithubCi {
         Self {
             http,
             api_base: api_base.into().trim_end_matches('/').to_string(),
+            auth,
+            cached_token: tokio::sync::Mutex::new(None),
             paused_until: Mutex::new(None),
         }
+    }
+
+    async fn token(&self) -> Option<String> {
+        match &self.auth {
+            GithubAuth::Anonymous => None,
+            GithubAuth::Static(token) => Some(token.clone()),
+            GithubAuth::Broker => {
+                let mut cached = self.cached_token.lock().await;
+                if let Some((token, read_at)) = cached.as_ref() {
+                    if read_at.elapsed() < TOKEN_TTL {
+                        return token.clone();
+                    }
+                }
+                let token = crate::secret_pty::redeem_for_service(service_id(), "gh")
+                    .await
+                    .map(|env| env.and_then(|mut env| env.remove("GH_TOKEN")))
+                    .unwrap_or_else(|err| {
+                        tracing::warn!(%err, "redeem GitHub token from the secret broker; polling anonymously");
+                        None
+                    });
+                *cached = Some((token.clone(), Instant::now()));
+                token
+            }
+        }
+    }
+
+    /// Drop a token GitHub rejected so the next check reads it again.
+    async fn forget_token(&self) {
+        *self.cached_token.lock().await = None;
     }
 
     fn paused_until(&self) -> Option<DateTime<Utc>> {
@@ -177,8 +233,14 @@ impl GithubCi {
         *self.paused_until.lock().expect("GitHub pause lock") = Some(until);
     }
 
-    async fn latest_run(&self, owner: &str, name: &str, branch: &str) -> anyhow::Result<RunLookup> {
-        let response = self
+    async fn latest_run(
+        &self,
+        owner: &str,
+        name: &str,
+        branch: &str,
+        token: Option<&str>,
+    ) -> anyhow::Result<RunLookup> {
+        let mut request = self
             .http
             .get(format!(
                 "{}/repos/{owner}/{name}/actions/runs",
@@ -186,11 +248,19 @@ impl GithubCi {
             ))
             .query(&[("branch", branch), ("per_page", "1")])
             .header(ACCEPT, "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", "2022-11-28");
+        if let Some(token) = token {
+            request = request.bearer_auth(token);
+        }
+        let response = request
             .send()
             .await
             .context("request GitHub Actions runs")?;
         let status = response.status();
+        if status == StatusCode::UNAUTHORIZED && token.is_some() {
+            self.forget_token().await;
+            anyhow::bail!("GitHub rejected the broker's GH_TOKEN");
+        }
         if status == StatusCode::NOT_FOUND {
             return Ok(RunLookup::Unavailable);
         }
@@ -236,10 +306,14 @@ fn rate_limit_reset(status: StatusCode, headers: &HeaderMap) -> Option<DateTime<
         .or_else(|| Some(Utc::now() + chrono::Duration::seconds(DEFAULT_RATE_LIMIT_PAUSE_SECS)))
 }
 
-fn cadence_secs(head_committed_at: Option<DateTime<Utc>>, state: Option<CiState>) -> i64 {
+fn cadence_secs(
+    authenticated: bool,
+    head_committed_at: Option<DateTime<Utc>>,
+    state: Option<CiState>,
+) -> i64 {
     let recent_commit = head_committed_at
         .is_some_and(|at| Utc::now() - at < chrono::Duration::hours(ACTIVE_WINDOW_HOURS));
-    if recent_commit || state == Some(CiState::InProgress) {
+    if authenticated || recent_commit || state == Some(CiState::InProgress) {
         ACTIVE_CADENCE_SECS
     } else {
         IDLE_CADENCE_SECS
@@ -268,13 +342,18 @@ pub async fn reconcile_repo_ci(pool: &Pool, ci: &GithubCi, repo: &str) -> anyhow
     if let Some(until) = ci.paused_until() {
         return schedule_at(pool, repo, until).await;
     }
-    match ci.latest_run(&owner, &name, &branch).await {
+    let token = ci.token().await;
+    let authenticated = token.is_some();
+    match ci
+        .latest_run(&owner, &name, &branch, token.as_deref())
+        .await
+    {
         Ok(RunLookup::Run(run)) => {
-            let cadence = cadence_secs(head_committed_at, Some(run.state));
+            let cadence = cadence_secs(authenticated, head_committed_at, Some(run.state));
             store_run(pool, repo, Some(&branch), Some(&run), cadence).await
         }
         Ok(RunLookup::NoRuns) => {
-            let cadence = cadence_secs(head_committed_at, None);
+            let cadence = cadence_secs(authenticated, head_committed_at, None);
             store_run(pool, repo, Some(&branch), None, cadence).await
         }
         Ok(RunLookup::Unavailable) => {
@@ -435,18 +514,28 @@ mod tests {
     }
 
     #[test]
-    fn active_repos_use_the_short_cadence() {
+    fn anonymous_polling_uses_the_short_cadence_only_for_active_repos() {
         let recent = Some(Utc::now() - chrono::Duration::hours(1));
         let old = Some(Utc::now() - chrono::Duration::days(3));
-        assert_eq!(cadence_secs(recent, None), ACTIVE_CADENCE_SECS);
+        assert_eq!(cadence_secs(false, recent, None), ACTIVE_CADENCE_SECS);
         assert_eq!(
-            cadence_secs(old, Some(CiState::InProgress)),
+            cadence_secs(false, old, Some(CiState::InProgress)),
             ACTIVE_CADENCE_SECS
         );
         assert_eq!(
-            cadence_secs(old, Some(CiState::Succeeded)),
+            cadence_secs(false, old, Some(CiState::Succeeded)),
             IDLE_CADENCE_SECS
         );
-        assert_eq!(cadence_secs(None, None), IDLE_CADENCE_SECS);
+        assert_eq!(cadence_secs(false, None, None), IDLE_CADENCE_SECS);
+    }
+
+    #[test]
+    fn authenticated_polling_checks_every_repo_on_the_short_cadence() {
+        let old = Some(Utc::now() - chrono::Duration::days(3));
+        assert_eq!(
+            cadence_secs(true, old, Some(CiState::Succeeded)),
+            ACTIVE_CADENCE_SECS
+        );
+        assert_eq!(cadence_secs(true, None, None), ACTIVE_CADENCE_SECS);
     }
 }

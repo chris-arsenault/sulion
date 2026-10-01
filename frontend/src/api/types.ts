@@ -505,6 +505,11 @@ export interface SecretMetadata {
   repo: string | null;
   env_keys: string[];
   updated_at: string;
+  /**
+   * Programs this secret is injected into for every terminal, below terminal
+   * and repository grants; null when it has no every-terminal grant.
+   */
+  all_terminal_programs?: string[] | null;
 }
 
 export interface SecretEnvelope {
@@ -520,7 +525,12 @@ export interface SecretGrantMetadata {
   granted_by_username: string | null;
   expires_at: string | null;
   repo?: string | null;
+  scope?: SecretGrantScope;
+  /** The programs an `all_terminals` grant applies to. */
+  programs?: string[] | null;
 }
+
+export type SecretGrantScope = "terminal" | "repository" | "all_terminals";
 
 export interface CreateRepoRequest {
   name: string;

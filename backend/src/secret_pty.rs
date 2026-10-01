@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
@@ -7,7 +8,9 @@ use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use uuid::Uuid;
 
-use crate::secret_protocol::RegisterPtyCredentialRequest;
+use crate::secret_protocol::{
+    RegisterPtyCredentialRequest, SignedUseSecretRequest, UseSecretResponse,
+};
 
 pub async fn prepare_pty_credential(
     pty_session_id: Uuid,
@@ -44,7 +47,7 @@ pub async fn prepare_pty_credential(
     let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref())
         .map_err(|_| anyhow::anyhow!("load generated PTY secret broker key"))?;
     let public_key = BASE64_STANDARD.encode(key_pair.public_key().as_ref());
-    register_credential(&client, pty_session_id, public_key, repo).await?;
+    register_credential(&client, pty_session_id, public_key, Some(repo)).await?;
 
     tokio::fs::write(&key_path, pkcs8.as_ref())
         .await
@@ -68,16 +71,52 @@ pub async fn refresh_pty_credential(pty_session_id: Uuid, repo: &str) -> anyhow:
         &client,
         pty_session_id,
         BASE64_STANDARD.encode(pair.public_key().as_ref()),
-        repo,
+        Some(repo),
     )
     .await
+}
+
+/// Redeem, for a node service, the secrets that apply to `program`. The
+/// service registers `service_id` like a terminal without a repository and
+/// uses the same `/v1/use` route, so only all-terminals grants that list
+/// `program` apply. `None` when no broker is configured or nothing applies.
+pub async fn redeem_for_service(
+    service_id: Uuid,
+    program: &str,
+) -> anyhow::Result<Option<HashMap<String, String>>> {
+    let Some(client) = broker_registration_client() else {
+        return Ok(None);
+    };
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new())
+        .map_err(|_| anyhow::anyhow!("generate service secret broker key"))?;
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref())
+        .map_err(|_| anyhow::anyhow!("load service secret broker key"))?;
+    let public_key = BASE64_STANDARD.encode(key_pair.public_key().as_ref());
+    register_credential(&client, service_id, public_key, None).await?;
+    let request = SignedUseSecretRequest::sign(&key_pair, service_id, program.to_owned());
+    let endpoint = format!("{}/v1/use", client.broker_url.trim_end_matches('/'));
+    let response = client
+        .http
+        .post(&endpoint)
+        .json(&request)
+        .send()
+        .await
+        .with_context(|| format!("reach the secret broker at {endpoint}"))?;
+    if response.status() == reqwest::StatusCode::FORBIDDEN {
+        return Ok(None);
+    }
+    let response = response
+        .error_for_status()
+        .with_context(|| format!("redeem secrets for {program}"))?;
+    let body: UseSecretResponse = response.json().await.context("decode broker response")?;
+    Ok(Some(body.env))
 }
 
 async fn register_credential(
     client: &BrokerRegistrationClient,
     pty_session_id: Uuid,
     public_key: String,
-    repo: &str,
+    repo: Option<&str>,
 ) -> anyhow::Result<()> {
     // Reaching the broker and being refused by it are different problems with
     // different fixes, and the refusal reason is the whole diagnosis. Reported
@@ -95,7 +134,7 @@ async fn register_credential(
         .json(&RegisterPtyCredentialRequest {
             pty_session_id,
             public_key,
-            repo: Some(repo.to_owned()),
+            repo: repo.map(str::to_owned),
         })
         .send()
         .await

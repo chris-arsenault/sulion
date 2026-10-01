@@ -228,10 +228,13 @@ are not deletable.
 
 The node's repo-state loop records each checkout's `origin` remote, with any URL
 credentials removed, in `repo_runtime_state`. For GitHub remotes it also polls
-the anonymous GitHub Actions API for the latest run on the checked-out branch
-(`backend/src/repo_ci.rs`). The cadence is sized to GitHub's anonymous budget
-of 60 requests per hour, and a rate-limit response pauses every check until
-reset.
+the GitHub Actions API for the latest run on the checked-out branch
+(`backend/src/repo_ci.rs`). It authenticates with the `GH_TOKEN` that
+all-terminals grants give the `gh` program, redeemed from the secret broker the
+way a terminal redeems it (see [secrets.md](secrets.md#broker-api)), cached for
+ten minutes, and checks every repository every ten minutes. Without that
+token it polls anonymously on a slower cadence sized to GitHub's budget of 60
+requests per hour. A rate-limit response pauses every check until reset.
 The control API derives the GitHub web URL from the stored remote when it reads
 the row.
 
@@ -256,14 +259,14 @@ The node launches PTYs with Sulion-managed wrapper tools on `PATH`:
 - `sulion-code` for structural code navigation
 - `sulion plan` / `sulion activity` for published progress and operational state
 - `sulion archive` to queue transcript archive cycles and restores for the control process
-- `with-cred` for general env-bundle injection
-- `aws` as a wrapper over the real AWS CLI
+- `with-cred` for env-bundle injection into one command
 - `docker` as either the real CLI in direct mode or a constrained runner client
 
-`with-cred` and `aws` are the only supported secret-consumption paths. Grants
-enable a secret for one PTY with a TTL or for one repository without an expiry.
-Both wrappers redeem either kind. The backend does not own the broker master
-key and does not expose an alternate secret-injection mechanism.
+`with-cred --` is the only supported secret-consumption path. Grants enable a
+secret for one PTY with a TTL, for one repository without an expiry, or for
+every terminal at the lowest precedence and only for listed program names, so
+any other command still needs a grant. The backend does not own the broker
+master key and does not expose an alternate secret-injection mechanism.
 
 ### Library and future prompts
 
@@ -350,13 +353,13 @@ and remains supported. See [the retired Ableton contract](ableton-file-contract.
 
 ## Broker surface
 
-The broker is a separate Rust service and container. It stores encrypted secret payloads, tracks active grants, validates direct browser requests for secrets/grants management, and redeems active grants for wrapper use.
+The broker is a separate Rust service and container. It stores encrypted secret payloads, tracks active grants, validates direct browser requests for secrets/grants management, and redeems active grants for `with-cred`.
 
 Its responsibilities are intentionally narrow:
 
 - store env-bundle secrets
-- manage timed PTY grants and permanent repository grants
-- redeem active grants through `with-cred` and `aws`
+- manage timed PTY grants, permanent repository grants, and every-terminal grants
+- redeem active grants through `with-cred --`
 
 It does not run PTYs, ingest transcripts, or serve the main application API.
 

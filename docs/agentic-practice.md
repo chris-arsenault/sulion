@@ -84,12 +84,12 @@ the master key. Full trust boundary in [`secrets.md`](secrets.md).
 
 `with-cred -- <command>` injects secrets as environment variables for the
 lifetime of one spawned command. Nothing lands in shell startup files, `.env`
-files, or logs. Grants are scoped to a `(PTY, secret)` pair with a TTL and are
-managed from terminal and session context menus.
+files, or logs. Grants are scoped to a terminal with a TTL, to a repository
+without one, or to every terminal as a lowest-precedence default that applies
+only to the programs it lists, so any other command still needs a grant.
 
-`with-cred` and the `aws` wrapper are the supported consumption paths. A refusal
-is legible: exit code 66, with stderr naming the `(pty, tool, secret_id)` tuple
-that was denied, so the operator can grant it deliberately.
+`with-cred --` is the only consumption path. A refusal is legible: exit code 66
+with the broker's reason on stderr, so the operator can grant deliberately.
 
 The shipped agent instructions treat that refusal as a boundary. An agent that
 hits a credential failure reports it and stops, rather than searching SSM, env

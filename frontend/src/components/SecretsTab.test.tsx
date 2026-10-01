@@ -26,6 +26,16 @@ function installSecretFetchMock(initial: SecretRecord[] = []) {
         return jsonResponse(Array.from(records.values()).map((record) => record.metadata));
       }
 
+      if (url === "/broker/v1/grants") {
+        const grant = body as { secret_id: string; programs?: string[] };
+        const record = records.get(grant.secret_id)!;
+        record.metadata = {
+          ...record.metadata,
+          all_terminal_programs: method === "POST" ? (grant.programs ?? null) : null,
+        };
+        return new Response(null, { status: method === "POST" ? 201 : 204 });
+      }
+
       const match = url.match(/^\/broker\/v1\/secrets\/([^/]+)$/);
       if (!match) {
         return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
@@ -189,5 +199,50 @@ describe("SecretsTab", () => {
         env: { ANTHROPIC_API_KEY: "" },
       });
     });
+  });
+
+  it("grants a secret to every terminal for listed programs and revokes it", async () => {
+    const server = installSecretFetchMock([
+      {
+        metadata: {
+          id: "gh-read",
+          description: "GitHub read-only",
+          scope: "global",
+          repo: null,
+          env_keys: ["GH_TOKEN"],
+          updated_at: "2026-09-30T00:00:00Z",
+          all_terminal_programs: null,
+        },
+        envelope: {
+          description: "GitHub read-only",
+          scope: "global",
+          repo: null,
+          env: { GH_TOKEN: "" },
+        },
+      },
+    ]);
+    const user = userEvent.setup();
+    render(<SecretsTab />);
+
+    const enable = await screen.findByRole("button", { name: "Enable for every terminal" });
+    expect((enable as HTMLButtonElement).disabled).toBe(true);
+
+    await user.type(screen.getByLabelText("Every-terminal programs"), "gh");
+    await user.click(enable);
+    await screen.findByText("gh-read is injected into gh in every terminal");
+    expect(screen.getByText(/GitHub read-only · every terminal/)).toBeDefined();
+    const sent = (method: string) =>
+      server.requests.find(
+        (request) => request.url === "/broker/v1/grants" && request.method === method,
+      );
+    expect(sent("POST")?.body).toEqual({
+      secret_id: "gh-read",
+      scope: "all_terminals",
+      programs: ["gh"],
+    });
+
+    await user.click(await screen.findByRole("button", { name: "Disable for every terminal" }));
+    await screen.findByText("gh-read is no longer available to every terminal");
+    expect(sent("DELETE")?.body).toEqual({ secret_id: "gh-read", scope: "all_terminals" });
   });
 });

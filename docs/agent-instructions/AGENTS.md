@@ -132,18 +132,14 @@ and other secret-backed flows.
 
 ```bash
 with-cred -- command --flag
-with-cred secret-id -- command --flag
-aws s3 ls
 ```
 
 - Keep API keys in broker-backed environment variables.
 - Use placeholder names in scripts, Makefiles, docs, and `.env.example` files.
 - If a command reports a missing environment variable, retry that same command
   once through `with-cred --` before proposing another fix.
-- The pre-wrapped `/opt/sulion/bin/aws` already uses the AWS credential path;
-  run ordinary AWS CLI commands directly.
-- Broker denial exits `66` and names the refused `(pty, tool, secret_id)`.
-  Report it exactly so I can grant the intended credential.
+- Broker denial exits `66` with the broker's reason. Report it exactly so I can
+  grant the intended credential.
 - Write environment-neutral documentation: mention `with-cred --` for this
   environment and ordinary environment variables for other installations.
 

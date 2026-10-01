@@ -27,7 +27,9 @@ use crate::secret_protocol::{
 };
 
 mod browser_auth;
+mod redeem;
 use browser_auth::{check_browser_authority, revoke_browser_principal, revoke_browser_session};
+use redeem::use_secret;
 
 #[derive(Debug, Clone)]
 pub struct BrokerConfig {
@@ -224,14 +226,21 @@ struct SecretMetadata {
     repo: Option<String>,
     env_keys: Vec<String>,
     updated_at: chrono::DateTime<chrono::Utc>,
+    /// Programs this secret is injected into for every terminal, at the lowest
+    /// precedence; absent when it has no all-terminals grant.
+    all_terminal_programs: Option<Vec<String>>,
 }
 
 async fn list_secrets(
     State(state): State<Arc<BrokerState>>,
 ) -> Result<Json<Vec<SecretMetadata>>, BrokerError> {
     let rows = sqlx::query(
-        "SELECT id, description, scope, repo, ciphertext, nonce, updated_at \
-         FROM secret_broker.secrets ORDER BY id",
+        "SELECT s.id, s.description, s.scope, s.repo, s.ciphertext, s.nonce, s.updated_at, \
+                g.programs AS all_terminal_programs \
+         FROM secret_broker.secrets s \
+         LEFT JOIN secret_broker.grants g ON g.secret_id = s.id \
+           AND g.scope = 'all_terminals' AND g.revoked_at IS NULL \
+         ORDER BY s.id",
     )
     .fetch_all(&state.pool)
     .await?;
@@ -249,6 +258,7 @@ async fn list_secrets(
             repo: row.get("repo"),
             env_keys,
             updated_at: row.get("updated_at"),
+            all_terminal_programs: row.get("all_terminal_programs"),
         });
     }
     Ok(Json(items))
@@ -377,6 +387,10 @@ struct GrantMetadata {
     granted_by_username: Option<String>,
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
     repo: Option<String>,
+    /// `terminal`, `repository`, or `all_terminals`.
+    scope: String,
+    /// The programs an `all_terminals` grant applies to.
+    programs: Option<Vec<String>>,
 }
 
 async fn list_grants(
@@ -384,13 +398,15 @@ async fn list_grants(
     Query(query): Query<GrantsQuery>,
 ) -> Result<Json<Vec<GrantMetadata>>, BrokerError> {
     let rows = sqlx::query(
-        "SELECT secret_id, granted_by_sub, granted_by_username, expires_at, repo \
+        "SELECT secret_id, granted_by_sub, granted_by_username, expires_at, repo, scope, \
+                programs \
          FROM ( \
-           SELECT DISTINCT ON (secret_id, repo) \
-             secret_id, granted_by_sub, granted_by_username, expires_at, repo \
+           SELECT DISTINCT ON (secret_id, scope) \
+             secret_id, granted_by_sub, granted_by_username, expires_at, repo, scope, \
+             programs \
            FROM secret_broker.effective_grants \
            WHERE pty_session_id = $1 \
-           ORDER BY secret_id, repo, expires_at DESC \
+           ORDER BY secret_id, scope, expires_at DESC \
          ) latest \
          ORDER BY expires_at DESC",
     )
@@ -405,6 +421,8 @@ async fn list_grants(
                 granted_by_username: row.get("granted_by_username"),
                 expires_at: row.get("expires_at"),
                 repo: row.get("repo"),
+                scope: row.get("scope"),
+                programs: row.get("programs"),
             })
             .collect(),
     ))
@@ -412,19 +430,88 @@ async fn list_grants(
 
 #[derive(Debug, Deserialize)]
 struct GrantRequest {
-    pty_session_id: Uuid,
+    /// The terminal for `terminal` scope, or whose repository `repository`
+    /// scope resolves; unused for `all_terminals`.
+    pty_session_id: Option<Uuid>,
     secret_id: String,
     ttl_seconds: Option<i64>,
     #[serde(default)]
     scope: GrantScope,
+    /// Program names an `all_terminals` grant applies to.
+    programs: Option<Vec<String>>,
 }
 
-#[derive(Debug, Default, Deserialize, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum GrantScope {
     #[default]
     Terminal,
     Repository,
+    AllTerminals,
+}
+
+impl GrantScope {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Terminal => "terminal",
+            Self::Repository => "repository",
+            Self::AllTerminals => "all_terminals",
+        }
+    }
+}
+
+/// The grant row a request addresses: one active grant per secret and target.
+struct GrantTarget {
+    scope: GrantScope,
+    pty_session_id: Option<Uuid>,
+    repo: Option<String>,
+}
+
+impl GrantTarget {
+    async fn resolve(
+        state: &BrokerState,
+        scope: GrantScope,
+        pty_session_id: Option<Uuid>,
+    ) -> Result<Self, BrokerError> {
+        let pty =
+            || pty_session_id.ok_or_else(|| BrokerError::bad_request("pty_session_id is required"));
+        Ok(match scope {
+            GrantScope::Terminal => Self {
+                scope,
+                pty_session_id: Some(pty()?),
+                repo: None,
+            },
+            GrantScope::Repository => Self {
+                scope,
+                pty_session_id: None,
+                repo: Some(registered_repo(state, pty()?).await?),
+            },
+            GrantScope::AllTerminals => Self {
+                scope,
+                pty_session_id: None,
+                repo: None,
+            },
+        })
+    }
+
+    async fn revoke(
+        &self,
+        executor: impl sqlx::PgExecutor<'_>,
+        secret_id: &str,
+    ) -> Result<(), BrokerError> {
+        sqlx::query(
+            "UPDATE secret_broker.grants SET revoked_at = NOW() \
+             WHERE secret_id = $1 AND scope = $2 AND revoked_at IS NULL \
+               AND pty_session_id IS NOT DISTINCT FROM $3 AND repo IS NOT DISTINCT FROM $4",
+        )
+        .bind(secret_id)
+        .bind(self.scope.as_str())
+        .bind(self.pty_session_id)
+        .bind(&self.repo)
+        .execute(executor)
+        .await?;
+        Ok(())
+    }
 }
 
 async fn registered_repo(state: &BrokerState, pty: Uuid) -> Result<String, BrokerError> {
@@ -444,56 +531,53 @@ async fn unlock_grant(
     Json(body): Json<GrantRequest>,
 ) -> Result<StatusCode, BrokerError> {
     validate_secret_id(&body.secret_id)?;
-    if body.scope == GrantScope::Repository {
-        if body.ttl_seconds.is_some() {
+    let ttl_seconds = match (body.scope, body.ttl_seconds) {
+        (GrantScope::Terminal, Some(ttl)) if (60..=86_400).contains(&ttl) => Some(ttl as i32),
+        (GrantScope::Terminal, _) => {
             return Err(BrokerError::bad_request(
-                "repository grants do not expire; omit ttl_seconds",
-            ));
+                "ttl_seconds must be between 60 and 86400",
+            ))
         }
-        let repo = registered_repo(&state, body.pty_session_id).await?;
-        sqlx::query(
-            "INSERT INTO secret_broker.grants \
-             (id, repo, secret_id, granted_by_sub, granted_by_username) \
-             VALUES ($1, $2, $3, $4, $5) \
-             ON CONFLICT (repo, secret_id) WHERE repo IS NOT NULL AND revoked_at IS NULL \
-             DO NOTHING",
-        )
-        .bind(Uuid::new_v4())
-        .bind(repo)
-        .bind(body.secret_id)
-        .bind(user.sub)
-        .bind(user.username)
-        .execute(&state.pool)
-        .await?;
-        return Ok(StatusCode::CREATED);
-    }
-    let ttl_seconds = body.ttl_seconds.unwrap_or(0);
-    if !(60..=86_400).contains(&ttl_seconds) {
-        return Err(BrokerError::bad_request(
-            "ttl_seconds must be between 60 and 86400",
-        ));
-    }
+        (_, None) => None,
+        (_, Some(_)) => {
+            return Err(BrokerError::bad_request(
+                "only terminal grants expire; omit ttl_seconds",
+            ))
+        }
+    };
+    let programs = match (body.scope, body.programs) {
+        (GrantScope::AllTerminals, Some(programs)) => Some(redeem::validate_programs(programs)?),
+        (GrantScope::AllTerminals, None) => {
+            return Err(BrokerError::bad_request(
+                "an all-terminals grant needs at least one program",
+            ))
+        }
+        (_, None) => None,
+        (_, Some(_)) => {
+            return Err(BrokerError::bad_request(
+                "only all-terminals grants take programs",
+            ))
+        }
+    };
+    let target = GrantTarget::resolve(&state, body.scope, body.pty_session_id).await?;
     let mut tx = state.pool.begin().await?;
-    sqlx::query(
-        "UPDATE secret_broker.grants \
-         SET revoked_at = NOW() \
-         WHERE pty_session_id = $1 AND secret_id = $2 AND revoked_at IS NULL",
-    )
-    .bind(body.pty_session_id)
-    .bind(&body.secret_id)
-    .execute(&mut *tx)
-    .await?;
+    target.revoke(&mut *tx, &body.secret_id).await?;
     sqlx::query(
         "INSERT INTO secret_broker.grants \
-         (id, pty_session_id, secret_id, granted_by_sub, granted_by_username, expires_at) \
-         VALUES ($1, $2, $3, $4, $5, NOW() + make_interval(secs => $6::int))",
+         (id, scope, pty_session_id, repo, secret_id, granted_by_sub, granted_by_username, \
+          expires_at, programs) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, \
+                 NOW() + make_interval(secs => $8::int), $9)",
     )
     .bind(Uuid::new_v4())
-    .bind(body.pty_session_id)
+    .bind(target.scope.as_str())
+    .bind(target.pty_session_id)
+    .bind(&target.repo)
     .bind(&body.secret_id)
     .bind(user.sub)
     .bind(user.username)
-    .bind(ttl_seconds as i32)
+    .bind(ttl_seconds)
+    .bind(programs)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -502,7 +586,7 @@ async fn unlock_grant(
 
 #[derive(Debug, Deserialize)]
 struct RevokeGrantRequest {
-    pty_session_id: Uuid,
+    pty_session_id: Option<Uuid>,
     secret_id: String,
     #[serde(default)]
     scope: GrantScope,
@@ -512,27 +596,8 @@ async fn revoke_grant(
     State(state): State<Arc<BrokerState>>,
     Json(body): Json<RevokeGrantRequest>,
 ) -> Result<StatusCode, BrokerError> {
-    if body.scope == GrantScope::Repository {
-        let repo = registered_repo(&state, body.pty_session_id).await?;
-        sqlx::query(
-            "UPDATE secret_broker.grants SET revoked_at = NOW() \
-             WHERE repo = $1 AND secret_id = $2 AND revoked_at IS NULL",
-        )
-        .bind(repo)
-        .bind(body.secret_id)
-        .execute(&state.pool)
-        .await?;
-        return Ok(StatusCode::NO_CONTENT);
-    }
-    sqlx::query(
-        "UPDATE secret_broker.grants \
-         SET revoked_at = NOW() \
-         WHERE pty_session_id = $1 AND secret_id = $2 AND revoked_at IS NULL",
-    )
-    .bind(body.pty_session_id)
-    .bind(body.secret_id)
-    .execute(&state.pool)
-    .await?;
+    let target = GrantTarget::resolve(&state, body.scope, body.pty_session_id).await?;
+    target.revoke(&state.pool, &body.secret_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -584,167 +649,6 @@ async fn revoke_pty_credential(
     .execute(&state.pool)
     .await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-async fn use_secret(
-    State(state): State<Arc<BrokerState>>,
-    Json(body): Json<SignedUseSecretRequest>,
-) -> Result<Json<UseSecretResponse>, BrokerError> {
-    verify_signed_use_request(&state, &body).await?;
-    validate_tool_name(&body.tool)?;
-    let rows = if let Some(secret_id) = &body.secret_id {
-        validate_secret_id(secret_id)?;
-        sqlx::query(
-            "SELECT s.id, s.ciphertext, s.nonce \
-             FROM secret_broker.effective_grants g \
-             JOIN secret_broker.secrets s ON s.id = g.secret_id \
-             WHERE g.pty_session_id = $1 \
-               AND g.secret_id = $2 \
-             ORDER BY g.expires_at DESC \
-             LIMIT 1",
-        )
-        .bind(body.pty_session_id)
-        .bind(secret_id)
-        .fetch_all(&state.pool)
-        .await?
-    } else {
-        sqlx::query(
-            "SELECT DISTINCT ON (s.id) s.id, s.ciphertext, s.nonce, g.expires_at \
-             FROM secret_broker.effective_grants g \
-             JOIN secret_broker.secrets s ON s.id = g.secret_id \
-             WHERE g.pty_session_id = $1 \
-             ORDER BY s.id, g.expires_at DESC",
-        )
-        .bind(body.pty_session_id)
-        .fetch_all(&state.pool)
-        .await?
-    };
-    if rows.is_empty() {
-        return Err(BrokerError::forbidden(redemption_forbidden_message(
-            &body.tool,
-            body.secret_id.as_deref(),
-        )));
-    }
-    let mut env = HashMap::new();
-    let mut granted_secret_ids = Vec::with_capacity(rows.len());
-    for row in rows {
-        let secret_id: String = row.get("id");
-        let ciphertext: Vec<u8> = row.get("ciphertext");
-        let nonce: Vec<u8> = row.get("nonce");
-        let secret_env = state.crypto.decrypt_env(&ciphertext, &nonce)?;
-        if !secret_matches_redemption(&body.tool, body.secret_id.as_deref(), &secret_env) {
-            continue;
-        }
-        for (key, value) in secret_env {
-            if env.insert(key.clone(), value).is_some() {
-                return Err(BrokerError::bad_request(format!(
-                    "conflicting env var {key} across unlocked secrets"
-                )));
-            }
-        }
-        granted_secret_ids.push(secret_id);
-    }
-    if granted_secret_ids.is_empty() {
-        return Err(BrokerError::forbidden(redemption_forbidden_message(
-            &body.tool,
-            body.secret_id.as_deref(),
-        )));
-    }
-    for secret_id in granted_secret_ids {
-        sqlx::query(
-            "INSERT INTO secret_broker.use_audit \
-             (id, pty_session_id, secret_id, tool, used_at) VALUES ($1, $2, $3, $4, NOW())",
-        )
-        .bind(Uuid::new_v4())
-        .bind(body.pty_session_id)
-        .bind(secret_id)
-        .bind(&body.tool)
-        .execute(&state.pool)
-        .await?;
-    }
-    Ok(Json(UseSecretResponse { env }))
-}
-
-fn secret_matches_redemption(
-    tool: &str,
-    requested_secret_id: Option<&str>,
-    env: &HashMap<String, String>,
-) -> bool {
-    if requested_secret_id.is_some() {
-        return true;
-    }
-    if tool == "aws" {
-        return env.contains_key("AWS_ACCESS_KEY_ID") && env.contains_key("AWS_SECRET_ACCESS_KEY");
-    }
-    true
-}
-
-fn redemption_forbidden_message(tool: &str, requested_secret_id: Option<&str>) -> &'static str {
-    if tool == "aws" && requested_secret_id.is_none() {
-        "no AWS credential is enabled for this terminal"
-    } else {
-        "secret is not unlocked for this terminal"
-    }
-}
-
-async fn verify_signed_use_request(
-    state: &BrokerState,
-    body: &SignedUseSecretRequest,
-) -> Result<(), BrokerError> {
-    if body.nonce.trim().is_empty() || body.nonce.len() > 128 {
-        return Err(BrokerError::unauthorized("invalid nonce"));
-    }
-    let now = chrono::Utc::now().timestamp();
-    if (body.timestamp_unix_seconds - now).abs() > 60 {
-        return Err(BrokerError::unauthorized("stale secret-use request"));
-    }
-    let row = sqlx::query(
-        "SELECT public_key \
-         FROM secret_broker.pty_credentials \
-         WHERE pty_session_id = $1 AND revoked_at IS NULL",
-    )
-    .bind(body.pty_session_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some(row) = row else {
-        return Err(BrokerError::unauthorized("unknown PTY credential"));
-    };
-    let public_key: String = row.get("public_key");
-    let public_key = BASE64_STANDARD
-        .decode(public_key.as_bytes())
-        .map_err(|_| BrokerError::unauthorized("invalid registered PTY key"))?;
-    let signature = BASE64_STANDARD
-        .decode(body.signature.as_bytes())
-        .map_err(|_| BrokerError::unauthorized("invalid request signature"))?;
-    let canonical = canonical_use_payload(
-        body.pty_session_id,
-        body.secret_id.as_deref(),
-        &body.tool,
-        body.timestamp_unix_seconds,
-        &body.nonce,
-    );
-    signature::UnparsedPublicKey::new(&signature::ED25519, public_key)
-        .verify(canonical.as_bytes(), &signature)
-        .map_err(|_| BrokerError::unauthorized("invalid request signature"))?;
-
-    sqlx::query(
-        "DELETE FROM secret_broker.pty_use_nonces WHERE seen_at < NOW() - INTERVAL '5 minutes'",
-    )
-    .execute(&state.pool)
-    .await?;
-    let inserted = sqlx::query(
-        "INSERT INTO secret_broker.pty_use_nonces (pty_session_id, nonce, seen_at) \
-         VALUES ($1, $2, NOW()) \
-         ON CONFLICT DO NOTHING",
-    )
-    .bind(body.pty_session_id)
-    .bind(&body.nonce)
-    .execute(&state.pool)
-    .await?;
-    if inserted.rows_affected() == 0 {
-        return Err(BrokerError::unauthorized("replayed secret-use request"));
-    }
-    Ok(())
 }
 
 struct SecretCrypto {
@@ -883,15 +787,6 @@ fn validate_secret_id(id: &str) -> Result<(), BrokerError> {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
     {
         return Err(BrokerError::bad_request("invalid secret id"));
-    }
-    Ok(())
-}
-
-fn validate_tool_name(tool: &str) -> Result<(), BrokerError> {
-    if !matches!(tool, "with-cred" | "aws") {
-        return Err(BrokerError::bad_request(
-            "tool must be one of: with-cred, aws",
-        ));
     }
     Ok(())
 }

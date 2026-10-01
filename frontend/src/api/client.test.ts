@@ -453,6 +453,17 @@ describe("api client", () => {
     expect(grants[1].expires_at).toBe(timed.expires_at);
     expect(grants[1].repo).toBeUndefined();
   });
+
+  it("keeps an every-terminal grant beside a terminal grant for the same secret", async () => {
+    const everyTerminal = {
+      secret_id: "gh-read", granted_by_sub: "sub", granted_by_username: "user",
+      expires_at: null, repo: null, scope: "all_terminals",
+    };
+    const timed = { ...everyTerminal, expires_at: "2026-01-01T00:05:00Z", scope: "terminal" };
+    stubFetch(async () => jsonResponse([timed, everyTerminal]));
+    const grants = await listSecretGrants("pty-1");
+    expect(grants.map((grant) => grant.scope)).toEqual(["all_terminals", "terminal"]);
+  });
 });
 
 describe("fileRawUrl", () => {

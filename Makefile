@@ -16,7 +16,7 @@ validate-deploy:
 	# The devenv image duplicates the PTY-facing assets from backend/ because
 	# CI builds each image from its own directory. Byte-identical or the build
 	# fails: drift here means PTYs behave differently per toolset image.
-	@for f in bin/sulion-agent bin/cl bin/co bin/docker bin/docker-compose bin/aws bin/with-cred bin/sulion-retrieve bin/sulion-code hooks/session-start.sh hooks/activity-hook.sh entrypoint.sh docs/toolset.md; do \
+	@for f in bin/sulion-agent bin/cl bin/co bin/docker bin/docker-compose bin/with-cred bin/sulion-retrieve bin/sulion-code hooks/session-start.sh hooks/activity-hook.sh entrypoint.sh docs/toolset.md; do \
 	  cmp -s backend/$$f devenv/$$f \
 	    || { echo "devenv/$$f drifted from backend/$$f"; exit 1; }; \
 	done

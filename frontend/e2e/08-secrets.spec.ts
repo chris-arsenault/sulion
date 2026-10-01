@@ -84,12 +84,12 @@ test("creates single-line and multiline secret values, redeems them, and revokes
   await tab(page, "terminal", label).click();
   await runTerminalCommand(
     page,
-    `with-cred ${secretId} -- sh -lc 'printf "E2E_SECRET_VALUE=$E2E_SECRET_VALUE\\n"'`,
+    `with-cred -- sh -lc 'printf "E2E_SECRET_VALUE=$E2E_SECRET_VALUE\\n"'`,
   );
   await expectTerminalToContain(page, `E2E_SECRET_VALUE=${secretValue}`);
   await runTerminalCommand(
     page,
-    `with-cred ${secretId} -- sh -lc 'key_lines=$(printf "%s" "$SSH_PRIVATE_KEY" | wc -l); printf "SSH_KEY_LINES=%s\\n" "$key_lines"'`,
+    `with-cred -- sh -lc 'key_lines=$(printf "%s" "$SSH_PRIVATE_KEY" | wc -l); printf "SSH_KEY_LINES=%s\\n" "$key_lines"'`,
   );
   await expectTerminalToContain(page, "SSH_KEY_LINES=3");
 
@@ -101,7 +101,7 @@ test("creates single-line and multiline secret values, redeems them, and revokes
   await tab(page, "terminal", label).click();
   await runTerminalCommand(
     page,
-    `with-cred ${secretId} -- sh -lc 'printf "SHOULD_NOT_PRINT=$E2E_SECRET_VALUE\\n"'`,
+    `with-cred -- sh -lc 'printf "SHOULD_NOT_PRINT=$E2E_SECRET_VALUE\\n"'`,
   );
   await expectTerminalToContain(page, "credential-helper: broker denied access");
 });

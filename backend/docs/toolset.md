@@ -152,48 +152,24 @@ Use `--json` for machine-readable output.
 
 ## Credentials
 
-Sulion supports exactly two credential paths.
-
-### `with-cred`
-
-Use this for env-based secrets:
+Run any command that needs a secret through `with-cred`:
 
 ```sh
-with-cred <secret-id> -- <command...>
 with-cred -- <command...>
 ```
 
-Examples:
-
-```sh
-with-cred claude-api -- claude
-with-cred openai-api -- codex
-with-cred -- make test
-```
-
-Rules:
-
-- `with-cred <secret-id> -- ...` injects one enabled secret bundle.
-- `with-cred -- ...` injects all currently enabled bundles for this PTY.
-- It works only after the user grants that secret to this PTY in the Sulion UI.
-- Secret values are injected only into the child process, not into the shell.
-- Each request is signed with this PTY's Sulion-managed key; there is no shared
-  credential token for all terminals.
-
-### `aws`
-
-Use `aws` normally:
-
-```sh
-aws sts get-caller-identity
-aws s3 ls
-```
-
-The `aws` command is a Sulion wrapper. It redeems any currently enabled
-secret for this PTY that contains `AWS_ACCESS_KEY_ID` and
-`AWS_SECRET_ACCESS_KEY`, then runs the real AWS CLI. The grant is the same
-PTY-to-secret grant used by `with-cred`; there is no separate AWS grant mode.
-If no AWS-shaped secret is enabled, it fails with an access error.
+- It injects the secrets that apply to this terminal into the command's
+  environment only, not into the shell.
+- The user grants secrets in the Sulion UI: to this terminal for a time or to
+  this repository permanently, which apply to any command. The user can also
+  make a secret a default for every terminal, but only for specific programs;
+  it is injected when the command is one of them and is ignored otherwise. A
+  terminal or repository grant replaces a default value for the same variable.
+- If nothing applies, or two grants of the same kind set one variable, it exits
+  `66` with the broker's reason. A refusal means the user has not granted what
+  this command needs: ask them.
+- A credential with too little access fails at the remote service, for example
+  with HTTP 403. Ask the user for the grant rather than retrying.
 
 Do not try to fetch credentials from files, AWS SSM, or external vaults from a
 PTY. Ask the user to enable the needed Sulion secret for the terminal.
