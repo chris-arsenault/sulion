@@ -93,11 +93,23 @@ pub struct ModelUsage {
 
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct ModelPrice {
+    pub basis: ModelPriceBasis,
     pub input_usd_per_million: f64,
     pub cached_input_usd_per_million: f64,
     pub cache_write_usd_per_million: f64,
     pub cache_write_1h_usd_per_million: f64,
     pub output_usd_per_million: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ModelPriceBasis {
+    Published,
+    Estimated {
+        reference_model: &'static str,
+        source_url: &'static str,
+        note: &'static str,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -231,6 +243,7 @@ fn price(
 ) -> CatalogPrice {
     CatalogPrice {
         public: ModelPrice {
+            basis: ModelPriceBasis::Published,
             input_usd_per_million: input,
             cached_input_usd_per_million: cached_input,
             cache_write_usd_per_million: cache_write,
@@ -247,12 +260,25 @@ fn price(
 
 fn catalog_price(model: &str) -> Option<CatalogPrice> {
     match model {
+        "fugu" => {
+            let mut estimate = price(5.0, 0.5, 5.0, 5.0, 30.0);
+            estimate.public.basis = ModelPriceBasis::Estimated {
+                reference_model: "fugu-ultra-v2.0",
+                source_url: "https://console.sakana.ai/pricing",
+                note: "Uses Fugu Ultra standard rates as a proxy. Plain Fugu bills by the underlying models used. Cache writes use the input rate; orchestration tokens not recorded by the harness and tool fees are excluded.",
+            };
+            Some(estimate)
+        }
+        // https://developers.openai.com/api/docs/models/gpt-6.1-sol, checked 2026-10-09.
+        "gpt-6.1-sol" => Some(price(2.0, 0.1, 2.5, 2.5, 10.0)),
         // https://developers.openai.com/api/docs/models/<model>, checked 2026-09-11.
         // OpenAI cache writes cost 1.25 times standard input.
         "gpt-6-astra" => Some(price(10.0, 1.0, 12.5, 12.5, 50.0)),
         "gpt-5.6-sol" | "gpt-5.6" => Some(price(4.0, 0.4, 5.0, 5.0, 20.0)),
         "gpt-5.6-terra" => Some(price(2.0, 0.2, 2.5, 2.5, 12.0)),
         "gpt-5.6-luna" => Some(price(0.2, 0.02, 0.25, 0.25, 1.2)),
+        // https://platform.claude.com/docs/en/about-claude/pricing, checked 2026-10-09.
+        "claude-opus-5-5" => Some(price(4.0, 0.2, 5.0, 8.0, 20.0)),
         // https://platform.claude.com/docs/en/about-claude/pricing, checked 2026-09-11.
         "claude-opus-5" | "claude-opus-4-8" => Some(price(5.0, 0.5, 6.25, 10.0, 25.0)),
         "claude-fable-5" => Some(price(10.0, 1.0, 12.5, 20.0, 50.0)),
@@ -427,11 +453,11 @@ async fn usage_metrics(pool: &Pool) -> anyhow::Result<UsageMetrics> {
         model_window_days: DAILY_WINDOW_DAYS,
         daily,
         pricing: UsagePricingMetadata {
-            basis: "API list price (standard tier)",
-            as_of: NaiveDate::from_ymd_opt(2026, 9, 11).unwrap_or(now),
+            basis: "API list price (standard tier), with marked approximate rates",
+            as_of: NaiveDate::from_ymd_opt(2026, 10, 9).unwrap_or(now),
             openai_source_url: "https://developers.openai.com/api/docs/pricing",
             anthropic_source_url: "https://platform.claude.com/docs/en/about-claude/pricing",
-            note: "Current catalog rates apply to all dates, not historical invoices. Subscription fees, service-tier and long-context multipliers are excluded. Unknown models make estimates incomplete.",
+            note: "Current catalog rates apply to all dates, not historical invoices. Approximate model rates are marked and included in totals. Subscription fees, service-tier and long-context multipliers are excluded. Unknown models make estimates incomplete.",
         },
     })
 }
@@ -536,18 +562,21 @@ mod tests {
             standard_input: 1_000_000,
             cache_read: 2_000_000,
             cache_write: 1_000_000,
-            cache_write_1h: 0,
+            cache_write_1h: 1_000_000,
             output: 1_000_000,
         };
         for (model, expected) in [
-            ("gpt-6-astra", 74.5),
-            ("gpt-5.6-sol", 29.8),
-            ("gpt-5.6", 29.8),
-            ("gpt-5.6-terra", 16.9),
-            ("gpt-5.6-luna", 1.69),
-            ("claude-opus-4-8", 37.25),
-            ("claude-fable-5-1", 73.0),
-            ("claude-haiku-4-5-20251001", 7.45),
+            ("fugu", 46.0),
+            ("gpt-6.1-sol", 17.2),
+            ("gpt-6-astra", 87.0),
+            ("gpt-5.6-sol", 34.8),
+            ("gpt-5.6", 34.8),
+            ("gpt-5.6-terra", 19.4),
+            ("gpt-5.6-luna", 1.94),
+            ("claude-opus-5-5", 37.4),
+            ("claude-opus-4-8", 47.25),
+            ("claude-fable-5-1", 93.0),
+            ("claude-haiku-4-5-20251001", 9.45),
         ] {
             let mut total = UsageAccumulator::default();
             total.add(usage, Some(model));
@@ -555,5 +584,35 @@ mod tests {
             assert_eq!(window.estimated_cost_usd, expected, "{model}");
             assert_eq!(window.unpriced_tokens, 0, "{model}");
         }
+    }
+
+    #[test]
+    fn approximate_prices_preserve_their_basis_and_contribute_to_totals() {
+        let fugu = catalog_price("fugu").unwrap();
+        let serialized = serde_json::to_value(fugu.public).unwrap();
+        assert_eq!(serialized["basis"]["kind"], "estimated");
+        assert_eq!(serialized["basis"]["reference_model"], "fugu-ultra-v2.0");
+        assert_eq!(
+            serialized["basis"]["source_url"],
+            "https://console.sakana.ai/pricing"
+        );
+        assert!(serialized["basis"]["note"]
+            .as_str()
+            .unwrap()
+            .contains("proxy"));
+        let published = serde_json::to_value(catalog_price("gpt-6.1-sol").unwrap().public).unwrap();
+        assert_eq!(published["basis"]["kind"], "published");
+
+        let usage = UsageComponents {
+            standard_input: 1_000_000,
+            cache_read: 2_000_000,
+            output: 1_000_000,
+            ..Default::default()
+        };
+        let mut total = UsageAccumulator::default();
+        total.add(usage, Some("fugu"));
+        total.add(usage, Some("gpt-6.1-sol"));
+        assert_eq!(total.window().estimated_cost_usd, 48.2);
+        assert_eq!(total.window().unpriced_tokens, 0);
     }
 }

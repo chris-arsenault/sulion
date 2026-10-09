@@ -306,6 +306,16 @@ function TokensSection({ data }: { data: MetricsResponse }) {
                 <span className="metrics-model__rates">
                   {row.price ? priceLabel(row.price) : "price unavailable"}
                 </span>
+                {row.price?.basis?.kind === "estimated" ? (
+                  <Tooltip label={row.price.basis.note}>
+                    <span className="metrics-model__rates">
+                      proxy: {" "}
+                      <a href={row.price.basis.source_url} target="_blank" rel="noreferrer">
+                        {row.price.basis.reference_model}
+                      </a>
+                    </span>
+                  </Tooltip>
+                ) : null}
               </td>
               <td className="tabular">
                 {formatTokens(row.usage.input_tokens)}
@@ -320,7 +330,9 @@ function TokensSection({ data }: { data: MetricsResponse }) {
               </td>
               <td className="tabular">{formatTokens(row.usage.output_tokens)}</td>
               <td className="tabular">
-                {row.price ? formatUsd(row.usage.estimated_cost_usd) : "unpriced"}
+                {row.price
+                  ? `${row.price.basis?.kind === "estimated" ? "~" : ""}${formatUsd(row.usage.estimated_cost_usd)}`
+                  : "unpriced"}
               </td>
             </tr>
           ))}
@@ -411,11 +423,12 @@ function usageTooltip(
 }
 
 function priceLabel(price: MetricsModelPrice): string {
+  const prefix = price.basis?.kind === "estimated" ? "approximate · " : "";
   const write =
     price.cache_write_1h_usd_per_million === price.cache_write_usd_per_million
       ? formatRate(price.cache_write_usd_per_million)
       : `${formatRate(price.cache_write_usd_per_million)}/${formatRate(price.cache_write_1h_usd_per_million)} 1h`;
-  return `per 1M: in ${formatRate(price.input_usd_per_million)} · write ${write} · cached ${formatRate(price.cached_input_usd_per_million)} · out ${formatRate(price.output_usd_per_million)}`;
+  return `${prefix}per 1M: in ${formatRate(price.input_usd_per_million)} · write ${write} · cached ${formatRate(price.cached_input_usd_per_million)} · out ${formatRate(price.output_usd_per_million)}`;
 }
 
 // ─── Flow ───────────────────────────────────────────────────────────

@@ -4,6 +4,13 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Model pricing
+
+- Add API-equivalent rates for GPT-6.1 Sol and Claude Opus 5.5.
+- Include Fugu in cost estimates using Fugu Ultra rates as an approximate proxy.
+  Model prices carry a published or estimated basis; approximate rates show
+  their reference model and explanation in the Metrics pane.
+
 ### Repository links and CI status
 
 - The repo context menu offers **Go to repo**, which opens the GitHub page for

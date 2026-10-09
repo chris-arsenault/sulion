@@ -107,6 +107,14 @@ usage is marked as incomplete in totals and on the chart. Repository hash
 fallbacks use a mapping computed once per query to avoid repeated scans of the
 frequently updated runtime-state table.
 
+Each model price carries a tagged `basis`: `published` for list rates, or
+`estimated` with a `reference_model`, `source_url`, and explanation in `note`.
+Plain `fugu` uses Fugu Ultra v2.0 standard rates as an approximate proxy:
+$5/M input, $0.50/M cache reads, and $30/M output. Cache writes use the input
+rate. Plain Fugu actually bills by the underlying models used; orchestration
+tokens absent from harness receipts and tool fees are excluded. Approximate
+rates contribute to totals and are labelled in the model table.
+
 ## Process ownership
 
 - Control owns SQLx migrations and Postgres-only startup maintenance.

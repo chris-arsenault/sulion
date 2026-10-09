@@ -76,7 +76,7 @@ function fixture(): MetricsResponse {
           model: "claude-opus-5",
           agent: "claude-code",
           usage: { input_tokens: 900_000, cache_write_input_tokens: 200_000, cached_input_tokens: 40_000_000, output_tokens: 300_000, estimated_cost_usd: 34.75, unpriced_tokens: 0 },
-          price: { input_usd_per_million: 5, cached_input_usd_per_million: 0.5, cache_write_usd_per_million: 6.25, cache_write_1h_usd_per_million: 10, output_usd_per_million: 25 },
+          price: { basis: { kind: "published" }, input_usd_per_million: 5, cached_input_usd_per_million: 0.5, cache_write_usd_per_million: 6.25, cache_write_1h_usd_per_million: 10, output_usd_per_million: 25 },
         },
       ],
       model_window_days: 14,
@@ -238,6 +238,56 @@ describe("MetricsPane", () => {
     const tokens = await screen.findByRole("region", { name: "Token spend" });
     expect(within(tokens).getByText("~$0.00")).toBeDefined();
     expect(tokens.querySelector('[data-cost-incomplete="true"]')).toBeNull();
+  });
+
+  it("distinguishes approximate model rates from published and unknown prices", async () => {
+    const data = fixture();
+    const note = "Uses Fugu Ultra rates as a proxy; actual billing depends on the underlying models.";
+    data.usage.by_model.push({
+      model: "fugu",
+      agent: "codex",
+      usage: {
+        input_tokens: 1_000_000, cache_write_input_tokens: 0,
+        cached_input_tokens: 2_000_000, output_tokens: 1_000_000,
+        estimated_cost_usd: 36, unpriced_tokens: 0,
+      },
+      price: {
+        basis: {
+          kind: "estimated",
+          reference_model: "fugu-ultra-v2.0",
+          source_url: "https://console.sakana.ai/pricing",
+          note,
+        },
+        input_usd_per_million: 5, cached_input_usd_per_million: 0.5,
+        cache_write_usd_per_million: 5, cache_write_1h_usd_per_million: 5,
+        output_usd_per_million: 30,
+      },
+    });
+    data.usage.by_model.push({
+      model: "unknown-model",
+      agent: "codex",
+      usage: { ...data.usage.by_model[1].usage, estimated_cost_usd: 0, unpriced_tokens: 4_000_000 },
+      price: null,
+    });
+    stubFetch(data);
+    render(<MetricsPane />);
+
+    const table = await screen.findByRole("table", { name: "Tokens by model" });
+    const fugu = within(table).getByText("fugu").closest("tr")!;
+    expect(within(fugu).getByText(/^approximate · per 1M:/)).toBeDefined();
+    expect(within(fugu).getByText("~$36.00")).toBeDefined();
+    const source = within(fugu).getByRole("link", { name: "fugu-ultra-v2.0" });
+    expect(source.getAttribute("href")).toBe("https://console.sakana.ai/pricing");
+    const user = userEvent.setup();
+    await user.hover(source);
+    await waitFor(() => expect(screen.getByRole("tooltip").textContent).toBe(note));
+
+    const published = within(table).getByText("claude-opus-5").closest("tr")!;
+    expect(within(published).queryByText(/approximate/)).toBeNull();
+    expect(within(published).getByText("$34.75")).toBeDefined();
+    const unknown = within(table).getByText("unknown-model").closest("tr")!;
+    expect(within(unknown).getByText("price unavailable")).toBeDefined();
+    expect(within(unknown).getByText("unpriced")).toBeDefined();
   });
 
   it("surfaces fetch errors", async () => {

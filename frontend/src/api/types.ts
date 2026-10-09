@@ -1063,12 +1063,22 @@ export interface MetricsUsage {
 }
 
 export interface MetricsModelPrice {
+  basis: MetricsModelPriceBasis;
   input_usd_per_million: number;
   cached_input_usd_per_million: number;
   cache_write_usd_per_million: number;
   cache_write_1h_usd_per_million: number;
   output_usd_per_million: number;
 }
+
+export type MetricsModelPriceBasis =
+  | { kind: "published" }
+  | {
+      kind: "estimated";
+      reference_model: string;
+      source_url: string;
+      note: string;
+    };
 
 export interface MetricsModelUsage {
   model: string;
