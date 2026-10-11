@@ -25,7 +25,9 @@ describe("DisplayStore", () => {
 
   it("persists the mode and rehydrates it", () => {
     useDisplay.getState().setMode("timeline");
-    expect(window.localStorage.getItem("sulion.display.mode.v1")).toBe("timeline");
+    expect(window.localStorage.getItem("sulion.display.mode.v1")).toBe(
+      "timeline",
+    );
     useDisplay.setState({ mode: "split" });
     resetDisplayStore();
     expect(useDisplay.getState().mode).toBe("timeline");
@@ -37,5 +39,27 @@ describe("DisplayStore", () => {
     expect(window.localStorage.getItem("sulion.sidebar.pinned.v1")).toBe("0");
     resetDisplayStore();
     expect(useDisplay.getState().sidebarPinned).toBe(false);
+  });
+
+  it("defaults to grouped sessions on desktop and open sessions on mobile", () => {
+    expect(useDisplay.getState().desktopSidebarView).toBe("sessions");
+    expect(useDisplay.getState().mobileSidebarView).toBe("open");
+  });
+
+  it("persists sidebar views independently across reloads", () => {
+    useDisplay.getState().setSidebarView("desktop", "full");
+    expect(useDisplay.getState().mobileSidebarView).toBe("open");
+    useDisplay.getState().setSidebarView("mobile", "sessions");
+    resetDisplayStore();
+    expect(useDisplay.getState().desktopSidebarView).toBe("full");
+    expect(useDisplay.getState().mobileSidebarView).toBe("sessions");
+  });
+
+  it("ignores invalid stored sidebar views", () => {
+    localStorage.setItem("sulion.sidebar.view.desktop.v1", "invalid");
+    localStorage.setItem("sulion.sidebar.view.mobile.v1", "invalid");
+    resetDisplayStore();
+    expect(useDisplay.getState().desktopSidebarView).toBe("sessions");
+    expect(useDisplay.getState().mobileSidebarView).toBe("open");
   });
 });

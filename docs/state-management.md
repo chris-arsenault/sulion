@@ -12,7 +12,7 @@ No React context stores.
 | `SessionStore` | PTY sessions, repos, meta-repos, workspaces, open-plan summaries, selected-session URL sync, both hierarchy expansion maps, unread tracking, polling. |
 | `RepoStore` | Per-repo git status, file tree state, expansion state, polling. |
 | `TabStore` | Thin tab registry only. |
-| `DisplayStore` | Persisted desktop display mode and sidebar pin; transient peek visibility. |
+| `DisplayStore` | Persisted desktop display mode, sidebar pin, and separate desktop/mobile sidebar views; transient peek visibility. |
 | `TimelineControlsStore` | Shared, persisted timeline filters, turn-navigation mode, and timeline text size. |
 | `TurnDetailStore` | Shared unfiltered turn records, resumable cursors, and coalesced reads for session, repository, and subagent views. Retains at most 24 turns unless active consumers require more. |
 | `ContextMenuStore` | Ephemeral open/close state for the global context-menu layer. |
@@ -124,6 +124,13 @@ mobile timeline-only behavior and the prompt injection target without writing
 over the desktop preference. Library and future-prompt actions use the same
 typed injection command: timeline composer in timeline-only mode, terminal in
 split and terminal-only modes.
+
+Sidebar view choices persist separately under
+`sulion.sidebar.view.desktop.v1` and `sulion.sidebar.view.mobile.v1`.
+Changing viewport selects the corresponding preference without overwriting
+the other. Sidebar search and creation drafts stay component-local; session
+and meta-repo expansion continue to belong to `SessionStore`. Search reveals
+matching groups temporarily without changing their saved expansion state.
 
 ## Why Zustand
 

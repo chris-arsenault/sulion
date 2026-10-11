@@ -14,7 +14,6 @@ import {
 import { useShallow } from "zustand/react/shallow";
 
 import type {
-  AgentLaunchType,
   DirEntryView,
   GitCommit,
   MetaRepoView,
@@ -40,6 +39,12 @@ import type { TabStore } from "../state/TabStore";
 import { useTabs } from "../state/TabStore";
 import { Icon } from "../icons";
 import { Tooltip } from "./ui";
+import { useDisplay, type SidebarView } from "../state/DisplayStore";
+import {
+  NewSessionForm,
+  SessionCreationDialog,
+  type NewSessionFormValue,
+} from "./SessionCreationDialog";
 import type { MenuItem } from "./common/contextMenuStore";
 import {
   contextMenuHandler,
@@ -57,12 +62,12 @@ import "./LibrarySection.css";
 
 const EMPTY_SECRET_GRANTS: SecretGrantMetadata[] = [];
 const EMPTY_SESSIONS: SessionView[] = [];
-
-type NewSessionFormValue = {
-  working_dir: string;
-  launch_agent: AgentLaunchType | "";
-  workspace_mode: "isolated" | "main";
-};
+const SESSION_STATE_STYLES = {
+  live: { icon: "session-live", tone: "ok" },
+  dead: { icon: "session-dead", tone: "crit" },
+  orphaned: { icon: "session-orphan", tone: "atn" },
+  deleted: { icon: "session-dead", tone: "mute" },
+} as const;
 
 type MetaRepoFormValue = {
   name: string;
@@ -70,7 +75,32 @@ type MetaRepoFormValue = {
   primary_repo_name: string;
 };
 
+type CreationTarget = string | null | undefined;
+
 export function Sidebar() {
+  const isMobile = useIsMobileLayout();
+  const layout = isMobile ? "mobile" : "desktop";
+  const view = useDisplay((store) =>
+    isMobile ? store.mobileSidebarView : store.desktopSidebarView,
+  );
+  const setSidebarView = useDisplay((store) => store.setSidebarView);
+  const compact = view !== "full";
+  const [query, setQuery] = useState("");
+  const [creationTarget, setCreationTarget] =
+    useState<CreationTarget>(undefined);
+  const changeView = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      setSidebarView(layout, event.currentTarget.dataset.view as SidebarView);
+    },
+    [layout, setSidebarView],
+  );
+  const changeQuery = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) =>
+      setQuery(event.target.value),
+    [],
+  );
+  const openCreation = useCallback(() => setCreationTarget(null), []);
+  const closeCreation = useCallback(() => setCreationTarget(undefined), []);
   const {
     sessions,
     repos,
@@ -123,9 +153,35 @@ export function Sidebar() {
 
   const openSession = useSessionNavigation();
 
+  const filteredSessions = useMemo(() => {
+    if (!compact) return sessions;
+    const parentNames = new Map(
+      metaRepos.flatMap((meta) =>
+        meta.members.map((member) => [member.repo_name, meta.name] as const),
+      ),
+    );
+    return sessions.filter((session) =>
+      matchesSession(session, query, parentNames.get(session.repo)),
+    );
+  }, [compact, sessions, query, metaRepos]);
+  const openSessions = useMemo(
+    () =>
+      filteredSessions
+        .filter((session) => session.state === "live")
+        .sort(sessionCompare),
+    [filteredSessions],
+  );
+
   const grouped = useMemo(
-    () => groupByRepo(sessions, repos, workspaces, plans),
-    [sessions, repos, workspaces, plans],
+    () =>
+      groupByRepo(filteredSessions, repos, workspaces, plans).filter(
+        (group) =>
+          !compact ||
+          !query.trim() ||
+          group.sessions.length > 0 ||
+          group.name.toLowerCase().includes(query.trim().toLowerCase()),
+      ),
+    [filteredSessions, repos, workspaces, plans, compact, query],
   );
   const groupedByName = useMemo(
     () => new Map(grouped.map((group) => [group.name, group])),
@@ -146,7 +202,7 @@ export function Sidebar() {
   );
   const collectionSessionsByMetaRepo = useMemo(() => {
     const result = new Map<string, SessionView[]>();
-    for (const session of sessions) {
+    for (const session of filteredSessions) {
       const id = session.meta_repo?.id;
       if (!id) continue;
       const group = result.get(id) ?? [];
@@ -155,7 +211,22 @@ export function Sidebar() {
     }
     for (const group of result.values()) group.sort(sessionCompare);
     return result;
-  }, [sessions]);
+  }, [filteredSessions]);
+
+  const visibleMetaRepos = useMemo(
+    () =>
+      metaRepos.filter(
+        (metaRepo) =>
+          !compact ||
+          !query.trim() ||
+          (collectionSessionsByMetaRepo.get(metaRepo.id)?.length ?? 0) > 0 ||
+          metaRepo.name.toLowerCase().includes(query.trim().toLowerCase()) ||
+          metaRepo.members.some((member) =>
+            groupedByName.has(member.repo_name),
+          ),
+      ),
+    [metaRepos, compact, query, collectionSessionsByMetaRepo, groupedByName],
+  );
 
   // Called directly from the click handler so sidebar interaction does
   // not fight file/tab activation through the global tab state.
@@ -171,10 +242,15 @@ export function Sidebar() {
       Object.fromEntries(
         grouped.map((group) => [
           group.name,
-          repoExpansion[group.name] ?? defaultRepoExpanded(group),
+          compact && query.trim()
+            ? true
+            : (repoExpansion[group.name] ??
+              (compact
+                ? group.sessions.length > 0
+                : defaultRepoExpanded(group))),
         ]),
       ),
-    [grouped, repoExpansion],
+    [grouped, repoExpansion, compact, query],
   );
   const collapseTargetRepos = useMemo(() => {
     const emptyExpanded = grouped
@@ -223,6 +299,7 @@ export function Sidebar() {
   } | null>(null);
 
   useAppCommand("reveal-file", ({ repo, path }) => {
+    setSidebarView(layout, "full");
     setRevealRequest({ repo, path, nonce: Date.now() });
   });
 
@@ -256,12 +333,16 @@ export function Sidebar() {
   );
 
   useAppCommand("reveal-repo", ({ repo }) => {
+    if (view === "open") setSidebarView(layout, "sessions");
+    setQuery("");
     const parentId = repoParentByName.get(repo);
     if (parentId) setMetaRepoExpanded(parentId, true);
     scrollAnchorIntoView(() => repoAnchorsRef.current.get(repo) ?? null);
   });
 
   useAppCommand("reveal-meta-repo", ({ metaRepoId }) => {
+    if (view === "open") setSidebarView(layout, "sessions");
+    setQuery("");
     setMetaRepoExpanded(metaRepoId, true);
     scrollAnchorIntoView(
       () => metaRepoAnchorsRef.current.get(metaRepoId) ?? null,
@@ -269,6 +350,10 @@ export function Sidebar() {
   });
 
   useAppCommand("new-meta-repo-session", ({ metaRepoId }) => {
+    if (compact) {
+      setCreationTarget(metaRepoId);
+      return;
+    }
     setMetaRepoExpanded(metaRepoId, true);
     setNewSessionFor(null);
     setNewSessionForMetaRepo(metaRepoId);
@@ -394,36 +479,38 @@ export function Sidebar() {
     async (repoName: string, form: NewSessionFormValue) => {
       setFormError(null);
       try {
-        await createSession({
+        const created = await createSession({
           repo: repoName,
           working_dir: form.working_dir.trim() || undefined,
           workspace_mode: form.workspace_mode,
           launch_agent: form.launch_agent || undefined,
         });
         setNewSessionFor(null);
+        openSessionTabs(created.id);
       } catch (err) {
         setFormError(messageOf(err));
       }
     },
-    [createSession],
+    [createSession, openSessionTabs],
   );
 
   const onCreateMetaRepoSession = useCallback(
     async (metaRepoId: string, form: NewSessionFormValue) => {
       setFormError(null);
       try {
-        await createSession({
+        const created = await createSession({
           meta_repo_id: metaRepoId,
           working_dir: form.working_dir.trim() || undefined,
           workspace_mode: form.workspace_mode,
           launch_agent: form.launch_agent || undefined,
         });
         setNewSessionForMetaRepo(null);
+        openSessionTabs(created.id);
       } catch (err) {
         setFormError(messageOf(err));
       }
     },
-    [createSession],
+    [createSession, openSessionTabs],
   );
 
   const requestDelete = useCallback((id: string) => setPendingDeleteId(id), []);
@@ -564,43 +651,107 @@ export function Sidebar() {
   );
 
   return (
-    <div className="sidebar">
+    <div
+      className={compact ? "sidebar sidebar--compact" : "sidebar"}
+      data-sidebar-view={view}
+    >
       <div className="sidebar__header">
         <span className="sidebar__logo">sulion</span>
         <div className="sidebar__header-actions">
-          <Tooltip label={collapseButtonLabel}>
-            <button
-              type="button"
-              className="sidebar__icon-button"
-              onClick={collapseRepoGroups}
-              aria-label={collapseButtonLabel}
-              disabled={collapseTargetRepos.length === 0}
-            >
-              <Icon name="panel-left-close" size={14} />
-            </button>
-          </Tooltip>
-          <Tooltip label="New repo">
-            <button
-              type="button"
-              className="sidebar__icon-button"
-              onClick={toggleNewRepoOpen}
-              aria-label="New repo"
-            >
-              <Icon name="plus" size={14} />
-            </button>
-          </Tooltip>
-          <Tooltip label="New meta-repository">
-            <button
-              type="button"
-              className="sidebar__icon-button"
-              onClick={openNewMetaRepo}
-              aria-label="New meta-repository"
-            >
-              <Icon name="layers" size={14} />
-            </button>
-          </Tooltip>
+          {view !== "open" && (
+            <Tooltip label={collapseButtonLabel}>
+              <button
+                type="button"
+                className="sidebar__icon-button"
+                onClick={collapseRepoGroups}
+                aria-label={collapseButtonLabel}
+                disabled={collapseTargetRepos.length === 0}
+              >
+                <Icon name="panel-left-close" size={14} />
+              </button>
+            </Tooltip>
+          )}
+          {!compact && (
+            <>
+              <Tooltip label="New repo">
+                <button
+                  type="button"
+                  className="sidebar__icon-button"
+                  onClick={toggleNewRepoOpen}
+                  aria-label="New repo"
+                >
+                  <Icon name="plus" size={14} />
+                </button>
+              </Tooltip>
+              <Tooltip label="New meta-repository">
+                <button
+                  type="button"
+                  className="sidebar__icon-button"
+                  onClick={openNewMetaRepo}
+                  aria-label="New meta-repository"
+                >
+                  <Icon name="layers" size={14} />
+                </button>
+              </Tooltip>
+            </>
+          )}
         </div>
       </div>
+
+      <div className="sidebar__views" role="group" aria-label="Sidebar view">
+        <button
+          type="button"
+          data-view="open"
+          aria-pressed={view === "open"}
+          onClick={changeView}
+        >
+          Open
+        </button>
+        <button
+          type="button"
+          data-view="sessions"
+          aria-pressed={view === "sessions"}
+          onClick={changeView}
+        >
+          Sessions
+        </button>
+        <button
+          type="button"
+          data-view="full"
+          aria-pressed={view === "full"}
+          onClick={changeView}
+        >
+          Full
+        </button>
+      </div>
+      {compact && (
+        <input
+          className="sidebar__search"
+          type="search"
+          aria-label="Search sessions"
+          placeholder="Search sessions…"
+          value={query}
+          onChange={changeQuery}
+        />
+      )}
+      <button
+        type="button"
+        className="sidebar__new-session"
+        onClick={openCreation}
+      >
+        <Icon name="plus" size={14} />
+        New session
+      </button>
+      {creationTarget !== undefined && (
+        <SessionCreationDialog
+          repos={repos}
+          metaRepos={metaRepos}
+          initialMetaRepoId={creationTarget ?? undefined}
+          createSession={createSession}
+          onCreated={openSessionTabs}
+          onClose={closeCreation}
+        />
+      )}
 
       {newRepoOpen && (
         <NewRepoForm onSubmit={onCreateRepo} onCancel={closeNewRepo} />
@@ -624,40 +775,118 @@ export function Sidebar() {
       {formError && <div className="sidebar__error">{formError}</div>}
 
       <div className="sidebar__scroll">
-        {grouped.length === 0 && metaRepos.length === 0 && (
-          <div className="sidebar__muted">No repos yet.</div>
-        )}
+        {view === "open" ? (
+          <>
+            {openSessions.map((session) => (
+              <SessionRow
+                key={session.id}
+                session={session}
+                selected={session.id === selectedSessionId}
+                unread={isUnread(session.id, session.last_event_at)}
+                onSelect={openSessionTabs}
+                onDelete={requestDelete}
+                onUpdate={onUpdateSession}
+                compact
+                showScope
+              />
+            ))}
+            {openSessions.length === 0 && (
+              <div className="sidebar__muted">
+                {query.trim()
+                  ? "No matching open sessions."
+                  : "No open sessions. Start a session or switch to Sessions to browse history."}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            {grouped.length === 0 && visibleMetaRepos.length === 0 && (
+              <div className="sidebar__muted">
+                {compact && query.trim()
+                  ? "No matching sessions."
+                  : "No repos yet."}
+              </div>
+            )}
 
-        <ul className="sidebar__tree">
-          {metaRepos.map((metaRepo) => (
-            <MetaRepoGroup
-              key={metaRepo.id}
-              metaRepo={metaRepo}
-              sessions={
-                collectionSessionsByMetaRepo.get(metaRepo.id) ?? EMPTY_SESSIONS
-              }
-              expanded={metaRepoExpansion[metaRepo.id] ?? true}
-              newSessionOpen={newSessionForMetaRepo === metaRepo.id}
-              onToggle={setMetaRepoExpanded}
-              onSetNewSession={setNewSessionForMetaRepo}
-              onCreateSession={onCreateMetaRepoSession}
-              onEdit={setMetaRepoEditorId}
-              onDelete={setPendingMetaRepoDelete}
-              registerAnchor={registerMetaRepoAnchor}
-              selection={repoGroupSelection}
-              sessionOps={repoGroupSessionOps}
-              isUnread={isUnread}
-            >
-              <ul className="sidebar__tree sidebar__tree--nested">
-                {metaRepo.members
-                  .slice()
-                  .sort((a, b) => a.repo_name.localeCompare(b.repo_name))
-                  .map((member) => {
-                    const group = groupedByName.get(member.repo_name);
-                    return group ? (
+            <ul className="sidebar__tree">
+              {visibleMetaRepos.map((metaRepo) => (
+                <MetaRepoGroup
+                  key={metaRepo.id}
+                  metaRepo={metaRepo}
+                  compact={compact}
+                  sessions={
+                    collectionSessionsByMetaRepo.get(metaRepo.id) ??
+                    EMPTY_SESSIONS
+                  }
+                  expanded={
+                    compact && query.trim()
+                      ? true
+                      : (metaRepoExpansion[metaRepo.id] ?? true)
+                  }
+                  newSessionOpen={newSessionForMetaRepo === metaRepo.id}
+                  onToggle={setMetaRepoExpanded}
+                  onSetNewSession={setNewSessionForMetaRepo}
+                  onCreateSession={onCreateMetaRepoSession}
+                  onEdit={setMetaRepoEditorId}
+                  onDelete={setPendingMetaRepoDelete}
+                  registerAnchor={registerMetaRepoAnchor}
+                  selection={repoGroupSelection}
+                  sessionOps={repoGroupSessionOps}
+                  isUnread={isUnread}
+                >
+                  <ul className="sidebar__tree sidebar__tree--nested">
+                    {metaRepo.members
+                      .slice()
+                      .sort((a, b) => a.repo_name.localeCompare(b.repo_name))
+                      .map((member) => {
+                        const group = groupedByName.get(member.repo_name);
+                        return group ? (
+                          <RepoGroup
+                            key={group.name}
+                            group={group}
+                            compact={compact}
+                            expanded={
+                              expandedByRepo[group.name] ??
+                              defaultRepoExpanded(group)
+                            }
+                            newSessionRepoName={newSessionFor}
+                            renamingRepoName={renamingRepoName}
+                            handlers={repoGroupHandlers}
+                            selection={repoGroupSelection}
+                            repoOps={repoGroupRepoOps}
+                            sessionOps={repoGroupSessionOps}
+                            workspaceOps={repoGroupWorkspaceOps}
+                            isUnread={isUnread}
+                            onError={setFormError}
+                            revealRequest={
+                              revealRequest?.repo === group.name
+                                ? revealRequest
+                                : null
+                            }
+                          />
+                        ) : compact ? null : (
+                          <li
+                            key={member.repo_name}
+                            className="sidebar__missing-repo"
+                          >
+                            {member.repo_name} (missing)
+                          </li>
+                        );
+                      })}
+                  </ul>
+                </MetaRepoGroup>
+              ))}
+              {ungrouped.length > 0 && (
+                <li className="sidebar__ungrouped">
+                  {metaRepos.length > 0 && (
+                    <div className="sidebar__ungrouped-label">Ungrouped</div>
+                  )}
+                  <ul className="sidebar__tree sidebar__tree--nested">
+                    {ungrouped.map((group) => (
                       <RepoGroup
                         key={group.name}
                         group={group}
+                        compact={compact}
                         expanded={
                           expandedByRepo[group.name] ??
                           defaultRepoExpanded(group)
@@ -677,49 +906,13 @@ export function Sidebar() {
                             : null
                         }
                       />
-                    ) : (
-                      <li
-                        key={member.repo_name}
-                        className="sidebar__missing-repo"
-                      >
-                        {member.repo_name} (missing)
-                      </li>
-                    );
-                  })}
-              </ul>
-            </MetaRepoGroup>
-          ))}
-          {ungrouped.length > 0 && (
-            <li className="sidebar__ungrouped">
-              {metaRepos.length > 0 && (
-                <div className="sidebar__ungrouped-label">Ungrouped</div>
+                    ))}
+                  </ul>
+                </li>
               )}
-              <ul className="sidebar__tree sidebar__tree--nested">
-                {ungrouped.map((group) => (
-                  <RepoGroup
-                    key={group.name}
-                    group={group}
-                    expanded={
-                      expandedByRepo[group.name] ?? defaultRepoExpanded(group)
-                    }
-                    newSessionRepoName={newSessionFor}
-                    renamingRepoName={renamingRepoName}
-                    handlers={repoGroupHandlers}
-                    selection={repoGroupSelection}
-                    repoOps={repoGroupRepoOps}
-                    sessionOps={repoGroupSessionOps}
-                    workspaceOps={repoGroupWorkspaceOps}
-                    isUnread={isUnread}
-                    onError={setFormError}
-                    revealRequest={
-                      revealRequest?.repo === group.name ? revealRequest : null
-                    }
-                  />
-                ))}
-              </ul>
-            </li>
-          )}
-        </ul>
+            </ul>
+          </>
+        )}
       </div>
       {pendingMetaRepoDelete && (
         <ConfirmDialog
@@ -795,11 +988,15 @@ export function Sidebar() {
           onCancel={cancelPendingWorkspaceDelete}
         />
       )}
-      <LibraryPanel />
-      <StatsStrip />
-      <div className="sidebar__admin">
-        <ReindexButton />
-      </div>
+      <LibraryPanel compact={compact} />
+      {!compact && (
+        <>
+          <StatsStrip />
+          <div className="sidebar__admin">
+            <ReindexButton />
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -906,7 +1103,33 @@ function sessionCompare(a: SessionView, b: SessionView): number {
   const ap = a.pinned ? 1 : 0;
   const bp = b.pinned ? 1 : 0;
   if (ap !== bp) return bp - ap;
-  return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  return (
+    new Date(b.created_at).getTime() - new Date(a.created_at).getTime() ||
+    a.id.localeCompare(b.id)
+  );
+}
+
+function matchesSession(
+  session: SessionView,
+  query: string,
+  parentName?: string,
+): boolean {
+  const terms = query.trim().toLowerCase().split(/\s+/);
+  const text = [
+    session.label,
+    session.agent_label,
+    session.repo,
+    session.meta_repo?.name,
+    parentName,
+    session.workspace?.branch_name,
+    session.current_session_agent,
+    session.agent_runtime?.agent,
+    session.id,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return terms.every((term) => text.includes(term));
 }
 
 function workspaceCompare(a: WorkspaceView, b: WorkspaceView): number {
@@ -917,6 +1140,7 @@ function workspaceCompare(a: WorkspaceView, b: WorkspaceView): number {
 }
 
 interface MetaRepoGroupProps {
+  compact?: boolean;
   metaRepo: MetaRepoView;
   sessions: SessionView[];
   expanded: boolean;
@@ -937,6 +1161,7 @@ interface MetaRepoGroupProps {
 }
 
 function MetaRepoGroup({
+  compact = false,
   metaRepo,
   sessions,
   expanded,
@@ -960,10 +1185,10 @@ function MetaRepoGroup({
     () => onToggle(metaRepo.id, !expanded),
     [expanded, metaRepo.id, onToggle],
   );
-  const toggleNewSession = useCallback(
-    () => onSetNewSession(newSessionOpen ? null : metaRepo.id),
-    [metaRepo.id, newSessionOpen, onSetNewSession],
-  );
+  const toggleNewSession = useCallback(() => {
+    if (!expanded) onToggle(metaRepo.id, true);
+    onSetNewSession(newSessionOpen ? null : metaRepo.id);
+  }, [expanded, metaRepo.id, newSessionOpen, onSetNewSession, onToggle]);
   const cancelNewSession = useCallback(
     () => onSetNewSession(null),
     [onSetNewSession],
@@ -1017,34 +1242,40 @@ function MetaRepoGroup({
             <Icon name="plus" size={12} />
           </button>
         </Tooltip>
-        <Tooltip label={`Edit ${metaRepo.name}`}>
-          <button
-            type="button"
-            className="sidebar__icon-button sidebar__meta-action"
-            aria-label={`Edit ${metaRepo.name}`}
-            onClick={edit}
-          >
-            <Icon name="settings" size={12} />
-          </button>
-        </Tooltip>
-        <Tooltip label={`Delete ${metaRepo.name}`}>
-          <button
-            type="button"
-            className="sidebar__icon-button sidebar__icon-button--danger sidebar__meta-action"
-            aria-label={`Delete ${metaRepo.name}`}
-            onClick={requestDelete}
-          >
-            <Icon name="trash-2" size={12} />
-          </button>
-        </Tooltip>
+        {!compact && (
+          <>
+            <Tooltip label={`Edit ${metaRepo.name}`}>
+              <button
+                type="button"
+                className="sidebar__icon-button sidebar__meta-action"
+                aria-label={`Edit ${metaRepo.name}`}
+                onClick={edit}
+              >
+                <Icon name="settings" size={12} />
+              </button>
+            </Tooltip>
+            <Tooltip label={`Delete ${metaRepo.name}`}>
+              <button
+                type="button"
+                className="sidebar__icon-button sidebar__icon-button--danger sidebar__meta-action"
+                aria-label={`Delete ${metaRepo.name}`}
+                onClick={requestDelete}
+              >
+                <Icon name="trash-2" size={12} />
+              </button>
+            </Tooltip>
+          </>
+        )}
       </div>
       {expanded && (
         <div className="sidebar__meta-body">
           {(newSessionOpen || sessions.length > 0) && (
             <div className="sidebar__meta-sessions">
-              <div className="sidebar__ungrouped-label">
-                Collection sessions
-              </div>
+              {!compact && (
+                <div className="sidebar__ungrouped-label">
+                  Collection sessions
+                </div>
+              )}
               {newSessionOpen && (
                 <NewSessionForm
                   repoName={metaRepo.primary_repo_name ?? metaRepo.name}
@@ -1057,6 +1288,7 @@ function MetaRepoGroup({
                 <SessionRow
                   key={session.id}
                   session={session}
+                  compact={compact}
                   selected={session.id === selection.selectedSessionId}
                   unread={isUnread(session.id, session.last_event_at)}
                   onSelect={selection.onSelectSession}
@@ -1118,6 +1350,7 @@ interface RepoGroupBaseHandlers {
 }
 
 interface RepoGroupProps {
+  compact?: boolean;
   group: RepoGroupData;
   expanded: boolean;
   newSessionRepoName: string | null;
@@ -1133,6 +1366,7 @@ interface RepoGroupProps {
 }
 
 function RepoGroup({
+  compact = false,
   group,
   expanded,
   newSessionRepoName,
@@ -1169,10 +1403,10 @@ function RepoGroup({
     [toggleRepo, group.name, expanded],
   );
   const newSessionOpen = newSessionRepoName === group.name;
-  const newSessionOnStart = useCallback(
-    () => setNewSessionFor((prev) => (prev === group.name ? null : group.name)),
-    [setNewSessionFor, group.name],
-  );
+  const newSessionOnStart = useCallback(() => {
+    if (!expanded) toggleRepo(group.name, false);
+    setNewSessionFor((prev) => (prev === group.name ? null : group.name));
+  }, [expanded, toggleRepo, setNewSessionFor, group.name]);
   const newSessionOnSubmit = useCallback(
     (form: NewSessionFormValue) => createSession(group.name, form),
     [createSession, group.name],
@@ -1360,6 +1594,7 @@ function RepoGroup({
             type="button"
             className="sidebar__group-toggle"
             onClick={onToggle}
+            aria-expanded={expanded}
             onContextMenu={onRepoContextMenu}
           >
             <span
@@ -1372,50 +1607,64 @@ function RepoGroup({
               <Icon name="chevron-right" size={12} />
             </span>
             <span className="sidebar__group-name">{group.name}</span>
-            {git?.ci && (
+            {!compact && git?.ci && (
               <RepoCiChip ci={git.ci} branch={git.branch} age={relativeAge} />
             )}
-            {git && <RepoBadge git={git} staleness={staleness} />}
+            {!compact && git && <RepoBadge git={git} staleness={staleness} />}
+          </button>
+        )}
+        {compact && (
+          <button
+            type="button"
+            className="sidebar__icon-button"
+            aria-label={`New session in ${group.name}`}
+            onClick={newSessionOnStartClick}
+            disabled={!group.exists}
+          >
+            <Icon name="plus" size={14} />
           </button>
         )}
       </div>
 
       {expanded && (
         <div className="sidebar__repo-body">
-          <Subsection
-            label="Plans"
-            open={subOpen.plans}
-            onToggle={togglePlansSub}
-            count={group.plans.length}
-            rightSlot={
-              <Tooltip label={`Open plans for ${group.name}`}>
+          {!compact && (
+            <Subsection
+              label="Plans"
+              open={subOpen.plans}
+              onToggle={togglePlansSub}
+              count={group.plans.length}
+              rightSlot={
+                <Tooltip label={`Open plans for ${group.name}`}>
+                  <button
+                    type="button"
+                    className="sidebar__icon-button"
+                    aria-label={`Open plans for ${group.name}`}
+                    onClick={openPlansButtonClick}
+                  >
+                    <Icon name="plus" size={14} />
+                  </button>
+                </Tooltip>
+              }
+            >
+              {group.plans.length === 0 ? (
                 <button
                   type="button"
-                  className="sidebar__icon-button"
-                  aria-label={`Open plans for ${group.name}`}
-                  onClick={openPlansButtonClick}
+                  className="sidebar__plan-empty"
+                  onClick={openPlansClick}
                 >
-                  <Icon name="plus" size={14} />
+                  — start a published plan —
                 </button>
-              </Tooltip>
-            }
-          >
-            {group.plans.length === 0 ? (
-              <button
-                type="button"
-                className="sidebar__plan-empty"
-                onClick={openPlansClick}
-              >
-                — start a published plan —
-              </button>
-            ) : null}
-            {group.plans.map((plan) => (
-              <PlanRow key={plan.id} plan={plan} onOpen={openPlans} />
-            ))}
-          </Subsection>
+              ) : null}
+              {group.plans.map((plan) => (
+                <PlanRow key={plan.id} plan={plan} onOpen={openPlans} />
+              ))}
+            </Subsection>
+          )}
 
           <Subsection
             label="Sessions"
+            plain={compact}
             open={subOpen.sessions}
             onToggle={toggleSessionsSub}
             count={group.sessions.length}
@@ -1447,6 +1696,7 @@ function RepoGroup({
               <SessionRow
                 key={s.id}
                 session={s}
+                compact={compact}
                 selected={s.id === selectedSessionId}
                 unread={isUnread(s.id, s.last_event_at)}
                 onSelect={onSelectSession}
@@ -1456,48 +1706,54 @@ function RepoGroup({
             ))}
           </Subsection>
 
-          <Subsection
-            label="Workspaces"
-            open={subOpen.workspaces}
-            onToggle={toggleWorkspacesSub}
-            count={group.workspaces.length}
-          >
-            {group.workspaces.length === 0 && (
-              <div className="sidebar__muted">— no isolated workspaces —</div>
-            )}
-            {group.workspaces.map((workspace) => (
-              <WorkspaceRow
-                key={workspace.id}
-                workspace={workspace}
-                sessions={group.sessions}
-                onResume={onResumeWorkspace}
-                onRequestDelete={onRequestDeleteWorkspace}
-              />
-            ))}
-          </Subsection>
+          {!compact && (
+            <>
+              <Subsection
+                label="Workspaces"
+                open={subOpen.workspaces}
+                onToggle={toggleWorkspacesSub}
+                count={group.workspaces.length}
+              >
+                {group.workspaces.length === 0 && (
+                  <div className="sidebar__muted">
+                    — no isolated workspaces —
+                  </div>
+                )}
+                {group.workspaces.map((workspace) => (
+                  <WorkspaceRow
+                    key={workspace.id}
+                    workspace={workspace}
+                    sessions={group.sessions}
+                    onResume={onResumeWorkspace}
+                    onRequestDelete={onRequestDeleteWorkspace}
+                  />
+                ))}
+              </Subsection>
 
-          <Subsection
-            label="Files"
-            open={subOpen.files}
-            onToggle={toggleFilesSub}
-          >
-            {subOpen.files && (
-              <FileTree
-                repoName={group.name}
-                gitSummary={git}
-                onError={onError}
-                revealRequest={revealRequest}
-              />
-            )}
-          </Subsection>
+              <Subsection
+                label="Files"
+                open={subOpen.files}
+                onToggle={toggleFilesSub}
+              >
+                {subOpen.files && (
+                  <FileTree
+                    repoName={group.name}
+                    gitSummary={git}
+                    onError={onError}
+                    revealRequest={revealRequest}
+                  />
+                )}
+              </Subsection>
 
-          <Subsection
-            label="Git"
-            open={subOpen.gitSection}
-            onToggle={toggleGitSub}
-          >
-            <GitPanel git={git} />
-          </Subsection>
+              <Subsection
+                label="Git"
+                open={subOpen.gitSection}
+                onToggle={toggleGitSub}
+              >
+                <GitPanel git={git} />
+              </Subsection>
+            </>
+          )}
         </div>
       )}
     </li>
@@ -1544,6 +1800,7 @@ function PlanRow({
 }
 
 function Subsection({
+  plain = false,
   label,
   open,
   onToggle,
@@ -1551,6 +1808,7 @@ function Subsection({
   rightSlot,
   children,
 }: {
+  plain?: boolean;
   label: string;
   open: boolean;
   onToggle: () => void;
@@ -1558,6 +1816,7 @@ function Subsection({
   rightSlot?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  if (plain) return <div className="sidebar__compact-sessions">{children}</div>;
   return (
     <div className="sidebar__sub">
       <div className="sidebar__sub-header">
@@ -2361,6 +2620,8 @@ function buildSessionMenuItems({
 }
 
 interface SessionRowProps {
+  compact?: boolean;
+  showScope?: boolean;
   session: SessionView;
   selected: boolean;
   unread: boolean;
@@ -2385,6 +2646,8 @@ function SessionAgentLabel({ session }: { session: SessionView }) {
 }
 
 function SessionRow({
+  compact = false,
+  showScope = false,
   session: s,
   selected,
   unread,
@@ -2483,6 +2746,13 @@ function SessionRow({
     ],
   );
   const buildMenuItems = useCallback(() => menuItems, [menuItems]);
+  const openActions = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      const rect = event.currentTarget.getBoundingClientRect();
+      openCtx({ clientX: rect.left, clientY: rect.bottom }, menuItems);
+    },
+    [openCtx, menuItems],
+  );
   const { onContextMenu: onRowContextMenu, onKeyDown: onRowContextMenuKey } =
     useMemo(
       () => contextMenuTriggerProps(openCtx, buildMenuItems),
@@ -2529,22 +2799,7 @@ function SessionRow({
     .filter(Boolean)
     .join(" ");
 
-  const stateIcon =
-    s.state === "dead"
-      ? "session-dead"
-      : s.state === "orphaned"
-        ? "session-orphan"
-        : s.state === "deleted"
-          ? "session-dead"
-          : "session-live";
-  const stateTone =
-    s.state === "dead"
-      ? "crit"
-      : s.state === "orphaned"
-        ? "atn"
-        : s.state === "deleted"
-          ? "mute"
-          : "ok";
+  const { icon: stateIcon, tone: stateTone } = SESSION_STATE_STYLES[s.state];
 
   const submitRename = useCallback(
     (value: string) => {
@@ -2565,7 +2820,13 @@ function SessionRow({
           onCancel={stopRenaming}
         />
       ) : (
-        <Tooltip label="Right-click for session actions">
+        <Tooltip
+          label={
+            compact
+              ? (s.activity?.summary ?? s.activity?.reason ?? displayName)
+              : "Right-click for session actions"
+          }
+        >
           <button
             type="button"
             className={
@@ -2598,7 +2859,19 @@ function SessionRow({
                 <SessionAgentLabel session={s} />
               </span>
               <span className="sidebar__session-meta tabular">
-                {ageSince(s.created_at)} · {sessionLabel}
+                {compact ? (
+                  <>
+                    <CompactSessionSummary
+                      session={s}
+                      showScope={showScope}
+                      fallback={sessionLabel}
+                    />
+                  </>
+                ) : (
+                  <>
+                    {ageSince(s.created_at)} · {sessionLabel}
+                  </>
+                )}
                 {cwdHint && (
                   <>
                     {" · "}
@@ -2638,7 +2911,60 @@ function SessionRow({
           </button>
         </Tooltip>
       )}
+      {!renaming && (compact || isMobile) && (
+        <button
+          type="button"
+          className="sidebar__session-actions"
+          aria-label={`Actions for ${displayName}`}
+          aria-haspopup="menu"
+          onClick={openActions}
+        >
+          <Icon name="more-horizontal" size={16} />
+        </button>
+      )}
     </div>
+  );
+}
+
+function CompactSessionSummary({
+  session,
+  showScope,
+  fallback,
+}: {
+  session: SessionView;
+  showScope: boolean;
+  fallback: string;
+}) {
+  const state = session.state === "live" ? session.activity?.state : undefined;
+  const labels = {
+    shell: "Shell",
+    starting: "Starting",
+    working: "Working",
+    awaiting_prompt: "Awaiting prompt",
+    needs_input: "Needs input",
+    blocked: "Blocked",
+    unknown: "Unknown",
+  };
+  const label = state
+    ? labels[state]
+    : session.state === "live"
+      ? "Open"
+      : fallback;
+  const agent = session.agent_runtime?.agent ?? session.current_session_agent;
+  return (
+    <>
+      {showScope && <>{session.meta_repo?.name ?? session.repo} · </>}
+      {agent && <>{agent} · </>}
+      <span
+        className={
+          state === "needs_input" || state === "blocked"
+            ? "sidebar__activity sidebar__activity--attention"
+            : "sidebar__activity"
+        }
+      >
+        {label}
+      </span>
+    </>
   );
 }
 
@@ -2907,99 +3233,6 @@ function NewRepoForm({
           Cancel
         </button>
         <button type="submit">Create</button>
-      </div>
-    </form>
-  );
-}
-
-function NewSessionForm({
-  repoName,
-  mainOnly = false,
-  onSubmit,
-  onCancel,
-}: {
-  repoName: string;
-  mainOnly?: boolean;
-  onSubmit: (form: NewSessionFormValue) => void;
-  onCancel: () => void;
-}) {
-  const [workingDir, setWorkingDir] = useState("");
-  const [launchAgent, setLaunchAgent] = useState<AgentLaunchType | "">("");
-  const [workspaceMode, setWorkspaceMode] = useState<
-    NewSessionFormValue["workspace_mode"]
-  >(mainOnly ? "main" : "isolated");
-  const submit = useCallback(
-    (e: FormEvent) => {
-      e.preventDefault();
-      onSubmit({
-        working_dir: workspaceMode === "main" ? workingDir : "",
-        launch_agent: launchAgent,
-        workspace_mode: workspaceMode,
-      });
-    },
-    [launchAgent, onSubmit, workingDir, workspaceMode],
-  );
-  const onInputChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => setWorkingDir(e.target.value),
-    [],
-  );
-  const onAgentChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) =>
-      setLaunchAgent(e.target.value as AgentLaunchType | ""),
-    [],
-  );
-  const onWorkspaceModeChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) =>
-      setWorkspaceMode(e.target.value as NewSessionFormValue["workspace_mode"]),
-    [],
-  );
-  const onInputKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Escape") onCancel();
-    },
-    [onCancel],
-  );
-  return (
-    <form className="sidebar__form" onSubmit={submit}>
-      <input
-        type="text"
-        value={workingDir}
-        onChange={onInputChange}
-        onKeyDown={onInputKeyDown}
-        placeholder={
-          workspaceMode === "main"
-            ? `working dir (default: repos/${repoName})`
-            : "working dir is the isolated workspace root"
-        }
-        disabled={workspaceMode !== "main"}
-        autoFocus
-        aria-label="working directory"
-      />
-      {!mainOnly && (
-        <select
-          value={workspaceMode}
-          onChange={onWorkspaceModeChange}
-          aria-label="workspace mode"
-        >
-          <option value="isolated">Isolated worktree</option>
-          <option value="main">Main working tree</option>
-        </select>
-      )}
-      <select
-        value={launchAgent}
-        onChange={onAgentChange}
-        aria-label="launch agent"
-      >
-        <option value="">Shell only</option>
-        <option value="claude">Launch Claude</option>
-        <option value="codex">Launch Codex</option>
-        <option value="fugu">Launch Fugu</option>
-      </select>
-      <div className="sidebar__form-actions">
-        <button type="button" onClick={onCancel}>
-          Cancel
-        </button>
-        <button type="submit">Spawn</button>
       </div>
     </form>
   );

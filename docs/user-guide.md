@@ -21,8 +21,29 @@ references.
 
 ## Sidebar — meta-repos, repos, sessions, files, library
 
-The left rail is the navigation surface. Meta-repositories provide one optional
-organization level above repos without moving any checkout. Their collection
+Choose **Open**, **Sessions**, or **Full** at the top of the sidebar:
+
+| View | Contents |
+| --- | --- |
+| Open | A flat list of running sessions, including idle shells, with repo or meta-repo context on each row. Ended and orphaned sessions are excluded. |
+| Sessions | All sessions grouped by repo and meta-repo, without Plans, Workspaces, Files, or Git sections. Empty repos start collapsed. |
+| Full | The complete repository tree described below. |
+
+Mobile defaults to Open; desktop defaults to Sessions. Each choice persists
+separately in this browser. Compact views offer session search, visible `…`
+action buttons, agent activity such as **Needs input**, and an expandable
+**Library** button. Pinned sessions appear first; activity updates do not
+reorder the list. Workspace branch hints and unread markers remain visible.
+
+**New session** opens a searchable repo/meta-repo picker in every view,
+including repos without running sessions. Choose a shell or agent and a main
+checkout or isolated worktree; collection sessions use canonical checkouts.
+Creating a session opens its supported tabs and closes the mobile drawer.
+Rail and palette repo jumps switch Open to Sessions so the target is reachable.
+
+In Full, the left rail and sidebar provide the complete repository navigation.
+Meta-repositories provide one optional organization level above repos without
+moving any checkout. Their collection
 sessions appear at the parent; each member repo keeps its published plans,
 single-repo sessions, isolated workspaces, lightweight file tree, and Git
 status. Ungrouped repos remain first-class. The **Library**
@@ -35,7 +56,8 @@ box in timeline-only mode (and on mobile), the terminal otherwise.
 
 ![Sidebar](screenshots/01-sidebar.png)
 
-Right-click a session for rename / pin / colour / open-timeline /
+Use a session's `…` button in compact views or on mobile, or right-click it,
+for rename / pin / colour / open-timeline /
 delete actions, including the shortcut to manage secrets for that PTY.
 New agent sessions can target one repo or every member of a meta-repository.
 Collection sessions use canonical checkouts only. The primary repo supplies the

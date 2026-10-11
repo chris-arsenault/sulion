@@ -14,6 +14,25 @@
   padding: 0 4px;
 }
 
+.lib-panel__content:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lib-panel--compact {
+  border-top: 0;
+  padding-top: 0;
+}
+
+@media (max-width: 767px) {
+  .lib-sec__toggle,
+  .lib-sec__entry,
+  .lib-sec__new {
+    min-height: var(--lane-lg);
+  }
+}
+
 .lib-sec {
   display: flex;
   flex-direction: column;

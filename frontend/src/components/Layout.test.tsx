@@ -344,6 +344,7 @@ describe("Layout", () => {
   });
 
   it("opens file and diff tabs from sidebar tree actions", async () => {
+    useDisplay.getState().setSidebarView("desktop", "full");
     mockState.repos = [{ name: "alpha", path: "/tmp/alpha" }];
     mockState.trees["alpha:"] = {
       path: "",

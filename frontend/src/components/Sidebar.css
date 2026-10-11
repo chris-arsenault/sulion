@@ -1,4 +1,5 @@
 .sidebar {
+  box-sizing: border-box;
   padding: 10px 10px 0;
   display: flex;
   flex-direction: column;
@@ -6,6 +7,155 @@
   font-size: var(--t-body);
   height: 100%;
   overflow: hidden;
+}
+
+.sidebar__views {
+  display: flex;
+  border: 1px solid var(--hairline);
+  flex-shrink: 0;
+}
+
+.sidebar__views button {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--lane-sm);
+  border: 0;
+  background: transparent;
+  color: var(--text-mid);
+  font: inherit;
+  cursor: pointer;
+}
+
+.sidebar__views button[aria-pressed="true"] {
+  background: var(--accent-lo);
+  color: var(--text-hi);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.sidebar__search {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--lane-sm);
+  padding: 4px 8px;
+  background: var(--canvas-1);
+  border: 1px solid var(--hairline);
+  color: var(--text);
+  font: inherit;
+}
+
+.sidebar__new-session,
+.sidebar__library-button,
+.sidebar__text-button,
+.sidebar__target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--lane-sm);
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid var(--hairline);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sidebar__views button:hover,
+.sidebar__new-session:hover,
+.sidebar__library-button:hover,
+.sidebar__text-button:hover,
+.sidebar__target:hover,
+.sidebar__session-actions:hover {
+  background: var(--canvas-3);
+}
+
+.sidebar__target:disabled,
+.sidebar__text-button:disabled {
+  color: var(--text-dis);
+  cursor: default;
+}
+
+.sidebar__library-button {
+  margin: 4px 0 8px;
+}
+
+.sidebar__session-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--lane-sm);
+  border: 0;
+  background: transparent;
+  color: var(--text-mid);
+  cursor: pointer;
+}
+
+.sidebar__activity--attention {
+  color: var(--atn-fg);
+  font-weight: var(--w-600);
+}
+
+.sidebar__targets {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.sidebar__target span:first-of-type {
+  overflow-wrap: anywhere;
+}
+
+.sidebar__target-kind {
+  margin-left: auto;
+  color: var(--text-lo);
+  font-size: var(--t-meta);
+}
+
+.sidebar__creation-target {
+  margin: 12px 0 8px;
+  font-weight: var(--w-600);
+  overflow-wrap: anywhere;
+}
+
+.session-creation-dialog .ui-overlay__surface {
+  width: min(92vw, 480px);
+}
+
+@media (max-width: 767px) {
+  .sidebar__views button,
+  .sidebar__search,
+  .sidebar__new-session,
+  .sidebar__library-button,
+  .sidebar__text-button,
+  .sidebar__target,
+  .sidebar__meta-toggle,
+  .sidebar__sub-toggle,
+  .sidebar__form input,
+  .sidebar__form select,
+  .sidebar__form button,
+  .session-creation-dialog input,
+  .session-creation-dialog select,
+  .session-creation-dialog button {
+    min-height: var(--lane-lg);
+  }
+
+  .sidebar__session-actions {
+    width: var(--lane-lg);
+    min-height: var(--lane-lg);
+  }
+
+  .sidebar__search,
+  .sidebar__form input,
+  .sidebar__form select,
+  .sidebar__rename-input,
+  .session-creation-dialog input,
+  .session-creation-dialog select {
+    font-size: 16px;
+  }
 }
 
 .sidebar__scroll {
@@ -245,7 +395,9 @@
   width: 14px;
   height: 14px;
   color: var(--text-lo);
-  transition: transform var(--dur-0) var(--ease), color var(--dur-0) var(--ease);
+  transition:
+    transform var(--dur-0) var(--ease),
+    color var(--dur-0) var(--ease);
 }
 
 .sidebar__chevron--open {
@@ -732,7 +884,9 @@
   cursor: pointer;
   border-radius: var(--r-1);
   text-align: left;
-  transition: background var(--dur-0) var(--ease), color var(--dur-0) var(--ease);
+  transition:
+    background var(--dur-0) var(--ease),
+    color var(--dur-0) var(--ease);
 }
 
 .sidebar__session:hover {

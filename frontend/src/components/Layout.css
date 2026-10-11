@@ -140,7 +140,7 @@
   top: 0;
   left: 0;
   bottom: 0;
-  width: min(86vw, 320px);
+  width: min(94vw, 420px);
   background: var(--canvas-2);
   border-right: 1px solid var(--hairline);
   z-index: var(--z-drawer);
@@ -167,8 +167,8 @@
   min-height: var(--lane-lg);
 }
 .layout__drawer .sidebar__icon-button {
-  min-width: 32px;
-  min-height: 32px;
+  min-width: var(--lane-lg);
+  min-height: var(--lane-lg);
 }
 
 /* Peek at the hidden projection (⌘⇧E / Ctrl-⇧E) — the terminal or

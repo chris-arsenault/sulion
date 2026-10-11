@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -23,6 +23,8 @@ import { ContextMenuHost } from "./common/ContextMenu";
 import { resetTabStore, useTabStore } from "../state/TabStore";
 import { appCommands, subscribeToAppCommands } from "../state/AppCommands";
 import { appStatePayload, jsonResponse } from "../test/appState";
+import { resetDisplayStore, useDisplay } from "../state/DisplayStore";
+import { useSessionStore } from "../state/SessionStore";
 
 const REPO_ALPHA = "alpha";
 const REPO_ALPHA_PATH = "/tmp/alpha";
@@ -325,6 +327,9 @@ function metaRepoFixture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Sidebar", () => {
+  beforeEach(() => {
+    useDisplay.getState().setSidebarView("desktop", "full");
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
     resetTabStore();
@@ -367,6 +372,217 @@ describe("Sidebar", () => {
     await user.hover(item);
     return item;
   }
+
+  function sessionFixture(id: string, overrides: Record<string, unknown> = {}) {
+    return {
+      id,
+      label: id,
+      repo: REPO_ALPHA,
+      working_dir: REPO_ALPHA_PATH,
+      state: "live",
+      created_at: "2026-10-01T00:00:00Z",
+      ended_at: null,
+      exit_code: null,
+      current_session_uuid: null,
+      current_session_agent: "codex",
+      last_event_at: "2026-10-02T00:00:00Z",
+      pinned: false,
+      color: null,
+      future_prompts_pending_count: 0,
+      ...overrides,
+    };
+  }
+
+  it("shows only running sessions in Open with stable pin order, collection scope and attention", async () => {
+    const state = installFetchMock();
+    state.repos.push(
+      { name: REPO_ALPHA, path: REPO_ALPHA_PATH },
+      { name: "empty", path: "/tmp/empty" },
+    );
+    state.sessions.push(
+      sessionFixture("newest", { created_at: "2026-10-03T00:00:00Z" }),
+      sessionFixture("pinned", {
+        pinned: true,
+        meta_repo: { id: META_REPO_ID, name: "Platform" },
+        activity: { state: "needs_input", summary: "Choose a direction" },
+        workspace: { kind: "worktree", branch_name: "feature/sidebar" },
+        future_prompts_pending_count: 2,
+      }),
+      sessionFixture("ended", { state: "dead" }),
+      sessionFixture("orphan", { state: "orphaned" }),
+    );
+    useDisplay.getState().setSidebarView("desktop", "open");
+    setup();
+    await screen.findByText("pinned");
+    const rows = () =>
+      Array.from(document.querySelectorAll("[data-session-name]")).map((row) =>
+        row.getAttribute("data-session-name"),
+      );
+    expect(rows()).toEqual(["pinned", "newest"]);
+    expect(screen.getByText(/Platform · codex/)).toBeDefined();
+    expect(screen.getByText("Needs input")).toBeDefined();
+    expect(screen.getByText("feature/sidebar")).toBeDefined();
+    expect(screen.getByLabelText("2 queued future prompts")).toBeDefined();
+    expect(
+      screen.getAllByLabelText("new activity since last view"),
+    ).toHaveLength(2);
+    expect(document.querySelector("[data-repo-name]")).toBeNull();
+    act(() =>
+      useSessionStore.setState((current) => ({
+        sessions: current.sessions.map((session) => ({
+          ...session,
+          last_event_at: "2026-10-04T00:00:00Z",
+        })),
+      })),
+    );
+    expect(rows()).toEqual(["pinned", "newest"]);
+  });
+
+  it("keeps grouped sessions compact, searches through collapsed groups, and restores Full", async () => {
+    const state = installFetchMock();
+    state.repos.push(
+      { name: REPO_ALPHA, path: REPO_ALPHA_PATH },
+      { name: "beta", path: "/tmp/beta" },
+    );
+    state.metaRepos.push(metaRepoFixture());
+    state.sessions.push(
+      sessionFixture("running"),
+      sessionFixture("ended", { state: "dead" }),
+    );
+    state.workspaces.push(workspaceFixture());
+    useDisplay.getState().setSidebarView("desktop", "sessions");
+    setup();
+    await screen.findByText("ended", { selector: ".sidebar__session-id" });
+    for (const label of ["Workspaces", "Plans", "Files", "Git"])
+      expect(screen.queryByText(label)).toBeNull();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: REPO_ALPHA }));
+    expect(screen.queryByText("running")).toBeNull();
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search sessions" }),
+      "Ahara running",
+    );
+    expect(screen.getByText("running")).toBeDefined();
+    expect(screen.queryByText("ended")).toBeNull();
+    await user.clear(
+      screen.getByRole("searchbox", { name: "Search sessions" }),
+    );
+    expect(screen.queryByText("running")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Full" }));
+    expect(screen.queryByText("running")).toBeNull();
+    await user.click(screen.getByRole("button", { name: REPO_ALPHA }));
+    for (const label of ["Workspaces", "Plans", "Files", "Git"])
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+  });
+
+  it("starts a session in an empty repo from Open and opens its tabs", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    useDisplay.getState().setSidebarView("desktop", "open");
+    setup();
+    const user = userEvent.setup();
+    await screen.findByText(/No open sessions/);
+    await waitFor(() =>
+      expect(useSessionStore.getState().repos).toHaveLength(1),
+    );
+    await user.click(screen.getByRole("button", { name: "New session" }));
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search repositories" }),
+      "alpha",
+    );
+    await user.click(screen.getByRole("button", { name: "alpha Repository" }));
+    await user.selectOptions(screen.getByLabelText("launch agent"), "codex");
+    await user.click(screen.getByRole("button", { name: "Spawn" }));
+    await waitFor(() => expect(state.createSessionCalls).toHaveLength(1));
+    expect(state.createSessionCalls[0]).toEqual({
+      repo: REPO_ALPHA,
+      workspace_mode: "isolated",
+      launch_agent: "codex",
+    });
+    expect(screen.queryByRole("dialog", { name: "New session" })).toBeNull();
+    expect(
+      Object.values(useTabStore.getState().tabs).map((tab) => tab.kind),
+    ).toEqual(["terminal", "timeline"]);
+  });
+
+  it("offers collection launches in the picker with canonical workspace mode", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.metaRepos.push(metaRepoFixture());
+    useDisplay.getState().setSidebarView("desktop", "open");
+    setup();
+    const user = userEvent.setup();
+    await waitFor(() =>
+      expect(useSessionStore.getState().metaRepos).toHaveLength(1),
+    );
+    await user.click(screen.getByRole("button", { name: "New session" }));
+    await user.click(
+      screen.getByRole("button", { name: "Ahara platform Collection" }),
+    );
+    expect(screen.queryByLabelText("workspace mode")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Spawn" }));
+    await waitFor(() => expect(state.createSessionCalls).toHaveLength(1));
+    expect(state.createSessionCalls[0]).toEqual({
+      meta_repo_id: META_REPO_ID,
+      workspace_mode: "main",
+    });
+  });
+
+  it("uses the mobile preference and exposes actions without selecting a session", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query.includes("max-width"),
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.sessions.push(sessionFixture("running"));
+    setup();
+    const user = userEvent.setup();
+    await screen.findByText("running");
+    expect(
+      screen.getByRole("button", { name: "Open" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    await user.click(
+      screen.getByRole("button", { name: "Actions for running" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Pin to top" }));
+    await waitFor(() => expect(state.patches).toHaveLength(1));
+    expect(Object.values(useTabStore.getState().tabs)).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "Sessions" }));
+    expect(useDisplay.getState().desktopSidebarView).toBe("full");
+    expect(useDisplay.getState().mobileSidebarView).toBe("sessions");
+    await user.click(screen.getByText("running"));
+    expect(
+      Object.values(useTabStore.getState().tabs).map((tab) => tab.kind),
+    ).toEqual(["timeline"]);
+  });
+
+  it("reveals repo navigation from Open without losing its collapsed state", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    state.sessions.push(sessionFixture("running"));
+    localStorage.clear();
+    resetDisplayStore();
+    useDisplay.getState().setSidebarView("desktop", "open");
+    setup();
+    await screen.findByText("running");
+    act(() => {
+      useSessionStore.getState().setRepoExpanded(REPO_ALPHA, false);
+      appCommands.revealRepo({ repo: REPO_ALPHA });
+    });
+    expect(useDisplay.getState().desktopSidebarView).toBe("sessions");
+    expect(screen.queryByText("running")).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: REPO_ALPHA })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+  });
 
   it("renders repo groups and their sessions", async () => {
     const state = installFetchMock();

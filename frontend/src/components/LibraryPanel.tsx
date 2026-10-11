@@ -24,13 +24,12 @@ import {
 import { Tooltip } from "./ui";
 import { ConfirmDialog } from "./common/ConfirmDialog";
 import type { MenuItem } from "./common/contextMenuStore";
-import {
-  contextMenuHandler,
-  useContextMenu,
-} from "./common/contextMenuStore";
+import { contextMenuHandler, useContextMenu } from "./common/contextMenuStore";
 import { PromptTemplateDialog } from "./PromptTemplateDialog";
 
-export function LibraryPanel() {
+export function LibraryPanel({ compact = false }: { compact?: boolean }) {
+  const [panelOpen, setPanelOpen] = useState(false);
+  const togglePanel = useCallback(() => setPanelOpen((open) => !open), []);
   const [references, setReferences] = useState<LibraryEntry[] | null>(null);
   const [prompts, setPrompts] = useState<LibraryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +71,7 @@ export function LibraryPanel() {
   }, [refresh]);
 
   useAppCommand("library-changed", (command) => {
+    setPanelOpen(true);
     if (command.kind === "references") {
       setReferencesOpen(true);
     } else {
@@ -88,7 +88,9 @@ export function LibraryPanel() {
     const bottomId = activeByPane.bottom;
     const isSessionTab = (id: string | null) => {
       const tab = id ? tabs[id] : undefined;
-      return tab && (tab.kind === "terminal" || tab.kind === "timeline") ? tab : null;
+      return tab && (tab.kind === "terminal" || tab.kind === "timeline")
+        ? tab
+        : null;
     };
     const candidate = isSessionTab(topId) ?? isSessionTab(bottomId);
     return candidate?.sessionId ?? null;
@@ -205,7 +207,11 @@ export function LibraryPanel() {
           id: "edit",
           label: "Edit",
           onSelect: () =>
-            setEditingPrompt({ slug: entry.slug, name: entry.name, body: entry.body }),
+            setEditingPrompt({
+              slug: entry.slug,
+              name: entry.name,
+              body: entry.body,
+            }),
         },
         { kind: "separator" },
         {
@@ -235,98 +241,109 @@ export function LibraryPanel() {
     }
   }, []);
 
-  const toggleReferences = useCallback(
-    () => setReferencesOpen((v) => !v),
-    [],
-  );
+  const toggleReferences = useCallback(() => setReferencesOpen((v) => !v), []);
   const togglePrompts = useCallback(() => setPromptsOpen((v) => !v), []);
-  const startNewPrompt = useCallback(
-    () => {
-      setPromptsOpen(true);
-      setEditingPrompt({ slug: undefined, name: "", body: "" });
-    },
-    [],
-  );
+  const startNewPrompt = useCallback(() => {
+    setPromptsOpen(true);
+    setEditingPrompt({ slug: undefined, name: "", body: "" });
+  }, []);
   const cancelEdit = useCallback(() => setEditingPrompt(null), []);
 
   return (
-    <div className="lib-panel">
-      <div className="lib-panel__header">
-        <span className="sidebar__sub-label">Library</span>
+    <div className={compact ? "lib-panel lib-panel--compact" : "lib-panel"}>
+      {compact && (
+        <button
+          type="button"
+          className="sidebar__library-button"
+          aria-expanded={panelOpen}
+          onClick={togglePanel}
+        >
+          <Icon name="list" size={14} />
+          Library
+          <Icon name={panelOpen ? "chevron-down" : "chevron-right"} size={12} />
+        </button>
+      )}
+      <div className="lib-panel__content" hidden={compact && !panelOpen}>
+        {!compact && (
+          <div className="lib-panel__header">
+            <span className="sidebar__sub-label">Library</span>
+          </div>
+        )}
+        {error && <div className="lib-sec__error">{error}</div>}
+
+        <LibrarySection
+          label="References"
+          count={references?.length}
+          open={referencesOpen}
+          onToggle={toggleReferences}
+        >
+          {references === null && (
+            <div className="lib-sec__muted">loading…</div>
+          )}
+          {references?.length === 0 && (
+            <div className="lib-sec__muted">
+              save assistant output from the timeline to keep it close by
+            </div>
+          )}
+          {references && references.length > 0 && (
+            <ul className="lib-sec__list">
+              {references.map((entry) => (
+                <ReferenceRow
+                  key={entry.slug}
+                  entry={entry}
+                  openTab={openTab}
+                  onContextMenu={onReferenceContextMenu(entry)}
+                />
+              ))}
+            </ul>
+          )}
+        </LibrarySection>
+
+        <LibrarySection
+          label="Prompts"
+          count={prompts?.length}
+          open={promptsOpen}
+          onToggle={togglePrompts}
+          rightSlot={
+            <Tooltip label="New prompt">
+              <button
+                type="button"
+                className="lib-sec__new"
+                onClick={startNewPrompt}
+                aria-label="New prompt"
+              >
+                <Icon name="plus" size={12} />
+              </button>
+            </Tooltip>
+          }
+        >
+          {editingPrompt && (
+            <PromptForm
+              draft={editingPrompt}
+              onCancel={cancelEdit}
+              onSave={savePrompt}
+            />
+          )}
+          {prompts === null && <div className="lib-sec__muted">loading…</div>}
+          {prompts?.length === 0 && !editingPrompt && (
+            <div className="lib-sec__muted">
+              save a past user prompt or create one here for one-click reuse
+            </div>
+          )}
+          {prompts && prompts.length > 0 && (
+            <ul className="lib-sec__list">
+              {prompts.map((entry) => (
+                <PromptRow
+                  key={entry.slug}
+                  entry={entry}
+                  injectPrompt={injectPrompt}
+                  onContextMenu={onPromptContextMenu(entry)}
+                />
+              ))}
+            </ul>
+          )}
+        </LibrarySection>
       </div>
-      {error && <div className="lib-sec__error">{error}</div>}
-
-      <LibrarySection
-        label="References"
-        count={references?.length}
-        open={referencesOpen}
-        onToggle={toggleReferences}
-      >
-        {references === null && <div className="lib-sec__muted">loading…</div>}
-        {references?.length === 0 && (
-          <div className="lib-sec__muted">
-            save assistant output from the timeline to keep it close by
-          </div>
-        )}
-        {references && references.length > 0 && (
-          <ul className="lib-sec__list">
-            {references.map((entry) => (
-              <ReferenceRow
-                key={entry.slug}
-                entry={entry}
-                openTab={openTab}
-                onContextMenu={onReferenceContextMenu(entry)}
-              />
-            ))}
-          </ul>
-        )}
-      </LibrarySection>
-
-      <LibrarySection
-        label="Prompts"
-        count={prompts?.length}
-        open={promptsOpen}
-        onToggle={togglePrompts}
-        rightSlot={
-          <Tooltip label="New prompt">
-            <button
-              type="button"
-              className="lib-sec__new"
-              onClick={startNewPrompt}
-              aria-label="New prompt"
-            >
-              <Icon name="plus" size={12} />
-            </button>
-          </Tooltip>
-        }
-      >
-        {editingPrompt && (
-          <PromptForm
-            draft={editingPrompt}
-            onCancel={cancelEdit}
-            onSave={savePrompt}
-          />
-        )}
-        {prompts === null && <div className="lib-sec__muted">loading…</div>}
-        {prompts?.length === 0 && !editingPrompt && (
-          <div className="lib-sec__muted">
-            save a past user prompt or create one here for one-click reuse
-          </div>
-        )}
-        {prompts && prompts.length > 0 && (
-          <ul className="lib-sec__list">
-            {prompts.map((entry) => (
-              <PromptRow
-                key={entry.slug}
-                entry={entry}
-                injectPrompt={injectPrompt}
-                onContextMenu={onPromptContextMenu(entry)}
-              />
-            ))}
-          </ul>
-        )}
-      </LibrarySection>
-
       {pendingDelete && (
         <ConfirmDialog
           title={
@@ -397,7 +414,11 @@ function LibrarySection({
           onClick={onToggle}
           aria-expanded={open}
         >
-          <span className={open ? "lib-sec__chev lib-sec__chev--open" : "lib-sec__chev"}>
+          <span
+            className={
+              open ? "lib-sec__chev lib-sec__chev--open" : "lib-sec__chev"
+            }
+          >
             ▸
           </span>
           <span className="lib-sec__label">{label}</span>
@@ -539,10 +560,7 @@ function PromptRow({
   injectPrompt: (entry: LibraryEntry) => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }) {
-  const onClick = useCallback(
-    () => injectPrompt(entry),
-    [injectPrompt, entry],
-  );
+  const onClick = useCallback(() => injectPrompt(entry), [injectPrompt, entry]);
   return (
     <li>
       <Tooltip label={entry.body.slice(0, 200)}>

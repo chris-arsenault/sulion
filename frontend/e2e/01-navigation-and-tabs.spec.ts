@@ -15,16 +15,60 @@ test.afterEach(async ({ request }) => {
   await restoreSeededSessionMetadata(request);
 });
 
-test("opens seeded sessions, tabs, and preserves tab layout across reload", async ({ page }) => {
+test("switches compact desktop views, searches sessions, and remembers the view", async ({
+  page,
+}, testInfo) => {
+  await gotoApp(page);
+  const views = page.getByRole("group", { name: "Sidebar view" });
+  await expect(
+    views.getByRole("button", { name: "Sessions", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: /^Files/ })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("desktop-sessions.png") });
+  await views.getByRole("button", { name: "Open", exact: true }).click();
+  await expect(page.locator("[data-repo-name]")).toHaveCount(0);
+  await page
+    .getByRole("searchbox", { name: "Search sessions" })
+    .fill("Atlas Claude");
+  await expect(page.locator("[data-session-name]")).toHaveCount(1);
+  await expect(
+    page.locator('[data-session-name="Atlas Claude"]'),
+  ).toBeVisible();
+  await page
+    .getByRole("searchbox", { name: "Search sessions" })
+    .fill("no-matching-agent");
+  await expect(page.getByText("No matching open sessions.")).toBeVisible();
+  await views.getByRole("button", { name: "Full", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: /^Files/ }).first(),
+  ).toBeVisible();
+  await page.reload();
+  await expect(
+    views.getByRole("button", { name: "Full", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.locator('[data-session-name="Atlas Claude"]'),
+  ).toBeVisible();
+});
+
+test("opens seeded sessions, tabs, and preserves tab layout across reload", async ({
+  page,
+}) => {
   await gotoApp(page);
 
-  await expect(page.getByRole("button", { name: "Jump to atlas" })).toBeVisible();
-  await expect(page.locator('[data-session-name="Atlas Claude"]')).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Jump to atlas" }),
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-session-name="Atlas Claude"]'),
+  ).toBeVisible();
   await expect(page.locator('[data-session-name="Atlas Codex"]')).toBeVisible();
 
   await page.getByRole("button", { name: "Open command palette" }).click();
   await page.getByPlaceholder("Type a command or jump to…").fill("Atlas Codex");
-  await page.getByRole("option", { name: /Open session · atlas \/ Atlas Codex/i }).click();
+  await page
+    .getByRole("option", { name: /Open session · atlas \/ Atlas Codex/i })
+    .click();
   await expect(page.getByTestId("timeline-pane")).toBeVisible();
 
   await openSession(page, "Atlas Claude");
@@ -38,7 +82,9 @@ test("opens seeded sessions, tabs, and preserves tab layout across reload", asyn
 
   const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
   const configTab = tab(page, "file", "config.json");
-  const bottomDropZone = page.getByRole("button", { name: "Drop tab into bottom pane" });
+  const bottomDropZone = page.getByRole("button", {
+    name: "Drop tab into bottom pane",
+  });
   await configTab.dispatchEvent("dragstart", { dataTransfer });
   await bottomDropZone.dispatchEvent("dragover", { dataTransfer });
   await bottomDropZone.dispatchEvent("drop", { dataTransfer });
@@ -73,13 +119,15 @@ test("timeline-only mode fills the desktop work area", async ({ page }) => {
   await expect(page.locator(".wa--single")).toBeVisible();
   await expect(page.getByTestId("timeline-pane")).toBeVisible();
   expect(
-    await page.locator(".wa--single > .wa__pane").evaluate(
-      (pane) => pane.getBoundingClientRect().height,
-    ),
+    await page
+      .locator(".wa--single > .wa__pane")
+      .evaluate((pane) => pane.getBoundingClientRect().height),
   ).toBeGreaterThan(200);
 });
 
-test("supports session rename, pin, and colour from the sidebar", async ({ page }) => {
+test("supports session rename, pin, and colour from the sidebar", async ({
+  page,
+}) => {
   await gotoApp(page);
 
   const row = page.locator('[data-session-name="Atlas Claude"]');
@@ -88,7 +136,9 @@ test("supports session rename, pin, and colour from the sidebar", async ({ page 
   const input = page.getByLabel("Session name");
   await input.fill("Atlas Claude Temp");
   await input.press("Enter");
-  await expect(page.locator('[data-session-name="Atlas Claude Temp"]')).toBeVisible();
+  await expect(
+    page.locator('[data-session-name="Atlas Claude Temp"]'),
+  ).toBeVisible();
 
   const renamed = page.locator('[data-session-name="Atlas Claude Temp"]');
   await openContextMenu(renamed);
@@ -98,9 +148,9 @@ test("supports session rename, pin, and colour from the sidebar", async ({ page 
   await openContextMenu(renamed);
   await page.getByRole("menuitem", { name: "Colour" }).hover();
   await page.getByRole("menuitem", { name: "teal" }).click();
-  await expect(renamed.locator("xpath=ancestor::div[contains(@class, 'sidebar__row')]")).toHaveClass(
-    /sidebar__row--color-teal/,
-  );
+  await expect(
+    renamed.locator("xpath=ancestor::div[contains(@class, 'sidebar__row')]"),
+  ).toHaveClass(/sidebar__row--color-teal/);
 
   await openContextMenu(renamed);
   await selectMenuItem(page, "Unpin");
@@ -111,5 +161,7 @@ test("supports session rename, pin, and colour from the sidebar", async ({ page 
   await renamed.dblclick();
   await page.getByLabel("Session name").fill("Atlas Claude");
   await page.getByLabel("Session name").press("Enter");
-  await expect(page.locator('[data-session-name="Atlas Claude"]')).toBeVisible();
+  await expect(
+    page.locator('[data-session-name="Atlas Claude"]'),
+  ).toBeVisible();
 });

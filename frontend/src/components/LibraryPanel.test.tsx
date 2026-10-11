@@ -14,18 +14,58 @@ describe("LibraryPanel", () => {
     vi.restoreAllMocks();
   });
 
+  it("shows a single compact disclosure and reveals saved prompts on library changes", async () => {
+    vi.spyOn(apiClient, "listLibrary").mockImplementation(async (kind) =>
+      kind === "prompts"
+        ? [
+            {
+              slug: "deploy",
+              name: DEPLOY_PROMPT_NAME,
+              body: "deploy",
+              created_at: null,
+              updated_at: null,
+            },
+          ]
+        : [],
+    );
+    render(<LibraryPanel compact />);
+    const user = userEvent.setup();
+    expect(
+      screen
+        .getByRole("button", { name: "Library" })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(screen.queryByRole("button", { name: /Prompts/ })).toBeNull();
+    act(() => appCommands.libraryChanged({ kind: "prompts" }));
+    await screen.findByRole("button", { name: /Deploy prompt/ });
+    expect(
+      screen
+        .getByRole("button", { name: "Library" })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+    await user.click(screen.getByRole("button", { name: "Library" }));
+    expect(screen.queryByRole("button", { name: /Deploy prompt/ })).toBeNull();
+  });
+
   it("starts the reference and prompt sections collapsed", () => {
     vi.spyOn(apiClient, "listLibrary").mockImplementation(
-      () => new Promise<Awaited<ReturnType<typeof apiClient.listLibrary>>>(() => {}),
+      () =>
+        new Promise<Awaited<ReturnType<typeof apiClient.listLibrary>>>(
+          () => {},
+        ),
     );
 
     render(<LibraryPanel />);
 
     expect(
-      screen.getByRole("button", { name: /References/ }).getAttribute("aria-expanded"),
+      screen
+        .getByRole("button", { name: /References/ })
+        .getAttribute("aria-expanded"),
     ).toBe("false");
     expect(
-      screen.getByRole("button", { name: /Prompts/ }).getAttribute("aria-expanded"),
+      screen
+        .getByRole("button", { name: /Prompts/ })
+        .getAttribute("aria-expanded"),
     ).toBe("false");
   });
 
@@ -59,7 +99,9 @@ describe("LibraryPanel", () => {
 
     await waitFor(() => expect(screen.getByText("Ship prompt")).toBeDefined());
     expect(
-      screen.getByRole("button", { name: /Prompts/ }).getAttribute("aria-expanded"),
+      screen
+        .getByRole("button", { name: /Prompts/ })
+        .getAttribute("aria-expanded"),
     ).toBe("true");
   });
 
@@ -75,7 +117,9 @@ describe("LibraryPanel", () => {
           body: "echo deploy\r\nnow",
         },
       ]);
-    useTabStore.getState().openTab({ kind: "terminal", sessionId: "sess-1" }, "top");
+    useTabStore
+      .getState()
+      .openTab({ kind: "terminal", sessionId: "sess-1" }, "top");
 
     const seen: Array<unknown> = [];
     const unsubscribe = subscribeToAppCommands((command) => {
@@ -86,7 +130,9 @@ describe("LibraryPanel", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /Prompts/ }));
 
-    await waitFor(() => expect(screen.getByText(DEPLOY_PROMPT_NAME)).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByText(DEPLOY_PROMPT_NAME)).toBeDefined(),
+    );
     await user.click(screen.getByText(DEPLOY_PROMPT_NAME));
 
     expect(seen).toContainEqual({
@@ -109,7 +155,9 @@ describe("LibraryPanel", () => {
           body: "echo deploy",
         },
       ]);
-    useTabStore.getState().openTab({ kind: "timeline", sessionId: "sess-2" }, "top");
+    useTabStore
+      .getState()
+      .openTab({ kind: "timeline", sessionId: "sess-2" }, "top");
 
     const seen: Array<unknown> = [];
     const unsubscribe = subscribeToAppCommands((command) => {
@@ -120,7 +168,9 @@ describe("LibraryPanel", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /Prompts/ }));
 
-    await waitFor(() => expect(screen.getByText(DEPLOY_PROMPT_NAME)).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByText(DEPLOY_PROMPT_NAME)).toBeDefined(),
+    );
     await user.click(screen.getByText(DEPLOY_PROMPT_NAME));
 
     expect(seen).toContainEqual({
@@ -143,7 +193,9 @@ describe("LibraryPanel", () => {
           body: "do item $n in $repo. cost $$5. repeat $n",
         },
       ]);
-    useTabStore.getState().openTab({ kind: "terminal", sessionId: "sess-1" }, "top");
+    useTabStore
+      .getState()
+      .openTab({ kind: "terminal", sessionId: "sess-1" }, "top");
 
     const seen: Array<unknown> = [];
     const unsubscribe = subscribeToAppCommands((command) => {
@@ -154,7 +206,9 @@ describe("LibraryPanel", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /Prompts/ }));
 
-    await waitFor(() => expect(screen.getByText(DEPLOY_PROMPT_NAME)).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByText(DEPLOY_PROMPT_NAME)).toBeDefined(),
+    );
     await user.click(screen.getByText(DEPLOY_PROMPT_NAME));
 
     expect(screen.getByText("Prompt Values")).toBeDefined();
@@ -179,7 +233,10 @@ describe("LibraryPanel", () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockImplementation(
-        () => new Promise<Awaited<ReturnType<typeof apiClient.listLibrary>>>(() => {}),
+        () =>
+          new Promise<Awaited<ReturnType<typeof apiClient.listLibrary>>>(
+            () => {},
+          ),
       );
     vi.spyOn(apiClient, "saveLibraryEntry").mockResolvedValue({
       slug: "refactor",
@@ -188,7 +245,9 @@ describe("LibraryPanel", () => {
       updated_at: "2026-05-28T03:15:29Z",
       body: "Implement item $N.",
     });
-    useTabStore.getState().openTab({ kind: "terminal", sessionId: "sess-1" }, "top");
+    useTabStore
+      .getState()
+      .openTab({ kind: "terminal", sessionId: "sess-1" }, "top");
 
     render(<LibraryPanel />);
     const user = userEvent.setup();

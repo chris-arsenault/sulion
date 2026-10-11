@@ -4,6 +4,15 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Session navigation
+
+- Choose **Open** for live sessions, **Sessions** for compact repository groups,
+  or **Full** for the existing repository tools. Mobile defaults to Open and
+  desktop to Sessions, with separate saved preferences.
+- Compact views include session search, agent activity, unread and queued-prompt
+  indicators, session actions, and a searchable repository picker for new sessions.
+  Mobile has a wider drawer and larger touch controls; Library folds into one button.
+
 ### Model pricing
 
 - Add API-equivalent rates for GPT-6.1 Sol and Claude Opus 5.5.

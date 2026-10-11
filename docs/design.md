@@ -63,8 +63,17 @@ When contributing, ask "which tier is this?" before picking a component.
   sigils aggregate unread state, dirty count, and worst member staleness. The
   rail also houses the pin toggle and command palette trigger.
 - **Sidebar** is drag-resizable and persisted (`sulion.sidebar.width.v1`); pinned state persists in `sulion.sidebar.pinned.v1`.
+  Open presents running sessions as a flat switcher; Sessions groups all
+  sessions without repository tool sections; Full retains the complete tree.
+  Desktop defaults to Sessions and mobile to Open, with separate persisted
+  choices. Compact rows retain scope, agent activity, workspace hints and unread
+  markers, and expose a visible session action button. Search and New session
+  stay above the scrolling list; Library collapses to one disclosure button.
 - **Work area** keeps its existing two-pane split + tab strip. Terminal pane gets a 2px accent border when focused — xterm swallows keys, the frame tells you it's live.
 - **Mobile** (<768px) hides the rail, keeps a hamburger top bar, and makes the sidebar a drawer. The work area is timeline-only; terminal tabs, terminal actions, display-mode controls, and the projection peek are desktop-only. Dynamic viewport units and safe-area insets keep the top bar, drawer, and prompt controls inside the usable screen.
+  The drawer uses up to 94vw (420px maximum). Navigation, creation controls and
+  session menus use 44px touch targets; input text stays at 16px to avoid mobile
+  browser zoom.
 
 No right-side inspector column. Reading surfaces (timeline TurnDetail, file body, diff hunks) stay embedded in their panes; overlays (ToolHoverCard, ThinkingFlyout, SubagentModal) stay transient.
 

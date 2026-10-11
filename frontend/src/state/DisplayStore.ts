@@ -1,11 +1,28 @@
 // Global display preferences: how the work area projects a session
 // (split terminal+timeline, terminal only, timeline only) and whether
-// the sidebar is pinned open. Both persist to localStorage so the
-// layout survives reloads.
+// the sidebar is pinned open. Sidebar views persist independently for
+// desktop and mobile; changing viewport preserves both preferences.
 
 import { create } from "zustand";
 
 export type DisplayMode = "split" | "terminal" | "timeline";
+export type SidebarView = "open" | "sessions" | "full";
+export type SidebarLayout = "desktop" | "mobile";
+
+const SIDEBAR_VIEW_KEYS = {
+  desktop: "sulion.sidebar.view.desktop.v1",
+  mobile: "sulion.sidebar.view.mobile.v1",
+} as const;
+
+function readSidebarView(layout: SidebarLayout): SidebarView {
+  try {
+    const raw = localStorage.getItem(SIDEBAR_VIEW_KEYS[layout]);
+    if (raw === "open" || raw === "sessions" || raw === "full") return raw;
+  } catch {
+    /* storage disabled */
+  }
+  return layout === "mobile" ? "open" : "sessions";
+}
 
 export const DISPLAY_MODES: readonly DisplayMode[] = [
   "split",
@@ -45,6 +62,9 @@ function readPinned(): boolean {
 interface DisplayStore {
   mode: DisplayMode;
   sidebarPinned: boolean;
+  desktopSidebarView: SidebarView;
+  mobileSidebarView: SidebarView;
+  setSidebarView: (layout: SidebarLayout, view: SidebarView) => void;
   /** Peek overlay for the projection the current mode hides. Transient
    * (never persisted); forced closed whenever the mode returns to split. */
   peekOpen: boolean;
@@ -60,7 +80,22 @@ interface DisplayStore {
 export const useDisplay = create<DisplayStore>((set) => ({
   mode: typeof localStorage === "undefined" ? "split" : readMode(),
   sidebarPinned: typeof localStorage === "undefined" ? true : readPinned(),
+  desktopSidebarView: readSidebarView("desktop"),
+  mobileSidebarView: readSidebarView("mobile"),
   peekOpen: false,
+
+  setSidebarView(layout, view) {
+    try {
+      localStorage.setItem(SIDEBAR_VIEW_KEYS[layout], view);
+    } catch {
+      /* storage disabled */
+    }
+    set(
+      layout === "mobile"
+        ? { mobileSidebarView: view }
+        : { desktopSidebarView: view },
+    );
+  },
 
   setMode(mode) {
     try {
@@ -123,6 +158,8 @@ export function resetDisplayStore() {
   useDisplay.setState({
     mode: typeof localStorage === "undefined" ? "split" : readMode(),
     sidebarPinned: typeof localStorage === "undefined" ? true : readPinned(),
+    desktopSidebarView: readSidebarView("desktop"),
+    mobileSidebarView: readSidebarView("mobile"),
     peekOpen: false,
   });
 }

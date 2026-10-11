@@ -1,4 +1,9 @@
-import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import {
+  expect,
+  type APIRequestContext,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 
 interface SessionView {
   id: string;
@@ -20,7 +25,9 @@ interface LibraryEntry {
 
 export async function gotoApp(page: Page) {
   await page.goto("/");
-  const drawerButton = page.getByRole("button", { name: "Open sessions drawer" });
+  const drawerButton = page.getByRole("button", {
+    name: "Open sessions drawer",
+  });
   if (await drawerButton.isVisible().catch(() => false)) {
     await expect(drawerButton).toBeVisible();
     return;
@@ -32,13 +39,21 @@ export async function gotoApp(page: Page) {
 export async function openSession(page: Page, label: string) {
   await page.locator(`[data-session-name="${label}"]`).click();
   await expect(
-    page.getByRole("tab", { name: new RegExp(`${escapeRegex(label)} · term`, "i") }),
+    page.getByRole("tab", {
+      name: new RegExp(`${escapeRegex(label)} · term`, "i"),
+    }),
   ).toHaveAttribute("aria-selected", "true");
   await expect(
-    page.getByRole("tab", { name: new RegExp(`${escapeRegex(label)} · time`, "i") }),
+    page.getByRole("tab", {
+      name: new RegExp(`${escapeRegex(label)} · time`, "i"),
+    }),
   ).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator('[data-testid="terminal-pane"]:visible')).toBeVisible();
-  await expect(page.locator('[data-testid="timeline-pane"]:visible')).toBeVisible();
+  await expect(
+    page.locator('[data-testid="terminal-pane"]:visible'),
+  ).toBeVisible();
+  await expect(
+    page.locator('[data-testid="timeline-pane"]:visible'),
+  ).toBeVisible();
 }
 
 export async function createMockTerminalSession(
@@ -49,7 +64,11 @@ export async function createMockTerminalSession(
     repo: "atlas",
     e2e_fixture: "mock-terminal",
   });
-  await patchSession(request, session.id, { label, pinned: false, color: null });
+  await patchSession(request, session.id, {
+    label,
+    pinned: false,
+    color: null,
+  });
   return session.id;
 }
 
@@ -68,16 +87,26 @@ export async function createLabeledSession(
   label: string,
 ) {
   const session = await createSession(request, { repo });
-  await patchSession(request, session.id, { label, pinned: false, color: null });
+  await patchSession(request, session.id, {
+    label,
+    pinned: false,
+    color: null,
+  });
   return session.id;
 }
 
-export async function deleteSessionById(request: APIRequestContext, id: string) {
+export async function deleteSessionById(
+  request: APIRequestContext,
+  id: string,
+) {
   const response = await request.delete(`/api/sessions/${id}`);
   expect(response.ok()).toBeTruthy();
 }
 
-export async function dropSessionWebSocket(request: APIRequestContext, id: string) {
+export async function dropSessionWebSocket(
+  request: APIRequestContext,
+  id: string,
+) {
   const response = await request.post(`/api/sessions/${id}/e2e/drop-ws`);
   expect(response.ok()).toBeTruthy();
 }
@@ -87,7 +116,14 @@ export function repoGroup(page: Page, repo: string) {
 }
 
 export async function ensureFilesOpen(page: Page, repo: string) {
+  await page
+    .getByRole("group", { name: "Sidebar view" })
+    .getByRole("button", { name: "Full", exact: true })
+    .click();
   const group = repoGroup(page, repo);
+  const toggle = group.locator(".sidebar__group-toggle");
+  if ((await toggle.getAttribute("aria-expanded")) === "false")
+    await toggle.click();
   const tree = group.locator(".sidebar__tree-body");
   if (await tree.isVisible().catch(() => false)) {
     return;
@@ -105,7 +141,9 @@ export async function openTreeFile(page: Page, repo: string, filePath: string) {
 }
 
 export function treeRow(page: Page, repo: string, filePath: string) {
-  return page.locator(`.sidebar__tree-row[data-repo="${repo}"][data-path="${filePath}"]`);
+  return page.locator(
+    `.sidebar__tree-row[data-repo="${repo}"][data-path="${filePath}"]`,
+  );
 }
 
 export function tab(page: Page, kind: string, match?: string) {
@@ -132,11 +170,13 @@ export async function terminalText(page: Page) {
   if (await mirror.count()) {
     return (await mirror.first().textContent()) ?? "";
   }
-  return page.locator('.terminal-pane__host:visible').evaluate((host) => {
+  return page.locator(".terminal-pane__host:visible").evaluate((host) => {
     const rows = Array.from(host.querySelectorAll(".xterm-rows > div"))
       .map((row) => row.textContent ?? "")
       .join("\n");
-    const accessibility = Array.from(host.querySelectorAll(".xterm-accessibility-tree"))
+    const accessibility = Array.from(
+      host.querySelectorAll(".xterm-accessibility-tree"),
+    )
       .map((node) => node.textContent ?? "")
       .join("\n");
     return `${rows}\n${accessibility}`;
@@ -144,7 +184,9 @@ export async function terminalText(page: Page) {
 }
 
 export async function focusTerminal(page: Page) {
-  await page.locator('.terminal-pane__host:visible').click({ position: { x: 24, y: 24 } });
+  await page
+    .locator(".terminal-pane__host:visible")
+    .click({ position: { x: 24, y: 24 } });
 }
 
 export async function runTerminalCommand(page: Page, command: string) {
@@ -159,49 +201,57 @@ export async function pressTerminalEnter(page: Page) {
 }
 
 export async function pasteIntoTerminal(page: Page, text: string) {
-  await page.locator('.terminal-pane__host:visible').evaluate((host, payload) => {
-    const textarea = host.querySelector("textarea");
-    if (!(textarea instanceof HTMLTextAreaElement)) {
-      throw new Error("terminal textarea not found");
-    }
-    const event = new Event("paste", { bubbles: true, cancelable: true });
-    Object.defineProperty(event, "clipboardData", {
-      value: {
-        getData: (kind: string) => (kind === "text/plain" ? payload : ""),
-      },
-    });
-    textarea.dispatchEvent(event);
-  }, text);
+  await page
+    .locator(".terminal-pane__host:visible")
+    .evaluate((host, payload) => {
+      const textarea = host.querySelector("textarea");
+      if (!(textarea instanceof HTMLTextAreaElement)) {
+        throw new Error("terminal textarea not found");
+      }
+      const event = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "clipboardData", {
+        value: {
+          getData: (kind: string) => (kind === "text/plain" ? payload : ""),
+        },
+      });
+      textarea.dispatchEvent(event);
+    }, text);
 }
 
 export async function pasteImageIntoTerminal(
   page: Page,
   image: { base64: string; mediaType: string },
 ) {
-  await page.locator('.terminal-pane__host:visible').evaluate((host, payload) => {
-    const textarea = host.querySelector("textarea");
-    if (!(textarea instanceof HTMLTextAreaElement)) {
-      throw new Error("terminal textarea not found");
-    }
-    const binary = atob(payload.base64);
-    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-    const file = new File([bytes], "clipboard-image", { type: payload.mediaType });
-    const event = new Event("paste", { bubbles: true, cancelable: true });
-    Object.defineProperty(event, "clipboardData", {
-      value: {
-        files: [file],
-        getData: () => "",
-        items: [
-          {
-            kind: "file",
-            type: payload.mediaType,
-            getAsFile: () => file,
-          },
-        ],
-      },
-    });
-    textarea.dispatchEvent(event);
-  }, image);
+  await page
+    .locator(".terminal-pane__host:visible")
+    .evaluate((host, payload) => {
+      const textarea = host.querySelector("textarea");
+      if (!(textarea instanceof HTMLTextAreaElement)) {
+        throw new Error("terminal textarea not found");
+      }
+      const binary = atob(payload.base64);
+      const bytes = Uint8Array.from(binary, (character) =>
+        character.charCodeAt(0),
+      );
+      const file = new File([bytes], "clipboard-image", {
+        type: payload.mediaType,
+      });
+      const event = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "clipboardData", {
+        value: {
+          files: [file],
+          getData: () => "",
+          items: [
+            {
+              kind: "file",
+              type: payload.mediaType,
+              getAsFile: () => file,
+            },
+          ],
+        },
+      });
+      textarea.dispatchEvent(event);
+    }, image);
 }
 
 export async function expectTerminalToContain(page: Page, text: string) {
@@ -240,7 +290,9 @@ export async function deleteLibraryEntries(
   expect(response.ok()).toBeTruthy();
   const entries = (await response.json()) as LibraryEntry[];
   for (const entry of entries) {
-    await request.delete(`/api/library/${kind}/${encodeURIComponent(entry.slug)}`);
+    await request.delete(
+      `/api/library/${kind}/${encodeURIComponent(entry.slug)}`,
+    );
   }
 }
 
@@ -257,9 +309,7 @@ export async function listRepoEntries(
   const url = suffix
     ? `/api/repos/${encodeURIComponent(repo)}/files?${suffix}`
     : `/api/repos/${encodeURIComponent(repo)}/files`;
-  const response = await request.get(
-    url,
-  );
+  const response = await request.get(url);
   expect(response.ok()).toBeTruthy();
   return (await response.json()) as DirListing;
 }

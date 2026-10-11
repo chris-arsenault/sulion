@@ -30,6 +30,10 @@ test("saves prompts and references from the timeline, opens refs, and injects pr
   mockSessionId = await createMockTerminalSession(request, "Atlas Mock Prompt");
 
   await gotoApp(page);
+  await page
+    .getByRole("group", { name: "Sidebar view" })
+    .getByRole("button", { name: "Full", exact: true })
+    .click();
   await openSession(page, "Atlas Claude");
 
   await page.getByTestId("turn-row").first().click();
@@ -52,7 +56,10 @@ test("saves prompts and references from the timeline, opens refs, and injects pr
   await openSession(page, "Atlas Mock Prompt");
   await promptRow.first().click();
   await pressTerminalEnter(page);
-  await expectTerminalToContain(page, "MOCK_ECHO printf 'PROMPT_TIMELINE_SENTINEL\\n'");
+  await expectTerminalToContain(
+    page,
+    "MOCK_ECHO printf 'PROMPT_TIMELINE_SENTINEL\\n'",
+  );
 
   await referenceRow.first().click();
   await expect(page.getByTestId("ref-tab")).toContainText(

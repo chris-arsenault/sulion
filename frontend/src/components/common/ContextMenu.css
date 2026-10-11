@@ -125,3 +125,16 @@
 .ctxm__row--submenu.ctxm__row--focused .ctxm__chevron {
   color: var(--text);
 }
+
+@media (max-width: 767px) {
+  .ctxm {
+    max-height: calc(100dvh - 8px);
+    max-width: calc(100vw - 8px);
+    overflow-y: auto;
+    box-sizing: border-box;
+  }
+
+  .ctxm__row {
+    min-height: var(--lane-lg);
+  }
+}
