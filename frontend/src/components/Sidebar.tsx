@@ -38,6 +38,7 @@ import { useSecretStore } from "../state/SecretStore";
 import type { TabStore } from "../state/TabStore";
 import { useTabs } from "../state/TabStore";
 import { Icon } from "../icons";
+import { sessionIdentity } from "../lib/sessionIdentity";
 import { Tooltip } from "./ui";
 import { useDisplay, type SidebarView } from "../state/DisplayStore";
 import {
@@ -2637,14 +2638,6 @@ interface SessionRowProps {
   ) => void | Promise<void>;
 }
 
-/** Agent-chosen terminal name (`sulion name`), rendered beside the
- * user's display name. Hidden when unset or redundant with the label. */
-function SessionAgentLabel({ session }: { session: SessionView }) {
-  const name = session.agent_label?.trim();
-  if (!name || name === session.label) return null;
-  return <span className="sidebar__session-agent-label">{name}</span>;
-}
-
 function SessionRow({
   compact = false,
   showScope = false,
@@ -2772,8 +2765,7 @@ function SessionRow({
     return `${agent} ${s.current_session_uuid.slice(0, 6)}`;
   })();
 
-  const displayName =
-    s.label && s.label.length > 0 ? s.label : s.id.slice(0, 8);
+  const { primary: displayName, secondary: agentName } = sessionIdentity(s);
 
   // Session working_dir relative to the repo root — displayed on the
   // row so you can tell "this session runs in src/" vs "this one at
@@ -2855,8 +2847,12 @@ function SessionRow({
                     <Icon name="pin" size={12} />
                   </span>
                 )}
-                {displayName}
-                <SessionAgentLabel session={s} />
+                <span className="sidebar__session-name">{displayName}</span>
+                {agentName && (
+                  <span className="sidebar__session-agent-label">
+                    {agentName}
+                  </span>
+                )}
               </span>
               <span className="sidebar__session-meta tabular">
                 {compact ? (

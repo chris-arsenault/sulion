@@ -234,7 +234,9 @@ Use `waiting` only when user action is actually required. An explicit
 `needs_input` or `blocked` report is not overwritten by a later automatic
 turn-complete signal; the next explicit working/clear transition releases it.
 
-Agents may also name their terminal — no permission required:
+Agents name their terminal once the task is clear, before substantial work,
+and update it when the task changes. This applies to small tasks too and does
+not require permission or a published plan:
 
 ```sh
 sulion name "ingest batcher refactor"
@@ -242,9 +244,10 @@ sulion name show
 sulion name clear
 ```
 
-The agent name complements the user's label (it never overwrites it) and is
-shown beside it in the sidebar and team overview, deliberately not in tab
-headers.
+The agent name never overwrites the user's label. Navigation shows the user
+name first, falls back to the agent name, and uses the session ID only when
+neither name is set. When both names differ, the sidebar and team overview
+show the user name as primary and agent name as secondary.
 
 ## Browser surfaces
 

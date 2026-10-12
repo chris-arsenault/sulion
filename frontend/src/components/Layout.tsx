@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { PlanSummaryView } from "../api/types";
 import { Icon } from "../icons";
+import { sessionName } from "../lib/sessionIdentity";
 import { Rail } from "./Rail";
 import { Sidebar } from "./Sidebar";
 import { WorkArea } from "./WorkArea";
@@ -634,8 +635,8 @@ function usePaletteCommands({
         ),
       );
     for (const s of liveSessions) {
-      const labeled = Boolean(s.label && s.label.trim().length > 0);
-      const label = labeled && s.label ? s.label : s.id.slice(0, 8);
+      const labeled = Boolean(s.label?.trim() || s.agent_label?.trim());
+      const label = sessionName(s);
       out.push({
         id: `session.${s.id}`,
         label: `Open session · ${s.meta_repo?.name ?? s.repo} / ${label}`,

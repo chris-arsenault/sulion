@@ -393,6 +393,78 @@ describe("Sidebar", () => {
     };
   }
 
+  it.each(["open", "sessions", "full"] as const)(
+    "uses user name, agent name, then ID in the %s view",
+    async (view) => {
+      const state = installFetchMock();
+      state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+      const names = [
+        {
+          id: "11111111-fallback",
+          label: null,
+          agent_label: null,
+          primary: "11111111",
+          secondary: null,
+        },
+        {
+          id: "22222222-agent",
+          label: null,
+          agent_label: "Agent task",
+          primary: "Agent task",
+          secondary: null,
+        },
+        {
+          id: "33333333-user",
+          label: "User task",
+          agent_label: null,
+          primary: "User task",
+          secondary: null,
+        },
+        {
+          id: "44444444-both",
+          label: "User primary",
+          agent_label: "Agent secondary",
+          primary: "User primary",
+          secondary: "Agent secondary",
+        },
+        {
+          id: "55555555-blank",
+          label: "  ",
+          agent_label: " Trimmed task ",
+          primary: "Trimmed task",
+          secondary: null,
+        },
+        {
+          id: "66666666-same",
+          label: "Same task",
+          agent_label: " Same task ",
+          primary: "Same task",
+          secondary: null,
+        },
+      ];
+      state.sessions.push(
+        ...names.map((name) => sessionFixture(name.id, name)),
+      );
+      useDisplay.getState().setSidebarView("desktop", view);
+      setup();
+      await screen.findByText("Agent task");
+
+      for (const name of names) {
+        const row = document.querySelector(`[data-session-id="${name.id}"]`)!;
+        expect(row.querySelector(".sidebar__session-name")?.textContent).toBe(
+          name.primary,
+        );
+        expect(
+          row.querySelector(".sidebar__session-agent-label")?.textContent ??
+            null,
+        ).toBe(name.secondary);
+        if (name.primary !== name.id.slice(0, 8)) {
+          expect(row.textContent).not.toContain(name.id.slice(0, 8));
+        }
+      }
+    },
+  );
+
   it("shows only running sessions in Open with stable pin order, collection scope and attention", async () => {
     const state = installFetchMock();
     state.repos.push(
@@ -452,7 +524,7 @@ describe("Sidebar", () => {
     state.workspaces.push(workspaceFixture());
     useDisplay.getState().setSidebarView("desktop", "sessions");
     setup();
-    await screen.findByText("ended", { selector: ".sidebar__session-id" });
+    await screen.findByText("ended", { selector: ".sidebar__session-name" });
     for (const label of ["Workspaces", "Plans", "Files", "Git"])
       expect(screen.queryByText(label)).toBeNull();
     const user = userEvent.setup();
@@ -1098,11 +1170,10 @@ describe("Sidebar", () => {
     setup();
     const user = userEvent.setup();
 
-    await waitFor(() => expect(screen.getByText(/44444444/)).toBeDefined());
-    // The agent-set name renders beside the display name.
-    expect(screen.getByText("batcher dedupe pass")).toBeDefined();
+    await screen.findByText("batcher dedupe pass");
+    expect(screen.queryByText(/44444444/)).toBeNull();
 
-    await openSessionContextMenu(user, /44444444/);
+    await openSessionContextMenu(user, /batcher dedupe pass/);
     await user.click(screen.getByRole("menuitem", { name: /pin to top/i }));
 
     await waitFor(() => expect(state.patches.length).toBe(1));

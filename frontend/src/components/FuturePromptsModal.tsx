@@ -14,6 +14,7 @@ import {
 } from "../api/client";
 import type { FuturePromptEntry } from "../api/types";
 import { Icon } from "../icons";
+import { sessionName } from "../lib/sessionIdentity";
 import { appCommands } from "../state/AppCommands";
 import { useSessions } from "../state/SessionStore";
 import { Overlay } from "./ui";
@@ -191,7 +192,7 @@ export function FuturePromptsModal({
   );
 
   const displayName = session
-    ? session.label?.trim() || session.id.slice(0, 8)
+    ? sessionName(session)
     : "session";
   const subtitle = sessionUuid
     ? `${sessionAgent ?? "session"} ${sessionUuid.slice(0, 8)}`

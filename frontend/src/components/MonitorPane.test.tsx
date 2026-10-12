@@ -59,6 +59,60 @@ describe("MonitorPane", () => {
     resetContextMenuStore();
   });
 
+  it("uses user names before agent names and hides IDs when named", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo) => {
+        const url = typeof input === "string" ? input : input.url;
+        return jsonResponse(
+          url === APP_STATE_URL
+            ? appStatePayload({ sessions: useSessionStore.getState().sessions })
+            : { generated_at: STARTED_AT, sessions: [] },
+        );
+      }),
+    );
+    useSessionStore.setState({
+      sessions: [
+        { ...session("11111111-fallback", 1), label: null },
+        {
+          ...session("22222222-agent", 1),
+          label: null,
+          agent_label: "Agent primary",
+        },
+        {
+          ...session("33333333-both", 1),
+          label: "User primary",
+          agent_label: "Agent secondary",
+        },
+        {
+          ...session("44444444-orphan", 1),
+          state: "orphaned",
+          label: null,
+          agent_label: "Orphan task",
+        },
+      ],
+      sessionsLoaded: true,
+    });
+    render(<MonitorPane />);
+    await screen.findByText("Agent primary");
+    for (const [primary, secondary] of [
+      ["11111111", null],
+      ["Agent primary", null],
+      ["User primary", "Agent secondary"],
+      ["Orphan task", null],
+    ]) {
+      const identity = screen.getByText(primary!);
+      expect(identity.className).toBe("monitor-card__identity");
+      expect(
+        identity.closest("article")?.querySelector(".monitor-card__agent-label")
+          ?.textContent ?? null,
+      ).toBe(secondary);
+    }
+    for (const id of ["22222222", "33333333", "44444444"]) {
+      expect(screen.queryByText(id)).toBeNull();
+    }
+  });
+
   it("loads every live terminal even when it has no open tab", async () => {
     const bodies: unknown[] = [];
     vi.stubGlobal(
@@ -66,7 +120,9 @@ describe("MonitorPane", () => {
       vi.fn(async (input: RequestInfo, init?: RequestInit) => {
         const url = typeof input === "string" ? input : input.url;
         if (url === APP_STATE_URL) {
-          return jsonResponse(appStatePayload({ sessions: useSessionStore.getState().sessions }));
+          return jsonResponse(
+            appStatePayload({ sessions: useSessionStore.getState().sessions }),
+          );
         }
         bodies.push(JSON.parse(init?.body as string));
         return jsonResponse({
@@ -117,8 +173,12 @@ describe("MonitorPane", () => {
       sessions: [session("sess-a", 1), session("sess-b", 2)],
       sessionsLoaded: true,
     });
-    useTabStore.getState().openTab({ kind: "terminal", sessionId: "sess-a" }, "top");
-    useTabStore.getState().openTab({ kind: "timeline", sessionId: "sess-a" }, "bottom");
+    useTabStore
+      .getState()
+      .openTab({ kind: "terminal", sessionId: "sess-a" }, "top");
+    useTabStore
+      .getState()
+      .openTab({ kind: "timeline", sessionId: "sess-a" }, "bottom");
 
     render(<MonitorPane />);
 
@@ -214,9 +274,7 @@ describe("MonitorPane", () => {
     const user = userEvent.setup();
     await user.hover(within(alpha).getByTestId("monitor-ctx-sess-a"));
     await waitFor(() =>
-      expect(
-        screen.getByText(/80K of 100K used · 20% left/),
-      ).toBeDefined(),
+      expect(screen.getByText(/80K of 100K used · 20% left/)).toBeDefined(),
     );
   });
 
@@ -260,10 +318,7 @@ describe("MonitorPane", () => {
       sessionsLoaded: true,
     });
 
-    const newMetaRepoSession = vi.spyOn(
-      appCommands,
-      "newMetaRepoSession",
-    );
+    const newMetaRepoSession = vi.spyOn(appCommands, "newMetaRepoSession");
     render(
       <>
         <MonitorPane />
@@ -376,7 +431,9 @@ describe("MonitorPane", () => {
     render(<MonitorPane />);
     expect(await screen.findByText("Choose the durable API")).toBeDefined();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /plan · native plans/i }));
+    await user.click(
+      screen.getByRole("button", { name: /plan · native plans/i }),
+    );
 
     expect(openPlan).toHaveBeenCalledWith({ repo: "alpha", planId: "plan-1" });
   });
@@ -417,7 +474,9 @@ describe("MonitorPane", () => {
 
     const tabs = Object.values(useTabStore.getState().tabs);
     expect(
-      tabs.some((tab) => tab.kind === "terminal" && tab.sessionId === "sess-ctx"),
+      tabs.some(
+        (tab) => tab.kind === "terminal" && tab.sessionId === "sess-ctx",
+      ),
     ).toBe(true);
     expect(onNavigate).toHaveBeenCalled();
   });
@@ -502,7 +561,9 @@ describe("MonitorPane", () => {
     render(<MonitorPane onNavigate={onNavigate} />);
 
     const region = await screen.findByRole("region", { name: "alpha team" });
-    expect(within(region).getByText(/orphaned claude-code session/)).toBeDefined();
+    expect(
+      within(region).getByText(/orphaned claude-code session/),
+    ).toBeDefined();
 
     const user = userEvent.setup();
     await user.click(
@@ -554,7 +615,9 @@ describe("MonitorPane", () => {
 
     render(<MonitorPane />);
     await waitFor(() =>
-      expect(screen.getByText(/no live teams or published plans/i)).toBeDefined(),
+      expect(
+        screen.getByText(/no live teams or published plans/i),
+      ).toBeDefined(),
     );
     expect(screen.queryByRole("button", { name: /resume/i })).toBeNull();
   });
@@ -565,7 +628,9 @@ describe("MonitorPane", () => {
       vi.fn(async (input: RequestInfo) => {
         const url = typeof input === "string" ? input : input.url;
         if (url === APP_STATE_URL) {
-          return jsonResponse(appStatePayload({ sessions: useSessionStore.getState().sessions }));
+          return jsonResponse(
+            appStatePayload({ sessions: useSessionStore.getState().sessions }),
+          );
         }
         return jsonResponse({
           generated_at: STARTED_AT,
@@ -603,7 +668,9 @@ describe("MonitorPane", () => {
       sessions: [session("sess-a", 1)],
       sessionsLoaded: true,
     });
-    useTabStore.getState().openTab({ kind: "terminal", sessionId: "sess-a" }, "top");
+    useTabStore
+      .getState()
+      .openTab({ kind: "terminal", sessionId: "sess-a" }, "top");
 
     render(<MonitorPane />);
     const user = userEvent.setup();

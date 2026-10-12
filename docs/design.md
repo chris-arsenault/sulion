@@ -69,6 +69,9 @@ When contributing, ask "which tier is this?" before picking a component.
   choices. Compact rows retain scope, agent activity, workspace hints and unread
   markers, and expose a visible session action button. Search and New session
   stay above the scrolling list; Library collapses to one disclosure button.
+  Session identities use the user name, then the agent task name, then the ID.
+  When both names differ, the user name is primary and the agent name is
+  secondary. Other navigation surfaces use the same primary-name priority.
 - **Work area** keeps its existing two-pane split + tab strip. Terminal pane gets a 2px accent border when focused — xterm swallows keys, the frame tells you it's live.
 - **Mobile** (<768px) hides the rail, keeps a hamburger top bar, and makes the sidebar a drawer. The work area is timeline-only; terminal tabs, terminal actions, display-mode controls, and the projection peek are desktop-only. Dynamic viewport units and safe-area insets keep the top bar, drawer, and prompt controls inside the usable screen.
   The drawer uses up to 94vw (420px maximum). Navigation, creation controls and

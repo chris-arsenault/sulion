@@ -86,6 +86,14 @@ An isolated workspace is a real Git worktree. Use normal Git commands inside it.
 From the canonical checkout, `git worktree list` shows active Sulion worktrees
 and their branches for merge/fast-forward work.
 
+## Session names
+
+In a managed PTY, run `sulion name "<short task description>"` once the task
+is clear, before substantial investigation or implementation. Update it when
+the task changes. Name the work, not the model or session ID. Do this for small
+tasks too, even when the user supplied a label; it does not require permission
+or a published plan. The agent name never overwrites the user label.
+
 ## Published plans and activity
 
 Sulion published plans are durable, repo-scoped phase summaries for the user.

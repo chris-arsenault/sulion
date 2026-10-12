@@ -21,6 +21,7 @@ import {
   useSessionNavigation,
 } from "../hooks/useSessionNavigation";
 import { appCommands } from "../state/AppCommands";
+import { sessionIdentity } from "../lib/sessionIdentity";
 import { useSessions } from "../state/SessionStore";
 import { type TabStore, useTabs } from "../state/TabStore";
 import {
@@ -566,7 +567,7 @@ function AbandonedCard({
   const resumeSession = useResumeSession();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const label = session.label?.trim() || session.id.slice(0, 8);
+  const { primary: label, secondary: agentName } = sessionIdentity(session);
   const agent = session.current_session_agent ?? "agent";
   const lastActive = session.last_event_at ?? session.created_at;
 
@@ -639,6 +640,11 @@ function AbandonedCard({
             {label}
           </button>
         </Tooltip>
+        {agentName && (
+          <Tooltip label={`Agent-set name: ${agentName}`}>
+            <span className="monitor-card__agent-label">{agentName}</span>
+          </Tooltip>
+        )}
         <span className="monitor-card__report">
           <span className="tabular">{shortAge(lastActive)}</span>
         </span>
@@ -695,7 +701,7 @@ function TerminalCard({
   const openSession = useSessionNavigation();
   const isMobile = useIsMobileLayout();
   const openCtx = useContextMenu((store) => store.open);
-  const label = session.label?.trim() || session.id.slice(0, 8);
+  const { primary: label, secondary: agentName } = sessionIdentity(session);
   const navigationCopy = monitorSessionNavigationCopy(isMobile, label);
   const assistant = item?.turn ? latestAssistantText(item.turn) : null;
   const prompt =
@@ -836,11 +842,9 @@ function TerminalCard({
             {label}
           </button>
         </Tooltip>
-        {session.agent_label?.trim() && session.agent_label !== session.label ? (
-          <Tooltip label={`Agent-set name: ${session.agent_label}`}>
-            <span className="monitor-card__agent-label">
-              {session.agent_label}
-            </span>
+        {agentName ? (
+          <Tooltip label={`Agent-set name: ${agentName}`}>
+            <span className="monitor-card__agent-label">{agentName}</span>
           </Tooltip>
         ) : null}
         <Tooltip

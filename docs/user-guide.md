@@ -35,6 +35,11 @@ action buttons, agent activity such as **Needs input**, and an expandable
 **Library** button. Pinned sessions appear first; activity updates do not
 reorder the list. Workspace branch hints and unread markers remain visible.
 
+Session names use your label first, then the agent's task name, and only show
+the session ID when neither name is set. When both names differ, your name is
+primary and the agent name is secondary in the sidebar and Overview. Tabs,
+the command palette, and session dialogs use the same primary-name priority.
+
 **New session** opens a searchable repo/meta-repo picker in every view,
 including repos without running sessions. Choose a shell or agent and a main
 checkout or isolated worktree; collection sessions use canonical checkouts.

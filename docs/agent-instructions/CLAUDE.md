@@ -200,8 +200,13 @@ different credential is technically reachable.
   `show` include live ancestor guidance before phases; branch guidance adds
   context without overriding ancestor requirements. `history` preserves
   before/after guidance edits.
-- Use `sulion activity` to publish blocked or needs-input state. You may use
-  `sulion name "<text>"` when a short terminal label helps distinguish sessions.
+- In a managed Sulion PTY (`SULION_PTY_ID` is set), run
+  `sulion name "<short task description>"` once the task is clear, before
+  substantial investigation or implementation. Update it when the task changes.
+  Name the work, not the model or session ID. Do this even when the user has
+  supplied a label: the agent name is separate and never overwrites it.
+  Do not ask permission or wait for a plan; small tasks also need useful names.
+- Use `sulion activity` to publish blocked or needs-input state.
 - `$SULION_PTY_ID` identifies a managed PTY. The internal agent launcher is
   `/opt/sulion/bin/sulion-agent`.
 

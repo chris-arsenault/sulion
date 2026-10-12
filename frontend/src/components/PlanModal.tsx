@@ -34,6 +34,7 @@ import type {
 } from "../api/types";
 import { Icon } from "../icons";
 import { cleanGuidance, EMPTY_GUIDANCE } from "../lib/planGuidance";
+import { sessionName as sessionLabel } from "../lib/sessionIdentity";
 import type { Maybe } from "../lib/types";
 import { useSessions } from "../state/SessionStore";
 import { FileRefText } from "./common/FileRefText";
@@ -1220,10 +1221,6 @@ function parsePhases(value: string): NewPlanPhaseInput[] {
       };
     })
     .filter((phase) => phase.title.length > 0);
-}
-
-function sessionLabel(session: SessionView): string {
-  return session.label?.trim() || session.id.slice(0, 8);
 }
 
 function humanEvent(value: string): string {

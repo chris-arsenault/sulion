@@ -11,6 +11,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import type { SecretGrantMetadata, SessionView } from "../api/types";
 import type { Maybe } from "../lib/types";
+import { sessionName as sessionLabel } from "../lib/sessionIdentity";
 import type { PaneId, TabData } from "../state/TabStore";
 import {
   unassociatedTerminalTimelineTabIds,
@@ -731,7 +732,7 @@ function TabHandle({
 }
 
 /** The tab label shown in the strip. Session-bound kinds pick up the
- * session's label or its short id, so renames in the sidebar flow
+ * session's user name, agent name, or short ID, so renames in the sidebar flow
  * straight through to the tab without a store round-trip. */
 function liveLabel(
   tab: TabData,
@@ -753,17 +754,13 @@ function liveLabel(
       return tab.slug ? `ref: ${tab.slug}` : "ref";
     case "secrets":
       return tab.sessionId
-        ? `secrets · ${tab.sessionId.slice(0, 8)}`
+        ? `secrets · ${sessionTag ?? tab.sessionId.slice(0, 8)}`
         : "secrets";
     case "monitor":
       return "overview";
     case "metrics":
       return "metrics";
   }
-}
-
-function sessionLabel(session: SessionView): string {
-  return session.label?.trim() || session.id.slice(0, 8);
 }
 
 function taggedLabel(

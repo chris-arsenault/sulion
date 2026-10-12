@@ -91,10 +91,10 @@ export interface SessionView {
   last_event_at: string | null;
   /** Backend-maintained revision for this transcript's projected timeline. */
   timeline_revision?: number;
-  /** User-facing label; overrides the uuid prefix in the sidebar. */
+  /** User-facing name; takes priority over the agent name and ID. */
   label: string | null;
-  /** Agent-chosen terminal name (`sulion name`). Shown beside the
-   * user's label in the sidebar and monitor; never in tab headers. */
+  /** Agent-chosen task name (`sulion name`). Primary when no user name
+   * is set; otherwise secondary in the sidebar and Overview. */
   agent_label?: string | null;
   /** Pinned sessions float to the top of their repo group. */
   pinned: boolean;

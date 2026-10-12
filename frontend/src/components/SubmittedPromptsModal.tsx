@@ -7,6 +7,7 @@ import {
 } from "../api/client";
 import type { PromptGate, SubmittedPrompt } from "../api/types";
 import { Icon } from "../icons";
+import { sessionName } from "../lib/sessionIdentity";
 import { useSessions } from "../state/SessionStore";
 import { copyToClipboard } from "./terminal/clipboard";
 import { gateText } from "./timeline/promptGate";
@@ -102,7 +103,7 @@ export function SubmittedPromptsModal({
   }, []);
 
   const displayName = session
-    ? session.label?.trim() || session.id.slice(0, 8)
+    ? sessionName(session)
     : "session";
   const unmatched = prompts.filter((entry) => entry.state === "unmatched").length;
 

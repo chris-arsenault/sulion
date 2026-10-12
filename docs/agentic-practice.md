@@ -154,8 +154,11 @@ working and awaiting transitions automatically. An agent narrows that with
 `blocked` holds until the next explicit transition rather than being cleared by
 an automatic turn-complete signal.
 
-Agents may also name their own terminal with `sulion name`, shown beside the
-user's label.
+Agents run `sulion name "<short task description>"` once the task is clear,
+before substantial investigation or implementation, and update it when the
+task changes. The user name is primary when set; otherwise the agent name is
+primary. The session ID is the fallback when both are absent. When both names
+differ, the agent name is secondary in the sidebar and Overview.
 
 ## Presents the whole fleet on one screen
 

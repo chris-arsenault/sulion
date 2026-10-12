@@ -15,6 +15,7 @@ import type {
   SessionView,
 } from "../../api/types";
 import { Icon } from "../../icons";
+import { sessionName } from "../../lib/sessionIdentity";
 import { Overlay } from "../ui";
 import "./ModelSwitchModal.css";
 
@@ -95,7 +96,7 @@ export function ModelSwitchModal({
   const adopt = useCallback(() => void acknowledge(true), [acknowledge]);
   const dismiss = useCallback(() => void acknowledge(false), [acknowledge]);
 
-  const displayName = session.label?.trim() || session.id.slice(0, 8);
+  const displayName = sessionName(session);
   const agentName = agentLabel(modelSwitch.agent);
   const from = modelSwitch.from_model ?? "unknown";
 

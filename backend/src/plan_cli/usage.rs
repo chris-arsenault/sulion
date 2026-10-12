@@ -96,9 +96,10 @@ Commands:
 
 Rules:
   complements the user's label; never overwrites it
-  keep it short (max 100 chars); shown in the sidebar and team overview,
-    never in tab headers
-  set it when it helps the user tell terminals apart — no permission needed
+  keep it short (max 100 chars); name the task, not the model or session ID
+  set it once the task is clear, before substantial work — no permission needed
+  update it when the task changes; do this even when the user supplied a label
+  navigation uses the user's name, then the agent's name, then the session ID
 
 Start:
   sulion name \"ingest batcher refactor\""

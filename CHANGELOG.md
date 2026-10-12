@@ -6,6 +6,10 @@ All notable user-visible changes to Sulion are recorded here.
 
 ### Session navigation
 
+- Session names use the user label, then the agent task name, then the ID.
+  When both names differ, the sidebar and Overview show the user name as
+  primary and the agent name as secondary. Tabs, the palette, and session
+  dialogs follow the same primary-name priority.
 - Choose **Open** for live sessions, **Sessions** for compact repository groups,
   or **Full** for the existing repository tools. Mobile defaults to Open and
   desktop to Sessions, with separate saved preferences.

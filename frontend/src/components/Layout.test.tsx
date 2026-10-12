@@ -22,16 +22,17 @@ import { ContextMenuHost } from "./common/ContextMenu";
 import { Layout } from "./Layout";
 import { appCommands } from "../state/AppCommands";
 import { resetTabStore, useTabStore } from "../state/TabStore";
-import {
-  resetDisplayStore,
-  useDisplay,
-} from "../state/DisplayStore";
+import { resetDisplayStore, useDisplay } from "../state/DisplayStore";
 import { appStatePayload, jsonResponse } from "../test/appState";
+import { useSessionStore } from "../state/SessionStore";
 
 const mockState = {
   repos: [] as Array<Record<string, unknown>>,
   sessions: [] as Array<Record<string, unknown>>,
-  trees: {} as Record<string, { path: string; entries: Array<Record<string, unknown>> }>,
+  trees: {} as Record<
+    string,
+    { path: string; entries: Array<Record<string, unknown>> }
+  >,
   files: {} as Record<string, Record<string, unknown>>,
   diffs: {} as Record<string, string>,
 };
@@ -74,7 +75,8 @@ beforeEach(() => {
   vi.stubGlobal(
     "Worker",
     class MockWorker {
-      onmessage: ((event: { data: { files: unknown[] } }) => void) | null = null;
+      onmessage: ((event: { data: { files: unknown[] } }) => void) | null =
+        null;
       postMessage = vi.fn();
       terminate = vi.fn();
     } as unknown as typeof Worker,
@@ -97,11 +99,16 @@ beforeEach(() => {
         );
       }
 
-      if (url.pathname === "/api/library/references" || url.pathname === "/api/library/prompts") {
+      if (
+        url.pathname === "/api/library/references" ||
+        url.pathname === "/api/library/prompts"
+      ) {
         return json([]);
       }
 
-      const diffMatch = url.pathname.match(/^\/api\/repos\/([^/]+)\/git\/diff$/);
+      const diffMatch = url.pathname.match(
+        /^\/api\/repos\/([^/]+)\/git\/diff$/,
+      );
       if (diffMatch) {
         const repo = decodeURIComponent(diffMatch[1]!);
         const path = url.searchParams.get("path") ?? "";
@@ -112,7 +119,9 @@ beforeEach(() => {
       if (filesMatch) {
         const repo = decodeURIComponent(filesMatch[1]!);
         const path = url.searchParams.get("path") ?? "";
-        return json(mockState.trees[`${repo}:${path}`] ?? { path, entries: [] });
+        return json(
+          mockState.trees[`${repo}:${path}`] ?? { path, entries: [] },
+        );
       }
 
       const fileMatch = url.pathname.match(/^\/api\/repos\/([^/]+)\/file$/);
@@ -131,7 +140,9 @@ beforeEach(() => {
         );
       }
 
-      const traceMatch = url.pathname.match(/^\/api\/repos\/([^/]+)\/file-trace$/);
+      const traceMatch = url.pathname.match(
+        /^\/api\/repos\/([^/]+)\/file-trace$/,
+      );
       if (traceMatch) {
         const path = url.searchParams.get("path") ?? "";
         return json({
@@ -156,6 +167,53 @@ const MONITOR_PANE = "monitor-pane";
 const CTRL_M = "{Control>}m{/Control}";
 
 describe("Layout", () => {
+  it("uses agent names in palette entries and tabs, then follows a user rename", async () => {
+    stubMatchMedia(() => false);
+    const id = "77777777-named-session";
+    mockState.repos = [{ name: "alpha", path: "/tmp/alpha" }];
+    mockState.sessions = [
+      {
+        id,
+        repo: "alpha",
+        working_dir: "/tmp/alpha",
+        state: "live",
+        created_at: "2026-05-02T00:00:00Z",
+        ended_at: null,
+        exit_code: null,
+        current_session_uuid: null,
+        current_session_agent: null,
+        last_event_at: null,
+        label: null,
+        agent_label: "Agent task",
+        pinned: false,
+        color: null,
+        future_prompts_pending_count: 0,
+      },
+    ];
+    render(<Layout />);
+    const user = userEvent.setup();
+    await screen.findByText("Agent task");
+    await user.keyboard("{Control>}k{/Control}");
+    await user.type(
+      screen.getByPlaceholderText("Type a command or jump to…"),
+      "Agent task",
+    );
+    await user.click(
+      await screen.findByRole("option", {
+        name: /Open session · alpha \/ Agent task/,
+      }),
+    );
+    await screen.findByRole("tab", { name: "Agent task · time" });
+    expect(
+      screen.getByRole("tab", { name: "Agent task · term" }),
+    ).toBeDefined();
+    expect(screen.queryByText("77777777")).toBeNull();
+    mockState.sessions[0]!.label = "User task";
+    await act(async () => useSessionStore.getState().refresh());
+    expect(screen.getByRole("tab", { name: "User task · time" })).toBeDefined();
+    expect(screen.getByRole("tab", { name: "User task · term" })).toBeDefined();
+  });
+
   it("desktop (>=768px): renders the sidebar inline (no drawer)", async () => {
     stubMatchMedia(() => false); // no mobile media match
     render(
@@ -273,7 +331,9 @@ describe("Layout", () => {
         <ContextMenuHost />
       </>,
     );
-    expect(screen.getByText(/open the drawer to pick a session/i)).toBeDefined();
+    expect(
+      screen.getByText(/open the drawer to pick a session/i),
+    ).toBeDefined();
   });
 
   it("mobile session navigation opens only the timeline and hides terminal actions", async () => {
@@ -324,15 +384,19 @@ describe("Layout", () => {
     });
 
     await rightClick(row, user);
-    expect(screen.queryByRole("menuitem", { name: "Open terminal" })).toBeNull();
-    expect(screen.getByRole("menuitem", { name: "Open timeline" })).toBeDefined();
+    expect(
+      screen.queryByRole("menuitem", { name: "Open terminal" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("menuitem", { name: "Open timeline" }),
+    ).toBeDefined();
     await user.keyboard("{Escape}");
     await user.click(row);
 
     await waitFor(() => {
-      expect(Object.values(useTabStore.getState().tabs).map((tab) => tab.kind)).toEqual([
-        "timeline",
-      ]);
+      expect(
+        Object.values(useTabStore.getState().tabs).map((tab) => tab.kind),
+      ).toEqual(["timeline"]);
     });
     expect(document.querySelector('[data-kind="terminal"]')).toBeNull();
     expect(document.querySelector('[data-kind="timeline"]')).not.toBeNull();
@@ -376,10 +440,14 @@ describe("Layout", () => {
 
     await rightClick(fileRow, user);
     await user.click(await screen.findByText("Open diff"));
-    await waitFor(() => expect(screen.getByText("diff · app.ts")).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByText("diff · app.ts")).toBeDefined(),
+    );
 
     await user.click(fileRow);
-    await waitFor(() => expect(screen.getAllByText("app.ts").length).toBeGreaterThan(1));
+    await waitFor(() =>
+      expect(screen.getAllByText("app.ts").length).toBeGreaterThan(1),
+    );
   });
 
   it("closes the mobile drawer when requested through app commands", async () => {
@@ -393,11 +461,15 @@ describe("Layout", () => {
     const user = userEvent.setup();
 
     await user.click(screen.getByLabelText(/open sessions drawer/i));
-    await waitFor(() => expect(screen.getByLabelText(/^sessions$/i)).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByLabelText(/^sessions$/i)).toBeDefined(),
+    );
 
     act(() => {
       appCommands.closeDrawer();
     });
-    await waitFor(() => expect(screen.queryByLabelText(/^sessions$/i)).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByLabelText(/^sessions$/i)).toBeNull(),
+    );
   });
 });

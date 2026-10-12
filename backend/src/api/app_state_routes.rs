@@ -125,8 +125,8 @@ struct AppSessionView {
     last_event_at: Option<DateTime<Utc>>,
     timeline_revision: i64,
     label: Option<String>,
-    /// Agent-chosen terminal name (`sulion name`). Shown beside the
-    /// user's label in the sidebar and monitor; never in tab headers.
+    /// Agent-chosen task name (`sulion name`). Used as the primary name
+    /// without a user label, otherwise secondary in the sidebar and Overview.
     agent_label: Option<String>,
     pinned: bool,
     color: Option<String>,
