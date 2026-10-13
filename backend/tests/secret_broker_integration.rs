@@ -322,16 +322,49 @@ async fn repository_grants_persist_apply_to_future_sessions_and_revoke_independe
     let now = chrono::Utc::now().timestamp();
     let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
     header.kid = Some("fixture".into());
-    let token = jsonwebtoken::encode(
-        &header,
-        &json!({
-            "iss":issuer,"sub":"browser-fixture","client_id":"test","token_use":"access",
-            "iat":now,"auth_time":now-10,"exp":now+300
-        }),
-        &jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!("fixtures/auth-test-private.pem"))
-            .unwrap(),
-    )
-    .unwrap();
+    let claims = json!({
+        "iss":issuer,"sub":"browser-fixture","client_id":"test","token_use":"access",
+        "iat":now,"auth_time":now-10,"exp":now+300
+    });
+    let key =
+        jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!("fixtures/auth-test-private.pem"))
+            .unwrap();
+    let token = jsonwebtoken::encode(&header, &claims, &key).unwrap();
+    let mut expired = claims.clone();
+    expired["iat"] = json!(now - 20);
+    expired["auth_time"] = json!(now - 30);
+    expired["exp"] = json!(now - 1);
+    let mut wrong_client = claims.clone();
+    wrong_client["client_id"] = json!("another-app");
+    for authorization in [
+        None,
+        Some("Bearer invalid".to_string()),
+        Some(format!(
+            "Bearer {}",
+            jsonwebtoken::encode(&header, &expired, &key).unwrap()
+        )),
+        Some(format!(
+            "Bearer {}",
+            jsonwebtoken::encode(&header, &wrong_client, &key).unwrap()
+        )),
+    ] {
+        let mut request = Request::builder().method("POST").uri("/v1/session/revoke");
+        if let Some(value) = authorization {
+            request = request.header("authorization", value);
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM secret_broker.browser_revocations")
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 0, "rejected sign-out must not write a revocation");
+    }
     for (method, path, expected) in [
         ("GET", "/v1/secrets", StatusCode::OK),
         ("POST", "/v1/session/revoke", StatusCode::NO_CONTENT),
@@ -351,6 +384,46 @@ async fn repository_grants_persist_apply_to_future_sessions_and_revoke_independe
             .await
             .unwrap();
         assert_eq!(response.status(), expected, "{method} {path}");
+    }
+
+    // Make a newer login observable without sleeping across timestamp seconds.
+    let cutoff = now - 5;
+    sqlx::query("UPDATE secret_broker.browser_revocations SET revoked_before = $1 WHERE user_sub = 'browser-fixture'")
+        .bind(cutoff).execute(&state.pool).await.unwrap();
+    let mut newer = claims.clone();
+    newer["auth_time"] = json!(cutoff + 1);
+    let newer_token = jsonwebtoken::encode(&header, &newer, &key).unwrap();
+    for (method, path, bearer) in [
+        ("GET", "/v1/secrets", &newer_token),
+        ("POST", "/v1/session/revoke", &token),
+        ("GET", "/v1/secrets", &newer_token),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("authorization", format!("Bearer {bearer}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if method == "POST" {
+                StatusCode::NO_CONTENT
+            } else {
+                StatusCode::OK
+            }
+        );
+        let stored: i64 = sqlx::query_scalar("SELECT revoked_before FROM secret_broker.browser_revocations WHERE user_sub = 'browser-fixture'")
+            .fetch_one(&state.pool).await.unwrap();
+        assert_eq!(
+            stored, cutoff,
+            "revoked-token retries must not revoke a newer login"
+        );
     }
     issuer_server.abort();
     let now = chrono::Utc::now().timestamp();

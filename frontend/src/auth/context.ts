@@ -23,6 +23,8 @@ export interface AuthContextValue {
   submitMfaCode: (code: string) => Promise<void>;
   cancelMfa: () => void;
   logout: () => void;
+  logoutAllDevices: () => Promise<void>;
+  logoutPending: boolean;
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null);

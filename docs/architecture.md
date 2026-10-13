@@ -216,6 +216,30 @@ permanent access. See [`secrets.md`](secrets.md).
 
 ## Backend surface
 
+### Browser authentication and sign-out
+
+The browser's shared `authFetch` boundary sends missing or rejected credentials
+and HTTP 401 responses to `AuthProvider`, which clears the local Cognito login
+and returns to the login screen. HTTP 403, server errors, and network failures
+do not clear authentication. Request generations prevent a late response from
+an earlier login from signing out a newer login. REST, broker, streamed timeline
+reads, and WebSocket ticket issuance use this boundary.
+
+**Sign out (this device)** clears Cognito credentials in this browser profile
+without contacting the broker. **Sign out (all devices)** first calls the
+authenticated `POST /broker/v1/session/revoke`, then clears local credentials.
+If revocation is unavailable, the UI reports the failure and permits a retry.
+
+The broker stores a per-principal `revoked_before` cutoff. Tokens whose original
+Cognito `auth_time` is at or before that cutoff lose Sulion access, including
+tokens refreshed from those logins. Fresh authentication after the cutoff is
+required. Missing, invalid, and expired tokens cannot write a cutoff. An already
+revoked token receives an idempotent 204 for a sign-out retry without changing
+the cutoff or invalidating newer logins. This revokes Sulion access; it does not
+perform shared-pool Cognito global sign-out.
+
+### Control API
+
 The control process owns REST management (`GET/POST/PATCH/DELETE` on sessions,
 repos, meta-repos, plans, timeline, library, git, stats), durable operations, and browser
 WebSockets. Session, terminal, repo, file, Git, upload, and workspace handlers

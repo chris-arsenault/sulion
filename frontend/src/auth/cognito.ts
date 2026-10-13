@@ -6,6 +6,7 @@ import {
 } from "amazon-cognito-identity-js";
 
 import { getAuthRuntimeConfig } from "./config";
+import { advanceAuthGeneration, AuthenticationRequiredError } from "./session";
 
 export type SessionSnapshot = {
   accessToken: string;
@@ -44,7 +45,17 @@ export function getCurrentSession(): Promise<CognitoUserSession | null> {
   return new Promise((resolve, reject) => {
     user.getSession((err: Error | null, session: CognitoUserSession | null) => {
       if (err) {
-        reject(err);
+        const code = (err as Error & { code?: string }).code ?? err.name;
+        const missingCredentials = [
+          "Username is null. Cannot retrieve a new session",
+          "Cannot retrieve a new session. Please authenticate.",
+          "Local storage is missing an ID Token, Please authenticate",
+        ].includes(err.message);
+        reject(
+          missingCredentials || code === "NotAuthorizedException" || code === "UserNotFoundException"
+            ? new AuthenticationRequiredError()
+            : err,
+        );
         return;
       }
       if (!session?.isValid()) {
@@ -81,6 +92,7 @@ export async function getSessionSnapshot(): Promise<SessionSnapshot | null> {
 }
 
 export function signOut(): void {
+  advanceAuthGeneration();
   getCurrentUser()?.signOut();
 }
 
@@ -105,6 +117,7 @@ export type SignInResult =
   | { kind: "challenge"; challenge: SignInChallenge };
 
 export function signIn(username: string, password: string): Promise<SignInResult> {
+  advanceAuthGeneration();
   const pool = getPool();
   if (!pool) return Promise.reject(new Error("Cognito auth is not configured"));
 

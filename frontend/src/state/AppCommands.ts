@@ -25,7 +25,8 @@ export type AppCommand =
    * decide which of them takes it via `promptInjectionTarget`. */
   | { type: "inject-prompt"; sessionId: string; text: string }
   | { type: "library-changed"; kind: LibraryKind }
-  | { type: "open-display-settings" };
+  | { type: "open-display-settings" }
+  | { type: "authentication-required" };
 
 type AppCommandType = AppCommand["type"];
 type AppCommandOf<T extends AppCommandType> = Extract<AppCommand, { type: T }>;
@@ -40,6 +41,10 @@ function dispatchAppCommand(command: AppCommand) {
 }
 
 export const appCommands = {
+  authenticationRequired() {
+    dispatchAppCommand({ type: "authentication-required" });
+  },
+
   openFile(detail: Omit<AppCommandOf<"open-file">, "type">) {
     dispatchAppCommand({ type: "open-file", ...detail });
   },

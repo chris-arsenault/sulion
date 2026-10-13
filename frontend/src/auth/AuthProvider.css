@@ -136,6 +136,7 @@
 
 .auth-app__status {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
@@ -166,6 +167,11 @@
   padding: 2px 8px;
   font: inherit;
   cursor: pointer;
+}
+
+.auth-app__logout:disabled {
+  color: var(--text-dis);
+  cursor: wait;
 }
 
 .auth-app > .layout {

@@ -23,10 +23,20 @@ import {
 } from "./context";
 import "./AuthProvider.css";
 import { revokeBrowserSessions } from "../api/client";
+import { useAppCommand } from "../state/AppCommands";
+import { AuthenticationRequiredError, getAuthGeneration } from "./session";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ kind: "loading" });
   const [logoutError, setLogoutError] = useState<string | null>(null);
+  const [logoutPending, setLogoutPending] = useState(false);
+
+  useAppCommand("authentication-required", () => {
+    if (state.kind !== "authenticated") return;
+    signOut();
+    setLogoutError(null);
+    setState({ kind: "anonymous", error: new AuthenticationRequiredError().message });
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -93,18 +103,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signOut();
         setState({ kind: "anonymous", error: null });
       },
-      async logout() {
+      logout() {
+        signOut();
+        setLogoutError(null);
+        setState({ kind: "anonymous", error: null });
+      },
+      logoutPending,
+      async logoutAllDevices() {
+        const generation = getAuthGeneration();
+        setLogoutPending(true);
         setLogoutError(null);
         try {
           await revokeBrowserSessions();
+          if (generation !== getAuthGeneration()) return;
           signOut();
           setState({ kind: "anonymous", error: null });
         } catch (error) {
-          setLogoutError(error instanceof Error ? error.message : "Sign-out failed. Try again.");
+          if (generation === getAuthGeneration()) {
+            setLogoutError(error instanceof Error ? error.message : "Sign-out failed. Try again.");
+          }
+        } finally {
+          setLogoutPending(false);
         }
       },
     };
-  }, [state]);
+  }, [state, logoutPending]);
 
   return <AuthContext.Provider value={value}>
     {logoutError && <div role="alert">{logoutError}</div>}
@@ -113,7 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 }
 
 export function AuthGate({ children }: { children: ReactNode }) {
-  const { state, login, submitMfaCode, cancelMfa, logout } = useAuth();
+  const { state, login, submitMfaCode, cancelMfa, logout, logoutAllDevices, logoutPending } = useAuth();
   const runtime = getAuthRuntimeConfig();
 
   if (state.kind === "loading") {
@@ -142,8 +165,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
           <span className="auth-app__user">
             {state.session.username ?? state.session.email ?? "signed in"}
           </span>
-          <button type="button" className="auth-app__logout" onClick={logout}>
-            sign out all Sulion sessions
+          <button type="button" className="auth-app__logout" onClick={logout} disabled={logoutPending}>
+            sign out (this device)
+          </button>
+          <button type="button" className="auth-app__logout" onClick={logoutAllDevices} disabled={logoutPending}>
+            sign out (all devices)
           </button>
         </div>
         {children}

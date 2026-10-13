@@ -1,5 +1,6 @@
 // Typed REST client. Stateless — callers do their own caching/polling.
-import { getAccessToken } from "../auth/cognito";
+import { getAccessToken, isAuthConfigured } from "../auth/cognito";
+import { AuthenticationRequiredError, getAuthGeneration, requireAuthentication } from "../auth/session";
 import type { Maybe } from "../lib/types";
 import type { GrantedUpload, UploadGrant, UploadIntent, UploadTarget } from "./uploadTypes";
 
@@ -77,6 +78,7 @@ async function parseErrorBody(resp: Response): Promise<string> {
 }
 
 async function authHeaders(
+  generation: number,
   init?: RequestInit,
   opts?: { json?: boolean },
 ): Promise<Headers> {
@@ -84,7 +86,20 @@ async function authHeaders(
   if (opts?.json !== false && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const token = await getAccessToken();
+  let token: string | null;
+  try {
+    token = await getAccessToken();
+  } catch (error) {
+    if (error instanceof AuthenticationRequiredError) {
+      requireAuthentication(generation);
+      throw new ApiError(401, error.message);
+    }
+    throw error;
+  }
+  if (!token && isAuthConfigured()) {
+    requireAuthentication(generation);
+    throw new ApiError(401, new AuthenticationRequiredError().message);
+  }
   if (token && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${token}`);
   }
@@ -96,10 +111,17 @@ export async function authFetch(
   init?: RequestInit,
   opts?: { json?: boolean },
 ): Promise<Response> {
-  return fetch(url, {
+  const generation = getAuthGeneration();
+  const headers = await authHeaders(generation, init, opts);
+  if (generation !== getAuthGeneration()) {
+    throw new ApiError(401, new AuthenticationRequiredError().message);
+  }
+  const response = await fetch(url, {
     ...init,
-    headers: await authHeaders(init, opts),
+    headers,
   });
+  if (response.status === 401) requireAuthentication(generation);
+  return response;
 }
 
 async function brokerRequest<T>(url: string, init?: RequestInit): Promise<T> {
