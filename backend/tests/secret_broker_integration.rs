@@ -728,8 +728,64 @@ async fn repository_grants_persist_apply_to_future_sessions_and_revoke_independe
     assert_eq!(a.redeem(&restarted).await.0, StatusCode::FORBIDDEN);
     let (_, envelope) = request(management, "GET", "/v1/secrets/status", Value::Null, false).await;
     assert_eq!(envelope["env"]["STATUS_TOKEN"], "");
+    authority_outage_preserves_login(&state, &app, &token).await;
     sqlx::query(&format!("DROP DATABASE {database} WITH (FORCE)"))
         .execute(&admin)
         .await
         .unwrap();
+}
+
+async fn authority_outage_preserves_login(state: &BrokerState, app: &Router, token: &str) {
+    let now = chrono::Utc::now().timestamp();
+    let authority = json!({"sub":"unrevoked-user", "auth_time":now, "expires_at":now+300});
+    let mut connections = Vec::new();
+    for _ in 0..16 {
+        connections.push(state.pool.acquire().await.unwrap());
+    }
+    let (status, _) = request(
+        app.clone(),
+        "POST",
+        "/v1/auth/check",
+        authority.clone(),
+        true,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "pool exhaustion must not reject a login"
+    );
+    drop(connections);
+    assert_eq!(
+        request(
+            app.clone(),
+            "POST",
+            "/v1/auth/check",
+            authority.clone(),
+            true
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    state.pool.close().await;
+    let (status, _) = request(app.clone(), "POST", "/v1/auth/check", authority, true).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/secrets")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "browser middleware must preserve login on database failure"
+    );
+    assert_eq!(response.headers()["retry-after"], "30");
 }

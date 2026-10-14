@@ -218,12 +218,26 @@ permanent access. See [`secrets.md`](secrets.md).
 
 ### Browser authentication and sign-out
 
-The browser's shared `authFetch` boundary sends missing or rejected credentials
-and HTTP 401 responses to `AuthProvider`, which clears the local Cognito login
-and returns to the login screen. HTTP 403, server errors, and network failures
-do not clear authentication. Request generations prevent a late response from
-an earlier login from signing out a newer login. REST, broker, streamed timeline
-reads, and WebSocket ticket issuance use this boundary.
+The browser refreshes access tokens 60 seconds before expiry, accounting for
+Cognito's cached clock drift. Concurrent requests share a session refresh. The
+shared `authFetch` boundary recovers an HTTP 401 once with refreshed credentials,
+reusing a newer token if another request already refreshed. Only an explicit
+401 is replayed, with the same body and abort signal; network failures and
+server errors never replay a mutation. Explicit caller credentials and stream
+bodies are not replayed. A confirmed rejection returns to the login
+screen. HTTP 403, server errors, and network failures retain credentials. A
+temporary refresh failure on page load shows a retrying state with exponential
+backoff up to 30 seconds. REST, broker, streamed timeline reads, and WebSocket
+ticket issuance use this boundary.
+
+Request generations prevent an earlier login's responses or SDK storage writes
+from clearing or overwriting a newer login, or restoring a signed-out login.
+A late rejection of a token superseded by another refresh also retains login.
+The broker's authority-check response marks confirmed expiry or revocation;
+database errors, bounded query timeouts, broker connection failures, and machine
+credential rejection return HTTP 503 with `Retry-After: 30`. Requests remain
+denied until checks recover. WebSocket attachments close when authority cannot
+be established, preserving their PTYs for reconnection.
 
 The backend and broker refresh Cognito's public signing keys every 15 minutes
 in the background. Each successfully fetched key set remains usable for 60

@@ -7,6 +7,7 @@ import type {
 
 export type AuthState =
   | { kind: "loading" }
+  | { kind: "recovering" }
   | { kind: "disabled" }
   | { kind: "anonymous"; error: string | null }
   | {

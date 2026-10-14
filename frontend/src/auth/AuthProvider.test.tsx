@@ -33,7 +33,106 @@ describe("authentication recovery and sign-out", () => {
     window.__APP_CONFIG__ = { cognitoUserPoolId: "fixture", cognitoClientId: "fixture" };
   });
 
-  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+  it("retries a temporarily unavailable startup refresh without showing a login form", async () => {
+    vi.useFakeTimers();
+    vi.mocked(cognito.getSessionSnapshot).mockRejectedValueOnce(new TypeError("offline")).mockResolvedValue(session);
+    render(<AuthProvider><AuthGate><div>{PRIVATE_CONTENT}</div></AuthGate></AuthProvider>);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByRole("status").textContent).toContain("Retrying");
+    expect(screen.queryByLabelText("Password")).toBeNull();
+    expect(signOut).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(screen.getByText(PRIVATE_CONTENT)).toBeTruthy();
+  });
+
+  it("cancels startup recovery when the user signs out", async () => {
+    vi.useFakeTimers();
+    vi.mocked(cognito.getSessionSnapshot).mockRejectedValue(new TypeError("offline"));
+    render(<AuthProvider><AuthGate><div>{PRIVATE_CONTENT}</div></AuthGate></AuthProvider>);
+    await act(async () => { await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "sign out (this device)" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+    expectLogin();
+    expect(cognito.getSessionSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("recovers one rejected token and preserves a POST body and abort signal", async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(new Response(null, { status: 401 })).mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    vi.mocked(getAccessToken).mockResolvedValueOnce("expired").mockResolvedValue("fresh");
+    await renderSession();
+    const signal = new AbortController().signal;
+    await act(async () => { expect((await authFetch(APP_STATE_URL, { method: "POST", body: "payload", signal })).status).toBe(200); });
+    expect(getAccessToken).toHaveBeenCalledWith({ rejectedToken: "expired" });
+    expect(fetch.mock.calls[1][1]).toMatchObject({ method: "POST", body: "payload", signal });
+    expect(fetch.mock.calls[1][1].headers.get("Authorization")).toBe("Bearer fresh");
+    expect(signOut).not.toHaveBeenCalled();
+  });
+
+  it.each(["refresh", "retry"])("retains login if %s fails during 401 recovery", async (stage) => {
+    const error = new TypeError("offline");
+    const fetch = vi.fn().mockResolvedValueOnce(new Response(null, { status: 401 })).mockRejectedValue(error);
+    vi.stubGlobal("fetch", fetch);
+    if (stage === "refresh") vi.mocked(getAccessToken).mockResolvedValueOnce("fixture").mockRejectedValue(error);
+    await renderSession();
+    await act(async () => { await expect(authFetch(APP_STATE_URL)).rejects.toBe(error); });
+    expect(screen.getByText(PRIVATE_CONTENT)).toBeTruthy();
+    expect(signOut).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(stage === "refresh" ? 1 : 2);
+  });
+
+  it("retains login when authority becomes unavailable during token recovery", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(new Response(null, { status: 401 })).mockResolvedValue(new Response(null, { status: 503 })));
+    await renderSession();
+    await act(async () => { expect((await authFetch(APP_STATE_URL)).status).toBe(503); });
+    expect(signOut).not.toHaveBeenCalled();
+  });
+
+  it("ignores a rejected retry after another request obtains a newer token", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response(null, { status: 401 })));
+    vi.mocked(getAccessToken).mockResolvedValueOnce("old").mockResolvedValueOnce("retry").mockResolvedValue("newer");
+    await renderSession();
+    await act(async () => { await authFetch(APP_STATE_URL); });
+    expect(signOut).not.toHaveBeenCalled();
+    expect(screen.getByText(PRIVATE_CONTENT)).toBeTruthy();
+  });
+
+  it("does not replace explicit authorization or clear the browser login for it", async () => {
+    vi.mocked(getAccessToken).mockRejectedValue(new AuthenticationRequiredError());
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 401 }));
+    vi.stubGlobal("fetch", fetch);
+    await renderSession();
+    await act(async () => { await authFetch(APP_STATE_URL, { headers: { Authorization: "Bearer explicit" } }); });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(getAccessToken).not.toHaveBeenCalled();
+    expect(signOut).not.toHaveBeenCalled();
+  });
+
+  it("does not recover or replay an aborted request", async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn().mockImplementation(async () => {
+      controller.abort();
+      return new Response(null, { status: 401 });
+    });
+    vi.stubGlobal("fetch", fetch);
+    await renderSession();
+    await act(async () => { await expect(authFetch(APP_STATE_URL, { signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" }); });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(getAccessToken).toHaveBeenCalledOnce();
+    expect(signOut).not.toHaveBeenCalled();
+  });
+
+  it("refreshes but does not replay a consumed stream body", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 401 }));
+    vi.stubGlobal("fetch", fetch);
+    await renderSession();
+    await act(async () => { await authFetch(APP_STATE_URL, { method: "POST", body: new ReadableStream() }); });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(getAccessToken).toHaveBeenCalledWith({ rejectedToken: "fixture" });
+    expect(signOut).not.toHaveBeenCalled();
+  });
 
   it.each([APP_STATE_URL, "/api/ws-tickets", "/broker/v1/secrets"])(
     "returns to login on a 401 from %s without revoking other devices",
@@ -44,7 +143,7 @@ describe("authentication recovery and sign-out", () => {
       await act(async () => { expect((await authFetch(url)).status).toBe(401); });
       expectLogin();
       expect(signOut).toHaveBeenCalledOnce();
-      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledTimes(2);
       expect(fetch.mock.calls[0][0]).toBe(url);
     },
   );
@@ -65,7 +164,7 @@ describe("authentication recovery and sign-out", () => {
         .mockImplementationOnce(async () => new Response(null, { status: 503 }))
         .mockImplementationOnce(async () => new Response(null, { status: 503 }))
         .mockImplementationOnce(async () => new Response(null, { status: 200 }))
-        .mockImplementationOnce(async () => new Response(null, { status: 401 }));
+        .mockImplementation(async () => new Response(null, { status: 401 }));
       vi.stubGlobal("fetch", fetch);
       await renderSession();
       for (const status of [503, 503, 503, 200]) {

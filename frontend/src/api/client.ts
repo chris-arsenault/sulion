@@ -81,14 +81,16 @@ async function authHeaders(
   generation: number,
   init?: RequestInit,
   opts?: { json?: boolean },
+  rejectedToken?: string,
 ): Promise<Headers> {
   const headers = new Headers(init?.headers);
   if (opts?.json !== false && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
+  if (headers.has("Authorization")) return headers;
   let token: string | null;
   try {
-    token = await getAccessToken();
+    token = await getAccessToken(rejectedToken ? { rejectedToken } : undefined);
   } catch (error) {
     if (error instanceof AuthenticationRequiredError) {
       requireAuthentication(generation);
@@ -111,16 +113,33 @@ export async function authFetch(
   init?: RequestInit,
   opts?: { json?: boolean },
 ): Promise<Response> {
+  init?.signal?.throwIfAborted();
   const generation = getAuthGeneration();
   const headers = await authHeaders(generation, init, opts);
   if (generation !== getAuthGeneration()) {
     throw new ApiError(401, new AuthenticationRequiredError().message);
   }
-  const response = await fetch(url, {
+  let response = await fetch(url, {
     ...init,
     headers,
   });
-  if (response.status === 401) requireAuthentication(generation);
+  if (response.status !== 401 || generation !== getAuthGeneration() || !isAuthConfigured()) return response;
+  init?.signal?.throwIfAborted();
+  // A 401 from our auth middleware occurs before the handler. Only that
+  // explicit rejection is replayed; network errors and server errors are not.
+  const token = headers.get("Authorization")?.replace(/^Bearer /, "");
+  if (new Headers(init?.headers).has("Authorization")) return response;
+  if (token) {
+    const freshHeaders = await authHeaders(generation, init, opts, token);
+    if (generation !== getAuthGeneration()) return response;
+    if (init?.body instanceof ReadableStream) return response;
+    response = await fetch(url, { ...init, headers: freshHeaders });
+    if (response.status !== 401 || generation !== getAuthGeneration()) return response;
+    // Another request may have refreshed again while this response was in flight.
+    const currentHeaders = await authHeaders(generation, undefined, opts);
+    if (freshHeaders.get("Authorization") !== currentHeaders.get("Authorization")) return response;
+  }
+  requireAuthentication(generation);
   return response;
 }
 

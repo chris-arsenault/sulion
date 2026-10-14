@@ -6,6 +6,11 @@ All notable user-visible changes to Sulion are recorded here.
 
 ### Authentication
 
+- Refresh browser tokens before expiry and share refreshes across concurrent
+  requests. Recover one rejected request with fresh credentials, preserve login
+  through temporary Cognito, broker, or database failures, and protect newer
+  logins from late refresh results. Expired and revoked credentials remain
+  blocked; terminal attachments reconnect without terminating their PTYs.
 - Refresh public signing keys every 15 minutes and keep successfully fetched
   keys usable for 60 minutes. Temporary refresh failures preserve browser
   logins; if cached keys expire, requests report temporary unavailability until

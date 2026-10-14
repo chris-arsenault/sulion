@@ -146,7 +146,13 @@ async fn authority_expiry_closes_attachment_but_preserves_pty() {
 }
 
 #[tokio::test]
-async fn revocation_closes_an_attached_client_within_eight_seconds() {
+async fn authority_failure_closes_attachment_and_outage_recovery_preserves_pty() {
+    for status in [401, 503] {
+        authority_failure_scenario(status).await;
+    }
+}
+
+async fn authority_failure_scenario(failure_status: u16) {
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -158,10 +164,15 @@ async fn revocation_closes_an_attached_client_within_eight_seconds() {
         axum::routing::post(move || {
             let flag = flag.clone();
             async move {
+                use axum::response::IntoResponse;
                 if flag.load(Ordering::SeqCst) {
-                    axum::http::StatusCode::UNAUTHORIZED
+                    (
+                        axum::http::StatusCode::from_u16(failure_status).unwrap(),
+                        axum::Json(serde_json::json!({"code":"BROWSER_AUTHORITY_REJECTED"})),
+                    )
+                        .into_response()
                 } else {
-                    axum::http::StatusCode::NO_CONTENT
+                    axum::http::StatusCode::NO_CONTENT.into_response()
                 }
             }
         }),
@@ -242,6 +253,46 @@ async fn revocation_closes_an_attached_client_within_eight_seconds() {
             .state,
         sulion::pty::PtyState::Live
     );
+    if failure_status == 503 {
+        let ticket = state
+            .ws_tickets
+            .issue_for_test(meta.id, user.clone())
+            .await
+            .unwrap();
+        let mut req = format!("{base}/ws/sessions/{}", meta.id)
+            .into_client_request()
+            .unwrap();
+        req.headers_mut().insert(
+            SEC_WEBSOCKET_PROTOCOL,
+            format!("sulion.v1, sulion.ticket.{ticket}")
+                .parse()
+                .unwrap(),
+        );
+        match tokio_tungstenite::connect_async(req).await {
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                assert_eq!(response.status().as_u16(), 503)
+            }
+            _ => panic!("authority outage must deny attach with HTTP 503"),
+        }
+        revoked.store(false, Ordering::SeqCst);
+        assert!(user.check_authority().await.is_ok());
+        let ticket = state
+            .ws_tickets
+            .issue_for_test(meta.id, user)
+            .await
+            .unwrap();
+        let mut req = format!("{base}/ws/sessions/{}", meta.id)
+            .into_client_request()
+            .unwrap();
+        req.headers_mut().insert(
+            SEC_WEBSOCKET_PROTOCOL,
+            format!("sulion.v1, sulion.ticket.{ticket}")
+                .parse()
+                .unwrap(),
+        );
+        let (mut recovered, _) = tokio_tungstenite::connect_async(req).await.unwrap();
+        recovered.close(None).await.unwrap();
+    }
     drop(restore);
     mgr.delete(meta.id).await.unwrap();
     check_server.abort();

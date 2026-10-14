@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CognitoUserPool } from "amazon-cognito-identity-js";
 import { getAccessToken } from "./cognito";
-import { AuthenticationRequiredError } from "./session";
+import { advanceAuthGeneration, AuthenticationRequiredError } from "./session";
 
 const getSession = vi.fn();
 const getCurrentUser = vi.fn();
@@ -9,6 +9,7 @@ const getCurrentUser = vi.fn();
 describe("Cognito session recovery", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    advanceAuthGeneration();
     window.__APP_CONFIG__ = { cognitoUserPoolId: "us-east-1_fixture", cognitoClientId: "fixture" };
     vi.spyOn(CognitoUserPool.prototype, "getCurrentUser").mockImplementation(getCurrentUser);
     getCurrentUser.mockReturnValue({ getSession });
@@ -32,10 +33,16 @@ describe("Cognito session recovery", () => {
     await expect(getAccessToken()).rejects.toBe(error);
   });
 
+  it.each([null, { isValid: () => false }])("retains credentials when the SDK returns an unusable session: %s", async (session) => {
+    getSession.mockImplementation((callback) => callback(null, session));
+    await expect(getAccessToken()).rejects.toThrow("Token refresh returned no usable session");
+  });
+
   it("returns a refreshed access token", async () => {
     getSession.mockImplementation((callback) => callback(null, {
       isValid: () => true,
-      getAccessToken: () => ({ getJwtToken: () => "refreshed" }),
+      getClockDrift: () => 0,
+      getAccessToken: () => ({ getJwtToken: () => "refreshed", getExpiration: () => Date.now() / 1000 + 300 }),
     }));
     await expect(getAccessToken()).resolves.toBe("refreshed");
   });

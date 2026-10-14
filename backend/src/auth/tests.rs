@@ -13,6 +13,7 @@ struct Fixture {
     rotated: Arc<AtomicBool>,
     response_body: Arc<std::sync::Mutex<Option<String>>>,
     revoked: Arc<AtomicBool>,
+    authority_status: Arc<AtomicUsize>,
     server: tokio::task::JoinHandle<()>,
 }
 impl Drop for Fixture {
@@ -29,6 +30,8 @@ impl Fixture {
         let response_body = Arc::new(std::sync::Mutex::new(None::<String>));
         let revoked = Arc::new(AtomicBool::new(false));
         let revoke_flag = revoked.clone();
+        let authority_status = Arc::new(AtomicUsize::new(204));
+        let status = authority_status.clone();
         let (count, fail) = (calls.clone(), outage.clone());
         let (delay, rotation) = (slow.clone(), rotated.clone());
         let reply = response_body.clone();
@@ -65,11 +68,18 @@ impl Fixture {
             "/v1/auth/check",
             axum::routing::post(move || {
                 let flag = revoke_flag.clone();
+                let status = status.clone();
                 async move {
                     if flag.load(Ordering::SeqCst) {
-                        StatusCode::UNAUTHORIZED
+                        (
+                            StatusCode::UNAUTHORIZED,
+                            Json(json!({"code": revocation::REJECTED_CODE})),
+                        )
+                            .into_response()
                     } else {
-                        StatusCode::NO_CONTENT
+                        StatusCode::from_u16(status.load(Ordering::SeqCst) as u16)
+                            .unwrap()
+                            .into_response()
                     }
                 }
             }),
@@ -90,6 +100,7 @@ impl Fixture {
             rotated,
             response_body,
             revoked,
+            authority_status,
             server,
         }
     }
@@ -188,6 +199,33 @@ async fn http_middleware_checks_current_authority_after_jwt_validation() {
         );
     }
     f.revoked.store(false, Ordering::SeqCst);
+    for status in [500, 503, 401, 403, 200, 204] {
+        f.authority_status.store(status, Ordering::SeqCst);
+        let request = axum::http::Request::builder()
+            .uri("/probe")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            if status == 204 {
+                StatusCode::OK
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+        );
+        if status != 204 {
+            assert_eq!(response.headers()[header::RETRY_AFTER], "30");
+        }
+    }
+    let mut boundary = AuthenticatedUser::dev();
+    boundary.expires_at = chrono::Utc::now().timestamp();
+    let error = boundary.check_authority().await.unwrap_err();
+    assert_eq!(
+        authentication_error_response(&error).status(),
+        StatusCode::UNAUTHORIZED
+    );
     f.outage.store(true, Ordering::SeqCst);
     f.auth
         .keys
@@ -206,6 +244,23 @@ async fn http_middleware_checks_current_authority_after_jwt_validation() {
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(response.headers()[header::RETRY_AFTER], "30");
+    let unavailable = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    std::env::set_var(
+        "SULION_SECRET_BROKER_URL",
+        format!("http://{}", unavailable.local_addr().unwrap()),
+    );
+    drop(unavailable);
+    let error = revocation::check_remote(&revocation::Authority {
+        sub: "fixture-user".into(),
+        auth_time: 1,
+        expires_at: i64::MAX,
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(
+        authentication_error_response(&error).status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
     for (key, value) in [
         ("SULION_SECRET_BROKER_URL", previous_url),
         ("SULION_SECRET_BROKER_REGISTRATION_TOKEN", previous_token),
@@ -257,6 +312,11 @@ async fn signed_claims_are_required_and_verified() {
         );
     }
     let token = f.token(&good);
+    let mut at_expiry = good.clone();
+    at_expiry["iat"] = json!(chrono::Utc::now().timestamp() - 10);
+    at_expiry["auth_time"] = at_expiry["iat"].clone();
+    at_expiry["exp"] = json!(chrono::Utc::now().timestamp());
+    assert!(f.auth.validate_bearer(&f.token(&at_expiry)).await.is_err());
     let (body, signature) = token.rsplit_once('.').unwrap();
     let mut signature = signature.as_bytes().to_vec();
     signature[0] = if signature[0] == b'A' { b'B' } else { b'A' };

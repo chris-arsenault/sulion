@@ -123,4 +123,23 @@ describe("connectPty", () => {
     expect(authFetchMock).toHaveBeenCalledTimes(2);
     connection.close();
   });
+
+  it("recovers after repeated ticket outages during reconnect", async () => {
+    authFetchMock.mockImplementationOnce(() => ticketResponse("first"))
+      .mockRejectedValueOnce(new TypeError("offline"))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockImplementationOnce(() => ticketResponse("recovered"));
+    const connection = connectPty("session-1", { onBytes: vi.fn() });
+    await flushPromises();
+    MockWebSocket.instances[0].serverOpen();
+    MockWebSocket.instances[0].serverClose();
+    await vi.advanceTimersByTimeAsync(250 + 500 + 1000);
+    await flushPromises();
+    expect(authFetchMock).toHaveBeenCalledTimes(4);
+    expect(MockWebSocket.instances).toHaveLength(2);
+    expect(MockWebSocket.instances[1].protocols).toContain("sulion.ticket.recovered");
+    MockWebSocket.instances[1].serverOpen();
+    expect(connection.state()).toBe("open");
+    connection.close();
+  });
 });

@@ -40,26 +40,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    let delay = 1000;
+    const generation = getAuthGeneration();
     if (!isAuthConfigured()) {
       setState({ kind: "disabled" });
       return;
     }
-    void (async () => {
+    const checkSession = async () => {
+      if (cancelled || generation !== getAuthGeneration()) return;
       try {
         const session = await getSessionSnapshot();
-        if (cancelled) return;
+        if (cancelled || generation !== getAuthGeneration()) return;
         if (session) setState({ kind: "authenticated", session });
         else setState({ kind: "anonymous", error: null });
       } catch (err) {
-        if (cancelled) return;
-        setState({
-          kind: "anonymous",
-          error: err instanceof Error ? err.message : "authentication failed",
-        });
+        if (cancelled || generation !== getAuthGeneration()) return;
+        if (err instanceof AuthenticationRequiredError) {
+          signOut();
+          setState({ kind: "anonymous", error: err.message });
+        } else {
+          setState({ kind: "recovering" });
+          retry = setTimeout(() => { void checkSession(); }, delay);
+          delay = Math.min(delay * 2, 30000);
+        }
       }
-    })();
+    };
+    void checkSession();
     return () => {
       cancelled = true;
+      if (retry !== null) clearTimeout(retry);
     };
   }, []);
 
@@ -75,9 +85,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       state,
       async login(username: string, password: string) {
         setState({ kind: "loading" });
+        const attempt = signIn(username, password);
+        const generation = getAuthGeneration();
         try {
-          applyResult(await signIn(username, password));
+          const result = await attempt;
+          if (generation !== getAuthGeneration()) return;
+          applyResult(result);
         } catch (err) {
+          if (generation !== getAuthGeneration()) return;
           setState({
             kind: "anonymous",
             error: err instanceof Error ? err.message : "login failed",
@@ -87,10 +102,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       async submitMfaCode(code: string) {
         if (state.kind !== "mfa") return;
         const { challenge } = state;
+        const generation = getAuthGeneration();
         setState({ kind: "mfa", challenge, error: null, pending: true });
         try {
-          applyResult(await challenge.submitCode(code));
+          const result = await challenge.submitCode(code);
+          if (generation !== getAuthGeneration()) return;
+          applyResult(result);
         } catch (err) {
+          if (generation !== getAuthGeneration()) return;
           setState({
             kind: "mfa",
             challenge,
@@ -145,6 +164,13 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (state.kind === "disabled") {
     return <>{children}</>;
+  }
+
+  if (state.kind === "recovering") {
+    return <div className="auth-shell auth-shell--loading">
+      <p role="status">Authentication is temporarily unavailable. Retrying…</p>
+      <button type="button" onClick={logout}>sign out (this device)</button>
+    </div>;
   }
 
   if (state.kind === "mfa") {

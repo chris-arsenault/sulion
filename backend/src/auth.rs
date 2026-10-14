@@ -124,6 +124,7 @@ impl AuthState {
             !claims.sub.is_empty()
                 && claims.auth_time <= claims.iat
                 && claims.iat <= now
+                && claims.exp > now
                 && claims.exp > claims.iat,
             "invalid jwt times or subject"
         );
@@ -312,8 +313,9 @@ pub async fn require_http_auth(
 
     match auth_state.validate_bearer(token).await {
         Ok(user) => {
-            if user.check_authority().await.is_err() {
-                return unauthorized();
+            if let Err(err) = user.check_authority().await {
+                tracing::warn!(error = %format!("{err:#}"), "browser authority check failed");
+                return authentication_error_response(&err);
             }
             req.extensions_mut().insert(user);
             next.run(req).await
@@ -339,7 +341,7 @@ fn bearer_from_request(headers: &axum::http::HeaderMap) -> Option<&str> {
 }
 
 pub(crate) fn authentication_error_response(error: &anyhow::Error) -> Response {
-    if error.is::<SigningKeysUnavailable>() {
+    if error.is::<SigningKeysUnavailable>() || error.is::<revocation::AuthorityUnavailable>() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             [(header::RETRY_AFTER, "30")],

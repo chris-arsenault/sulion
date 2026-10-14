@@ -1,6 +1,13 @@
 //! One durable cutoff per Cognito principal, owned by the broker database.
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::{sync::OnceLock, time::Duration};
+
+#[derive(Debug, thiserror::Error)]
+#[error("authority check temporarily unavailable")]
+pub(crate) struct AuthorityUnavailable;
+
+pub(crate) const REJECTED_CODE: &str = "BROWSER_AUTHORITY_REJECTED";
 
 #[derive(Serialize, Deserialize)]
 pub struct Authority {
@@ -13,12 +20,17 @@ pub async fn allowed(pool: &crate::db::Pool, authority: &Authority) -> anyhow::R
     if authority.expires_at <= chrono::Utc::now().timestamp() {
         return Ok(false);
     }
-    let cutoff: Option<i64> = sqlx::query_scalar(
-        "SELECT revoked_before FROM secret_broker.browser_revocations WHERE user_sub = $1",
+    let cutoff: Option<i64> = tokio::time::timeout(
+        Duration::from_secs(2),
+        sqlx::query_scalar(
+            "SELECT revoked_before FROM secret_broker.browser_revocations WHERE user_sub = $1",
+        )
+        .bind(&authority.sub)
+        .fetch_optional(pool),
     )
-    .bind(&authority.sub)
-    .fetch_optional(pool)
-    .await?;
+    .await
+    .context(AuthorityUnavailable)?
+    .context(AuthorityUnavailable)?;
     Ok(cutoff.is_none_or(|at| authority.auth_time > at))
 }
 
@@ -40,19 +52,29 @@ pub async fn check_remote(authority: &Authority) -> anyhow::Result<()> {
             .expect("revocation HTTP client")
     });
     let base = crate::config::env_optional("SULION_SECRET_BROKER_URL")
-        .ok_or_else(|| anyhow::anyhow!("broker URL required for revocation checks"))?;
+        .ok_or_else(|| anyhow::anyhow!("broker URL required for revocation checks"))
+        .context(AuthorityUnavailable)?;
     let token = crate::config::env_optional("SULION_SECRET_BROKER_REGISTRATION_TOKEN")
-        .ok_or_else(|| anyhow::anyhow!("broker credential required for revocation checks"))?;
+        .ok_or_else(|| anyhow::anyhow!("broker credential required for revocation checks"))
+        .context(AuthorityUnavailable)?;
     let response = client
         .post(format!("{}/v1/auth/check", base.trim_end_matches('/')))
         .bearer_auth(token)
         .json(authority)
         .send()
         .await
-        .map_err(|_| anyhow::anyhow!("revocation check unavailable"))?;
-    anyhow::ensure!(
-        response.status() == reqwest::StatusCode::NO_CONTENT,
-        "browser authority rejected"
-    );
-    Ok(())
+        .context(AuthorityUnavailable)?;
+    let status = response.status();
+    if status == reqwest::StatusCode::NO_CONTENT {
+        return Ok(());
+    }
+    // An unmarked 401 can be the broker rejecting its machine credential.
+    // Only the broker's explicit authority decision can end a browser login.
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        let body: serde_json::Value = response.json().await.context(AuthorityUnavailable)?;
+        if body["code"] == REJECTED_CODE {
+            anyhow::bail!("browser authority expired or revoked");
+        }
+    }
+    Err(anyhow::anyhow!("authority service returned HTTP {status}").context(AuthorityUnavailable))
 }

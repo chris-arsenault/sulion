@@ -182,8 +182,9 @@ pub async fn attach(
     let Some(user) = state.ws_tickets.consume(&ticket, id).await else {
         return unauthorized();
     };
-    if user.check_authority().await.is_err() {
-        return unauthorized();
+    if let Err(err) = user.check_authority().await {
+        tracing::warn!(error = %format!("{err:#}"), "websocket authority check failed");
+        return crate::auth::authentication_error_response(&err);
     }
     let node_id = match node_proxy::session_node(&state, id).await {
         Ok(node_id) => node_id,
@@ -322,7 +323,8 @@ async fn handle_node_socket(
         let revocation = async {
             loop {
                 tokio::time::sleep(Duration::from_secs(5)).await;
-                if user.check_authority().await.is_err() {
+                if let Err(err) = user.check_authority().await {
+                    tracing::warn!(error = %format!("{err:#}"), "closing websocket after authority check failed");
                     break;
                 }
             }

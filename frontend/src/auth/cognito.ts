@@ -6,7 +6,8 @@ import {
 } from "amazon-cognito-identity-js";
 
 import { getAuthRuntimeConfig } from "./config";
-import { advanceAuthGeneration, AuthenticationRequiredError } from "./session";
+import { advanceAuthGeneration, AuthenticationRequiredError, getAuthGeneration } from "./session";
+import { storageForGeneration } from "./storage";
 
 export type SessionSnapshot = {
   accessToken: string;
@@ -16,15 +17,18 @@ export type SessionSnapshot = {
 
 let cachedPool: CognitoUserPool | null = null;
 let cachedPoolKey: string | null = null;
+let pending: { generation: number; rejectedToken?: string; promise: Promise<CognitoUserSession | null> } | null = null;
+const REFRESH_MARGIN_SECONDS = 60;
 
 function getPool(): CognitoUserPool | null {
   const config = getAuthRuntimeConfig();
   if (!config) return null;
-  const key = `${config.cognitoUserPoolId}:${config.cognitoClientId}`;
+  const key = `${config.cognitoUserPoolId}:${config.cognitoClientId}:${getAuthGeneration()}`;
   if (!cachedPool || cachedPoolKey !== key) {
     cachedPool = new CognitoUserPool({
       UserPoolId: config.cognitoUserPoolId,
       ClientId: config.cognitoClientId,
+      Storage: storageForGeneration(getAuthGeneration()),
     });
     cachedPoolKey = key;
   }
@@ -39,40 +43,75 @@ export function getCurrentUser(): CognitoUser | null {
   return getPool()?.getCurrentUser() ?? null;
 }
 
-export function getCurrentSession(): Promise<CognitoUserSession | null> {
+function sessionError(err: Error): Error {
+  const code = (err as Error & { code?: string }).code ?? err.name;
+  const missingCredentials = [
+    "Username is null. Cannot retrieve a new session",
+    "Cannot retrieve a new session. Please authenticate.",
+    "Local storage is missing an ID Token, Please authenticate",
+  ].includes(err.message);
+  return missingCredentials || code === "NotAuthorizedException" || code === "UserNotFoundException"
+    ? new AuthenticationRequiredError() : err;
+}
+
+async function loadSession(rejectedToken?: string): Promise<CognitoUserSession | null> {
   const user = getCurrentUser();
-  if (!user) return Promise.resolve(null);
-  return new Promise((resolve, reject) => {
+  if (!user) return null;
+  const session = await new Promise<CognitoUserSession | null>((resolve, reject) => {
     user.getSession((err: Error | null, session: CognitoUserSession | null) => {
       if (err) {
-        const code = (err as Error & { code?: string }).code ?? err.name;
-        const missingCredentials = [
-          "Username is null. Cannot retrieve a new session",
-          "Cannot retrieve a new session. Please authenticate.",
-          "Local storage is missing an ID Token, Please authenticate",
-        ].includes(err.message);
-        reject(
-          missingCredentials || code === "NotAuthorizedException" || code === "UserNotFoundException"
-            ? new AuthenticationRequiredError()
-            : err,
-        );
+        reject(sessionError(err));
         return;
       }
       if (!session?.isValid()) {
-        resolve(null);
+        reject(new Error("Token refresh returned no usable session"));
         return;
       }
       resolve(session);
     });
   });
+  if (!session) return null;
+  const token = session.getAccessToken();
+  // Leave time before the SDK's drift-adjusted expiry for requests and ticket
+  // handshakes that may still be in flight when the server checks the token.
+  const clockDrift = (session as CognitoUserSession & { getClockDrift(): number }).getClockDrift();
+  const nearExpiry = token.getExpiration() <= Date.now() / 1000 - clockDrift + REFRESH_MARGIN_SECONDS;
+  if (!nearExpiry && token.getJwtToken() !== rejectedToken) return session;
+  return new Promise((resolve, reject) => {
+    user.refreshSession(session.getRefreshToken(), (err, refreshed) => {
+      if (err) reject(sessionError(err));
+      else if (!refreshed?.isValid()) reject(new Error("Token refresh returned no usable session"));
+      else resolve(refreshed);
+    });
+  });
 }
 
-export async function getAccessToken(): Promise<string | null> {
+export async function getCurrentSession(rejectedToken?: string): Promise<CognitoUserSession | null> {
+  const generation = getAuthGeneration();
+  if (pending?.generation === generation) {
+    const operation = pending;
+    const session = await operation.promise;
+    if (generation !== getAuthGeneration()) throw new AuthenticationRequiredError();
+    if (!rejectedToken || operation.rejectedToken || session?.getAccessToken().getJwtToken() !== rejectedToken) return session;
+    return getCurrentSession(rejectedToken);
+  }
+  const operation = { generation, rejectedToken, promise: loadSession(rejectedToken) };
+  pending = operation;
+  try {
+    const session = await operation.promise;
+    if (generation !== getAuthGeneration()) throw new AuthenticationRequiredError();
+    return session;
+  } finally {
+    if (pending === operation) pending = null;
+  }
+}
+
+export async function getAccessToken(options?: { rejectedToken?: string }): Promise<string | null> {
   if (import.meta.env.VITE_SULION_E2E === "1") {
     const token = import.meta.env.VITE_SULION_E2E_ACCESS_TOKEN;
     if (typeof token === "string" && token.length > 0) return token;
   }
-  const session = await getCurrentSession();
+  const session = await getCurrentSession(options?.rejectedToken);
   return session?.getAccessToken().getJwtToken() ?? null;
 }
 
@@ -125,7 +164,7 @@ export function signIn(username: string, password: string): Promise<SignInResult
   const details = new AuthenticationDetails({ Username: username, Password: password });
 
   return new Promise<SignInResult>((resolve, reject) => {
-    user.authenticateUser(details, buildAuthCallbacks(user, resolve, reject));
+    user.authenticateUser(details, buildAuthCallbacks(user, resolve, reject, getAuthGeneration()));
   });
 }
 
@@ -133,22 +172,26 @@ function buildAuthCallbacks(
   user: CognitoUser,
   resolve: (result: SignInResult) => void,
   reject: (err: Error) => void,
+  generation: number,
 ) {
+  const active = () => generation === getAuthGeneration();
   return {
-    onSuccess: () => resolveAuthenticated(resolve, reject),
+    onSuccess: () => active() ? resolveAuthenticated(resolve, reject) : reject(new AuthenticationRequiredError()),
     onFailure: (err: Error) => reject(err),
     newPasswordRequired: () => reject(new Error("new password required")),
     // Enrolled user: prompt for the current authenticator code.
     totpRequired: () => {
+      if (!active()) { reject(new AuthenticationRequiredError()); return; }
       resolve({
         kind: "challenge",
         challenge: {
           kind: "softwareTokenMfa",
           submitCode: (code: string) =>
             new Promise<SignInResult>((res, rej) => {
+              if (!active()) { rej(new AuthenticationRequiredError()); return; }
               user.sendMFACode(
                 code.trim(),
-                buildAuthCallbacks(user, res, rej),
+                buildAuthCallbacks(user, res, rej, generation),
                 "SOFTWARE_TOKEN_MFA",
               );
             }),

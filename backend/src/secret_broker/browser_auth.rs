@@ -3,15 +3,21 @@ use super::*;
 pub(super) async fn check_browser_authority(
     State(state): State<Arc<BrokerState>>,
     Json(authority): Json<crate::auth::revocation::Authority>,
-) -> StatusCode {
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        crate::auth::revocation::allowed(&state.pool, &authority),
-    )
-    .await
-    {
-        Ok(Ok(true)) => StatusCode::NO_CONTENT,
-        _ => StatusCode::UNAUTHORIZED,
+) -> Response {
+    match crate::auth::revocation::allowed(&state.pool, &authority).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "code": crate::auth::revocation::REJECTED_CODE,
+                "error": "browser authority expired or revoked",
+            })),
+        )
+            .into_response(),
+        Err(err) => {
+            tracing::warn!(error = %format!("{err:#}"), "broker authority check failed");
+            crate::auth::authentication_error_response(&err)
+        }
     }
 }
 

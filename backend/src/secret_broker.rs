@@ -186,7 +186,11 @@ async fn require_user_auth(
                 {
                     return StatusCode::NO_CONTENT.into_response();
                 }
-                _ => return unauthorized(),
+                Ok(false) => return unauthorized(),
+                Err(err) => {
+                    tracing::warn!(error = %format!("{err:#}"), "broker authority check failed");
+                    return crate::auth::authentication_error_response(&err);
+                }
             }
             req.extensions_mut().insert(user);
             next.run(req).await
