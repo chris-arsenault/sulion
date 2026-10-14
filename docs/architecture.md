@@ -225,6 +225,21 @@ do not clear authentication. Request generations prevent a late response from
 an earlier login from signing out a newer login. REST, broker, streamed timeline
 reads, and WebSocket ticket issuance use this boundary.
 
+The backend and broker refresh Cognito's public signing keys every 15 minutes
+in the background. Each successfully fetched key set remains usable for 60
+minutes from that fetch; failed refreshes keep the previous set without
+extending its lifetime. Failures at minutes 15, 30, and 45 therefore do not
+interrupt authentication with known keys. At minute 60, a successful refresh
+is required before those keys can be used again. This key-cache lifetime does
+not extend the expiry of any login token.
+
+When no usable signing key is available because a fetch failed, authentication
+returns HTTP 503 with `Retry-After: 30`, preserving the browser login until
+requests can succeed again. Refreshes for unknown key IDs are coalesced and
+limited to one attempt per 30 seconds. A successful fetch that does not contain
+the requested key, an invalid token, or a revoked login still returns HTTP 401.
+Refresh warnings include the underlying fetch error for operational diagnosis.
+
 **Sign out (this device)** clears Cognito credentials in this browser profile
 without contacting the broker. **Sign out (all devices)** first calls the
 authenticated `POST /broker/v1/session/revoke`, then clears local credentials.

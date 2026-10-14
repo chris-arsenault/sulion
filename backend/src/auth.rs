@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use axum::extract::{Request, State};
@@ -10,20 +10,43 @@ use axum::response::{IntoResponse, Response};
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock};
+use tokio::time::Instant;
 
 use crate::config::AuthConfig;
 use crate::AppState;
 
 pub mod revocation;
 
-const JWKS_CACHE_TTL: Duration = Duration::from_secs(60 * 15);
+const JWKS_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 15);
+const JWKS_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 const JWKS_REFRESH_COOLDOWN: Duration = Duration::from_secs(30);
 
 pub struct AuthState {
     config: AuthConfig,
+    keys: Arc<SigningKeys>,
+    refresh_task: tokio::task::JoinHandle<()>,
+}
+
+struct SigningKeys {
+    issuer_url: String,
     client: reqwest::Client,
     jwks_cache: RwLock<Option<JwksCache>>,
-    last_refresh: Mutex<Option<Instant>>,
+    last_refresh: Mutex<Option<RefreshAttempt>>,
+}
+
+struct RefreshAttempt {
+    at: Instant,
+    succeeded: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("signing keys temporarily unavailable")]
+struct SigningKeysUnavailable;
+
+impl Drop for AuthState {
+    fn drop(&mut self) {
+        self.refresh_task.abort();
+    }
 }
 
 impl AuthState {
@@ -32,8 +55,8 @@ impl AuthState {
             issuer_url: config.issuer_url.trim_end_matches('/').to_string(),
             client_id: config.client_id,
         };
-        Self {
-            config,
+        let keys = Arc::new(SigningKeys {
+            issuer_url: config.issuer_url.clone(),
             client: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(2))
                 .timeout(Duration::from_secs(3))
@@ -42,6 +65,32 @@ impl AuthState {
                 .expect("HTTP client configuration"),
             jwks_cache: RwLock::new(None),
             last_refresh: Mutex::new(None),
+        });
+        let refresh_keys = keys.clone();
+        let refresh_task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval_at(
+                Instant::now() + JWKS_REFRESH_INTERVAL,
+                JWKS_REFRESH_INTERVAL,
+            );
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                let mut last = refresh_keys.last_refresh.lock().await;
+                if last
+                    .as_ref()
+                    .is_some_and(|at| at.at.elapsed() < JWKS_REFRESH_COOLDOWN)
+                {
+                    continue;
+                }
+                if let Err(error) = refresh_keys.refresh_jwks(&mut last).await {
+                    tracing::warn!(error = %format!("{error:#}"), "signing-key refresh failed; retaining cached keys");
+                }
+            }
+        });
+        Self {
+            config,
+            keys,
+            refresh_task,
         }
     }
 
@@ -52,7 +101,7 @@ impl AuthState {
             .kid
             .clone()
             .ok_or_else(|| anyhow!("jwt missing kid"))?;
-        let key = self.find_key(&kid).await?;
+        let key = self.keys.find_key(&kid).await?;
         let mut validation = Validation::new(Algorithm::RS256);
         validation.leeway = 0;
         validation.validate_aud = false; // Access tokens bind the application through client_id.
@@ -88,7 +137,9 @@ impl AuthState {
             expires_at: claims.exp,
         })
     }
+}
 
+impl SigningKeys {
     async fn find_key(&self, kid: &str) -> anyhow::Result<DecodingKey> {
         if let Some(key) = self.find_cached_key(kid).await {
             return Ok(key);
@@ -97,12 +148,18 @@ impl AuthState {
         if let Some(key) = self.find_cached_key(kid).await {
             return Ok(key);
         }
-        anyhow::ensure!(
-            !last.is_some_and(|at| at.elapsed() < JWKS_REFRESH_COOLDOWN),
-            "jwks refresh cooling down"
-        );
-        *last = Some(Instant::now());
-        self.refresh_jwks().await?;
+        if let Some(attempt) = last
+            .as_ref()
+            .filter(|at| at.at.elapsed() < JWKS_REFRESH_COOLDOWN)
+        {
+            if attempt.succeeded && self.cache_is_usable().await {
+                return Err(anyhow!("jwks missing key id"));
+            }
+            return Err(SigningKeysUnavailable.into());
+        }
+        self.refresh_jwks(&mut last)
+            .await
+            .context(SigningKeysUnavailable)?;
         self.find_cached_key(kid)
             .await
             .ok_or_else(|| anyhow!("jwks missing key id"))
@@ -111,16 +168,28 @@ impl AuthState {
     async fn find_cached_key(&self, kid: &str) -> Option<DecodingKey> {
         let cache = self.jwks_cache.read().await;
         let current = cache.as_ref()?;
-        if current.loaded_at.elapsed() > JWKS_CACHE_TTL {
+        if current.loaded_at.elapsed() >= JWKS_CACHE_TTL {
             return None;
         }
         current.keys.get(kid).cloned()
     }
 
-    async fn refresh_jwks(&self) -> anyhow::Result<()> {
+    async fn cache_is_usable(&self) -> bool {
+        self.jwks_cache
+            .read()
+            .await
+            .as_ref()
+            .is_some_and(|cache| cache.loaded_at.elapsed() < JWKS_CACHE_TTL)
+    }
+
+    async fn refresh_jwks(&self, last: &mut Option<RefreshAttempt>) -> anyhow::Result<()> {
+        *last = Some(RefreshAttempt {
+            at: Instant::now(),
+            succeeded: false,
+        });
         let resp = self
             .client
-            .get(format!("{}/.well-known/jwks.json", self.config.issuer_url))
+            .get(format!("{}/.well-known/jwks.json", self.issuer_url))
             .send()
             .await
             .context("jwks request failed")?
@@ -140,10 +209,12 @@ impl AuthState {
                 DecodingKey::from_rsa_components(&key.n, &key.e).context("invalid rsa jwk")?;
             keys.insert(kid, decoding_key);
         }
+        anyhow::ensure!(!keys.is_empty(), "jwks contains no usable signing keys");
         *self.jwks_cache.write().await = Some(JwksCache {
             loaded_at: Instant::now(),
             keys,
         });
+        last.as_mut().expect("refresh attempt exists").succeeded = true;
         Ok(())
     }
 }
@@ -248,8 +319,8 @@ pub async fn require_http_auth(
             next.run(req).await
         }
         Err(err) => {
-            tracing::warn!(error = %err, "authentication failed");
-            unauthorized()
+            tracing::warn!(error = %format!("{err:#}"), "authentication failed");
+            authentication_error_response(&err)
         }
     }
 }
@@ -265,6 +336,18 @@ fn bearer_from_request(headers: &axum::http::HeaderMap) -> Option<&str> {
         }
     }
     None
+}
+
+pub(crate) fn authentication_error_response(error: &anyhow::Error) -> Response {
+    if error.is::<SigningKeysUnavailable>() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::RETRY_AFTER, "30")],
+            axum::Json(serde_json::json!({ "error": "authentication temporarily unavailable" })),
+        )
+            .into_response();
+    }
+    unauthorized()
 }
 
 fn unauthorized() -> Response {

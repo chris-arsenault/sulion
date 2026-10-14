@@ -57,6 +57,31 @@ describe("authentication recovery and sign-out", () => {
     expect(signOut).not.toHaveBeenCalled();
   });
 
+  it.each([APP_STATE_URL, "/api/ws-tickets", "/broker/v1/secrets"])(
+    "recovers after repeated key-service failures from %s without logging in again",
+    async (url) => {
+      const fetch = vi.fn()
+        .mockImplementationOnce(async () => new Response(null, { status: 503 }))
+        .mockImplementationOnce(async () => new Response(null, { status: 503 }))
+        .mockImplementationOnce(async () => new Response(null, { status: 503 }))
+        .mockImplementationOnce(async () => new Response(null, { status: 200 }))
+        .mockImplementationOnce(async () => new Response(null, { status: 401 }));
+      vi.stubGlobal("fetch", fetch);
+      await renderSession();
+      for (const status of [503, 503, 503, 200]) {
+        await act(async () => { expect((await authFetch(url)).status).toBe(status); });
+        expect(screen.getByText(PRIVATE_CONTENT)).toBeTruthy();
+        expect(signOut).not.toHaveBeenCalled();
+      }
+      for (const [, init] of fetch.mock.calls as unknown as [string, RequestInit][]) {
+        expect(new Headers(init.headers).get("Authorization")).toBe("Bearer fixture");
+      }
+      await act(async () => { expect((await authFetch(url)).status).toBe(401); });
+      expectLogin();
+      expect(signOut).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([null, new AuthenticationRequiredError()])(
     "returns to login when credentials are missing or refresh is refused (%s)",
     async (result) => {

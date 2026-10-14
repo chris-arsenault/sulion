@@ -426,6 +426,29 @@ async fn repository_grants_persist_apply_to_future_sessions_and_revoke_independe
         );
     }
     issuer_server.abort();
+    let unavailable = secret_broker::app(BrokerState::from_config(&config).await.unwrap());
+    for (method, path) in [("GET", "/v1/secrets"), ("POST", "/v1/session/revoke")] {
+        let response = unavailable
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("authorization", format!("Bearer {newer_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()["retry-after"], "30");
+    }
+    let stored: i64 = sqlx::query_scalar("SELECT revoked_before FROM secret_broker.browser_revocations WHERE user_sub = 'browser-fixture'")
+        .fetch_one(&state.pool).await.unwrap();
+    assert_eq!(
+        stored, cutoff,
+        "key-fetch outages must not revoke browser logins"
+    );
     let now = chrono::Utc::now().timestamp();
     let authority = json!({"sub":"controlled-test-user", "auth_time":now-10, "expires_at":now+300});
     assert_eq!(

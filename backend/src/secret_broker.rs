@@ -192,8 +192,8 @@ async fn require_user_auth(
             next.run(req).await
         }
         Err(err) => {
-            tracing::warn!(error = %err, "broker authentication failed");
-            unauthorized()
+            tracing::warn!(error = %format!("{err:#}"), "broker authentication failed");
+            crate::auth::authentication_error_response(&err)
         }
     }
 }

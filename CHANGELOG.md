@@ -4,6 +4,13 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Authentication
+
+- Refresh public signing keys every 15 minutes and keep successfully fetched
+  keys usable for 60 minutes. Temporary refresh failures preserve browser
+  logins; if cached keys expire, requests report temporary unavailability until
+  a refresh succeeds.
+
 ### Session navigation
 
 - Session names use the user label, then the agent task name, then the ID.
