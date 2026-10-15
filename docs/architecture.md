@@ -324,6 +324,36 @@ every terminal at the lowest precedence and only for listed program names, so
 any other command still needs a grant. The backend does not own the broker
 master key and does not expose an alternate secret-injection mechanism.
 
+### Delivery metrics
+
+Metrics places repository-level DORA measurements inside Delivery flow above
+the plan burndowns. The rolling 30-day view shows deployment frequency, median
+change lead time, change failure rate, median failed deployment recovery time
+and deployment rework rate. Unknown evidence is distinct from a measured zero;
+failure and rework rates require every deployment in the window to be classified.
+
+The node's repository manager collects Actions history alongside its ordinary
+status loop, reusing the same brokered `GH_TOKEN` for `gh` and GitHub rate-limit
+pause. The automatic source recognizes main-branch push/manual runs with the
+Ahara `deploy-truenas` action, `Deploy to TrueNAS`, `Deploy to Komodo`, or
+`Terraform deploy` steps. A TrueNAS deployment takes precedence over its
+preparatory Terraform apply. Successful deploy steps count even when a later
+reporting step fails. Other pipelines remain unavailable rather than being
+inferred from general workflow success. History collection requires the
+every-terminal `GH_TOKEN` grant for `gh` and checks every 30 minutes; collection
+errors retain the last evidence and are visible in deployment details.
+
+`dora_deployments` stores run-attempt identity and explicit production outcomes.
+`dora_commit_deployments` records each commit's first observed production
+deployment using node-local Git history; the earliest observed deployment
+establishes a baseline and does not claim historical lead times. Metrics reads
+these tables through Postgres only. Operators record healthy/failed outcomes,
+failure/recovery times and unplanned incident rework in the expandable
+deployment details. The authenticated outcome update route is
+`PUT /api/metrics/deployments/:id/outcome`. Polling preserves those annotations;
+repository renaming carries their history with it, and the durable archive dump
+includes both tables.
+
 ### Library and future prompts
 
 Reusable prompts and saved references live in `library_entries`, keyed by

@@ -22,6 +22,7 @@ TEST_TARGETS=(
   uploads_integration
   secret_broker_integration
   repo_ci_integration
+  dora_integration
 )
 # Permit focused runs while retaining the same isolated database harness.
 if (( $# > 0 )); then

@@ -279,6 +279,15 @@ async fn rename_repo_runtime_records(
         .await?;
     }
 
+    for table in ["dora_deployments", "dora_commit_deployments"] {
+        sqlx::query(&format!(
+            "UPDATE {table} SET repo_name = $2 WHERE repo_name = $1"
+        ))
+        .bind(old_name)
+        .bind(new_name)
+        .execute(&mut **tx)
+        .await?;
+    }
     Ok(())
 }
 

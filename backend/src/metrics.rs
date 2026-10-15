@@ -9,6 +9,8 @@
 //! - churn hotspots from `timeline_file_touches` write re-touches,
 //! - agile flow (CFD, burndown, throughput, cycle time) replayed from the
 //!   append-only `plan_events` history, weighted by optional phase size.
+//! - DORA delivery measurements from node-collected production deployment
+//!   evidence, first-deployed commits and explicit production outcomes.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,6 +37,7 @@ pub struct MetricsResponse {
     pub git: Vec<RepoGitActivity>,
     pub churn: Vec<ChurnHotspot>,
     pub flow: FlowMetrics,
+    pub dora: crate::dora::DoraMetrics,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]
@@ -137,12 +140,14 @@ pub async fn portfolio_metrics(pool: &Pool) -> anyhow::Result<MetricsResponse> {
     let git = git_activity(pool).await?;
     let churn = churn_hotspots(pool).await?;
     let flow = flow_metrics(pool).await?;
+    let dora = crate::dora::metrics(pool).await?;
     Ok(MetricsResponse {
         generated_at: Utc::now(),
         usage,
         git,
         churn,
         flow,
+        dora,
     })
 }
 

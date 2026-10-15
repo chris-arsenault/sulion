@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
@@ -121,8 +121,7 @@ pub fn router() -> Router<Arc<AppState>> {
             "/api/monitor/timeline",
             post(timeline_routes::monitor_timeline),
         )
-        .route("/api/metrics", get(portfolio_metrics))
-        .route("/api/jobs", get(background_jobs))
+        .merge(metrics_router())
         .merge(workspace_router())
         .route("/api/repos/:name/git/diff", get(repo_routes::get_repo_diff))
         .route(
@@ -162,6 +161,17 @@ pub fn router() -> Router<Arc<AppState>> {
                 .delete(library_routes::delete_library_entry),
         )
         .merge(admin_router())
+}
+
+fn metrics_router() -> Router<Arc<AppState>> {
+    use axum::routing::{get, put};
+    Router::new()
+        .route("/api/metrics", get(portfolio_metrics))
+        .route("/api/jobs", get(background_jobs))
+        .route(
+            "/api/metrics/deployments/:id/outcome",
+            put(deployment_outcome),
+        )
 }
 
 fn admin_router() -> Router<Arc<AppState>> {
@@ -259,9 +269,23 @@ fn plan_router() -> Router<Arc<AppState>> {
         .route("/api/plans/:id/events", get(plan_routes::plan_events))
 }
 
-/// Portfolio metrics for the monitor and metrics tab: token rollups,
-/// git activity, churn hotspots, and plan flow. Read-only aggregation;
-/// git scans are cached in-process.
+/// Record explicit production outcomes without interpreting CI failures.
+async fn deployment_outcome(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<uuid::Uuid>,
+    Json(input): Json<crate::dora::DeploymentOutcome>,
+) -> ApiResult<Json<crate::dora::Deployment>> {
+    crate::dora::update_outcome(&state.pool, id, &input)
+        .await
+        .map_err(|error| match error {
+            crate::dora::OutcomeError::Invalid(message) => ApiError::BadRequest(message),
+            crate::dora::OutcomeError::Storage(error) => ApiError::Db(error),
+        })?
+        .map(Json)
+        .ok_or(ApiError::NotFound)
+}
+
+/// Portfolio measurements from durable Postgres evidence.
 async fn portfolio_metrics(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Json<crate::metrics::MetricsResponse>> {

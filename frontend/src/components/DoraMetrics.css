@@ -1,0 +1,135 @@
+.metrics-dora {
+  margin: 12px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.metrics-dora h3 {
+  font-size: var(--t-ui);
+  font-weight: var(--w-600);
+  color: var(--text-hi);
+}
+
+.metrics-dora h3 span,
+.metrics-dora__detail {
+  color: var(--text-lo);
+  font-weight: var(--w-400);
+}
+
+.metrics-dora__scroll {
+  overflow-x: auto;
+}
+
+.metrics-dora__scroll th,
+.metrics-dora__scroll td {
+  white-space: nowrap;
+  text-align: left;
+}
+
+.metrics-dora__scroll tbody th {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.metrics-dora__detail {
+  display: block;
+  font-size: var(--t-meta);
+  margin-top: 4px;
+}
+
+.metrics-dora__deployments {
+  border-top: 1px solid var(--hairline);
+  padding: 8px 0;
+  font-size: var(--t-ui);
+}
+
+.metrics-dora__deployments summary {
+  cursor: pointer;
+}
+
+.metrics-dora__warning {
+  color: var(--warn-fg);
+  overflow-wrap: anywhere;
+}
+
+.metrics-dora__list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.metrics-dora__list li {
+  border-top: 1px solid var(--hairline);
+  padding: 6px 0;
+}
+
+.metrics-dora__record,
+.metrics-dora__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.metrics-dora a {
+  color: var(--accent-hi);
+}
+
+.metrics-dora time {
+  color: var(--text-lo);
+  font-size: var(--t-meta);
+}
+
+.metrics-dora button,
+.metrics-dora select,
+.metrics-dora input {
+  min-height: var(--lane-sm);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-1);
+  background: var(--canvas-2);
+  color: var(--text);
+  font: inherit;
+  padding: 4px 8px;
+}
+
+.metrics-dora button {
+  cursor: pointer;
+}
+
+.metrics-dora button:hover {
+  border-color: var(--accent);
+}
+
+.metrics-dora button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.metrics-dora__form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.metrics-dora__form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-mid);
+  font-size: var(--t-meta);
+}
+
+@media (max-width: 767px) {
+  .metrics-dora button,
+  .metrics-dora select,
+  .metrics-dora input,
+  .metrics-dora summary {
+    min-height: var(--lane-lg);
+  }
+
+  .metrics-dora select,
+  .metrics-dora input {
+    font-size: 16px;
+  }
+}

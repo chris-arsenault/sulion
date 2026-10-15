@@ -4,6 +4,17 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### DORA metrics
+
+- Metrics shows 30-day repository summaries for deployment frequency, change
+  lead time, change failure rate, failed deployment recovery time and deployment
+  rework rate inside Delivery flow, directly above the burndowns.
+- Collect production deployment evidence from known Ahara deploy steps on
+  `main`, including successful deployments followed by failed reporting steps.
+  Deployment details let operators record production outcomes, failure and
+  recovery times, and unplanned incident rework. Missing evidence remains
+  unavailable rather than appearing as zero.
+
 ### Authentication
 
 - Refresh browser tokens before expiry and share refreshes across concurrent

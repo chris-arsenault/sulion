@@ -1167,6 +1167,48 @@ export interface MetricsResponse {
   git: RepoGitActivityView[];
   churn: ChurnHotspotView[];
   flow: FlowMetricsView;
+  /** Optional while frontend and control releases roll out independently. */
+  dora?: DoraMetricsView;
+}
+
+export interface DeploymentOutcome {
+  outcome: "unknown" | "healthy" | "failed";
+  failed_at: string | null;
+  recovered_at: string | null;
+  rework: boolean | null;
+}
+
+export interface DoraDeployment extends DeploymentOutcome {
+  id: string;
+  repo_name: string;
+  revision: string;
+  deployed_at: string;
+  source_url: string;
+}
+
+export interface RepoDoraMetrics {
+  repo: string;
+  checked_at: string | null;
+  scanned_since: string | null;
+  collection_error: string | null;
+  deployments: number;
+  deployments_per_day: number | null;
+  change_lead_time_hours_p50: number | null;
+  lead_time_samples: number;
+  classified_outcomes: number;
+  failed_deployments: number;
+  change_failure_rate: number | null;
+  recovery_time_hours_p50: number | null;
+  recovered_deployments: number;
+  open_failures: number;
+  classified_rework: number;
+  rework_rate: number | null;
+  recent_deployments: DoraDeployment[];
+}
+
+export interface DoraMetricsView {
+  window_days: number;
+  repos: RepoDoraMetrics[];
 }
 
 export interface JobView {

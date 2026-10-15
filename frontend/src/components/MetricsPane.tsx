@@ -13,6 +13,7 @@ import type {
 } from "../api/types";
 import { appCommands } from "../state/AppCommands";
 import { Sigil, Tooltip } from "./ui";
+import { DoraMetrics } from "./DoraMetrics";
 import "./MetricsPane.css";
 
 const REFRESH_MS = 60_000;
@@ -97,7 +98,7 @@ export function MetricsPane({
         <div className="metrics-pane__grid">
           <JobsSection active={active} />
           <TokensSection data={data} />
-          <FlowSection data={data} />
+          <FlowSection data={data} onDoraChanged={load} />
           <GitSection data={data} />
           <ChurnSection data={data} />
         </div>
@@ -433,7 +434,7 @@ function priceLabel(price: MetricsModelPrice): string {
 
 // ─── Flow ───────────────────────────────────────────────────────────
 
-function FlowSection({ data }: { data: MetricsResponse }) {
+function FlowSection({ data, onDoraChanged }: { data: MetricsResponse; onDoraChanged: () => Promise<void> }) {
   const { flow } = data;
   const throughput = flow.throughput_weeks.at(-1)?.completed_weight ?? 0;
   return (
@@ -463,6 +464,7 @@ function FlowSection({ data }: { data: MetricsResponse }) {
         />
       </div>
       <Cfd cfd={flow.cfd} />
+      <DoraMetrics data={data.dora} onChanged={onDoraChanged} />
       {flow.burndowns.slice(0, 4).map((burndown) => (
         <Burndown key={burndown.plan_id} burndown={burndown} />
       ))}

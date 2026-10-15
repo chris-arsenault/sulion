@@ -36,7 +36,7 @@ async fn fresh_pool() -> db::Pool {
          retrieval_embedding_backfills, retrieval_embedding_sources, retrieval_embeddings, \
          plan_events, plan_attachments, plan_phases, plans, session_activity_state, \
          events, ingester_state, claude_sessions, pty_sessions, repos, \
-         repo_runtime_state, repo_dirty_paths, timeline_session_state, library_entries, \
+         repo_runtime_state, repo_dirty_paths, dora_deployments, dora_commit_deployments, timeline_session_state, library_entries, \
          future_prompt_session_state, future_prompts, submitted_prompts, \
          workspaces, workspace_dirty_paths \
          RESTART IDENTITY CASCADE",
@@ -388,6 +388,67 @@ async fn meta_repo_crud_and_repo_lifecycle_stay_consistent() {
         .await
         .unwrap();
     assert!(state["meta_repos"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn dora_outcome_route_validates_evidence_and_updates_metrics() {
+    let h = Harness::new().await;
+    let id = Uuid::new_v4();
+    let repo_path = h.repos_root().join("dora-app");
+    std::fs::create_dir_all(&repo_path).unwrap();
+    h.state
+        .repo_state
+        .upsert_repo("dora-app", &repo_path)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO dora_deployments(id, repo_name, source_key, revision, deployed_at, source_url) \
+        VALUES ($1, 'dora-app', 'fixture', 'abcd', NOW() - INTERVAL '2 hours', 'https://github.com/acme/app/actions/runs/1')")
+        .bind(id).execute(&h.state.pool).await.unwrap();
+    let url = format!("{}/api/metrics/deployments/{id}/outcome", h.base);
+    let response = h
+        .client
+        .put(&url)
+        .json(&json!({"outcome": "failed"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    let response = h
+        .client
+        .put(&url)
+        .json(&json!({"outcome": "healthy", "rework": false}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let response: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(response["outcome"], "healthy");
+    let metrics: serde_json::Value = h
+        .client
+        .get(format!("{}/api/metrics", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let repo = &metrics["dora"]["repos"][0];
+    assert_eq!(repo["repo"], "dora-app");
+    assert_eq!(repo["change_failure_rate"], 0.0);
+    assert_eq!(repo["rework_rate"], 0.0);
+    assert!(repo["change_lead_time_hours_p50"].is_null());
+    let missing = h
+        .client
+        .put(format!(
+            "{}/api/metrics/deployments/{}/outcome",
+            h.base,
+            Uuid::new_v4()
+        ))
+        .json(&json!({"outcome": "healthy"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -1633,6 +1694,15 @@ async fn rename_repo_moves_checkout_and_updates_session_records() {
     .unwrap();
 
     let gate = h.runtime.repo_lifecycle_gate_for_tests();
+    let deployment_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO dora_deployments(id, repo_name, source_key, revision, deployed_at, source_url) \
+        VALUES ($1, 'oldrepo', 'rename-fixture', 'abcd', NOW(), 'https://github.com/acme/app/actions/runs/1')")
+        .bind(deployment_id).execute(&h.state.pool).await.unwrap();
+    sqlx::query("INSERT INTO dora_commit_deployments(repo_name, revision, deployment_id, committed_at, baseline) \
+        VALUES ('oldrepo', 'abcd', $1, NOW(), TRUE)")
+        .bind(deployment_id).execute(&h.state.pool).await.unwrap();
+    sqlx::query("INSERT INTO dora_run_checks(repo_name, source_key, production_source) VALUES ('oldrepo', 'rename-fixture', TRUE)")
+        .execute(&h.state.pool).await.unwrap();
     let mutation_guard = gate.hold_write_for_test().await;
     let workspace_state = h.runtime.workspace_state();
     let mut discovery =
@@ -1671,6 +1741,17 @@ async fn rename_repo_moves_checkout_and_updates_session_records() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["name"], "newrepo");
+    for table in [
+        "dora_deployments",
+        "dora_commit_deployments",
+        "dora_run_checks",
+    ] {
+        let names: Vec<String> = sqlx::query_scalar(&format!("SELECT repo_name FROM {table}"))
+            .fetch_all(&h.state.pool)
+            .await
+            .unwrap();
+        assert_eq!(names, vec!["newrepo"]);
+    }
     assert!(!h.repos_root().join("oldrepo").exists());
     assert!(h.repos_root().join("newrepo/src").is_dir());
 

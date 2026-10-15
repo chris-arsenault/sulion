@@ -20,6 +20,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::Pool;
 
+mod dora;
+pub use dora::reconcile as reconcile_repo_dora;
+
 pub const GITHUB_API_BASE: &str = "https://api.github.com";
 const GITHUB_WEB_BASE: &str = "https://github.com/";
 const ACTIVE_CADENCE_SECS: i64 = 600;

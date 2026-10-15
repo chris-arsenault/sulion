@@ -20,6 +20,7 @@ pub mod correlate;
 pub mod credential_helper;
 pub mod db;
 pub mod devenv;
+pub mod dora;
 pub mod e2e;
 pub mod emulator;
 pub mod file_preview;

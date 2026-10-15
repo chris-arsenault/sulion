@@ -70,6 +70,31 @@ impl RepoStateManager {
     }
 
     pub async fn run(self: Arc<Self>) {
+        tokio::join!(self.run_status_loop(), self.run_dora_loop());
+    }
+
+    async fn run_dora_loop(&self) {
+        loop {
+            if let Err(err) = self.reconcile_dora_due_once().await {
+                tracing::warn!(%err, "repo DORA collection failed");
+            }
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
+    }
+
+    async fn reconcile_dora_due_once(&self) -> anyhow::Result<()> {
+        let _lifecycle_guard = self.lifecycle_gate.read().await;
+        let target: Option<(String, String)> = sqlx::query_as(
+            "SELECT repo_name, path FROM repo_runtime_state WHERE exists = TRUE AND origin_url IS NOT NULL AND next_dora_at <= NOW() \
+             ORDER BY next_dora_at, repo_name LIMIT 1",
+        ).fetch_optional(&self.pool).await?;
+        if let Some((name, path)) = target {
+            repo_ci::reconcile_repo_dora(&self.pool, &self.ci, &name, Path::new(&path)).await?;
+        }
+        Ok(())
+    }
+
+    async fn run_status_loop(&self) {
         let mut last_scan = std::time::Instant::now() - REPO_SCAN_INTERVAL;
         loop {
             if last_scan.elapsed() >= REPO_SCAN_INTERVAL {

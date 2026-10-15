@@ -25,6 +25,8 @@ import type {
   LibraryKind,
   MonitorTimelineRequest,
   MetricsResponse,
+  DeploymentOutcome,
+  DoraDeployment,
   MonitorTimelineResponse,
   MetaRepoView,
   BranchPlanRequest,
@@ -380,6 +382,13 @@ export function getMonitorTimeline(
 
 export function getMetrics(): Promise<MetricsResponse> {
   return request<MetricsResponse>("/api/metrics");
+}
+
+export function updateDeploymentOutcome(id: string, body: DeploymentOutcome): Promise<DoraDeployment> {
+  return request<DoraDeployment>(`/api/metrics/deployments/${encodeURIComponent(id)}/outcome`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
 }
 
 export function getJobs(): Promise<JobsResponse> {

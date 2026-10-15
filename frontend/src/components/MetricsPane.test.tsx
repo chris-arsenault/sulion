@@ -163,6 +163,7 @@ describe("MetricsPane", () => {
     expect(within(flow).getByText("2")).toBeDefined();
     expect(within(flow).getByText(/burndown · sulion \/ monitor metrics/i)).toBeDefined();
     expect(within(flow).getByText("4/8 left")).toBeDefined();
+    expect(within(flow).getByRole("region", { name: "DORA metrics" })).toBeDefined();
 
     const git = screen.getByRole("region", { name: "Git activity" });
     expect(within(git).getAllByText("18").length).toBeGreaterThan(0);
