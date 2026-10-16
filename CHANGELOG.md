@@ -4,6 +4,12 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Mobile installation
+
+- Add home-screen installation metadata and icons so Sulion launches in a
+  standalone window without browser controls. Existing LAN HTTP access remains
+  available; installation adds no service worker or offline cache.
+
 ### DORA metrics
 
 - Metrics shows a compact 30-day aggregate across all repositories for

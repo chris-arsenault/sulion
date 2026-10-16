@@ -4,10 +4,11 @@ import { createServer } from "node:http";
 import { gotoApp, openTreeFile } from "./helpers";
 
 test("nginx enforces headers and denies retired and internal routes", async ({ request }) => {
-  for (const path of ["/", "/config.js", "/api/repos", "/pair"]) {
+  for (const path of ["/", "/config.js", "/manifest.webmanifest", "/icons/icon-192.png", "/api/repos", "/pair"]) {
     const response = await request.get(path);
     const headers = response.headers();
     expect(headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+    expect(headers["content-security-policy"]).toContain("manifest-src 'self'");
     expect(headers["content-security-policy"]).toContain("script-src 'self' 'wasm-unsafe-eval'");
     expect(headers["x-content-type-options"]).toBe("nosniff");
     expect(headers["referrer-policy"]).toBe("no-referrer");
@@ -16,6 +17,9 @@ test("nginx enforces headers and denies retired and internal routes", async ({ r
   }
   const https = await request.get("/", { headers: { "X-Forwarded-Proto": "https" } });
   expect(https.headers()["strict-transport-security"]).toBe("max-age=31536000");
+  const lan = await request.get("/", { headers: { Host: "192.168.66.3:30080" }, maxRedirects: 0 });
+  expect(lan.status()).toBe(200);
+  expect(lan.headers()["strict-transport-security"]).toBeUndefined();
   for (const path of [
     "/pair", "/api/devices/pair", "/api/repos/atlas/ingest", "/api/repos/atlas/raw",
     "/retrieval", "/retrieval/search", "/broker/v1/use", "/broker/v1/auth/check",
@@ -24,6 +28,47 @@ test("nginx enforces headers and denies retired and internal routes", async ({ r
     for (const headers of [{}, { Authorization: "Bearer retired-device-token" }]) {
       expect((await request.get(path, { headers })).status()).toBe(404);
     }
+  }
+});
+
+test("Chromium discovers standalone installation metadata and decodes the app icons over HTTP", async ({ page, request }) => {
+  const violations: string[] = [];
+  page.on("console", (message) => {
+    if (/violates.*Content Security Policy/i.test(message.text())) violations.push(message.text());
+  });
+  const response = await page.goto("/");
+  expect(response?.ok()).toBe(true);
+  expect(new URL(page.url()).protocol).toBe("http:");
+  expect(response?.headers()["strict-transport-security"]).toBeUndefined();
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const { url, data, errors } = await cdp.send("Page.getAppManifest");
+    expect(errors).toEqual([]);
+    expect(url).toBe(new URL("/manifest.webmanifest", page.url()).href);
+    const manifest = JSON.parse(data!);
+    expect(manifest).toMatchObject({ id: "/", display: "standalone", start_url: "/", scope: "/" });
+    expect(manifest.icons.map((icon: { sizes: string }) => icon.sizes)).toEqual(["192x192", "512x512"]);
+    const manifestResponse = await request.get(url);
+    expect(manifestResponse.headers()["content-type"]).toContain("application/manifest+json");
+    await expect(page.locator('meta[name="apple-mobile-web-app-capable"]')).toHaveAttribute("content", "yes");
+    const touchIcon = await page.locator('link[rel="apple-touch-icon"]').getAttribute("href");
+    const icons = [...manifest.icons, { src: touchIcon, sizes: "180x180" }];
+    for (const icon of icons) {
+      const dimensions = await page.evaluate(async (src: string) => {
+        const image = new Image();
+        image.src = src;
+        await image.decode();
+        return `${image.naturalWidth}x${image.naturalHeight}`;
+      }, icon.src);
+      expect(dimensions).toBe(icon.sizes);
+    }
+    expect(await page.evaluate(async () => ({
+      registrations: (await navigator.serviceWorker.getRegistrations()).length,
+      controlled: navigator.serviceWorker.controller != null,
+    }))).toEqual({ registrations: 0, controlled: false });
+    expect(violations).toEqual([]);
+  } finally {
+    await cdp.detach();
   }
 });
 

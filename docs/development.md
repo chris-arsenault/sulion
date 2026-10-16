@@ -82,6 +82,10 @@ SULION_TEST_DB='postgres://postgres:testpass@127.0.0.1:55432/sulion' \
 
 ## E2E
 
+Home-screen PNG icons are generated from `frontend/public/favicon.svg` and
+checked in. After changing that source, run `cd frontend && pnpm icons`;
+this uses the same Chromium installation as Playwright (`make e2e-install`).
+
 Real stack + Postgres + seeded ingest data via `scripts/run-e2e-stack.mjs`.
 The frontend runs as its built nginx image, including the production entrypoint,
 proxy routes and security headers. Test servers and containers are temporary

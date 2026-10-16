@@ -19,6 +19,16 @@ references.
 
 ---
 
+## Launch from the home screen
+
+Open Sulion's HTTPS address on your phone, then choose **Add to Home Screen**
+from the browser's share or menu controls (the label may be **Install app**).
+Launch Sulion from that icon to use it without the browser toolbar. You may
+need to sign in again in the installed app.
+
+The installed app needs a connection to Sulion. Regular browser access,
+including existing LAN HTTP URLs, continues to work as before.
+
 ## Sidebar — meta-repos, repos, sessions, files, library
 
 Choose **Open**, **Sessions**, or **Full** at the top of the sidebar:
