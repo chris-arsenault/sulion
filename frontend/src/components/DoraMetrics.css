@@ -3,37 +3,26 @@
   border-top: 1px solid var(--hairline);
 }
 
+.metrics-dora__tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.metrics-dora__tiles .metrics-tile {
+  min-width: 0;
+}
+
 .metrics-dora h3 {
   font-size: var(--t-ui);
   font-weight: var(--w-600);
   color: var(--text-hi);
 }
 
-.metrics-dora h3 span,
-.metrics-dora__detail {
+.metrics-dora h3 span {
   color: var(--text-lo);
   font-weight: var(--w-400);
-}
-
-.metrics-dora__scroll {
-  overflow-x: auto;
-}
-
-.metrics-dora__scroll th,
-.metrics-dora__scroll td {
-  white-space: nowrap;
-  text-align: left;
-}
-
-.metrics-dora__scroll tbody th {
-  text-transform: none;
-  letter-spacing: normal;
-}
-
-.metrics-dora__detail {
-  display: block;
-  font-size: var(--t-meta);
-  margin-top: 4px;
 }
 
 .metrics-dora__deployments {

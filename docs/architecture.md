@@ -326,11 +326,19 @@ master key and does not expose an alternate secret-injection mechanism.
 
 ### Delivery metrics
 
-Metrics places repository-level DORA measurements inside Delivery flow above
-the plan burndowns. The rolling 30-day view shows deployment frequency, median
-change lead time, change failure rate, median failed deployment recovery time
-and deployment rework rate. Unknown evidence is distinct from a measured zero;
+Metrics places one aggregate DORA rollup across all repositories inside Delivery
+flow above the plan burndowns. The rolling 30-day view
+shows deployment frequency, median change lead time, change failure rate,
+median failed deployment recovery time and deployment rework rate.
+Unknown evidence is distinct from a measured zero;
 failure and rework rates require every deployment in the window to be classified.
+Portfolio medians use the underlying commit and incident samples. The summary
+includes repository collection coverage; it does not average repository medians.
+The metrics poll returns summaries only. Deployment details load on demand in
+25-record pages through `GET /api/metrics/deployments`, optionally scoped by
+repository, with a deployment-time/ID cursor. Indexed lookups restrict commit
+aggregation to deployments in the reporting window. Saving an outcome refreshes
+DORA through `GET /api/metrics/dora` without reloading token, flow and churn data.
 
 The node's repository manager collects Actions history alongside its ordinary
 status loop, reusing the same brokered `GH_TOKEN` for `gh` and GitHub rate-limit

@@ -1,10 +1,16 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent, SyntheticEvent } from "react";
 
-import { updateDeploymentOutcome } from "../api/client";
+import {
+  getDoraDeployments,
+  getDoraMetrics,
+  updateDeploymentOutcome,
+} from "../api/client";
 import type {
   DeploymentOutcome,
   DoraDeployment,
+  DoraDeploymentCursor,
+  DoraDeploymentPage,
   DoraMetricsView,
   RepoDoraMetrics,
 } from "../api/types";
@@ -13,73 +19,68 @@ import "./DoraMetrics.css";
 
 export function DoraMetrics({
   data,
-  onChanged,
+  active = true,
 }: {
   data?: DoraMetricsView;
-  onChanged: () => Promise<void>;
+  active?: boolean;
 }) {
+  const [view, setView] = useState(data);
+  const [error, setError] = useState<string | null>(null);
+  const refreshVersion = useRef(0);
+  useEffect(() => {
+    setView(data);
+    setError(null);
+  }, [data]);
+  const summary = view?.summary;
+  const refresh = useCallback(async () => {
+    const version = ++refreshVersion.current;
+    try {
+      const updated = await getDoraMetrics();
+      if (version === refreshVersion.current) {
+        setView(updated);
+        setError(null);
+      }
+    } catch (err) {
+      if (version === refreshVersion.current)
+        setError(
+          `Outcome saved; metrics refresh failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        );
+    }
+  }, []);
   return (
     <section className="metrics-dora" aria-label="DORA metrics">
       <h3>
-        DORA <span>· {data?.window_days ?? 30}d</span>
+        DORA <span>· {view?.window_days ?? 30}d · all repositories</span>
       </h3>
-      {!data?.repos.length ? (
+      {!summary ? (
         <p className="metrics-chart__empty">
-          No production deployment history collected yet.
+          Aggregate deployment metrics are not available yet.
         </p>
       ) : (
         <>
-          <div className="metrics-dora__scroll">
-            <table className="metrics-table" aria-label="DORA by repository">
-              <thead>
-                <tr>
-                  <th>repository</th>
-                  <th>
-                    <Tooltip label="Successful production deployments per day over the full window.">
-                      <span>deploy frequency</span>
-                    </Tooltip>
-                  </th>
-                  <th>
-                    <Tooltip label="Median time from each commit to its first production deployment. The initial observed deployment is a baseline.">
-                      <span>change lead time</span>
-                    </Tooltip>
-                  </th>
-                  <th>
-                    <Tooltip label="Share of production deployments requiring immediate intervention. All deployments must have a recorded outcome.">
-                      <span>change failure</span>
-                    </Tooltip>
-                  </th>
-                  <th>
-                    <Tooltip label="Median failure-to-recovery time for resolved deployment incidents. Unresolved incidents remain open.">
-                      <span>failed deploy recovery</span>
-                    </Tooltip>
-                  </th>
-                  <th>
-                    <Tooltip label="Share of deployments that were unplanned work caused by a production incident. All deployments must be classified.">
-                      <span>deploy rework</span>
-                    </Tooltip>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.repos.map((repo) => (
-                  <DoraRow key={repo.repo} repo={repo} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {data.repos.map((repo) => (
-            <DeploymentDetails
-              key={repo.repo}
-              repo={repo}
-              onChanged={onChanged}
-            />
-          ))}
+          <DoraTiles summary={summary} />
+          <p className="metrics-note">
+            {summary.deployments} deployments ·{" "}
+            {summary.collected_repository_count ?? (summary.checked_at ? 1 : 0)}
+            /{summary.repository_count ?? 1} repositories collected
+          </p>
+          {summary.collection_error ? (
+            <p className="metrics-dora__warning">{summary.collection_error}</p>
+          ) : null}
+          <DeploymentDetails
+            active={active}
+            total={summary.deployments}
+            onSaved={refresh}
+          />
         </>
       )}
+      {error ? (
+        <p role="alert" className="metrics-dora__warning">
+          {error}
+        </p>
+      ) : null}
       <p className="metrics-note">
-        — means unavailable. Failure and rework rates need every deployment
-        classified. Production outcomes can be recorded in deployment details.{" "}
+        — means unavailable. Rates require classified outcomes.{" "}
         <a
           href="https://dora.dev/guides/dora-metrics/"
           target="_blank"
@@ -92,103 +93,177 @@ export function DoraMetrics({
   );
 }
 
-function DoraRow({ repo }: { repo: RepoDoraMetrics }) {
+function DoraTiles({ summary }: { summary: RepoDoraMetrics }) {
   return (
-    <tr>
-      <th scope="row">
-        {repo.repo}
-        <span className="metrics-dora__detail">
-          {repo.checked_at
-            ? `${repo.deployments} deployments`
-            : "awaiting deployment history"}
-        </span>
-      </th>
-      <td className="tabular">
-        {repo.deployments_per_day == null
-          ? "—"
-          : `${repo.deployments_per_day.toFixed(2)}/day`}
-      </td>
-      <td className="tabular">
-        {hours(repo.change_lead_time_hours_p50)}
-        <span className="metrics-dora__detail">
-          {repo.lead_time_samples} measured commits
-        </span>
-      </td>
-      <td className="tabular">
-        {percent(repo.change_failure_rate)}
-        <span className="metrics-dora__detail">
-          {repo.classified_outcomes}/{repo.deployments} outcomes
-        </span>
-      </td>
-      <td className="tabular">
-        {hours(repo.recovery_time_hours_p50)}
-        <span className="metrics-dora__detail">
-          {repo.recovered_deployments} recovered · {repo.open_failures} open
-        </span>
-      </td>
-      <td className="tabular">
-        {percent(repo.rework_rate)}
-        <span className="metrics-dora__detail">
-          {repo.classified_rework}/{repo.deployments} classified
-        </span>
-      </td>
-    </tr>
+    <div className="metrics-dora__tiles">
+      <DoraTile
+        label="deploy frequency"
+        value={
+          summary.deployments_per_day == null
+            ? "—"
+            : `${summary.deployments_per_day.toFixed(2)}/day`
+        }
+        detail="30-day average"
+        description="Observed production deployments per day over the full window."
+      />
+      <DoraTile
+        label="change lead time"
+        value={hours(summary.change_lead_time_hours_p50)}
+        detail={`${summary.lead_time_samples} measured commits`}
+        description="Median across measured commits from commit to first production deployment. The initial deployment is a baseline."
+      />
+      <DoraTile
+        label="change failure"
+        value={percent(summary.change_failure_rate)}
+        detail={`${summary.classified_outcomes}/${summary.deployments} outcomes`}
+        description="Share of observed deployments requiring immediate intervention. Every deployment needs an outcome."
+      />
+      <DoraTile
+        label="failed deploy recovery"
+        value={hours(summary.recovery_time_hours_p50)}
+        detail={`${summary.recovered_deployments} recovered · ${summary.open_failures} open`}
+        description="Median failure-to-recovery time across resolved deployment incidents."
+      />
+      <DoraTile
+        label="deploy rework"
+        value={percent(summary.rework_rate)}
+        detail={`${summary.classified_rework}/${summary.deployments} classified`}
+        description="Share of deployments that were unplanned work caused by a production incident."
+      />
+    </div>
+  );
+}
+
+function DoraTile({
+  label,
+  value,
+  detail,
+  description,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  description: string;
+}) {
+  return (
+    <Tooltip label={description}>
+      <div className="metrics-tile">
+        <span>{label}</span>
+        <strong className="tabular">{value}</strong>
+        <small>{detail}</small>
+      </div>
+    </Tooltip>
   );
 }
 
 function DeploymentDetails({
-  repo,
-  onChanged,
+  total,
+  active,
+  onSaved,
 }: {
-  repo: RepoDoraMetrics;
-  onChanged: () => Promise<void>;
+  total: number;
+  active: boolean;
+  onSaved: () => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
-  const [limit, setLimit] = useState(20);
+  const [page, setPage] = useState<DoraDeploymentPage | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const request = useRef<AbortController | null>(null);
   const onToggle = useCallback(
     (event: SyntheticEvent<HTMLDetailsElement>) =>
       setOpen(event.currentTarget.open),
     [],
   );
-  const showMore = useCallback(() => setLimit((current) => current + 20), []);
+  const load = useCallback(
+    async (cursor?: DoraDeploymentCursor) => {
+      request.current?.abort();
+      const controller = new AbortController();
+      request.current = controller;
+      setLoading(true);
+      setError(null);
+      if (!cursor) setPage(null);
+      try {
+        const result = await getDoraDeployments(
+          undefined,
+          cursor,
+          controller.signal,
+        );
+        if (!controller.signal.aborted)
+          setPage((previous) => ({
+            deployments:
+              cursor && previous
+                ? [...previous.deployments, ...result.deployments]
+                : result.deployments,
+            next_cursor: result.next_cursor,
+          }));
+      } catch (err) {
+        if (!controller.signal.aborted)
+          setError(
+            err instanceof Error ? err.message : "Could not load deployments.",
+          );
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    },
+    [],
+  );
+  useEffect(() => {
+    if (open && active) void load();
+    return () => request.current?.abort();
+  }, [open, active, load]);
+  const showMore = useCallback(() => {
+    if (page?.next_cursor) void load(page.next_cursor);
+  }, [page?.next_cursor, load]);
+  const retry = useCallback(() => {
+    void load();
+  }, [load]);
+  const changed = useCallback(
+    async (updated: DoraDeployment) => {
+      setPage(
+        (current) =>
+          current && {
+            ...current,
+            deployments: current.deployments.map((item) =>
+              item.id === updated.id ? updated : item,
+            ),
+          },
+      );
+      await onSaved();
+    },
+    [onSaved],
+  );
   return (
     <details className="metrics-dora__deployments" onToggle={onToggle}>
-      <summary>
-        {repo.repo} · deployment details
-        {repo.collection_error ? (
-          <span className="metrics-dora__warning">
-            {" "}
-            · collection incomplete
-          </span>
-        ) : null}
-      </summary>
+      <summary>Deployment details · {total}</summary>
       {open ? (
         <>
-          {repo.collection_error ? (
-            <p className="metrics-dora__warning">{repo.collection_error}</p>
+          {error ? (
+            <div role="alert" className="metrics-dora__warning">
+              {error}{" "}
+              <button type="button" onClick={retry}>
+                Retry
+              </button>
+            </div>
           ) : null}
-          {repo.checked_at ? (
-            <p className="metrics-note">
-              Last collected {new Date(repo.checked_at).toLocaleString()}.
-            </p>
-          ) : null}
-          {repo.recent_deployments.length === 0 ? (
+          {loading ? <p role="status">Loading deployments…</p> : null}
+          {page?.deployments.length === 0 ? (
             <p className="metrics-note">
               No supported production deployments recorded in this window.
             </p>
           ) : (
             <ul className="metrics-dora__list">
-              {repo.recent_deployments.slice(0, limit).map((deployment) => (
+              {page?.deployments.map((deployment) => (
                 <DeploymentRecord
                   key={deployment.id}
                   deployment={deployment}
-                  onChanged={onChanged}
+                  onChanged={changed}
                 />
               ))}
             </ul>
           )}
-          {repo.recent_deployments.length > limit ? (
-            <button type="button" onClick={showMore}>
+          {page?.next_cursor ? (
+            <button type="button" onClick={showMore} disabled={loading}>
               Show more deployments
             </button>
           ) : null}
@@ -203,7 +278,7 @@ function DeploymentRecord({
   onChanged,
 }: {
   deployment: DoraDeployment;
-  onChanged: () => Promise<void>;
+  onChanged: (updated: DoraDeployment) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const close = useCallback(() => setEditing(false), []);
@@ -211,6 +286,7 @@ function DeploymentRecord({
   return (
     <li>
       <div className="metrics-dora__record">
+        <span>{deployment.repo_name}</span>
         <a href={deployment.source_url} target="_blank" rel="noreferrer">
           {deployment.revision.slice(0, 8)}
         </a>
@@ -246,7 +322,7 @@ function OutcomeForm({
   onClose,
 }: {
   deployment: DoraDeployment;
-  onChanged: () => Promise<void>;
+  onChanged: (updated: DoraDeployment) => Promise<void>;
   onClose: () => void;
 }) {
   const [outcome, setOutcome] = useState(deployment.outcome);
@@ -298,8 +374,8 @@ function OutcomeForm({
               : null,
           rework: rework === "unknown" ? null : rework === "rework",
         };
-        await updateDeploymentOutcome(deployment.id, input);
-        await onChanged();
+        const updated = await updateDeploymentOutcome(deployment.id, input);
+        await onChanged(updated);
         onClose();
       } catch (err) {
         setError(

@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
@@ -167,6 +167,8 @@ fn metrics_router() -> Router<Arc<AppState>> {
     use axum::routing::{get, put};
     Router::new()
         .route("/api/metrics", get(portfolio_metrics))
+        .route("/api/metrics/dora", get(dora_metrics))
+        .route("/api/metrics/deployments", get(dora_deployments))
         .route("/api/jobs", get(background_jobs))
         .route(
             "/api/metrics/deployments/:id/outcome",
@@ -269,6 +271,33 @@ fn plan_router() -> Router<Arc<AppState>> {
         .route("/api/plans/:id/events", get(plan_routes::plan_events))
 }
 
+fn dora_error(error: crate::dora::OutcomeError) -> ApiError {
+    match error {
+        crate::dora::OutcomeError::Invalid(message) => ApiError::BadRequest(message),
+        crate::dora::OutcomeError::Storage(error) => ApiError::Db(error),
+    }
+}
+
+async fn dora_metrics(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<crate::dora::DoraMetrics>> {
+    Ok(Json(crate::dora::metrics(&state.pool).await?))
+}
+
+async fn dora_deployments(
+    State(state): State<Arc<AppState>>,
+    Query(input): Query<crate::dora::DeploymentQuery>,
+) -> ApiResult<Json<crate::dora::DeploymentPage>> {
+    if let Some(repo) = &input.repo {
+        validate_repo_name(repo)?;
+    }
+    Ok(Json(
+        crate::dora::list_deployments(&state.pool, &input)
+            .await
+            .map_err(dora_error)?,
+    ))
+}
+
 /// Record explicit production outcomes without interpreting CI failures.
 async fn deployment_outcome(
     State(state): State<Arc<AppState>>,
@@ -277,10 +306,7 @@ async fn deployment_outcome(
 ) -> ApiResult<Json<crate::dora::Deployment>> {
     crate::dora::update_outcome(&state.pool, id, &input)
         .await
-        .map_err(|error| match error {
-            crate::dora::OutcomeError::Invalid(message) => ApiError::BadRequest(message),
-            crate::dora::OutcomeError::Storage(error) => ApiError::Db(error),
-        })?
+        .map_err(dora_error)?
         .map(Json)
         .ok_or(ApiError::NotFound)
 }

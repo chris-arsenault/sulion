@@ -13,6 +13,9 @@ use sulion::repo_ci::{reconcile_repo_dora, GithubAuth, GithubCi};
 use sulion::{db, dora};
 use tokio::net::TcpListener;
 
+#[path = "dora_integration/reads.rs"]
+mod reads;
+
 async fn fresh_pool() -> db::Pool {
     let pool = db::connect(&std::env::var("SULION_TEST_DB").unwrap())
         .await
@@ -105,7 +108,15 @@ async fn window_excludes_old_and_future_deployments_and_keeps_open_recovery_unkn
     let initial = dora::metrics(&pool).await.unwrap();
     assert_eq!(initial.repos[0].deployments, 1);
     assert_eq!(initial.repos[0].change_failure_rate, None);
-    assert_eq!(initial.repos[0].recent_deployments.len(), 1);
+    assert!(initial.repos[0].recent_deployments.is_empty());
+    assert_eq!(
+        dora::list_deployments(&pool, &dora::DeploymentQuery::default())
+            .await
+            .unwrap()
+            .deployments
+            .len(),
+        1
+    );
     let mut input = dora::DeploymentOutcome {
         outcome: "failed".into(),
         failed_at: Some(deployed_at + chrono::Duration::hours(1)),
@@ -221,7 +232,17 @@ async fn collects_actual_deploy_steps_idempotently_and_measures_first_deployed_c
     assert!((repo.change_lead_time_hours_p50.unwrap() - 4.0).abs() < 0.001);
     assert_eq!(repo.change_failure_rate, None);
     assert_eq!(repo.rework_rate, None);
-    let failed = &repo.recent_deployments[0];
+    let deployments = dora::list_deployments(
+        &pool,
+        &dora::DeploymentQuery {
+            repo: Some("app".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .deployments;
+    let failed = &deployments[0];
     dora::update_outcome(
         &pool,
         failed.id,
@@ -234,7 +255,7 @@ async fn collects_actual_deploy_steps_idempotently_and_measures_first_deployed_c
     )
     .await
     .unwrap();
-    for healthy in &repo.recent_deployments[1..] {
+    for healthy in &deployments[1..] {
         dora::update_outcome(
             &pool,
             healthy.id,

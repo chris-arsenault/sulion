@@ -1,17 +1,22 @@
 //! Production delivery evidence. Metrics reads only Postgres; node collection
 //! lives in `repo_ci::dora`.
 
+use anyhow::Context;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::db::Pool;
 
+mod deployments;
+pub use deployments::{list_deployments, DeploymentCursor, DeploymentPage, DeploymentQuery};
+
 pub const WINDOW_DAYS: i64 = 30;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DoraMetrics {
     pub window_days: i64,
+    pub summary: RepoDoraMetrics,
     pub repos: Vec<RepoDoraMetrics>,
 }
 
@@ -21,6 +26,8 @@ pub struct RepoDoraMetrics {
     pub checked_at: Option<DateTime<Utc>>,
     pub scanned_since: Option<DateTime<Utc>>,
     pub collection_error: Option<String>,
+    pub repository_count: i64,
+    pub collected_repository_count: i64,
     pub deployments: i64,
     pub deployments_per_day: Option<f64>,
     pub change_lead_time_hours_p50: Option<f64>,
@@ -34,6 +41,7 @@ pub struct RepoDoraMetrics {
     pub classified_rework: i64,
     pub rework_rate: Option<f64>,
     #[sqlx(skip)]
+    /// Empty during rolling upgrades; deployment records use the paged reader.
     pub recent_deployments: Vec<Deployment>,
 }
 
@@ -88,60 +96,20 @@ impl DeploymentOutcome {
 pub async fn metrics(pool: &Pool) -> anyhow::Result<DoraMetrics> {
     let now = Utc::now();
     let since = now - chrono::Duration::days(WINDOW_DAYS);
-    let mut repos: Vec<RepoDoraMetrics> = sqlx::query_as(
-        "WITH deployments AS ( \
-           SELECT * FROM dora_deployments WHERE deployed_at >= $1 AND deployed_at <= $2 \
-         ), counts AS ( \
-           SELECT repo_name, COUNT(*) AS deployments, \
-             COUNT(*) FILTER (WHERE outcome <> 'unknown') AS classified_outcomes, \
-             COUNT(*) FILTER (WHERE outcome = 'failed') AS failed_deployments, \
-             COUNT(rework) AS classified_rework, COUNT(*) FILTER (WHERE rework) AS rework_count, \
-             COUNT(recovered_at) AS recovered_deployments, \
-             COUNT(*) FILTER (WHERE outcome = 'failed' AND recovered_at IS NULL) AS open_failures, \
-             percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (recovered_at - failed_at)) / 3600.0) \
-               FILTER (WHERE recovered_at IS NOT NULL) AS recovery_time_hours_p50 \
-           FROM deployments GROUP BY repo_name \
-         ), changes AS ( \
-           SELECT c.repo_name, COUNT(*) AS lead_time_samples, \
-             percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (d.deployed_at - c.committed_at)) / 3600.0) \
-               AS change_lead_time_hours_p50 \
-           FROM dora_commit_deployments c JOIN deployments d ON d.id = c.deployment_id \
-           WHERE NOT c.baseline AND c.committed_at <= d.deployed_at GROUP BY c.repo_name \
-         ) \
-         SELECT r.repo_name AS repo, r.dora_checked_at AS checked_at, r.dora_scanned_since AS scanned_since, \
-           r.dora_error AS collection_error, COALESCE(n.deployments, 0) AS deployments, \
-           CASE WHEN r.dora_checked_at IS NOT NULL THEN COALESCE(n.deployments, 0)::float8 / $3 END AS deployments_per_day, \
-           c.change_lead_time_hours_p50, COALESCE(c.lead_time_samples, 0) AS lead_time_samples, \
-           COALESCE(n.classified_outcomes, 0) AS classified_outcomes, \
-           COALESCE(n.failed_deployments, 0) AS failed_deployments, \
-           CASE WHEN n.deployments > 0 AND n.classified_outcomes = n.deployments \
-             THEN n.failed_deployments::float8 / n.deployments END AS change_failure_rate, \
-           n.recovery_time_hours_p50, COALESCE(n.recovered_deployments, 0) AS recovered_deployments, \
-           COALESCE(n.open_failures, 0) AS open_failures, COALESCE(n.classified_rework, 0) AS classified_rework, \
-           CASE WHEN n.deployments > 0 AND n.classified_rework = n.deployments \
-             THEN n.rework_count::float8 / n.deployments END AS rework_rate \
-         FROM repo_runtime_state r LEFT JOIN counts n ON n.repo_name = r.repo_name \
-         LEFT JOIN changes c ON c.repo_name = r.repo_name \
-         WHERE r.exists = TRUE ORDER BY r.repo_name",
-    ).bind(since).bind(now).bind(WINDOW_DAYS as f64).fetch_all(pool).await?;
-    let deployments: Vec<Deployment> = sqlx::query_as(
-        "SELECT id, repo_name, revision, deployed_at, source_url, outcome, failed_at, recovered_at, rework \
-         FROM dora_deployments WHERE deployed_at >= $1 AND deployed_at <= $2 ORDER BY deployed_at DESC, id",
-    ).bind(since).bind(now).fetch_all(pool).await?;
-    let mut by_repo: std::collections::HashMap<String, Vec<Deployment>> =
-        std::collections::HashMap::new();
-    for deployment in deployments {
-        by_repo
-            .entry(deployment.repo_name.clone())
-            .or_default()
-            .push(deployment);
-    }
-    for repo in &mut repos {
-        repo.recent_deployments = by_repo.remove(&repo.repo).unwrap_or_default();
-    }
+    let rows: Vec<RepoDoraMetrics> = sqlx::query_as(include_str!("dora/metrics.sql"))
+        .bind(since)
+        .bind(now)
+        .bind(WINDOW_DAYS as f64)
+        .fetch_all(pool)
+        .await?;
+    let mut rows = rows.into_iter();
+    let summary = rows
+        .next()
+        .context("DORA query omitted portfolio summary")?;
     Ok(DoraMetrics {
         window_days: WINDOW_DAYS,
-        repos,
+        summary,
+        repos: rows.collect(),
     })
 }
 

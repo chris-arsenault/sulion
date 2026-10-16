@@ -27,6 +27,9 @@ import type {
   MetricsResponse,
   DeploymentOutcome,
   DoraDeployment,
+  DoraDeploymentCursor,
+  DoraDeploymentPage,
+  DoraMetricsView,
   MonitorTimelineResponse,
   MetaRepoView,
   BranchPlanRequest,
@@ -389,6 +392,22 @@ export function updateDeploymentOutcome(id: string, body: DeploymentOutcome): Pr
     method: "PUT",
     body: JSON.stringify(body),
   });
+}
+
+export function getDoraMetrics(): Promise<DoraMetricsView> {
+  return request<DoraMetricsView>("/api/metrics/dora");
+}
+
+export function getDoraDeployments(repo?: string, cursor?: DoraDeploymentCursor, signal?: AbortSignal): Promise<DoraDeploymentPage> {
+  const params = new URLSearchParams();
+  if (repo) params.set("repo", repo);
+  if (cursor) {
+    params.set("before", cursor.deployed_at);
+    params.set("before_id", cursor.id);
+  }
+  const query = params.toString();
+  const suffix = query ? `?${query}` : "";
+  return request<DoraDeploymentPage>(`/api/metrics/deployments${suffix}`, { signal });
 }
 
 export function getJobs(): Promise<JobsResponse> {

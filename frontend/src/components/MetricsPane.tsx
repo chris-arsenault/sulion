@@ -98,7 +98,7 @@ export function MetricsPane({
         <div className="metrics-pane__grid">
           <JobsSection active={active} />
           <TokensSection data={data} />
-          <FlowSection data={data} onDoraChanged={load} />
+          <FlowSection data={data} active={active} />
           <GitSection data={data} />
           <ChurnSection data={data} />
         </div>
@@ -434,7 +434,7 @@ function priceLabel(price: MetricsModelPrice): string {
 
 // ─── Flow ───────────────────────────────────────────────────────────
 
-function FlowSection({ data, onDoraChanged }: { data: MetricsResponse; onDoraChanged: () => Promise<void> }) {
+function FlowSection({ data, active }: { data: MetricsResponse; active: boolean }) {
   const { flow } = data;
   const throughput = flow.throughput_weeks.at(-1)?.completed_weight ?? 0;
   return (
@@ -464,7 +464,7 @@ function FlowSection({ data, onDoraChanged }: { data: MetricsResponse; onDoraCha
         />
       </div>
       <Cfd cfd={flow.cfd} />
-      <DoraMetrics data={data.dora} onChanged={onDoraChanged} />
+      <DoraMetrics data={data.dora} active={active} />
       {flow.burndowns.slice(0, 4).map((burndown) => (
         <Burndown key={burndown.plan_id} burndown={burndown} />
       ))}

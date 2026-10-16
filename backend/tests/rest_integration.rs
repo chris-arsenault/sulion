@@ -437,6 +437,36 @@ async fn dora_outcome_route_validates_evidence_and_updates_metrics() {
     assert_eq!(repo["change_failure_rate"], 0.0);
     assert_eq!(repo["rework_rate"], 0.0);
     assert!(repo["change_lead_time_hours_p50"].is_null());
+    assert!(repo["recent_deployments"].as_array().unwrap().is_empty());
+    let summary: serde_json::Value = h
+        .client
+        .get(format!("{}/api/metrics/dora", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(summary["summary"]["deployments"], 1);
+    let page: serde_json::Value = h
+        .client
+        .get(format!("{}/api/metrics/deployments?repo=dora-app", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(page["deployments"].as_array().unwrap().len(), 1);
+    assert_eq!(page["deployments"][0]["outcome"], "healthy");
+    assert!(page["next_cursor"].is_null());
+    let invalid = h
+        .client
+        .get(format!("{}/api/metrics/deployments?before_id={id}", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), reqwest::StatusCode::BAD_REQUEST);
     let missing = h
         .client
         .put(format!(

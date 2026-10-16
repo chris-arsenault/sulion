@@ -8,6 +8,8 @@ import {
   fetchFileBlob,
   fileRawUrl,
   getAppState,
+  getDoraDeployments,
+  getDoraMetrics,
   getHistory,
   getRepoDirtyPaths,
   getRepoFileTrace,
@@ -52,6 +54,25 @@ const TEST_SECRET_ID = "claude-api";
 describe("api client", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("loads DORA summaries separately and forwards deployment scope, cursor and cancellation", async () => {
+    const controller = new AbortController();
+    const cursor = { deployed_at: "2026-10-16T01:02:03Z", id: "deployment-id" };
+    const seen: string[] = [];
+    stubFetch(async (url, init) => {
+      seen.push(url);
+      if (url === "/api/metrics/dora") return jsonResponse({ window_days: 30, repos: [] });
+      const params = new URL(url, "http://test.local").searchParams;
+      expect(params.get("repo")).toBe("repo-one");
+      expect(params.get("before")).toBe(cursor.deployed_at);
+      expect(params.get("before_id")).toBe(cursor.id);
+      expect(init?.signal).toBe(controller.signal);
+      return jsonResponse({ deployments: [], next_cursor: null });
+    });
+    await getDoraMetrics();
+    await getDoraDeployments("repo-one", cursor, controller.signal);
+    expect(seen).toHaveLength(2);
   });
 
   it("getAppState GETs /api/app-state and parses the unified state", async () => {

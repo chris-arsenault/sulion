@@ -81,3 +81,17 @@ being marked absent by discovery; the fixture now creates a real temporary
 directory and the final run passed. No live deployment or GitHub history was
 queried. Implementation is ready for publication; deployed behavior remains
 unverified.
+
+## Scale correction — 2026-10-16
+
+The original display and eager deployment payload did not fit the user's 50
+repositories. Repair plan: 4f47a6a2-9d7a-4e30-865c-d1d600111dfd. Replace the
+repository table and repeated disclosures with five portfolio metric tiles and
+one paginated deployment view. The user clarified that metrics must be
+aggregates; remove repository selection and repository metric panels. Preserve
+production evidence, explicit outcomes and unknown values. Compute portfolio medians from
+underlying samples and keep deployment detail reads outside metrics polling.
+Verification uses a 50-repository PostgreSQL fixture with 60,000 deployments and
+300,000 commits; live profiling is unavailable because the credential broker
+refused database access. The user authorized committing and pushing this
+correction on 2026-10-16. Deployed behavior remains unverified.

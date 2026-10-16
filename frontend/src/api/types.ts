@@ -1191,6 +1191,8 @@ export interface RepoDoraMetrics {
   checked_at: string | null;
   scanned_since: string | null;
   collection_error: string | null;
+  repository_count?: number;
+  collected_repository_count?: number;
   deployments: number;
   deployments_per_day: number | null;
   change_lead_time_hours_p50: number | null;
@@ -1208,7 +1210,18 @@ export interface RepoDoraMetrics {
 
 export interface DoraMetricsView {
   window_days: number;
+  summary?: RepoDoraMetrics;
   repos: RepoDoraMetrics[];
+}
+
+export interface DoraDeploymentCursor {
+  deployed_at: string;
+  id: string;
+}
+
+export interface DoraDeploymentPage {
+  deployments: DoraDeployment[];
+  next_cursor: DoraDeploymentCursor | null;
 }
 
 export interface JobView {
