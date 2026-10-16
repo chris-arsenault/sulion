@@ -110,6 +110,13 @@ flyout. These preferences apply to all timelines; selected turns and open
 flyouts remain local. Flyouts use anchor positioning on wider screens and a
 bottom sheet on narrow screens. Terminal text size is independent.
 
+Long turn prompts start with a 240-character preview and an ellipsis;
+Show full prompt and Show less toggle the complete Markdown. On mobile,
+tapping or holding assistant text opens a full-screen Turn output modal.
+The Full screen button also opens it from any viewport. The reader reuses
+the turn renderer and shared Overlay, preserves tool expansion and reading
+position, and closes with its close button or Escape.
+
 ## Motion
 
 - `--dur-0 80ms` — hover, press tint, chevron rotate

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 
@@ -7,6 +7,7 @@ import * as apiClient from "../../api/client";
 import { subscribeToAppCommands } from "../../state/AppCommands";
 import { TurnDetail } from "./TurnDetail";
 import { ContextMenuHost } from "../common/ContextMenu";
+import { Overlay } from "../ui";
 import {
   assistantChunk,
   assistantItems,
@@ -48,6 +49,145 @@ describe("TurnDetail", () => {
       </>,
     );
   }
+
+  it("limits long prompts to 240 characters and expands the full Markdown on demand", async () => {
+    const prompt = `${"x".repeat(239)}😀 **last sentence**`;
+    const { rerender } = render(<TurnDetail turn={makeTurn({ user_prompt_text: prompt })} showThinking />);
+    const preview = document.querySelector(".td__prompt-preview");
+    expect(preview?.textContent).toBe(`${"x".repeat(239)}😀…`);
+    expect(screen.queryByText("last sentence")).toBeNull();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Show full prompt" }));
+    expect(screen.getByText("last sentence").tagName).toBe("STRONG");
+    expect(screen.getByRole("button", { name: "Show less" }).getAttribute("aria-expanded")).toBe("true");
+    rerender(<TurnDetail turn={makeTurn({ user_prompt_text: prompt, event_count: 5 })} showThinking />);
+    expect(screen.getByText("last sentence")).toBeDefined();
+    await user.click(screen.getByRole("button", { name: "Show less" }));
+    expect(screen.queryByText("last sentence")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Show full prompt" }));
+    rerender(<TurnDetail turn={makeTurn({ id: 2, user_prompt_text: prompt })} showThinking />);
+    expect(screen.queryByText("last sentence")).toBeNull();
+  });
+
+  it("leaves short and filtered prompts without an expansion control", () => {
+    const { rerender } = render(<TurnDetail turn={makeTurn({ user_prompt_text: "x".repeat(240) })} showThinking />);
+    expect(screen.queryByRole("button", { name: "Show full prompt" })).toBeNull();
+    rerender(<TurnDetail turn={makeTurn({ user_prompt_text: "x".repeat(1000) })} showThinking hideUserPrompt />);
+    expect(screen.queryByRole("button", { name: "Show full prompt" })).toBeNull();
+  });
+
+  it("opens mobile assistant output in the shared modal and restores scroll and tool expansion", async () => {
+    stubMobileViewport();
+    const pair = makePair({ id: "tool", name: "read", input: { path: "one.txt" } });
+    const turn = makeTurn({ tool_pairs: [pair], items: itemsOf(assistantChunk(assistantItems("Read this output")), toolChunk("tool")) });
+    const { rerender } = render(<TurnDetail turn={turn} showThinking />);
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText("Expand tool details"));
+    const body = screen.getByTestId("turn-detail");
+    Object.defineProperties(body, { scrollHeight: { value: 1000 }, clientHeight: { value: 100 } });
+    body.scrollTop = 130;
+    fireEvent.scroll(body);
+    await user.click(screen.getByText("Read this output"));
+    const dialog = screen.getByRole("dialog", { name: "Turn output" });
+    expect(within(dialog).getByText("Read this output")).toBeDefined();
+    expect(within(dialog).getByTestId("turn-detail").scrollTop).toBe(130);
+    expect(within(dialog).getByLabelText("Collapse tool details")).toBeDefined();
+    rerender(<TurnDetail turn={{ ...turn, event_count: turn.event_count + 1 }} showThinking />);
+    expect(screen.getByRole("dialog", { name: "Turn output" })).toBeDefined();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Turn output" })).toBeNull();
+    expect(screen.getByTestId("turn-detail").scrollTop).toBe(130);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Full screen" }));
+  });
+
+  it("opens with the Full screen button on desktop and closes with the modal control", async () => {
+    render(<TurnDetail turn={makeTurn({ items: itemsOf(assistantChunk(assistantItems("desktop output"))) })} showThinking />);
+    const user = userEvent.setup();
+    await user.click(screen.getByText("desktop output"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Full screen" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("closes only the reader when opened inside an existing modal", async () => {
+    const onClose = vi.fn();
+    render(<Overlay open modal onClose={onClose} title="Parent turn">
+      <TurnDetail turn={makeTurn()} showThinking />
+    </Overlay>);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Full screen" }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Turn output" })).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("opens the reader after a touch hold", () => {
+    stubMobileViewport();
+    vi.useFakeTimers();
+    render(<TurnDetail turn={makeTurn({ items: itemsOf(assistantChunk(assistantItems("hold this output"))) })} showThinking />);
+    fireEvent.pointerDown(screen.getByText("hold this output"), { pointerId: 1, pointerType: "touch", button: 0, clientX: 10, clientY: 10 });
+    act(() => vi.advanceTimersByTime(500));
+    expect(screen.getByRole("dialog", { name: "Turn output" })).toBeDefined();
+  });
+
+  it.each(["move", "scroll", "release", "cancel"])("cancels a touch hold on %s", (action) => {
+    stubMobileViewport();
+    vi.useFakeTimers();
+    render(<TurnDetail turn={makeTurn({ items: itemsOf(assistantChunk(assistantItems("scroll this output"))) })} showThinking />);
+    const text = screen.getByText("scroll this output");
+    fireEvent.pointerDown(text, { pointerId: 1, pointerType: "touch", button: 0, clientX: 10, clientY: 10 });
+    if (action === "move") fireEvent.pointerMove(text, { pointerId: 1, clientX: 10, clientY: 40 });
+    if (action === "scroll") fireEvent.scroll(screen.getByTestId("turn-detail"));
+    if (action === "release") fireEvent.pointerUp(text, { pointerId: 1 });
+    if (action === "cancel") fireEvent.pointerCancel(text, { pointerId: 1 });
+    act(() => vi.advanceTimersByTime(600));
+    if (action === "move") fireEvent.click(text);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps links and selected text from opening the mobile reader", async () => {
+    stubMobileViewport();
+    const seen: unknown[] = [];
+    const unsubscribe = subscribeToAppCommands((command) => seen.push(command));
+    render(<TurnDetail turn={makeTurn({ items: itemsOf(assistantChunk(assistantItems("[file](src/lib.rs) and selectable output"))) })}
+      showThinking fileTarget={{ repo: "atlas" }} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("link", { name: "file" }));
+    expect(seen).toContainEqual(expect.objectContaining({ type: "open-file", path: "src/lib.rs" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    vi.spyOn(window, "getSelection").mockReturnValue({ toString: () => "selected output" } as Selection);
+    fireEvent.click(screen.getByText(/and selectable output/));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    unsubscribe();
+  });
+
+  it("uses a native mobile long press to open the reader instead of the assistant menu", () => {
+    stubMobileViewport();
+    renderWithContextMenu(<TurnDetail turn={makeTurn({ items: itemsOf(assistantChunk(assistantItems("native hold"))) })} showThinking />);
+    fireEvent.contextMenu(screen.getByText("native hold"));
+    expect(screen.getByRole("dialog", { name: "Turn output" })).toBeDefined();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("keeps thinking and context menus above the reader and dismisses them before the reader", async () => {
+    renderWithContextMenu(<TurnDetail turn={makeTurn({ items: itemsOf(assistantChunk(assistantItems("inspect output"), ["reasoning text"])) })} showThinking />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Full screen" }));
+    const reader = screen.getByRole("dialog", { name: "Turn output" });
+    await user.click(screen.getByRole("button", { name: /thinking/i }));
+    expect(reader.contains(screen.getByTestId("thinking-flyout"))).toBe(true);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("thinking-flyout")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Turn output" })).toBe(reader);
+    fireEvent.contextMenu(screen.getByText("inspect output"));
+    expect(screen.getByRole("menu")).toBeDefined();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Turn output" })).toBe(reader);
+  });
 
   it("renders prompt, assistant text, and projected tool rows", () => {
     const pair = makePair({
@@ -401,8 +541,10 @@ describe("TurnDetail", () => {
         onOpenSubagent={onOpen}
       />,
     );
+    await user.click(screen.getByRole("button", { name: "Full screen" }));
     await user.click(screen.getByText(/view agent log/i));
     expect(onOpen).toHaveBeenCalledWith(pair);
+    expect(screen.queryByRole("dialog", { name: "Turn output" })).toBeNull();
   });
 
   it("saves the prompt as a reusable prompt", async () => {

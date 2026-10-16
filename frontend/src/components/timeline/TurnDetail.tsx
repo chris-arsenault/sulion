@@ -8,6 +8,7 @@ import {
   useState,
   memo,
 } from "react";
+import { createPortal } from "react-dom";
 
 import { saveLibraryEntry } from "../../api/client";
 import type { TimelineAssistantItem } from "../../api/types";
@@ -37,7 +38,9 @@ import { planCommandSummary } from "./tools/planCommandData";
 import { blockKey, createItemGrouper } from "./turnDetailCache";
 import { TurnBlocks } from "./TurnBlocks";
 import { hydrateOperation } from "../../state/TurnDetailStore";
-import { Tooltip } from "../ui";
+import { Overlay, Tooltip } from "../ui";
+import { TurnPrompt } from "./TurnPrompt";
+import { useTurnReader } from "./useTurnReader";
 import "./TurnDetail.css";
 
 interface Props {
@@ -115,6 +118,8 @@ export function TurnDetail({
   // the bottom, hold position otherwise, and jump back to the top when
   // the selection moves to a different turn.
   const bodyRef = useRef<HTMLDivElement>(null);
+  const reader = useTurnReader(isMobile, turnIdentity, bodyRef);
+  const { cancelHold, open: readerOpen, close: closeReader } = reader;
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const attachScroller = useCallback((node: HTMLDivElement | null) => {
     bodyRef.current = node;
@@ -126,6 +131,10 @@ export function TurnDetail({
     if (!el) return;
     atBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 48;
   }, []);
+  const onScroll = useCallback(() => {
+    cancelHold();
+    onBodyScroll();
+  }, [cancelHold, onBodyScroll]);
   const scrollTurnRef = useRef(turnIdentity);
   const growthKey = `${turn.event_count}:${turn.items.length}:${turn.tool_pairs.length}`;
   useLayoutEffect(() => {
@@ -164,6 +173,11 @@ export function TurnDetail({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [thinking, setThinking] = useState<ThinkingAnchor | null>(null);
   const [hover, setHover] = useState<HoverAnchor | null>(null);
+  useEffect(() => {
+    if (!reader.open) return;
+    setHover(null);
+    setThinking(null);
+  }, [reader.open]);
   const hoverPair = hover ? pairById.get(hover.pair.id) ?? hover.pair : null;
   const hoverPairId = hoverPair?.id;
   const hoverBodyLoaded = hoverPair?.body_loaded;
@@ -323,11 +337,15 @@ export function TurnDetail({
     },
     [],
   );
+  const openSubagent = useCallback((pair: ToolPair) => {
+    if (readerOpen) closeReader();
+    onOpenSubagent?.(pair);
+  }, [readerOpen, closeReader, onOpenSubagent]);
   const onHoverEnter = useCallback(() => {
     if (dismissTimer.current) clearTimeout(dismissTimer.current);
   }, []);
 
-  return (
+  const detail = (
     <div className="td">
       <div
         className="td__header"
@@ -335,7 +353,12 @@ export function TurnDetail({
         {...headerTriggerProps}
       >
         <div className="td__header-prompt">
-          <span className="td__header-label">Prompt</span>
+          <div className="td__header-actions">
+            <span className="td__header-label">Prompt</span>
+            {!reader.open && <button type="button" ref={reader.buttonRef} className="td__reader-open" onClick={reader.show}>
+              <Icon name="eye" size={14} /> Full screen
+            </button>}
+          </div>
           <div
             className="td__prompt-text"
             aria-label="Prompt actions"
@@ -346,7 +369,7 @@ export function TurnDetail({
             ) : hideUserPrompt ? (
               <span className="td__muted">(user prompt hidden by filter)</span>
             ) : (
-              <Markdown source={turn.user_prompt_text} fileTarget={fileTarget} />
+              <TurnPrompt key={turnIdentity} text={turn.user_prompt_text} fileTarget={fileTarget} />
             )}
           </div>
         </div>
@@ -395,12 +418,21 @@ export function TurnDetail({
         {saveError && <div className="td__save-error">{saveError}</div>}
       </div>
 
+      {/* The Full screen button provides keyboard access; mobile output taps are a shortcut. */}
+      {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
       <div
         className="td__body"
         data-testid="turn-detail"
         ref={attachScroller}
-        onScroll={onBodyScroll}
+        onScroll={onScroll}
+        onClick={reader.onClick}
+        onContextMenuCapture={reader.onContextMenuCapture}
+        onPointerDown={reader.onPointerDown}
+        onPointerMove={reader.onPointerMove}
+        onPointerUp={reader.cancelHold}
+        onPointerCancel={reader.cancelHold}
       >
+        {reader.open && saveError && <div role="alert" className="td__save-error">{saveError}</div>}
         {turn.archived_at && (
           <div className="td__archived" data-testid="turn-archived">
             <Icon name="file-text" size={12} />
@@ -446,7 +478,7 @@ export function TurnDetail({
                 generation={turn.generation}
                 expanded={isExpanded(pair)}
                 onToggle={toggleExpansion}
-                onOpenSubagent={onOpenSubagent}
+                onOpenSubagent={onOpenSubagent ? openSubagent : undefined}
                 onEnter={openHover}
                 onLeave={scheduleDismiss}
                 hoverEnabled={!isMobile}
@@ -493,6 +525,7 @@ export function TurnDetail({
           anchor={thinking.el}
           thinkingText={thinking.text}
           onClose={onClearThinking}
+          portalTarget={reader.open ? scroller : null}
         />
       )}
       {hover && hoverPair && !isMobile && (
@@ -503,12 +536,22 @@ export function TurnDetail({
           pinned={hover.pinned}
           onPin={onPinHover}
           onClose={onClearHover}
+          portalTarget={reader.open ? scroller : null}
           onMouseEnter={onHoverEnter}
           onMouseLeave={scheduleDismiss}
         />
       )}
     </div>
   );
+
+  return reader.open ? createPortal(
+    <Overlay open modal onClose={reader.close} title="Turn output" aria-label="Turn output"
+      className="td-reader" width="100vw" maxWidth="100vw" maxHeight="100dvh"
+      onKeyDown={reader.onKeyDown}>
+      {/* eslint-disable-next-line local/no-inline-styles -- portal carries the shared timeline text-size preference */}
+      <div className="td-reader__content" style={reader.style}>{detail}</div>
+    </Overlay>, document.body,
+  ) : detail;
 }
 
 const AssistantBlock = memo(function AssistantBlock({

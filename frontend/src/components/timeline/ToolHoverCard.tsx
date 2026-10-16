@@ -28,6 +28,7 @@ interface Props {
   onClose: () => void;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
+  portalTarget?: HTMLElement | null;
 }
 
 export function ToolHoverCard({
@@ -39,18 +40,18 @@ export function ToolHoverCard({
   onClose,
   onMouseEnter,
   onMouseLeave,
+  portalTarget,
 }: Props) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
   useEffect(() => {
-    if (!pinned) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [pinned, onClose]);
+  }, [onClose]);
 
   useLayoutEffect(() => {
     if (!anchor || !cardRef.current) return;
@@ -175,7 +176,7 @@ export function ToolHoverCard({
         </div>
       )}
     </div>,
-    document.body,
+    portalTarget ?? document.body,
   );
 }
 

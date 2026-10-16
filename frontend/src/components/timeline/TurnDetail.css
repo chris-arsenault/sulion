@@ -2,11 +2,14 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
+  min-width: 0;
   background: var(--canvas-0);
 }
 
 /* #30: sticky header — stays pinned while the detail body scrolls */
 .td__header {
+  flex-shrink: 0;
   position: sticky;
   top: 0;
   z-index: 2;
@@ -27,6 +30,73 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-lo);
+}
+
+.td__header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.td__prompt-preview {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.td__prompt-toggle,
+.td__reader-open {
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--timeline-t-ui);
+  min-height: var(--lane-sm);
+  padding: 2px 0;
+}
+
+.td__reader-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.td-reader .ui-overlay__surface {
+  height: 100dvh;
+  border: 0;
+  border-radius: 0;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+.td-reader .ui-overlay__body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.td-reader__content {
+  flex: 1;
+  min-height: 0;
+}
+
+.td-reader .td__header {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .td__prompt-toggle,
+  .td__reader-open,
+  .td-reader .ui-overlay__close {
+    min-height: var(--lane-lg);
+    min-width: var(--lane-lg);
+  }
+
+  .td .td__prompt-text {
+    max-height: min(240px, 30dvh);
+  }
 }
 
 .td__prompt-text {
@@ -120,6 +190,7 @@
 
 .td__body {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 12px 14px;
   display: flex;

@@ -15,9 +15,10 @@ interface Props {
   anchor: HTMLElement | null;
   thinkingText: string;
   onClose: () => void;
+  portalTarget?: HTMLElement | null;
 }
 
-export function ThinkingFlyout({ anchor, thinkingText, onClose }: Props) {
+export function ThinkingFlyout({ anchor, thinkingText, onClose, portalTarget }: Props) {
   const { cardRef, isNarrow, cardStyle } = useFlyoutPosition(anchor, onClose, thinkingText);
 
   if (isNarrow) {
@@ -56,7 +57,7 @@ export function ThinkingFlyout({ anchor, thinkingText, onClose }: Props) {
           <pre className="tf__body">{thinkingText}</pre>
         </div>
       </div>,
-      document.body,
+      portalTarget ?? document.body,
     );
   }
 
@@ -86,6 +87,6 @@ export function ThinkingFlyout({ anchor, thinkingText, onClose }: Props) {
       </div>
       <pre className="tf__body">{thinkingText}</pre>
     </div>,
-    document.body,
+    portalTarget ?? document.body,
   );
 }

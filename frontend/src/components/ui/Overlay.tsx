@@ -40,7 +40,9 @@ export function Overlay({
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        e.stopPropagation();
+        const surfaces = document.querySelectorAll('.ui-overlay__surface, [role="dialog"], [role="menu"]');
+        if (surfaces[surfaces.length - 1] !== dialogRef.current) return;
+        e.stopImmediatePropagation();
         onClose();
       }
     };

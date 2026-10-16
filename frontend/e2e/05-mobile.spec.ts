@@ -1,6 +1,70 @@
 import { expect, test } from "@playwright/test";
 
-import { deleteSessionById, gotoApp } from "./helpers";
+import { createLabeledSession, deleteSessionById, expectTerminalToContain, gotoApp, openSession, runTerminalCommand } from "./helpers";
+
+test("folds long prompts and opens mobile output in a full-screen reader", async ({ page, request }) => {
+  const label = "Mobile reader mock agent";
+  const sessionId = await createLabeledSession(request, "atlas", label);
+  const prompt = `${"Review the mobile reading layout. ".repeat(30)}End of long prompt.`;
+  try {
+    await gotoApp(page);
+    await page.setViewportSize({ width: 1440, height: 1024 });
+    await openSession(page, label);
+    await runTerminalCommand(page, "sulion-agent --type claude --mode mock --");
+    await expectTerminalToContain(page, "Type a prompt and press Enter.");
+    await runTerminalCommand(page, prompt);
+    await expect(page.getByTestId("turn-row").first()).toBeVisible({ timeout: 20_000 });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByTestId("turn-row").first().click();
+    const preview = page.locator(".td__prompt-preview");
+    await expect(preview).toHaveText(`${prompt.slice(0, 240).trimEnd()}…`);
+    await page.getByRole("button", { name: "Show full prompt" }).click();
+    await expect(page.getByLabel("Prompt actions")).toContainText("End of long prompt.");
+    await page.getByRole("button", { name: "Show less" }).click();
+    expect(await page.getByTestId("turn-detail").evaluate((element) => element.clientHeight)).toBeGreaterThan(100);
+
+    const output = page.locator(".td__text").first();
+    await expect(output).toContainText("Claude mock assistant processed:");
+    const fontSize = await output.evaluate((element) => getComputedStyle(element.querySelector(".md")!).fontSize);
+    await output.tap();
+    const reader = page.getByRole("dialog", { name: "Turn output" });
+    await expect(reader).toBeVisible();
+    expect(await reader.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    })).toEqual({ x: 0, y: 0, width: 390, height: 844 });
+    await expect(reader.getByLabel("Prompt actions")).toBeHidden();
+    expect(await reader.locator(".td__text .md").first().evaluate((element) => getComputedStyle(element).fontSize)).toBe(fontSize);
+    await page.keyboard.press("Shift+Tab");
+    expect(await reader.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+    await reader.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(reader).toBeHidden();
+    await expect(page.getByRole("button", { name: "Full screen" })).toBeFocused();
+
+    await output.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+    });
+    await output.dispatchEvent("click");
+    await expect(reader).toBeHidden();
+    await page.evaluate(() => window.getSelection()!.removeAllRanges());
+
+    const box = await output.boundingBox();
+    if (!box) throw new Error("Assistant output has no bounds");
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: box.x + 10, y: box.y + 10 }] });
+    await expect(reader).toBeVisible();
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await cdp.detach();
+    await page.keyboard.press("Escape");
+    await expect(reader).toBeHidden();
+    await expect(page.getByRole("button", { name: "Back to timeline" })).toBeVisible();
+  } finally {
+    await deleteSessionById(request, sessionId);
+  }
+});
 
 test("uses compact mobile navigation and starts sessions through the repository picker", async ({
   page,
