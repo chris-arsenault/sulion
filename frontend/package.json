@@ -11,6 +11,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "e2e": "playwright test",
+    "test:browser": "pnpm e2e",
     "e2e:headed": "playwright test --headed",
     "e2e:install": "playwright install chromium"
   },

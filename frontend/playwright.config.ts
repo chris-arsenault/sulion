@@ -2,7 +2,8 @@ import { defineConfig, devices } from "@playwright/test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const FRONTEND_URL = process.env.SULION_E2E_FRONTEND_URL ?? "http://127.0.0.1:34173";
+const FRONTEND_URL =
+  process.env.SULION_E2E_FRONTEND_URL ?? "http://127.0.0.1:34173";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
@@ -13,7 +14,9 @@ export default defineConfig({
   expect: {
     timeout: 10_000,
   },
-  reporter: process.env.CI ? [["dot"], ["html", { open: "never" }]] : [["list"]],
+  reporter: process.env.CI
+    ? [["dot"], ["html", { open: "never" }]]
+    : [["list"]],
   use: {
     baseURL: FRONTEND_URL,
     trace: "retain-on-failure",
@@ -26,7 +29,9 @@ export default defineConfig({
     url: FRONTEND_URL,
     reuseExistingServer: !process.env.CI,
     gracefulShutdown: { signal: "SIGTERM", timeout: 30_000 },
-    timeout: 300_000,
+    // CI starts with cold Rust and Docker caches for the complete workbench
+    // image. Keep that setup budget separate from the 45-second journeys.
+    timeout: process.env.CI ? 1_200_000 : 300_000,
   },
   projects: [
     {

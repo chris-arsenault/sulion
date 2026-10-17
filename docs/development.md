@@ -98,8 +98,15 @@ coverage and the prioritized next-test list live in
 ## CI
 
 `.github/workflows/ci.yml` is a minimal caller of the shared ahara workflow at `chris-arsenault/ahara/.github/workflows/ci.yml@main`. Lint / test / build / Docker push / Komodo deploy are driven by `platform.yml`.
+The declared host browser runtime runs the real-stack Playwright suite before
+the shared CI/deployment job. `test:browser` retains both desktop and mobile
+Chromium projects and the Docker-backed broker, node, ingester and database
+harness. Browser failures block both the control-plane deployment and the
+subsequent node-release pointer update. CI allows 20 minutes for cold Rust and
+Docker startup; individual browser journeys retain their 45-second budget.
 After that job succeeds on `main`, the caller advances `node-release` to the
 same commit for the dedicated host's ordered NixOS-and-application pull deployer.
+
 # Authentication in local fixtures
 
 Unauthenticated development requires both `SULION_DEPLOYMENT_ROLE=development`
