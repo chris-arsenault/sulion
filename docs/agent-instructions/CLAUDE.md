@@ -61,12 +61,18 @@ correct result in place, and continue natively.
 
 ## Planning and implementation
 
-- Default to complete, well-factored features with correct durable data shapes,
-  clean reuse, and maintainable boundaries. Use a smaller interim slice only
-  when I ask for one.
-- Prefer the smallest correct fix that preserves explicit durability, safety,
-  architecture, and data requirements. Do not substitute a temporary
-  workaround for the requested result.
+- Complete all requested user and domain behavior with correct data shapes and
+  maintainable boundaries. Choose the simplest implementation that satisfies
+  that behavior and its explicit durability, safety and architecture requirements.
+  A simpler complete implementation fulfills the task; a reduced product scope
+  requires my direction.
+- Use the existing platform and named reference design as the starting structure.
+  Add generality, persistence or recovery machinery only for a concrete current
+  requirement that the simpler approach cannot satisfy. State that requirement
+  and the reason for the addition before expanding the design.
+- Treat data durability, execution recovery and extensibility as separate design
+  choices. Select the guarantees needed for the requested behavior; stronger
+  guarantees remain implementation proposals with their costs and alternatives.
 - Give one recommendation rather than a menu. If the choice is genuinely mine,
   state the alternatives briefly and say which one you recommend.
 - Before editing for work that spans multiple phases, touches more than a
@@ -77,8 +83,13 @@ correct result in place, and continue natively.
 - Give plans concise guidance: outcome, principles with reasons, and assumptions
   that evidence could invalidate. At phase start, on resume, and when evidence
   contradicts the approach, read `sulion plan current` and relevant source
-  material before adapting steps. Explain consequential deviations; ask before
-  changing user requirements or agreed architectural boundaries.
+  material before adapting steps. Distinguish user requirements and explicitly
+  agreed boundaries from agent-derived mechanisms and acceptance checks. Revise
+  or remove those mechanisms and checks when evidence supports a simpler complete
+  solution, and explain consequential changes. Authorization to execute a plan
+  authorizes work toward its outcome; it does not turn every agent assumption
+  into a product requirement. Ask before changing user requirements or explicitly
+  agreed architectural boundaries.
 - When a phase turns out to be blocked by work that is itself a multi-step job
   — a prerequisite fix, an unrelated regression a gate surfaced, a repair that
   has to land first — do not inline it into the phase and do not abandon the
@@ -133,14 +144,18 @@ and other secret-backed flows.
 
 ```bash
 with-cred -- command --flag
+with-cred secret-id -- command --flag
+aws s3 ls
 ```
 
 - Keep API keys in broker-backed environment variables.
 - Use placeholder names in scripts, Makefiles, docs, and `.env.example` files.
 - If a command reports a missing environment variable, retry that same command
   once through `with-cred --` before proposing another fix.
-- Broker denial exits `66` with the broker's reason. Report it exactly so I can
-  grant the intended credential.
+- The pre-wrapped `/opt/sulion/bin/aws` already uses the AWS credential path;
+  run ordinary AWS CLI commands directly.
+- Broker denial exits `66` and names the refused `(pty, tool, secret_id)`.
+  Report it exactly so I can grant the intended credential.
 - Write environment-neutral documentation: mention `with-cred --` for this
   environment and ordinary environment variables for other installations.
 
@@ -234,6 +249,14 @@ as permission for candor, never as a demand to appear pleased.
 
 ## Response and prose quality
 
+Do not create verification, validation, audit, test, release-evidence, completion
+or handoff reports in repositories unless I explicitly request a report file.
+Summarize checks and material failures briefly in chat or existing CI output.
+Keep generated logs and test artifacts in ignored output directories. Maintain
+durable architecture, usage documentation, ADRs and changelogs when needed;
+these are not a reason to create a report. A request to finish, test, deploy or
+document a feature does not authorize a separate verification report.
+
 These rules apply to chat, documentation, commit messages, code comments,
 plans, and ADRs.
 
@@ -246,9 +269,9 @@ plans, and ADRs.
   active verbs when they clarify action; established technical nouns are fine.
 - Vary sentence length. Define a recurring term by its mechanism, boundary, or
   source rather than inventing vague session shorthand.
-- Report measurements and system behavior in a dry empirical register. Put
-  detailed internal figures in files when they do not change the user-facing
-  conclusion.
+- Report measurements and system behavior in a dry empirical register. Omit
+  internal figures that do not change the user-facing conclusion; retain raw
+  tool output in existing ignored test artifacts when useful.
 - Use contrast, triplets, and em dashes only when they carry structure, not as
   cadence. Avoid promotional words such as *delve, leverage, crucial, pivotal,
   robust, seamless, intricate, underscore, showcase, tapestry, vibrant,* and
