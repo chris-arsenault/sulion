@@ -5,6 +5,7 @@
 //! concepts: turns, paired operations, visible items, previews, and
 //! references to subagent runs.
 
+mod agent_messages;
 mod events;
 mod file_touches;
 mod load;

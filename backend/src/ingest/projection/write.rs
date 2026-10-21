@@ -228,6 +228,34 @@ pub async fn rebuild_session_projection(pool: &Pool, session_uuid: Uuid) -> anyh
     Ok(turns.unwrap_or(0) as usize)
 }
 
+/// Rebuild only retained sessions affected by conversation classification changes.
+pub async fn backfill_conversation_events(
+    pool: &Pool,
+    job: Option<&crate::ingest::jobs::JobHandle>,
+) -> anyhow::Result<usize> {
+    let sessions: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT cs.session_uuid FROM claude_sessions cs \
+         WHERE cs.purged_at IS NULL AND EXISTS ( \
+             SELECT 1 FROM events e WHERE e.session_uuid = cs.session_uuid AND ( \
+                 e.kind IN ('api-request', 'api-request-blob', 'inter_agent_communication_metadata') \
+                 OR (e.agent = 'codex' AND e.subtype = 'agent_message') \
+             ) \
+         ) ORDER BY cs.started_at DESC, cs.session_uuid",
+    )
+    .fetch_all(pool)
+    .await?;
+    if let Some(job) = job {
+        job.set_total(sessions.len() as i64).await;
+    }
+    for session in &sessions {
+        rebuild_session_projection(pool, *session).await?;
+        if let Some(job) = job {
+            job.advance(Some(&session.to_string())).await;
+        }
+    }
+    Ok(sessions.len())
+}
+
 /// Rebuild every retained session from its canonical events, most recently
 /// active first. Each is marked up front, so the live ingester rebuilds a
 /// session that receives events before this pass reaches it, and this pass

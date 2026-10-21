@@ -42,6 +42,17 @@ pub(crate) fn compose_turn_markdown(
                     }
                 }
             }
+            TimelineChunk::AgentMessage {
+                author,
+                recipient,
+                message_type,
+                text,
+            } => {
+                let label = message_type.as_deref().unwrap_or("MESSAGE");
+                parts.push(format!(
+                    "**Agent {label}:** {author} → {recipient}\n\n{text}"
+                ));
+            }
             TimelineChunk::System {
                 subtype: Some(subtype),
                 text,

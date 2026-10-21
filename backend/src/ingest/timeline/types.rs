@@ -38,6 +38,8 @@ pub(crate) fn is_bookkeeping_system_subtype(subtype: Option<&str>) -> bool {
 
 pub(crate) const BOOKKEEPING_KINDS: &[&str] = &[
     "agent-name",
+    "api-request",
+    "api-request-blob",
     "ai-title",
     "attachment",
     "bridge-session",
@@ -46,6 +48,7 @@ pub(crate) const BOOKKEEPING_KINDS: &[&str] = &[
     "file-history-snapshot",
     "frame-link",
     "last-prompt",
+    "inter_agent_communication_metadata",
     "mode",
     "permission-mode",
     "queue-operation",
@@ -319,6 +322,12 @@ pub enum TimelineChunk {
         subtype: Option<String>,
         text: String,
         is_meta: bool,
+    },
+    AgentMessage {
+        author: String,
+        recipient: String,
+        message_type: Option<String>,
+        text: String,
     },
     Generic {
         label: String,

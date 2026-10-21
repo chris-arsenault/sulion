@@ -167,7 +167,12 @@ one turn, and submitted prompts match against whitespace-normalized bodies.
 Codex child sessions retain their owning metadata and use
 `subagent_history_start_ordinal` to exclude copied parent history from turns,
 usage, and activity. Agent messages retain their author, recipient, and available
-text; encrypted content gets an explicit unavailable-content marker. New
+text; encrypted content gets an explicit unavailable-content marker.
+Timeline agent messages carry author, recipient, message type and Markdown body
+as separate fields. The display collapses them by default and removes complete
+harness envelopes from their bodies. API request records, API request blobs and
+inter-agent communication metadata hide with bookkeeping; source records remain
+available. Timeline version 15 rebuilds affected retained sessions into this shape.
 `SubAgentActivity` start records link spawning operations to the child session.
 Completed runtime items enrich an existing operation by ID or a unique enclosing
 code-mode execution, including yielded executions resumed by `wait`. Commands,

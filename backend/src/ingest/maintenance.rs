@@ -38,7 +38,8 @@ const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // v13: content-creating code cells fail only on their file changes and
 // failed scripts; file edits carry their change status.
 // v14: classify recorded plan commands and enrich their operation rows in place.
-const TIMELINE_PROJECTION_VERSION: i32 = 14;
+// v15: structured agent messages and API/collaboration bookkeeping classification.
+const TIMELINE_PROJECTION_VERSION: i32 = 15;
 const USAGE_PROJECTION_KEY: &str = "usage_projection";
 // v2: include Codex per-response usage, including compaction, and retain the
 // legacy prefix before a session first supplies response records.
@@ -160,21 +161,26 @@ async fn repair_timeline_projection_if_behind(
     let job = super::jobs::start(
         pool,
         "timeline_backfill",
-        if current == 13 {
-            "Plan command classification"
-        } else {
-            "Timeline projection rebuild"
-        },
+        "Timeline projection rebuild",
         "sessions",
         None,
     )
     .await
     .ok();
-    let result = if current == 13 {
-        super::projection::plan_commands::backfill(pool).await
-    } else {
-        super::projection::backfill_timeline_projection(pool, job.as_ref()).await
-    };
+    let result = async {
+        if current < 13 {
+            return super::projection::backfill_timeline_projection(pool, job.as_ref()).await;
+        }
+        let plan_sessions = if current == 13 {
+            super::projection::plan_commands::backfill(pool).await?
+        } else {
+            0
+        };
+        let conversation_sessions =
+            super::projection::backfill_conversation_events(pool, job.as_ref()).await?;
+        Ok(plan_sessions + conversation_sessions)
+    }
+    .await;
     match result {
         Ok(rebuilt) => {
             if let Some(job) = &job {

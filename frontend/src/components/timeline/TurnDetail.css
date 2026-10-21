@@ -277,6 +277,44 @@
   margin: 4px 0 0;
 }
 
+.td__agent-message {
+  border: 1px solid var(--canvas-3);
+  border-left: 2px solid var(--cat-delegate);
+  border-radius: 3px;
+  background: var(--canvas-2);
+  min-width: 0;
+}
+
+.td__agent-message summary {
+  padding: 4px 8px;
+  min-height: var(--lane-sm);
+  box-sizing: border-box;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.td__agent-message-label {
+  color: var(--cat-delegate);
+  font-weight: 500;
+}
+
+.td__agent-message-route {
+  color: var(--text-mid);
+  font-family: var(--font-mono);
+  font-size: var(--timeline-t-meta);
+}
+
+.td__agent-message-body {
+  padding: 4px 10px 8px;
+  border-top: 1px solid var(--canvas-3);
+}
+
+@media (max-width: 767px) {
+  .td__agent-message summary {
+    min-height: var(--lane-lg);
+  }
+}
+
 .td__tool {
   border: 1px solid var(--canvas-3);
   border-radius: 4px;

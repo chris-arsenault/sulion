@@ -217,6 +217,59 @@ mod tests {
     }
 
     #[test]
+    fn api_and_collaboration_metadata_hide_but_agent_messages_remain_visible() {
+        use crate::ingest::timeline::TimelineGenericDetails;
+        let mut turn = turn_with_pair();
+        turn.items = [
+            "api-request",
+            "api-request-blob",
+            "inter_agent_communication_metadata",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(offset, kind)| TimelineItem {
+            offset: offset as i64,
+            chunk: TimelineChunk::Generic {
+                label: kind.into(),
+                details: TimelineGenericDetails {
+                    event_uuid: None,
+                    parent_event_uuid: None,
+                    related_tool_use_id: None,
+                    subtype: None,
+                    speaker: Some("other".into()),
+                    content_kind: Some("none".into()),
+                    blocks: vec![],
+                },
+            },
+        })
+        .collect();
+        turn.items.push(TimelineItem {
+            offset: 3,
+            chunk: TimelineChunk::AgentMessage {
+                author: "/root/worker".into(),
+                recipient: "/root".into(),
+                message_type: None,
+                text: "reply".into(),
+            },
+        });
+        let mut hidden = turn.clone();
+        apply_projection_filters(&mut hidden, &ProjectionFilters::default());
+        assert_eq!(hidden.items.len(), 1);
+        assert!(matches!(
+            hidden.items[0].chunk,
+            TimelineChunk::AgentMessage { .. }
+        ));
+        apply_projection_filters(
+            &mut turn,
+            &ProjectionFilters {
+                show_bookkeeping: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(turn.items.len(), 4);
+    }
+
+    #[test]
     fn turn_telemetry_system_chunks_hide_with_bookkeeping() {
         let chunk = TimelineChunk::System {
             subtype: Some("stop_hook_summary".to_string()),

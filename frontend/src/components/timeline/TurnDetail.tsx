@@ -40,6 +40,7 @@ import { TurnBlocks } from "./TurnBlocks";
 import { hydrateOperation } from "../../state/TurnDetailStore";
 import { Overlay, Tooltip } from "../ui";
 import { TurnPrompt } from "./TurnPrompt";
+import { AgentMessage } from "./AgentMessage";
 import { useTurnReader } from "./useTurnReader";
 import "./TurnDetail.css";
 
@@ -495,6 +496,10 @@ export function TurnDetail({
                 <span>{chunk.text}</span>
               </div>
             );
+          }
+
+          if (chunk.kind === "agent_message") {
+            return <AgentMessage key={blockKey(idx, chunk)} message={chunk} fileTarget={fileTarget} />;
           }
 
           if (chunk.kind === "system") {

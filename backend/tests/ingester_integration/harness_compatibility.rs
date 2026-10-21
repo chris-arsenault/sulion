@@ -260,6 +260,102 @@ fn codex(fx: &CodexFixture, ordinal: u64, kind: &str, payload: Value) {
 }
 
 #[tokio::test]
+async fn conversation_upgrade_repairs_legacy_messages_once_without_touching_other_sessions() {
+    let pool = fresh_pool().await;
+    let fx = CodexFixture::new();
+    codex(
+        &fx,
+        0,
+        "response_item",
+        json!({"type":"message","role":"user",
+        "content":[{"type":"input_text","text":"review"}]}),
+    );
+    codex(
+        &fx,
+        1,
+        "inter_agent_communication_metadata",
+        json!({"message_id":"msg-1"}),
+    );
+    codex(
+        &fx,
+        2,
+        "response_item",
+        json!({"type":"agent_message", "author":"/root/worker", "recipient":"/root",
+        "content":[{"type":"input_text","text":"Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\n**Findings**"}]}),
+    );
+    Ingester::new().tick(&pool, &fx.config()).await.unwrap();
+    let unrelated = Fixture::new();
+    claude(
+        &unrelated,
+        json!({"type":"user","uuid":"prompt","timestamp":"2026-10-21T00:00:00Z",
+        "message":{"content":"unrelated prompt"}}),
+    );
+    Ingester::new()
+        .tick(&pool, &unrelated.config())
+        .await
+        .unwrap();
+    let purged = Fixture::new();
+    claude(
+        &purged,
+        json!({"type":"user","uuid":"purged-prompt","timestamp":"2026-10-21T00:00:00Z",
+        "message":{"content":"archived prompt"}}),
+    );
+    claude(
+        &purged,
+        json!({"type":"api-request","timestamp":"2026-10-21T00:00:01Z"}),
+    );
+    Ingester::new().tick(&pool, &purged.config()).await.unwrap();
+    sqlx::query("UPDATE claude_sessions SET purged_at=NOW() WHERE session_uuid=$1")
+        .bind(purged.session_uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let untouched: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT session_uuid,generation FROM timeline_session_state WHERE session_uuid <> $1 ORDER BY session_uuid")
+        .bind(fx.session_uuid).fetch_all(&pool).await.unwrap();
+    // Simulate the old stored system chunk; canonical source rows stay intact.
+    sqlx::query("UPDATE timeline_items SET body=$2 WHERE session_uuid=$1 AND body->>'kind'='agent_message'")
+        .bind(fx.session_uuid).bind(json!({"kind":"system","subtype":"agent_message","is_meta":false,"text":"legacy flattened reply"}))
+        .execute(&pool).await.unwrap();
+    sulion::ingest::mark_projection_versions_current(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE ingest_projection_versions SET version=14 WHERE name='timeline_projection'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let stats = sulion::ingest::run_required_startup_maintenance(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stats.timeline_sessions_backfilled, 1);
+    let timeline =
+        sulion::ingest::load_timeline_response(&pool, fx.session_uuid, &Default::default())
+            .await
+            .unwrap();
+    assert_eq!(timeline.turns.len(), 1);
+    assert_eq!(timeline.turns[0].items.len(), 1);
+    let message = serde_json::to_value(&timeline.turns[0].items[0]).unwrap();
+    assert_eq!(message["kind"], "agent_message");
+    assert_eq!(message["author"], "/root/worker");
+    assert_eq!(message["recipient"], "/root");
+    assert_eq!(message["message_type"], "FINAL_ANSWER");
+    assert_eq!(message["text"], "**Findings**");
+    let after: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT session_uuid,generation FROM timeline_session_state WHERE session_uuid <> $1 ORDER BY session_uuid")
+        .bind(fx.session_uuid).fetch_all(&pool).await.unwrap();
+    assert_eq!(after, untouched);
+    assert_eq!(
+        sulion::ingest::run_required_startup_maintenance(&pool)
+            .await
+            .unwrap()
+            .timeline_sessions_backfilled,
+        0
+    );
+}
+
+#[tokio::test]
 async fn codex_inherited_history_never_overwrites_child_lineage_after_restart_or_repair() {
     let pool = fresh_pool().await;
     let fx = CodexFixture::new();
@@ -330,15 +426,29 @@ async fn codex_inherited_history_never_overwrites_child_lineage_after_restart_or
             show_sidechain: true,
             ..Default::default()
         };
-        let markdown: String =
-            sulion::ingest::load_timeline_response(&pool, fx.session_uuid, &shown)
-                .await
-                .unwrap()
-                .turns
-                .into_iter()
-                .map(|turn| turn.markdown)
-                .collect::<Vec<_>>()
-                .join("\n");
+        let timeline = sulion::ingest::load_timeline_response(&pool, fx.session_uuid, &shown)
+            .await
+            .unwrap();
+        assert!(timeline
+            .turns
+            .iter()
+            .flat_map(|turn| &turn.items)
+            .any(|item| {
+                let message = serde_json::to_value(item).unwrap();
+                message["kind"] == "agent_message"
+                    && message["author"] == "/root"
+                    && message["recipient"] == "/root/worker"
+                    && message["text"].as_str().is_some_and(|text| {
+                        text.contains("inspect the parser")
+                            && text.contains("Encrypted agent message")
+                    })
+            }));
+        let markdown: String = timeline
+            .turns
+            .into_iter()
+            .map(|turn| turn.markdown)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(!markdown.contains("inherited prompt"));
         assert!(markdown.contains("inspect the parser"));
         assert!(markdown.contains("Encrypted agent message"));

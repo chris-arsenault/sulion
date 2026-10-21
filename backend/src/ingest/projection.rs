@@ -30,9 +30,9 @@ pub use view::{load_session_turns, load_timeline_turn_view, TurnView};
 pub use file_trace::{load_repo_file_trace, RepoFileTraceTouch};
 use filters::apply_projection_filters;
 pub use write::{
-    backfill_timeline_projection, project_batch, project_until_caught_up,
-    rebuild_session_projection, request_rebuild, session_projection_current, store_turn_digests,
-    BATCH_EVENTS, REDUCER_VERSION,
+    backfill_conversation_events, backfill_timeline_projection, project_batch,
+    project_until_caught_up, rebuild_session_projection, request_rebuild,
+    session_projection_current, store_turn_digests, BATCH_EVENTS, REDUCER_VERSION,
 };
 
 #[derive(FromRow)]

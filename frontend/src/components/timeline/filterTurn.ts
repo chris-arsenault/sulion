@@ -2,9 +2,10 @@ import type { TimelineItem, TimelineTurn } from "../../api/types";
 import type { TimelineFilters } from "./filters";
 
 const bookkeeping = new Set([
-  "agent-name", "ai-title", "attachment", "bridge-session", "custom-title",
+  "agent-name", "api-request", "api-request-blob", "ai-title", "attachment", "bridge-session", "custom-title",
   "file-history-delta", "file-history-snapshot", "frame-link", "last-prompt",
   "mode", "permission-mode", "queue-operation", "world_state", "token_usage_record", "atis-latch",
+  "inter_agent_communication_metadata",
 ]);
 const telemetry = new Set(["stop_hook_summary", "turn_duration", "runtime_evidence"]);
 const commandPrefix = /^\s*<(command-name|command-message|local-command-stdout|local-command-stderr|local-command-caveat)>/;

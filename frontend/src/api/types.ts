@@ -686,6 +686,7 @@ export type TimelineChunk =
   | { kind: "assistant"; items: TimelineAssistantItem[]; thinking: string[] }
   | { kind: "summary"; subtype: string | null; text: string }
   | { kind: "system"; subtype: string | null; text: string; is_meta: boolean }
+  | { kind: "agent_message"; author: string; recipient: string; message_type: string | null; text: string }
   | {
       kind: "generic";
       label: string;

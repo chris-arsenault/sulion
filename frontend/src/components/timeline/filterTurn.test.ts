@@ -35,4 +35,18 @@ describe("local turn visibility", () => {
     expect(filterTurn(turn, DEFAULT_FILTERS).items.map((item) => item.offset)).toEqual([1]);
     expect(filterTurn(turn, { ...DEFAULT_FILTERS, showBookkeeping: true }).items).toEqual(turn.items);
   });
+
+  it("hides API and collaboration metadata while keeping agent communication", () => {
+    const details = { event_uuid: null, parent_event_uuid: null, related_tool_use_id: null,
+      subtype: null, speaker: "other", content_kind: "none", blocks: [] };
+    const turn = makeTurn({ items: [
+      { offset: 1, kind: "generic", label: "api-request", details },
+      { offset: 2, kind: "generic", label: "api-request-blob", details },
+      { offset: 3, kind: "generic", label: "inter_agent_communication_metadata", details },
+      { offset: 4, kind: "agent_message", author: "/root/worker", recipient: "/root", message_type: "MESSAGE", text: "hello" },
+      { offset: 5, kind: "generic", label: "unknown-future-event", details },
+    ] });
+    expect(filterTurn(turn, DEFAULT_FILTERS).items.map((item) => item.offset)).toEqual([4, 5]);
+    expect(filterTurn(turn, { ...DEFAULT_FILTERS, showBookkeeping: true }).items).toEqual(turn.items);
+  });
 });

@@ -647,6 +647,9 @@ fn visible_item(event: &StoredEvent) -> Option<TimelineChunk> {
         return (!items.is_empty() || !thinking.is_empty())
             .then_some(TimelineChunk::Assistant { items, thinking });
     }
+    if let Some(message) = super::agent_messages::project(event) {
+        return Some(message);
+    }
     let text = text_blocks_in(event).join(" ");
     Some(if is_summary_event(event) {
         TimelineChunk::Summary {

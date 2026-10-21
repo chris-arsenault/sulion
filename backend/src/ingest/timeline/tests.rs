@@ -293,12 +293,61 @@ fn notifications_commands_and_lifecycle_records_do_not_open_turns() {
 #[test]
 fn bookkeeping_before_the_first_turn_is_not_projected() {
     let turns = project(&[
-        event(1, "attachment", vec![]),
-        event(2, "user", vec![text("prompt")]),
-        event(3, "assistant", vec![text("reply")]),
+        event(0, "api-request", vec![]),
+        event(1, "api-request-blob", vec![]),
+        event(2, "inter_agent_communication_metadata", vec![]),
+        event(3, "attachment", vec![]),
+        event(4, "user", vec![text("prompt")]),
+        event(5, "assistant", vec![text("reply")]),
     ]);
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].event_count, 2);
+}
+
+#[test]
+fn codex_agent_messages_keep_routes_and_markdown_without_the_harness_envelope() {
+    use crate::ingest::canonical::{CodexParser, EventParser};
+
+    let body =
+        "    indented code\n\n**Findings**\n\n| Area | Result |\n| --- | --- |\n| Parser | OK |";
+    let parsed = CodexParser.parse(&json!({"type": "response_item", "payload": {
+        "type": "agent_message", "author": "/root/reviewer", "recipient": "/root",
+        "content": [{"type": "input_text", "text": format!(
+            "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/reviewer\nPayload:\n{body}"
+        )}]
+    }}));
+    let mut message = event(2, "response_item", parsed.blocks);
+    message.agent = "codex".into();
+    message.speaker = Some("system".into());
+    message.subtype = parsed.subtype;
+    let turns = project(&[event(1, "user", vec![text("review")]), message]);
+    assert!(matches!(&turns[0].items[0].chunk,
+        TimelineChunk::AgentMessage { author, recipient, message_type, text }
+        if author == "/root/reviewer" && recipient == "/root"
+            && message_type.as_deref() == Some("FINAL_ANSWER") && text == body));
+    assert!(turns[0].markdown.contains(body));
+    assert!(turns[0].markdown.contains("/root/reviewer → /root"));
+    assert!(!turns[0].markdown.contains("Task name:"));
+}
+
+#[test]
+fn codex_agent_messages_preserve_plaintext_and_encrypted_content_markers() {
+    for body in [
+        "Message Type: is part of this message, not an envelope\n\n**Keep this**",
+        "[Encrypted agent message; plaintext unavailable]",
+    ] {
+        let mut message = event(
+            2,
+            "response_item",
+            vec![text("Agent message: /root/worker → /root"), text(body)],
+        );
+        message.agent = "codex".into();
+        message.speaker = Some("system".into());
+        message.subtype = Some("agent_message".into());
+        let turns = project(&[event(1, "user", vec![text("start")]), message]);
+        assert!(matches!(&turns[0].items[0].chunk,
+            TimelineChunk::AgentMessage { message_type: None, text, .. } if text == body));
+    }
 }
 
 #[test]

@@ -50,6 +50,31 @@ describe("TurnDetail", () => {
     );
   }
 
+  it("shows agent replies as collapsed routed messages with Markdown on demand", async () => {
+    render(<TurnDetail turn={makeTurn({ items: [{ offset: 1, kind: "agent_message",
+      author: "/root/reviewer", recipient: "/root", message_type: "FINAL_ANSWER",
+      text: "**Findings**\n\n| Area | Result |\n| --- | --- |\n| Parser | OK |",
+    }] })} showThinking />);
+    const summary = screen.getByText("Agent reply").closest("summary")!;
+    expect(summary.textContent).toContain("/root/reviewer → /root");
+    expect(screen.queryByText("Findings")).toBeNull();
+    const user = userEvent.setup();
+    await user.click(summary);
+    expect((await screen.findByText("Findings")).tagName).toBe("STRONG");
+    expect(screen.getByRole("table")).toBeDefined();
+    await user.click(summary);
+    expect(screen.queryByText("Findings")).toBeNull();
+  });
+
+  it("labels encrypted-only agent messages without inventing their content", async () => {
+    render(<TurnDetail turn={makeTurn({ items: [{ offset: 1, kind: "agent_message",
+      author: "/root/worker", recipient: "/root", message_type: null,
+      text: "[Encrypted agent message; plaintext unavailable]",
+    }] })} showThinking />);
+    await userEvent.setup().click(screen.getByText("Agent message").closest("summary")!);
+    expect(await screen.findByText("[Encrypted agent message; plaintext unavailable]")).toBeDefined();
+  });
+
   it("limits long prompts to 240 characters and expands the full Markdown on demand", async () => {
     const prompt = `${"x".repeat(239)}😀 **last sentence**`;
     const { rerender } = render(<TurnDetail turn={makeTurn({ user_prompt_text: prompt })} showThinking />);
