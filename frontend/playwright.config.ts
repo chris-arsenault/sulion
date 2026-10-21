@@ -29,9 +29,7 @@ export default defineConfig({
     url: FRONTEND_URL,
     reuseExistingServer: !process.env.CI,
     gracefulShutdown: { signal: "SIGTERM", timeout: 30_000 },
-    // CI starts with cold Rust and Docker caches for the complete workbench
-    // image. Keep that setup budget separate from the 45-second journeys.
-    timeout: process.env.CI ? 1_200_000 : 300_000,
+    timeout: 300_000,
   },
   projects: [
     {

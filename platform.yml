@@ -4,9 +4,6 @@ stack:
   - rust
   - typescript
   - terraform
-browser_tests:
-  engines: [chromium]
-  runtime: host
 truenas: true
 # TrueNAS topology selector:
 #   compose.yaml                            = split control plane
