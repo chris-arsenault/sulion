@@ -44,6 +44,15 @@ fn preserves_title_guidance_and_branch_anchors() {
     assert_eq!(metadata["from"], json!(["2", "3"]));
     assert_eq!(metadata["phase_count"], 1);
     assert_eq!(metadata["outcome"], "Visible plans");
+    let (input, _, _) = project_command(
+        "sulion plan update --boundary 'correction|Smooth curves alone are insufficient'",
+    );
+    assert_eq!(
+        input["plan_commands"][0]["boundaries"],
+        json!([{
+            "source": "user_correction", "text": "Smooth curves alone are insufficient"
+        }])
+    );
 }
 
 #[test]

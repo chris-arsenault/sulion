@@ -4,6 +4,7 @@ export const EMPTY_GUIDANCE: PlanGuidance = {
   outcome: "",
   principles: [],
   assumptions: [],
+  boundaries: [],
 };
 
 export function cleanGuidance(value: PlanGuidance): PlanGuidance {
@@ -11,5 +12,6 @@ export function cleanGuidance(value: PlanGuidance): PlanGuidance {
     outcome: value.outcome.trim(),
     principles: value.principles.map((item) => item.trim()).filter(Boolean),
     assumptions: value.assumptions.map((item) => item.trim()).filter(Boolean),
+    boundaries: (value.boundaries ?? []).map((item) => ({ ...item, text: item.text.trim() })),
   };
 }

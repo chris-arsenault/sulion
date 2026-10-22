@@ -46,6 +46,7 @@ function plan(status: PlanView["status"] = "active"): PlanView {
     outcome: "",
     principles: [],
     assumptions: [],
+    boundaries: [],
     status,
     revision: 2,
     parent_plan_id: null,
@@ -134,6 +135,9 @@ describe("PlanModal", () => {
     await user.type(screen.getByLabelText("Outcome"), "Recover product intent");
     await user.type(screen.getByLabelText("Principles"), "Read evidence{enter}Preserve requirements");
     await user.type(screen.getByLabelText("Assumptions"), "Agents read plans");
+    await user.click(screen.getByRole("button", { name: "Add boundary" }));
+    await user.selectOptions(screen.getByLabelText("Boundary 1 source"), "user_requirement");
+    await user.type(screen.getByLabelText("Boundary 1", { exact: true }), " Browser only ");
     await user.selectOptions(
       screen.getByLabelText("Attach to terminal"),
       "pty-1",
@@ -149,6 +153,7 @@ describe("PlanModal", () => {
         outcome: "Recover product intent",
         principles: ["Read evidence", "Preserve requirements"],
         assumptions: ["Agents read plans"],
+        boundaries: [{ source: "user_requirement", text: "Browser only" }],
         phases: [
           { title: "Backend", description: "Schema and service" },
           { title: "Frontend", description: "Plan workspace" },
@@ -161,8 +166,8 @@ describe("PlanModal", () => {
   });
 
   it("edits and clears guidance, keeps a rejected draft, and displays history", async () => {
-    let current = { ...plan(), outcome: "Original benefit", principles: ["Keep requirements"], assumptions: ["Unverified"] };
-    const before = { outcome: current.outcome, principles: current.principles, assumptions: current.assumptions };
+    let current: PlanView = { ...plan(), outcome: "Original benefit", principles: ["Keep requirements"], assumptions: ["Unverified"], boundaries: [{ source: "agent_proposal", text: "Initial approach" }] };
+    const before = { outcome: current.outcome, principles: current.principles, assumptions: current.assumptions, boundaries: current.boundaries };
     const requests: unknown[] = [];
     let reject = true;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo, init?: RequestInit) => {
@@ -186,21 +191,30 @@ describe("PlanModal", () => {
     await user.clear(screen.getByLabelText("Outcome"));
     await user.type(screen.getByLabelText("Outcome"), "Verified benefit");
     await user.clear(screen.getByLabelText("Assumptions"));
+    await user.selectOptions(screen.getByLabelText("Boundary 1 source"), "user_correction");
+    await user.clear(screen.getByLabelText("Boundary 1", { exact: true }));
+    await user.type(screen.getByLabelText("Boundary 1", { exact: true }), "Shared interpolation is insufficient");
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(requests).toHaveLength(1));
     expect((screen.getByLabelText("Outcome") as HTMLTextAreaElement).value).toBe("Verified benefit");
+    expect((screen.getByLabelText("Boundary 1", { exact: true }) as HTMLTextAreaElement).value).toBe("Shared interpolation is insufficient");
     reject = false;
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByLabelText("Outcome")).toBeNull());
-    expect(requests[1]).toMatchObject({ outcome: "Verified benefit", principles: ["Keep requirements"], assumptions: [] });
+    expect(requests[1]).toMatchObject({ outcome: "Verified benefit", principles: ["Keep requirements"], assumptions: [], boundaries: [{ source: "user_correction", text: "Shared interpolation is insufficient" }] });
     await user.click(screen.getByText("History · 1"));
     await user.click(screen.getByText("Guidance changes"));
     expect(screen.getByText("Original benefit")).toBeDefined();
     expect(screen.getByText("Unverified")).toBeDefined();
+    expect(screen.getByText("Initial approach")).toBeDefined();
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(screen.getByRole("button", { name: "Remove boundary 1" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(requests[2]).toMatchObject({ boundaries: [] }));
   });
 
   it("refreshes inherited guidance when the ancestor revision changes", async () => {
-    let ancestor = { ...plan(), outcome: "Initial intent" };
+    let ancestor: PlanView = { ...plan(), outcome: "Initial intent", boundaries: [{ source: "user_requirement", text: "No backend" }] };
     const branch = { ...plan(), id: "plan-2", parent_plan_id: "plan-1", depth: 1, outcome: "Branch intent" };
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo) => {
       const url = typeof input === "string" ? input : input.url;
@@ -216,9 +230,12 @@ describe("PlanModal", () => {
     render(<PlanModal open repo="alpha" planId="plan-2" onClose={noop} />);
     const inherited = await screen.findByRole("region", { name: `Guidance from ${ROOT_TITLE}` });
     expect(within(inherited).getByText("Initial intent")).toBeDefined();
-    ancestor = { ...ancestor, outcome: "Revised intent", revision: 3 };
+    expect(within(inherited).getByText("No backend")).toBeDefined();
+    ancestor = { ...ancestor, outcome: "Revised intent", revision: 3, boundaries: [{ source: "user_correction", text: "No recovery machinery" }] };
     act(() => useSessionStore.setState({ plans: [{ ...summary, revision: 3 }] }));
     expect(await within(inherited).findByText("Revised intent")).toBeDefined();
+    expect(await within(inherited).findByText("No recovery machinery")).toBeDefined();
+    expect(within(inherited).queryByText("No backend")).toBeNull();
     expect(screen.getByText("Branch intent")).toBeDefined();
   });
 
@@ -427,6 +444,7 @@ describe("PlanModal", () => {
             outcome: "Resolve the blocker",
             principles: ["Preserve parent requirements"],
             assumptions: [],
+            boundaries: [],
             parent_phase_refs: ["1", "2", "3"],
             phases: [
               { title: "Diagnose", description: "Find the cause" },

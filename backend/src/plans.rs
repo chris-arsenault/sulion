@@ -12,9 +12,9 @@ use branches::{ancestors, anchor_phase_ids, branch_views, close_branch_into_pare
 pub use branches::{branch, tree};
 use model::PlanRow;
 pub use model::{
-    BranchPlanInput, CreatePlanInput, NewPhase, PlanActor, PlanAncestorView, PlanAttachmentView,
-    PlanBranchView, PlanEventView, PlanGuidance, PlanPhaseView, PlanSummaryView, PlanTreeNodeView,
-    PlanView, UpdatePhaseInput, UpdatePlanInput,
+    BoundarySource, BranchPlanInput, CreatePlanInput, NewPhase, PlanActor, PlanAncestorView,
+    PlanAttachmentView, PlanBoundary, PlanBranchView, PlanEventView, PlanGuidance, PlanPhaseView,
+    PlanSummaryView, PlanTreeNodeView, PlanView, UpdatePhaseInput, UpdatePlanInput,
 };
 pub use phases::{add_phase, resolve_phase_id, update_phase};
 use phases::{initial_phase_status, skip_remaining_phases, validate_phase_size};
@@ -25,7 +25,7 @@ const MAX_DESCRIPTION_CHARS: usize = 1_000;
 const MAX_NOTE_CHARS: usize = 1_000;
 
 const PLAN_COLUMNS: &str =
-    "id, repo_name, title, summary, outcome, principles, assumptions, status, revision, \
+    "id, repo_name, title, summary, outcome, principles, assumptions, boundaries, status, revision, \
      parent_plan_id, root_plan_id, depth, \
      created_by_pty_id, created_by_agent_session_uuid, \
      created_at, updated_at, closed_at";
@@ -226,7 +226,7 @@ pub async fn update(
         "UPDATE plans \
             SET title = $2, summary = $3, status = $4, revision = revision + 1, \
                 closed_at = CASE WHEN $4 IN ('completed', 'canceled') THEN COALESCE(closed_at, NOW()) ELSE NULL END, \
-                updated_at = NOW(), outcome = $5, principles = $6, assumptions = $7 \
+                updated_at = NOW(), outcome = $5, principles = $6, assumptions = $7, boundaries = $8 \
           WHERE id = $1",
     )
     .bind(plan_id)
@@ -236,6 +236,7 @@ pub async fn update(
     .bind(&guidance.outcome)
     .bind(&guidance.principles)
     .bind(&guidance.assumptions)
+    .bind(sqlx::types::Json(&guidance.boundaries))
     .execute(&mut *tx)
     .await?;
 
@@ -469,8 +470,8 @@ async fn insert_plan(
         "INSERT INTO plans \
              (id, repo_name, title, summary, status, revision, parent_plan_id, \
               root_plan_id, depth, created_by_pty_id, created_by_agent_session_uuid, \
-              created_at, updated_at, outcome, principles, assumptions) \
-         VALUES ($1, $2, $3, $4, 'active', 1, $5, $6, $7, $8, $9, NOW(), NOW(), $10, $11, $12)",
+              created_at, updated_at, outcome, principles, assumptions, boundaries) \
+         VALUES ($1, $2, $3, $4, 'active', 1, $5, $6, $7, $8, $9, NOW(), NOW(), $10, $11, $12, $13)",
     )
     .bind(plan_id)
     .bind(repo_name)
@@ -484,6 +485,7 @@ async fn insert_plan(
     .bind(&guidance.outcome)
     .bind(&guidance.principles)
     .bind(&guidance.assumptions)
+    .bind(sqlx::types::Json(&guidance.boundaries))
     .execute(&mut **tx)
     .await?;
     insert_event(

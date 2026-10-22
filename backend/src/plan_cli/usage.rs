@@ -31,22 +31,36 @@ Commands:
 
 Guidance (start, branch, update):
   --outcome <text>       user-visible improvement and evidence of success
+  --boundary <source|text>... excluded scope, rejected approaches, reassessment triggers
+                        source: requirement, correction, or proposal
+                        example: --boundary \"correction|Smooth curves alone are insufficient\"
   --principle <text>...  concrete decision rules, constraints, and reasons
   --assumption <text>... beliefs that evidence might invalidate
   update replaces each supplied list; omitted fields stay unchanged
   --clear-principles / --clear-assumptions clear lists; --outcome \"\" clears outcome
+  --clear-boundaries clears this plan's boundaries, not inherited boundaries
   keep it short: outcome <= 1000 characters; <= 10 entries per list, <= 500 each
   current/show include live ancestor guidance, root first, before phases
+  every plan command repeats outcome and boundaries, with source plan and revision
+  list/help use the attached plan; explicit targets use that plan's context
+  close/detach/return retain the command target's context after attachment changes
+  --json keeps stdout data unchanged; the recurring reminder goes to stderr
+  unavailable context is reported; it never hides a command failure or undoes success
   history retains guidance before/after, including cleared values
 
 Execution:
   write guidance from the request; label uncertain interpretations as assumptions
   at phase start, on resume, and when evidence contradicts the approach, read
     current guidance and relevant source material; check the next step against
-    the outcome and principles
+    the outcome, boundaries, and principles
   revise steps when justified and explain consequential deviations; ask before
     changing user requirements or agreed architectural boundaries
   branch guidance adds context; it does not override ancestor requirements
+  record user corrections as boundaries and revise affected phases before continuing
+  preserve requirement/correction/proposal sources; plans do not promote agent choices
+    into user requirements or authorize weakening user boundaries
+  limits bound the approach, not the requested coverage; tests cannot substitute
+    for the outcome. No extra approval is needed for work inside the agreed scope
 
 Statuses:
   plan   active | paused (close sets completed or canceled)

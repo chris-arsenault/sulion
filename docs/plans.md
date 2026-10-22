@@ -37,7 +37,7 @@ A plan has:
 
 - a repo, title, short summary, status, revision, and audit timestamps
 - guidance: outcome text, an ordered list of principles, and an ordered list
-  of assumptions; existing plans default to empty guidance
+  of assumptions, plus sourced boundaries; existing plans default to empty guidance
 - ordered phases with a title, short description, status, and optional status
   note
 - zero or more attached live PTYs; each PTY can have only one current plan
@@ -56,6 +56,10 @@ Guidance preserves the reasons for the work alongside its phases:
 
 - **Outcome:** what should improve for the user and what would demonstrate
   success.
+- **Boundaries:** excluded scope, rejected approaches or substitutes, and
+  conditions for reassessing the approach. Each entry identifies its source as
+  a user requirement, user correction, or agent proposal. Include the relevant
+  instruction or reference in the text when needed to preserve its meaning.
 - **Principles:** concrete rules for choosing approaches, including constraints
   and their reasons. Keep user requirements distinct from implementation choices.
 - **Assumptions:** beliefs the proposed approach depends on that new evidence
@@ -68,10 +72,18 @@ architectural boundaries.
 
 At phase start, on resume, and when evidence contradicts the approach, read
 `sulion plan current` and relevant source material. Check whether the next step
-still advances the outcome under the principles. Revise steps when justified,
-explain consequential deviations, and ask before changing user requirements or
+still advances the outcome within the boundaries and under the principles.
+Revise steps when justified, explain consequential deviations, and ask before changing user requirements or
 agreed architectural boundaries. Consult referenced source material rather than
 treating guidance as a substitute for it.
+
+Record user corrections as boundaries and revise the affected phases before
+continuing. An agent proposal does not become a user requirement because it
+appears in a plan. Do not weaken a user boundary to fit completed work. Boundaries
+limit approaches without reducing requested coverage: "do not chase minor
+optimizations" does not mean "stop after two improvements." Tests of a rejected
+substitute cannot establish the requested outcome. Ordinary work inside the
+agreed scope needs no additional approval.
 
 `current` and `show` display guidance before phases. Branch reads include the
 live guidance of every ancestor, root first, labeled with the source plan and
@@ -80,9 +92,31 @@ ancestor requirements. Guidance is read from its owner rather than copied into
 children. The plan modal shows the same guidance and refreshes an open branch
 when an open ancestor's revision changes.
 
+Every plan command surfaces the outcome and boundaries, root first, with the
+source plan, revision, and boundary source. Routine commands omit principles
+and assumptions from the recurring reminder; `current` and `show` include the
+full guidance. `list` and `help` use the attached plan. An explicit target uses
+that plan, even when another plan is attached. `close`, `detach`, and `return`
+retain the command target's context in their result; subsequent commands use
+the new attachment. Clearing local boundaries does not clear inherited ones.
+
+`--json` preserves the command's existing stdout shape and prints the recurring
+reminder on stderr. Failed commands also show available context. Usage errors
+show the attached plan; service refusals use the requested target. If context
+is unavailable (including no attachment or an unreachable service), the CLI
+says so without hiding the original error or reporting a successful operation
+as failed. Help remains usable outside a managed PTY.
+
+These reminders restore context at tool boundaries; they are not runtime
+enforcement or proof that an agent has followed the instructions. Reading
+`current` on resume remains necessary. Existing plans have no boundaries until
+someone records them; the empty state does not waive existing user instructions.
+
 ```sh
 sulion plan start "Plan guidance" \
   --outcome "Agents can recover product intent when resuming work." \
+  --boundary "requirement|Keep outcome and boundaries visible on every plan command." \
+  --boundary "proposal|Extend existing guidance without a separate enforcement system." \
   --principle "Preserve user requirements when adapting implementation steps." \
   --assumption "Agents consult the current plan at phase boundaries." \
   --phase "Implement" --phase "Verify"
@@ -93,12 +127,19 @@ sulion plan update --clear-assumptions --note "Assumption checked against execut
 sulion plan history
 ```
 
-`start`, `branch`, and `update` accept `--outcome`, repeatable `--principle`, and
-repeatable `--assumption`. An update replaces each supplied list in order;
-omitted fields stay unchanged. `--clear-principles` and `--clear-assumptions`
-clear lists and cannot be combined with entries for the same list. Use
+`start`, `branch`, and `update` accept `--outcome`, repeatable `--principle`,
+`--assumption`, and `--boundary "source|text"`. Boundary sources are `requirement`,
+`correction`, and `proposal`; the text may contain additional `|` characters.
+An update replaces each supplied list in order; omitted fields stay unchanged.
+Retain existing applicable boundaries when recording a correction.
+`--clear-principles`, `--clear-assumptions`, and `--clear-boundaries` clear lists
+and cannot be combined with entries for the same list. Use
 `--outcome ""` to clear the outcome. The API uses `outcome`, `principles`, and
-`assumptions` fields with empty strings/arrays for clearing.
+`assumptions` fields with empty strings/arrays for clearing. `boundaries` is an
+ordered array of `{ "source": "user_requirement" | "user_correction" |
+"agent_proposal", "text": "..." }` entries, with `[]` for clearing. Like the
+other lists, it allows up to 10 entries with 500 characters of text each. Source
+labels record attribution; the service does not infer or certify authorization.
 
 Guidance changes increment the plan revision and append a `guidance_changed`
 event in the same transaction, preserving actor, optional explanation, and

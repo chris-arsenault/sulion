@@ -16,6 +16,8 @@ use sulion::plans::{BranchPlanInput, NewPhase, UpdatePhaseInput, UpdatePlanInput
 use sulion::pty::SpawnParams;
 
 mod common;
+#[path = "correlate_integration/plan_boundaries.rs"]
+mod plan_boundaries;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use uuid::Uuid;
@@ -739,6 +741,7 @@ async fn control_socket_branches_to_arbitrary_depth_and_returns_to_the_parent() 
                 outcome: "Preserve product intent".into(),
                 principles: vec!["Consult source evidence".into()],
                 assumptions: vec!["The planned mechanism fits".into()],
+                boundaries: vec![],
             },
             phases: vec![
                 phase("One"),

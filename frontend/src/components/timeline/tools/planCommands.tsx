@@ -14,6 +14,9 @@ export function PlanCommandMetadata({ input }: { input: unknown }) {
 function PlanCommand({ command }: { command: Metadata }) {
   const from = Array.isArray(command.from) ? command.from.filter((v) => typeof v === "string").join(", ") : undefined;
   const phases = Array.isArray(command.phases) ? command.phases.filter(record) : [];
+  const boundaries = Array.isArray(command.boundaries)
+    ? command.boundaries.filter(record).map((item) => `[${text(item.source)?.replaceAll("_", " ") ?? "unspecified source"}] ${text(item.text) ?? ""}`)
+    : [];
   return (
     <section className="tr-plan">
       <div className="tr-plan__heading">
@@ -31,6 +34,7 @@ function PlanCommand({ command }: { command: Metadata }) {
         <Field label="Note" value={text(command.note)} />
         <Field label="Outcome" value={text(command.outcome)} />
       </dl>
+      <Items label="Boundaries" value={boundaries} />
       <Items label="Principles" value={command.principles} />
       <Items label="Assumptions" value={command.assumptions} />
       {phases.length > 0 && (

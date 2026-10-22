@@ -80,8 +80,8 @@ correct result in place, and continue natively.
   Keep phases current and close the plan when work lands. Single-step changes,
   pure questions, and read-only investigations without follow-on edits are
   exempt.
-- Give plans concise guidance: outcome, principles with reasons, and assumptions
-  that evidence could invalidate. At phase start, on resume, and when evidence
+- Give plans concise guidance: outcome, sourced boundaries, principles with
+  reasons, and assumptions that evidence could invalidate. At phase start, on resume, and when evidence
   contradicts the approach, read `sulion plan current` and relevant source
   material before adapting steps. Distinguish user requirements and explicitly
   agreed boundaries from agent-derived mechanisms and acceptance checks. Revise
@@ -90,6 +90,12 @@ correct result in place, and continue natively.
   authorizes work toward its outcome; it does not turn every agent assumption
   into a product requirement. Ask before changing user requirements or explicitly
   agreed architectural boundaries.
+- Check each plan reminder against the next action. Boundaries preserve excluded
+  scope, rejected substitutes, and reasons to reassess, including live ancestor
+  boundaries. Record user corrections there and revise affected phases before
+  continuing. Keep user requirements and corrections distinct from agent proposals;
+  never weaken a user boundary to fit work already built. Bound the approach without
+  reducing requested coverage. Passing tests of a substitute do not prove the outcome.
 - When a phase turns out to be blocked by work that is itself a multi-step job
   — a prerequisite fix, an unrelated regression a gate surfaced, a repair that
   has to land first — do not inline it into the phase and do not abandon the
@@ -210,11 +216,15 @@ different credential is technically reachable.
   (`--from 4 --from 5 --from 6`). `sulion plan return` closes the sub-plan and
   puts the terminal back on the parent, clearing any phase the branch was
   blocked on. `sulion plan tree` shows where you are in a nested plan.
-- Set guidance with `--outcome`, repeatable `--principle`, and repeatable
-  `--assumption` on `sulion plan start`, `branch`, or `update`. `current` and
+- Set guidance with `--outcome`, repeatable `--boundary "source|text"`, `--principle`,
+  and `--assumption` on `sulion plan start`, `branch`, or `update`. Boundary sources
+  are `requirement`, `correction`, or `proposal`; cite the relevant instruction in
+  the text when needed. Every plan command surfaces outcome and boundaries;
+  `--json` keeps its stdout data and prints the reminder on stderr. `current` and
   `show` include live ancestor guidance before phases; branch guidance adds
   context without overriding ancestor requirements. `history` preserves
-  before/after guidance edits.
+  before/after guidance edits. Updates replace supplied lists; retain existing
+  applicable boundaries when adding a correction.
 - In a managed Sulion PTY (`SULION_PTY_ID` is set), run
   `sulion name "<short task description>"` once the task is clear, before
   substantial investigation or implementation. Update it when the task changes.

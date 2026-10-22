@@ -343,10 +343,16 @@ export interface PlanAttachmentView {
   attached_at: string;
 }
 
+export interface PlanBoundary {
+  source: "user_requirement" | "user_correction" | "agent_proposal";
+  text: string;
+}
+
 export interface PlanGuidance {
   outcome: string;
   principles: string[];
   assumptions: string[];
+  boundaries: PlanBoundary[];
 }
 
 export interface PlanAncestorView extends PlanGuidance {

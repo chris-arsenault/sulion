@@ -1,7 +1,7 @@
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-use super::{limited_text, required_text, PlanActor, PlanGuidance, UpdatePlanInput};
+use super::{limited_text, required_text, PlanActor, PlanBoundary, PlanGuidance, UpdatePlanInput};
 
 impl PlanGuidance {
     pub(super) fn with_update(&self, input: &UpdatePlanInput) -> anyhow::Result<Self> {
@@ -17,15 +17,33 @@ impl PlanGuidance {
                 .as_ref()
                 .unwrap_or(&self.assumptions)
                 .clone(),
+            boundaries: input
+                .boundaries
+                .as_ref()
+                .unwrap_or(&self.boundaries)
+                .clone(),
         }
         .validated()
     }
 
     pub(super) fn validated(&self) -> anyhow::Result<Self> {
+        if self.boundaries.len() > 10 {
+            anyhow::bail!("guidance allows at most 10 boundary entries");
+        }
         Ok(Self {
             outcome: limited_text(&self.outcome, "outcome", 1_000)?,
             principles: validate_items(&self.principles, "principle")?,
             assumptions: validate_items(&self.assumptions, "assumption")?,
+            boundaries: self
+                .boundaries
+                .iter()
+                .map(|boundary| {
+                    Ok(PlanBoundary {
+                        source: boundary.source,
+                        text: required_text(&boundary.text, "boundary", 500)?,
+                    })
+                })
+                .collect::<anyhow::Result<_>>()?,
         })
     }
 }

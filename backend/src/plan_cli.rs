@@ -11,6 +11,7 @@ use crate::plans::{BranchPlanInput, NewPhase, PlanGuidance, UpdatePhaseInput, Up
 
 mod archive;
 mod guidance;
+mod reminder;
 mod usage;
 
 pub use archive::run_archive;
@@ -21,18 +22,29 @@ pub async fn run_plan(args: &[OsString]) -> anyhow::Result<i32> {
     let json = take_flag(&mut args, "--json");
     let Some(command) = args.first().cloned() else {
         print_plan_usage();
+        reminder::print_attached(json).await;
         return Ok(64);
     };
     if matches!(command.as_str(), "help" | "-h" | "--help") {
         print_plan_usage();
+        reminder::print_attached(json).await;
         return Ok(0);
     }
     args.remove(0);
     let request = match parse_plan_request(&command, &mut args) {
         Ok(request) => request,
-        Err(err) => return Ok(usage_failure(ResponseKind::Plan, &err)),
+        Err(err) => {
+            let code = usage_failure(ResponseKind::Plan, &err);
+            reminder::print_attached(true).await;
+            return Ok(code);
+        }
     };
-    run_control(request, json, ResponseKind::Plan).await
+    reminder::run(
+        request,
+        json,
+        matches!(command.as_str(), "current" | "show"),
+    )
+    .await
 }
 
 pub async fn run_activity(args: &[OsString]) -> anyhow::Result<i32> {
@@ -224,6 +236,7 @@ pub(crate) fn parse_plan_request(
             let outcome = take_option(args, "--outcome")?;
             let principles = guidance::parse_items(args, "--principle", "--clear-principles")?;
             let assumptions = guidance::parse_items(args, "--assumption", "--clear-assumptions")?;
+            let boundaries = guidance::parse_boundaries(args)?;
             reject_unknown_options(args)?;
             Ok(ControlRequest::PlanUpdate {
                 plan_id,
@@ -234,6 +247,7 @@ pub(crate) fn parse_plan_request(
                     outcome,
                     principles,
                     assumptions,
+                    boundaries,
                     ..Default::default()
                 },
             })
@@ -452,7 +466,7 @@ async fn run_control(
         return Ok(0);
     }
     match kind {
-        ResponseKind::Plan => print_plan_data(&data),
+        ResponseKind::Plan => print_plan_data(&data, true),
         ResponseKind::Activity => print_activity_data(&data),
         ResponseKind::Name => print_name_data(&data),
         ResponseKind::Archive => archive::print_archive_data(&data),
@@ -467,7 +481,7 @@ fn print_name_data(data: &Value) {
     }
 }
 
-fn print_plan_data(data: &Value) {
+fn print_plan_data(data: &Value, full_guidance: bool) {
     if let Some(items) = data.as_array() {
         if items.is_empty() {
             println!("No plans.");
@@ -531,7 +545,9 @@ fn print_plan_data(data: &Value) {
         return;
     }
     print_plan_header(data);
-    print!("{}", guidance::format_context(data));
+    if full_guidance {
+        print!("{}", guidance::format_context(data));
+    }
     let branches = data
         .get("branches")
         .and_then(Value::as_array)

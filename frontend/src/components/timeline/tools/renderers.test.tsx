@@ -167,6 +167,7 @@ const PLAN_TOOL = {
     plan_commands: [{
       action: "branch", title: "Next", plan_id: "plan-id", from: ["2"],
       outcome: "Visible progress", principles: ["Preserve history"],
+      boundaries: [{ source: "user_correction", text: "No recovery machinery" }],
       phases: [{ title: "Verify", description: "Run checks", size: "m" }],
     }],
   },
@@ -186,6 +187,7 @@ describe("ToolCallRenderer", () => {
 
   it("renders plan metadata with raw command evidence and guidance", () => {
     render(<ToolCallRenderer tool={PLAN_TOOL} />);
+    expect(screen.getByText("[user correction] No recovery machinery")).toBeDefined();
     expect(screen.getByText("plan · branch")).toBeDefined();
     expect(screen.getByText("Next")).toBeDefined();
     expect(screen.getByText("plan-id")).toBeDefined();

@@ -41,7 +41,7 @@ const RUNTIME_UPDATE_MAX_ATTEMPTS: usize = 20;
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum SocketMsg {
-    Control(ControlMsg),
+    Control(Box<ControlMsg>),
     Runtime(RuntimeMsg),
     Correlate(CorrelateMsg),
 }
@@ -244,7 +244,7 @@ async fn handle_conn(pool: &Pool, stream: UnixStream) -> anyhow::Result<()> {
             b"ok\n".to_vec()
         }
         SocketMsg::Control(msg) => {
-            let response = match dispatch_control(pool, msg).await {
+            let response = match dispatch_control(pool, *msg).await {
                 Ok(data) => ControlResponse {
                     ok: true,
                     data: Some(data),
@@ -775,13 +775,12 @@ mod tests {
         let msg: SocketMsg = serde_json::from_str(raw).unwrap();
         assert!(matches!(
             msg,
-            SocketMsg::Control(ControlMsg {
-                control: ControlRequest::ActivitySet {
+            SocketMsg::Control(msg) if matches!(msg.control,
+                ControlRequest::ActivitySet {
                     state: crate::activity::ActivityState::Working,
                     ..
-                },
-                ..
-            })
+                }
+            )
         ));
     }
 }

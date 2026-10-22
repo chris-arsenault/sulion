@@ -225,6 +225,7 @@ fn metadata(tokens: &[Option<String>]) -> Value {
         "outcome",
         "principles",
         "assumptions",
+        "boundaries",
         "size",
         "phases",
     ] {

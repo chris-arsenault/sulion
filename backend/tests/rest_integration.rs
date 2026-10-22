@@ -1882,7 +1882,8 @@ async fn plan_guidance_inherits_live_values_and_audits_revisions() {
         .json(&json!({
             "title": "Root", "phases": [{"title": "Build"}],
             "outcome": " User benefit ", "principles": [" Preserve requirements "],
-            "assumptions": ["The approach fits"]
+            "assumptions": ["The approach fits"],
+            "boundaries": [{"source": "user_requirement", "text": " Browser only "}]
         }))
         .send()
         .await
@@ -1895,6 +1896,10 @@ async fn plan_guidance_inherits_live_values_and_audits_revisions() {
     let root_id = root["id"].as_str().unwrap();
     assert_eq!(root["outcome"], "User benefit");
     assert_eq!(root["principles"], json!(["Preserve requirements"]));
+    assert_eq!(
+        root["boundaries"],
+        json!([{"source": "user_requirement", "text": "Browser only"}])
+    );
 
     let branch: serde_json::Value = h.client
         .post(format!("{}/api/plans/{root_id}/branches", h.base))
@@ -1917,12 +1922,14 @@ async fn plan_guidance_inherits_live_values_and_audits_revisions() {
     assert_eq!(leaf["outcome"], "");
     assert_eq!(leaf["principles"], json!([]));
     assert_eq!(leaf["assumptions"], json!([]));
+    assert_eq!(leaf["boundaries"], json!([]));
+    assert_eq!(leaf["ancestors"][0]["boundaries"], root["boundaries"]);
     assert_eq!(leaf["ancestors"][0]["id"], root_id);
     assert_eq!(leaf["ancestors"][1]["outcome"], "Local benefit");
 
     let updated: serde_json::Value = h.client
         .patch(format!("{}/api/plans/{root_id}", h.base))
-        .json(&json!({"principles": ["Evidence before changes", "Preserve requirements"], "assumptions": [], "note": "Probe disproved assumption"}))
+        .json(&json!({"principles": ["Evidence before changes", "Preserve requirements"], "assumptions": [], "boundaries": [{"source": "user_correction", "text": "No durable recovery machinery"}], "note": "Probe disproved assumption"}))
         .send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
     assert_eq!(updated["outcome"], "User benefit");
     let reread: serde_json::Value = h
@@ -1939,6 +1946,7 @@ async fn plan_guidance_inherits_live_values_and_audits_revisions() {
     assert_eq!(reread["ancestors"][0]["principles"], updated["principles"]);
     assert_eq!(reread["ancestors"][0]["revision"], updated["revision"]);
     assert_eq!(reread["ancestors"][0]["assumptions"], json!([]));
+    assert_eq!(reread["ancestors"][0]["boundaries"], updated["boundaries"]);
     assert_eq!(
         reread["revision"], leaf["revision"],
         "ancestor edits must not copy into descendants"
@@ -1949,6 +1957,9 @@ async fn plan_guidance_inherits_live_values_and_audits_revisions() {
         json!({"principles": [" "]}),
         json!({"principles": vec!["rule"; 11]}),
         json!({"assumptions": ["x".repeat(501)]}),
+        json!({"boundaries": [{"source": "agent_proposal", "text": " "}]}),
+        json!({"boundaries": [{"source": "user_correction", "text": "x".repeat(501)}]}),
+        json!({"boundaries": vec![json!({"source": "user_requirement", "text": "Limit"}); 11]}),
     ] {
         let response = h
             .client
@@ -1981,7 +1992,7 @@ async fn plan_guidance_inherits_live_values_and_audits_revisions() {
         .unwrap();
     h.client
         .patch(format!("{}/api/plans/{root_id}", h.base))
-        .json(&json!({"outcome": "", "principles": []}))
+        .json(&json!({"outcome": "", "principles": [], "boundaries": []}))
         .send()
         .await
         .unwrap()
@@ -2003,13 +2014,25 @@ async fn plan_guidance_inherits_live_values_and_audits_revisions() {
     assert_eq!(changes.len(), 3);
     assert_eq!(
         changes[0]["guidance_after"],
-        json!({"outcome": "", "principles": [], "assumptions": []})
+        json!({"outcome": "", "principles": [], "assumptions": [], "boundaries": []})
     );
     assert_eq!(
         changes[1]["guidance_before"]["assumptions"],
         json!(["The approach fits"])
     );
     assert_eq!(changes[1]["guidance_after"]["assumptions"], json!([]));
+    assert_eq!(
+        changes[1]["guidance_before"]["boundaries"],
+        root["boundaries"]
+    );
+    assert_eq!(
+        changes[1]["guidance_after"]["boundaries"],
+        updated["boundaries"]
+    );
+    assert_eq!(
+        changes[0]["guidance_before"]["boundaries"],
+        updated["boundaries"]
+    );
     assert_eq!(changes[1]["note"], "Probe disproved assumption");
     assert_eq!(changes[1]["actor_kind"], "user");
     assert!(changes[2]["guidance_before"].is_null());

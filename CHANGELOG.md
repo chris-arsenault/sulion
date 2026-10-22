@@ -4,6 +4,16 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Plan boundaries
+
+- Plans carry Boundaries with source labels for user requirements, user
+  corrections, and agent proposals. Agents and the plan editor can record
+  excluded scope and rejected approaches, with live ancestor inheritance and
+  before/after history.
+- Every plan command surfaces the applicable outcome and boundaries, including
+  progress updates, help, list, history, and branch transitions. JSON output
+  retains its existing shape, with the reminder on stderr.
+
 ### Mobile installation
 
 - Add home-screen installation metadata and icons so Sulion launches in a

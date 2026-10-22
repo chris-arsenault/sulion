@@ -269,13 +269,13 @@ pub(super) async fn anchor_phase_ids(pool: &Pool, plan_id: Uuid) -> anyhow::Resu
 pub(super) async fn ancestors(pool: &Pool, plan_id: Uuid) -> anyhow::Result<Vec<PlanAncestorView>> {
     let rows = sqlx::query_as(
         "WITH RECURSIVE chain AS ( \
-             SELECT id, title, status, depth, parent_plan_id, revision, outcome, principles, assumptions \
+             SELECT id, title, status, depth, parent_plan_id, revision, outcome, principles, assumptions, boundaries \
                FROM plans WHERE id = $1 \
              UNION ALL \
-             SELECT p.id, p.title, p.status, p.depth, p.parent_plan_id, p.revision, p.outcome, p.principles, p.assumptions \
+             SELECT p.id, p.title, p.status, p.depth, p.parent_plan_id, p.revision, p.outcome, p.principles, p.assumptions, p.boundaries \
                FROM plans p JOIN chain c ON p.id = c.parent_plan_id \
          ) \
-         SELECT id, title, status, depth, revision, outcome, principles, assumptions FROM chain WHERE id <> $1 ORDER BY depth",
+         SELECT id, title, status, depth, revision, outcome, principles, assumptions, boundaries FROM chain WHERE id <> $1 ORDER BY depth",
     )
     .bind(plan_id)
     .fetch_all(pool)

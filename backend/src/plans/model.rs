@@ -98,6 +98,7 @@ pub struct UpdatePlanInput {
     pub outcome: Option<String>,
     pub principles: Option<Vec<String>>,
     pub assumptions: Option<Vec<String>>,
+    pub boundaries: Option<Vec<PlanBoundary>>,
     pub status: Option<String>,
     pub note: Option<String>,
     #[serde(default)]
@@ -280,4 +281,21 @@ pub struct PlanGuidance {
     pub principles: Vec<String>,
     #[serde(default)]
     pub assumptions: Vec<String>,
+    #[serde(default)]
+    #[sqlx(json)]
+    pub boundaries: Vec<PlanBoundary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct PlanBoundary {
+    pub source: BoundarySource,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoundarySource {
+    UserRequirement,
+    UserCorrection,
+    AgentProposal,
 }
