@@ -35,6 +35,9 @@ mod harness_compatibility;
 #[path = "ingester_integration/plan_commands.rs"]
 mod plan_commands;
 
+#[path = "ingester_integration/compaction.rs"]
+mod compaction;
+
 fn test_db_url() -> Option<String> {
     std::env::var("SULION_TEST_DB").ok()
 }

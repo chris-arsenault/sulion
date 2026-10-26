@@ -50,8 +50,14 @@ async fn project_from_event(
 }
 
 fn claude_transition(value: &Value) -> Option<(ActivityState, Option<String>, &'static str)> {
+    if super::canonical::claude_compaction_subtype(value).is_some()
+        || (value.get("type").and_then(Value::as_str) == Some("user")
+            && value.get("isMeta").and_then(Value::as_bool) == Some(true))
+    {
+        return None;
+    }
     match value.get("type").and_then(Value::as_str) {
-        // Any user record — a prompt or a tool result — means the agent
+        // A conversational user record — a prompt or a tool result — means the agent
         // is (back to) working. This also clears a needs_input once the
         // interactive tool's result lands.
         Some("user") => Some((ActivityState::Working, first_message_text(value), "derived")),
@@ -73,6 +79,85 @@ fn claude_transition(value: &Value) -> Option<(ActivityState, Option<String>, &'
             }
         }
         _ => None,
+    }
+}
+
+/// Repair only an ingester report caused by a compaction summary. A later
+/// explicit report, transcript append or session switch wins over this snapshot.
+pub(super) async fn repair_compaction_activity(pool: &Pool) -> anyhow::Result<()> {
+    use chrono::{DateTime, Utc};
+
+    let candidates: Vec<(Uuid, Uuid, DateTime<Utc>, String, i64)> = sqlx::query_as(
+        "SELECT ps.id, ps.current_session_uuid, a.updated_at, a.summary, \
+                (SELECT MAX(e.byte_offset) FROM events e WHERE e.session_uuid = ps.current_session_uuid) \
+         FROM session_activity_state a JOIN pty_sessions ps ON ps.id = a.pty_session_id \
+         WHERE a.source = 'ingester' AND a.confidence = 'derived' AND a.state = 'working' \
+           AND a.summary IS NOT NULL AND ps.state = 'live' \
+           AND ps.agent_runtime_state IN ('starting', 'running') AND EXISTS ( \
+               SELECT 1 FROM events e WHERE e.session_uuid = ps.current_session_uuid \
+               AND e.agent = 'claude-code' AND e.payload ->> 'isCompactSummary' = 'true' \
+           )",
+    ).fetch_all(pool).await?;
+    for (pty, session, updated_at, summary, through) in candidates {
+        let Some((state, summary, confidence)) =
+            activity_before_compaction(pool, session, through, &summary).await?
+        else {
+            continue;
+        };
+        sqlx::query(
+            "UPDATE session_activity_state a SET state = $4, summary = $5, reason = NULL, \
+                    confidence = $6, updated_at = NOW() \
+             FROM pty_sessions ps WHERE ps.id = a.pty_session_id AND ps.id = $1 \
+               AND ps.current_session_uuid = $2 AND ps.state = 'live' \
+               AND ps.agent_runtime_state IN ('starting', 'running') \
+               AND a.source = 'ingester' AND a.confidence = 'derived' \
+               AND a.state = 'working' AND a.updated_at = $3 \
+               AND (SELECT MAX(e.byte_offset) FROM events e WHERE e.session_uuid = $2) = $7",
+        )
+        .bind(pty)
+        .bind(session)
+        .bind(updated_at)
+        .bind(state.as_str())
+        .bind(summary)
+        .bind(confidence)
+        .bind(through)
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
+async fn activity_before_compaction(
+    pool: &Pool,
+    session: Uuid,
+    mut through: i64,
+    summary: &str,
+) -> anyhow::Result<Option<(ActivityState, Option<String>, &'static str)>> {
+    let mut found_summary = false;
+    loop {
+        let rows: Vec<(i64, Value)> = sqlx::query_as(
+            "SELECT byte_offset, payload FROM events WHERE session_uuid = $1 \
+             AND byte_offset <= $2 AND kind IN ('user', 'assistant', 'system') \
+             ORDER BY byte_offset DESC LIMIT 64",
+        )
+        .bind(session)
+        .bind(through)
+        .fetch_all(pool)
+        .await?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        for (offset, payload) in rows {
+            through = offset - 1;
+            if super::canonical::claude_compaction_subtype(&payload) == Some("compact_summary")
+                && first_message_text(&payload).as_deref() == Some(summary)
+            {
+                found_summary = true;
+            }
+            if let Some(transition) = claude_transition(&payload) {
+                return Ok(found_summary.then_some(transition));
+            }
+        }
     }
 }
 
@@ -229,6 +314,38 @@ mod tests {
         });
         let (state, _, _) = claude_transition(&value).expect("transition");
         assert_eq!(state, ActivityState::Working);
+    }
+
+    #[test]
+    fn claude_compaction_preserves_idle_working_and_attention_states() {
+        let records = [
+            json!({"type":"system","subtype":"compact_boundary"}),
+            json!({"type":"user","isCompactSummary":true,"turnOrigin":"human",
+                "message":{"content":"summary"}}),
+            json!({"type":"user","isMeta":true,"message":{"content":"context"}}),
+            json!({"type":"system","subtype":"informational",
+                "content":"Compacted while idle, before the prompt cache expired"}),
+        ];
+        for initial in [
+            ActivityState::AwaitingPrompt,
+            ActivityState::Working,
+            ActivityState::NeedsInput,
+            ActivityState::Blocked,
+        ] {
+            let mut state = initial;
+            for record in &records {
+                if let Some((next, _, _)) = claude_transition(record) {
+                    state = next;
+                }
+            }
+            assert_eq!(state, initial);
+        }
+        let result = json!({"type":"user","message":{"content":[
+            {"type":"tool_result","tool_use_id":"call","content":"approved"}]}});
+        assert_eq!(
+            claude_transition(&result).unwrap().0,
+            ActivityState::Working
+        );
     }
 
     #[test]

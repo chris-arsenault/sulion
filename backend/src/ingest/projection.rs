@@ -29,6 +29,7 @@ pub use view::{load_session_turns, load_timeline_turn_view, TurnView};
 
 pub use file_trace::{load_repo_file_trace, RepoFileTraceTouch};
 use filters::apply_projection_filters;
+pub(crate) use write::backfill_compaction_events;
 pub use write::{
     backfill_conversation_events, backfill_timeline_projection, project_batch,
     project_until_caught_up, rebuild_session_projection, request_rebuild,

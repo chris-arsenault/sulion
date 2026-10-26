@@ -20,6 +20,7 @@ mod tests;
 mod tools;
 mod types;
 
+pub(crate) use claude::claude_compaction_subtype;
 pub use claude::ClaudeParser;
 pub use codex::{codex_record_kind, CodexParser};
 pub use tools::canonicalize_tool_name;

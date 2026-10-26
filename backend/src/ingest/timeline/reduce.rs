@@ -17,9 +17,9 @@ use uuid::Uuid;
 use crate::ingest::canonical::{BlockKind, OperationCategory};
 
 use super::events::{
-    first_paragraph, has_useful_thinking, is_assistant_event, is_bookkeeping_event,
-    is_real_user_prompt, is_summary_event, is_system_event, is_tool_result_event, text_blocks_in,
-    tool_uses_in, user_prompt_text,
+    advances_turn_time, first_paragraph, has_useful_thinking, is_assistant_event,
+    is_bookkeeping_event, is_real_user_prompt, is_summary_event, is_system_event,
+    is_tool_result_event, text_blocks_in, tool_uses_in, user_prompt_text,
 };
 use super::file_touches::{extract_file_touches, FileTouchContext};
 use super::runtime::{
@@ -324,6 +324,7 @@ impl<B: Backend> Reducer<B> {
             };
             match current {
                 Some(turn_id) => turn_id,
+                None if is_bookkeeping_event(&event) => return Ok(()),
                 None => {
                     let turn_id = self.create_turn(&event, is_prompt, true);
                     self.state.current_sidechain = Some(turn_id);
@@ -472,10 +473,12 @@ impl<B: Backend> Reducer<B> {
         }
         let turn = self.turn_mut(turn_id);
         turn.event_count += 1;
-        turn.end_timestamp = event.timestamp;
-        turn.duration_ms = (turn.end_timestamp - turn.start_timestamp)
-            .num_milliseconds()
-            .max(0);
+        if advances_turn_time(event) {
+            turn.end_timestamp = turn.end_timestamp.max(event.timestamp);
+            turn.duration_ms = (turn.end_timestamp - turn.start_timestamp)
+                .num_milliseconds()
+                .max(0);
+        }
         self.state.total_event_count += 1;
         self.state.latest_event_at = self.state.latest_event_at.max(Some(event.timestamp));
 

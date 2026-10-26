@@ -6,6 +6,27 @@ use super::{
 
 pub struct ClaudeParser;
 
+pub(crate) fn claude_compaction_subtype(value: &Value) -> Option<&'static str> {
+    if value.get("isCompactSummary").and_then(Value::as_bool) == Some(true) {
+        return Some("compact_summary");
+    }
+    if value.get("type").and_then(Value::as_str) != Some("system") {
+        return None;
+    }
+    match value.get("subtype").and_then(Value::as_str) {
+        Some("compact_boundary") => Some("compact_boundary"),
+        Some("informational")
+            if value
+                .get("content")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.starts_with("Compacted while idle,")) =>
+        {
+            Some("compact_status")
+        }
+        _ => None,
+    }
+}
+
 impl EventParser for ClaudeParser {
     fn agent_id(&self) -> &'static str {
         "claude-code"
@@ -13,8 +34,10 @@ impl EventParser for ClaudeParser {
 
     fn parse(&self, value: &Value) -> CanonicalEvent {
         let kind = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let compaction = claude_compaction_subtype(value);
         let attachment = value.get("attachment");
-        let queued_human = kind == "attachment"
+        let queued_human = compaction.is_none()
+            && kind == "attachment"
             && attachment.is_some_and(|a| {
                 a.get("type").and_then(Value::as_str) == Some("queued_command")
                     && a.get("commandMode").and_then(Value::as_str) == Some("prompt")
@@ -22,6 +45,7 @@ impl EventParser for ClaudeParser {
                         || a.get("humanTurn").and_then(Value::as_bool) == Some(true))
             });
         let speaker = match kind {
+            _ if compaction.is_some() => Speaker::System,
             "attachment" if queued_human => Speaker::User,
             "attachment" => Speaker::System,
             "user" => Speaker::User,
@@ -37,7 +61,10 @@ impl EventParser for ClaudeParser {
         let content = if queued_human {
             attachment.and_then(|a| a.get("prompt"))
         } else {
-            value.get("message").and_then(|m| m.get("content"))
+            value
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .or_else(|| compaction.and_then(|_| value.get("content")))
         };
 
         let tool_result_payload = value
@@ -93,9 +120,13 @@ impl EventParser for ClaudeParser {
             is_meta: if queued_human {
                 false
             } else {
-                kind == "attachment" || bool_field(value, &["isMeta"]).unwrap_or(false)
+                compaction.is_some()
+                    || kind == "attachment"
+                    || bool_field(value, &["isMeta"]).unwrap_or(false)
             },
-            subtype: if queued_human {
+            subtype: if let Some(subtype) = compaction {
+                Some(subtype.into())
+            } else if queued_human {
                 Some("queued_user_prompt".into())
             } else {
                 string_field(value, &["subtype"])

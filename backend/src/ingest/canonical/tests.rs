@@ -39,6 +39,42 @@ fn claude_user_text_string_content() {
 }
 
 #[test]
+fn claude_compaction_is_maintenance_even_with_human_origin() {
+    for content in [json!("summary"), json!([{"type":"text","text":"summary"}])] {
+        let event = parse_claude(json!({
+            "type":"user", "uuid":"summary-1", "parentUuid":"boundary-1",
+            "isCompactSummary":true, "isVisibleInTranscriptOnly":true,
+            "turnOrigin":"human", "message":{"role":"user","content":content}
+        }));
+        assert_eq!(event.speaker, Speaker::System);
+        assert!(event.is_meta);
+        assert_eq!(event.subtype.as_deref(), Some("compact_summary"));
+        assert_eq!(event.event_uuid.as_deref(), Some("summary-1"));
+        assert_eq!(event.parent_event_uuid.as_deref(), Some("boundary-1"));
+        assert_eq!(event.blocks[0].text.as_deref(), Some("summary"));
+    }
+    for (subtype, content, expected) in [
+        (
+            "compact_boundary",
+            "Conversation compacted",
+            "compact_boundary",
+        ),
+        (
+            "informational",
+            "Compacted while idle, before the prompt cache expired",
+            "compact_status",
+        ),
+    ] {
+        let event = parse_claude(json!({"type":"system","subtype":subtype,
+            "content":content,"isMeta":false}));
+        assert_eq!(event.speaker, Speaker::System);
+        assert!(event.is_meta);
+        assert_eq!(event.subtype.as_deref(), Some(expected));
+        assert_eq!(event.blocks[0].text.as_deref(), Some(content));
+    }
+}
+
+#[test]
 fn claude_assistant_text_array() {
     let ev = parse_claude(json!({
         "type": "assistant",

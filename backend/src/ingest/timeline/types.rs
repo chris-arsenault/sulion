@@ -44,6 +44,7 @@ pub(crate) const BOOKKEEPING_KINDS: &[&str] = &[
     "attachment",
     "bridge-session",
     "custom-title",
+    "cost-state",
     "file-history-delta",
     "file-history-snapshot",
     "frame-link",

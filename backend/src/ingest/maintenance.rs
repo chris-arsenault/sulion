@@ -11,7 +11,8 @@ const CANONICAL_BLOCKS_KEY: &str = "canonical_blocks";
 // or shell executable; all historical wrapper blocks get re-derived.
 // v5: queued/pasted Claude input and Codex inheritance, collaboration and runtime items.
 // v6: Codex Code Mode results whose envelope reports `Script failed` are errors.
-const CANONICAL_BLOCKS_VERSION: i32 = 6;
+// v7: Claude compaction summaries, boundaries and idle notices are maintenance.
+const CANONICAL_BLOCKS_VERSION: i32 = 7;
 const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // v3: sessions with codex `exec` operations reprojected after their
 // inputs were re-canonicalized into the {command, code} shape.
@@ -39,7 +40,8 @@ const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // failed scripts; file edits carry their change status.
 // v14: classify recorded plan commands and enrich their operation rows in place.
 // v15: structured agent messages and API/collaboration bookkeeping classification.
-const TIMELINE_PROJECTION_VERSION: i32 = 15;
+// v16: compaction preserves turns/activity; maintenance no longer advances turn time.
+const TIMELINE_PROJECTION_VERSION: i32 = 16;
 const USAGE_PROJECTION_KEY: &str = "usage_projection";
 // v2: include Codex per-response usage, including compaction, and retain the
 // legacy prefix before a session first supplies response records.
@@ -106,7 +108,12 @@ async fn repair_canonical_blocks_if_behind(
     )
     .await
     .ok();
-    let outcome = match super::ingester::backfill_canonical_blocks(pool, job.as_ref()).await {
+    let result = if current >= 6 {
+        super::ingester::backfill_claude_compaction(pool, job.as_ref()).await
+    } else {
+        super::ingester::backfill_canonical_blocks(pool, job.as_ref()).await
+    };
+    let outcome = match result {
         Ok(outcome) => outcome,
         Err(err) => {
             if let Some(job) = &job {
@@ -176,11 +183,22 @@ async fn repair_timeline_projection_if_behind(
         } else {
             0
         };
-        let conversation_sessions =
-            super::projection::backfill_conversation_events(pool, job.as_ref()).await?;
-        Ok(plan_sessions + conversation_sessions)
+        let conversation_sessions = if current < 15 {
+            super::projection::backfill_conversation_events(pool, job.as_ref()).await?
+        } else {
+            0
+        };
+        let compaction_sessions =
+            super::projection::backfill_compaction_events(pool, job.as_ref()).await?;
+        Ok(plan_sessions + conversation_sessions + compaction_sessions)
     }
     .await;
+    let result = match result {
+        Ok(rebuilt) => super::activity_projection::repair_compaction_activity(pool)
+            .await
+            .map(|()| rebuilt),
+        Err(err) => Err(err),
+    };
     match result {
         Ok(rebuilt) => {
             if let Some(job) = &job {

@@ -4,6 +4,13 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Claude compaction
+
+- Idle compaction preserves completed turns, their duration, and agent activity.
+  Active compaction keeps subsequent work and usage on the original turn.
+- Repair affected retained history and stale summary-derived activity from
+  stored events, preserving newer explicit activity reports.
+
 ### Plan boundaries
 
 - Plans carry Boundaries with source labels for user requirements, user

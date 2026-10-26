@@ -304,6 +304,107 @@ fn bookkeeping_before_the_first_turn_is_not_projected() {
     assert_eq!(turns[0].event_count, 2);
 }
 
+fn claude_record(offset: i64, value: Value) -> StoredEvent {
+    use crate::ingest::canonical::{ClaudeParser, EventParser};
+    let parsed = ClaudeParser.parse(&value);
+    let mut event = event(offset, value["type"].as_str().unwrap(), parsed.blocks);
+    event.speaker = Some(parsed.speaker.as_str().into());
+    event.is_meta = parsed.is_meta;
+    event.subtype = parsed.subtype;
+    event
+}
+
+#[test]
+fn idle_compaction_keeps_the_completed_turn_and_its_end_time() {
+    let mut records = vec![
+        event(1, "user", vec![text("work")]),
+        event(2, "assistant", vec![text("done")]),
+        claude_record(3, json!({"type":"system","subtype":"stop_hook_summary"})),
+        claude_record(4, json!({"type":"system","subtype":"turn_duration"})),
+        event(3300, "last-prompt", vec![]),
+        claude_record(3301, json!({"type":"system","subtype":"compact_boundary"})),
+        claude_record(
+            3302,
+            json!({"type":"user","isCompactSummary":true,
+            "turnOrigin":"human","message":{"content":"summary"}}),
+        ),
+        claude_record(
+            3303,
+            json!({"type":"attachment","attachment":{"type":"file"}}),
+        ),
+        claude_record(
+            3304,
+            json!({"type":"system","subtype":"informational",
+            "content":"Compacted while idle, before the prompt cache expired"}),
+        ),
+        event(3340, "cost-state", vec![]),
+    ];
+    let turns = project(&records);
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].end_timestamp, ts(4));
+    assert_eq!(turns[0].duration_ms, 3000);
+    assert_eq!(turns[0].event_count, records.len());
+    records.push(event(7000, "user", vec![text("next task")]));
+    assert_eq!(project(&records).len(), 2);
+    let maintenance = &records[4..10];
+    assert!(project(maintenance).is_empty());
+    let sidechain: Vec<_> = maintenance
+        .iter()
+        .cloned()
+        .map(|mut event| {
+            event.is_sidechain = true;
+            event
+        })
+        .collect();
+    assert!(project(&sidechain).is_empty());
+}
+
+#[test]
+fn active_compaction_preserves_calls_usage_and_monotonic_turn_time() {
+    let mut receipt = event(5, "assistant", vec![text("continued")]);
+    receipt.usage_message_id = Some("message".into());
+    receipt.usage_json = Some(json!({"input_tokens":100,"output_tokens":40}));
+    let mut revised = receipt.clone();
+    revised.byte_offset = 6;
+    revised.timestamp = ts(2);
+    revised.usage_json = Some(json!({"input_tokens":100,"output_tokens":50}));
+    let records = [
+        event(1, "user", vec![text("work")]),
+        event(2, "assistant", vec![call("c1", "bash", json!({}))]),
+        claude_record(3, json!({"type":"system","subtype":"compact_boundary"})),
+        claude_record(
+            4,
+            json!({"type":"user","isCompactSummary":true,
+            "message":{"content":"summary"}}),
+        ),
+        receipt,
+        revised,
+        event(7, "user", vec![result("c1", "done", false)]),
+    ];
+    assert_eq!(project(&records[..6])[0].end_timestamp, ts(5));
+    let turns = project(&records);
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].id, 1);
+    assert_eq!(turns[0].tool_pairs.len(), 1);
+    assert!(!turns[0].tool_pairs[0].is_pending);
+    assert_eq!((turns[0].input_tokens, turns[0].output_tokens), (100, 50));
+    assert_eq!(turns[0].end_timestamp, ts(7));
+    assert!(!turns[0].markdown.contains("summary"));
+}
+
+#[test]
+fn meta_user_records_cannot_seed_turns() {
+    let meta = claude_record(
+        2,
+        json!({"type":"user","isMeta":true,
+        "message":{"content":"injected context"}}),
+    );
+    assert!(project(std::slice::from_ref(&meta)).is_empty());
+    let turns = project(&[event(1, "user", vec![text("prompt")]), meta]);
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].end_timestamp, ts(1));
+}
+
 #[test]
 fn codex_agent_messages_keep_routes_and_markdown_without_the_harness_envelope() {
     use crate::ingest::canonical::{CodexParser, EventParser};

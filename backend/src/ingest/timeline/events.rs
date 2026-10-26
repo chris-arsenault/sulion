@@ -72,6 +72,7 @@ pub(crate) fn is_tool_result_event(event: &StoredEvent) -> bool {
 
 pub(crate) fn is_real_user_prompt(event: &StoredEvent) -> bool {
     event_speaker(event) == "user"
+        && !is_bookkeeping_event(event)
         && !is_tool_result_event(event)
         && !is_claude_task_notification(event)
         && !is_local_command_event(event)
@@ -125,6 +126,14 @@ pub(crate) fn is_bookkeeping_event(event: &StoredEvent) -> bool {
         || event.is_meta
         || (is_system_event(event) && is_bookkeeping_system_subtype(event.subtype.as_deref()))
         || is_local_command_event(event)
+}
+
+pub(crate) fn advances_turn_time(event: &StoredEvent) -> bool {
+    // Completion telemetry is hidden bookkeeping, but still ends actual work.
+    matches!(
+        event.subtype.as_deref(),
+        Some("turn_duration" | "stop_hook_summary")
+    ) || !is_bookkeeping_event(event)
 }
 
 pub(crate) fn event_speaker(event: &StoredEvent) -> &str {

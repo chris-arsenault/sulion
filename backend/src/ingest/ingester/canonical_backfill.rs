@@ -63,6 +63,39 @@ pub struct CanonicalBackfillOutcome {
     pub failed: usize,
 }
 
+pub(crate) async fn backfill_claude_compaction(
+    pool: &Pool,
+    job: Option<&super::super::jobs::JobHandle>,
+) -> anyhow::Result<CanonicalBackfillOutcome> {
+    let rows: Vec<(Uuid, i64, serde_json::Value)> = sqlx::query_as(
+        "SELECT e.session_uuid, e.byte_offset, e.payload FROM events e \
+         JOIN claude_sessions cs ON cs.session_uuid = e.session_uuid \
+         WHERE cs.purged_at IS NULL AND e.agent = 'claude-code' AND ( \
+             e.payload ->> 'isCompactSummary' = 'true' OR \
+             e.payload ->> 'subtype' = 'compact_boundary' OR \
+             (e.payload ->> 'subtype' = 'informational' \
+              AND e.payload ->> 'content' LIKE 'Compacted while idle,%') \
+         ) AND (NOT e.is_meta OR e.speaker IS DISTINCT FROM 'system' \
+             OR e.subtype IS NULL OR e.subtype = 'informational')",
+    )
+    .fetch_all(pool)
+    .await?;
+    if let Some(job) = job {
+        job.set_total(rows.len() as i64).await;
+    }
+    for (session, offset, payload) in &rows {
+        let parsed = parse_canonical_event("claude-code", payload, *session, *offset, None);
+        rewrite_canonical_event(pool, *session, *offset, &parsed).await?;
+        if let Some(job) = job {
+            job.advance(Some(&session.to_string())).await;
+        }
+    }
+    Ok(CanonicalBackfillOutcome {
+        repaired: rows.len(),
+        failed: 0,
+    })
+}
+
 pub async fn backfill_canonical_blocks(
     pool: &Pool,
     job: Option<&super::super::jobs::JobHandle>,
@@ -131,6 +164,7 @@ pub async fn backfill_canonical_blocks(
          FROM events e \
          WHERE e.agent <> 'codex' AND ( \
              e.kind IN ('attachment', 'user') OR \
+             (e.kind = 'system' AND e.payload ->> 'subtype' IN ('compact_boundary', 'informational')) OR \
              e.speaker IS NULL OR \
              e.content_kind IS NULL OR \
              EXISTS ( \

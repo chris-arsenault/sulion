@@ -164,6 +164,16 @@ human input. Paired harness paste delimiters are removed from canonical text;
 the pasted body and raw payload remain intact. Duplicate prompt UUIDs produce
 one turn, and submitted prompts match against whitespace-normalized bodies.
 
+Claude compaction summaries (`isCompactSummary`), boundaries and idle-compaction
+notices are canonical meta-system records. They retain their text and raw payload,
+hide with bookkeeping, and neither seed a turn nor change agent activity. Work
+continuing after active compaction stays on the original turn. Maintenance,
+including cost snapshots and context attachments, does not advance turn timing;
+completion telemetry still does, and out-of-order timestamps cannot shorten a turn.
+Canonical version 7 and timeline version 16 repair retained compaction sessions
+from stored payloads. The activity repair replaces only an unchanged ingester
+report caused by a summary, preserving newer activity and session associations.
+
 Codex child sessions retain their owning metadata and use
 `subagent_history_start_ordinal` to exclude copied parent history from turns,
 usage, and activity. Agent messages retain their author, recipient, and available
