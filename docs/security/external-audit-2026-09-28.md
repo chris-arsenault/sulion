@@ -7,8 +7,9 @@ material weaknesses in the unused device-token surface, file-write confinement,
 credential revocation, and the extent of public machine-service exposure.
 
 The user's direction is to remove device-token access completely. The
-[remediation plan](../plans/external-security-remediation.md) maps F01–F08 to
-security work and verification. The user subsequently removed operational
+remediation, recorded in
+[ADR 0027](../adrs/0027-remove-device-access-and-allowlist-the-public-edge.md),
+maps F01–F08 to security work. The user subsequently removed operational
 phase 7: F09–F11 remain recorded observations outside remediation scope, with no
 implementation or completion gates. Phase 3's internal-service LAN restriction
 is agreed. No application or deployed configuration was changed during this audit.
@@ -342,11 +343,15 @@ limited to the retained security phases and their stated verification gates;
 F09–F11 are excluded and do not block completion.
 # Remediation status
 
-The audit below records the pre-change evidence. Local remediation now removes
-device access (F01/F05), confines legacy uploads (F02), closes public machine
-paths and removes URL credentials (F04), fails closed on missing auth config
-(F06), bounds JWKS refreshes (F07), adds durable browser revocation/expiry (F03)
-and enforces browser response policy (F08). See the
-[release record](external-remediation-release.md) for test evidence, release order
-and residual limits. These changes are unpublished and are not deployed proof.
-F09–F11 remain excluded. Live/browser acceptance still gates plan completion.
+The audit above records the pre-change evidence. The remediation shipped in
+`3d40436` and `d4d615a`: it removes device access (F01/F05), confines uploads
+(F02), closes public machine paths and removes URL credentials (F04), fails
+closed on missing auth config (F06), bounds JWKS refreshes (F07), adds durable
+browser revocation and expiry (F03), and enforces browser response policy
+(F08). The decisions are recorded in
+[ADR 0027](../adrs/0027-remove-device-access-and-allowlist-the-public-edge.md)
+and [ADR 0010](../adrs/0010-cognito-authentication-with-broker-held-revocation.md).
+F09–F11 remain excluded at the user's direction. Public unauthenticated probes
+after release returned 404 for device pairing, broker use, PTY registration,
+and retrieval, and HTML responses carried the security headers; authenticated
+deployed acceptance was not separately recorded.

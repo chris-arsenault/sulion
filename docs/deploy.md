@@ -419,6 +419,12 @@ HSTS applies to HTTPS responses and does not include unrelated subdomains.
 
 Production backend and broker require nonblank `SULION_AUTH_ISSUER_URL` (HTTPS)
 and `SULION_AUTH_CLIENT_ID`. Missing configuration prevents startup. Device
-tokens, pairing URLs and `SULION_PUBLIC_URL` are retired. See the
-[security release checklist](security/external-remediation-release.md) for
-migration order, revocation behavior and outstanding live checks.
+tokens, pairing URLs and `SULION_PUBLIC_URL` are retired. Revocation behavior
+is described in
+[architecture](architecture.md#browser-authentication-and-sign-out); the
+decisions are
+[ADR 0010](adrs/0010-cognito-authentication-with-broker-held-revocation.md)
+and [ADR 0027](adrs/0027-remove-device-access-and-allowlist-the-public-edge.md).
+Rollback must keep the device-route closure, the retired token tables, and
+the broker revocation storage; restore compatible binaries forward rather
+than reversing those migrations.

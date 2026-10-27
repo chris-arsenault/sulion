@@ -1,11 +1,9 @@
 # Sulion user guide
 
-A guide to sessions, review, prompts, and supervision. Existing screenshots
-illustrate the feature surfaces and may predate the current toolbar layout;
-the instructions below describe the current controls. Screenshots are captured
-against the real e2e stack (Rust backend + Postgres + seeded ingest) through
-Playwright, then cropped to feature regions with Pillow. To
-regenerate:
+A guide to sessions, review, prompts, and supervision. Screenshots are
+captured against the real e2e stack (Rust backend + Postgres + seeded ingest)
+through Playwright, then cropped to feature regions with Pillow, so they show
+seeded fixture data rather than a production workspace. To regenerate:
 
 ```sh
 make screenshots
@@ -18,6 +16,22 @@ manifest into `docs/screenshots/raw/`, then runs
 references.
 
 ---
+
+## Sign in and sign out
+
+Sulion signs in through the shared Cognito pool. The login form completes a
+software-token MFA challenge with a code-entry screen; un-enrolled users are
+sent to the central enrollment app. Logins refresh themselves before they
+expire. A temporary identity, broker, or database outage shows a retrying
+state and keeps you signed in; only a confirmed expiry or revocation returns
+you to the login screen.
+
+The account menu offers two sign-out actions. **Sign out (this device)**
+clears the credentials in this browser only. **Sign out (all devices)** first
+revokes every earlier Sulion login for your account, including sessions that
+would otherwise refresh themselves, then clears this browser. Revocation
+closes browser attachments within a few seconds and never ends the terminals
+behind them; it does not sign you out of other Ahara applications.
 
 ## Launch from the home screen
 
@@ -45,16 +59,23 @@ action buttons, agent activity such as **Needs input**, and an expandable
 **Library** button. Pinned sessions appear first; activity updates do not
 reorder the list. Workspace branch hints and unread markers remain visible.
 
+![Sessions view](screenshots/13-sidebar-views.png)
+![Open view](screenshots/14-sidebar-open.png)
+
 Session names use your label first, then the agent's task name, and only show
 the session ID when neither name is set. When both names differ, your name is
 primary and the agent name is secondary in the sidebar and Overview. Tabs,
 the command palette, and session dialogs use the same primary-name priority.
 
-**New session** opens a searchable repo/meta-repo picker in every view,
-including repos without running sessions. Choose a shell or agent and a main
-checkout or isolated worktree; collection sessions use canonical checkouts.
-Creating a session opens its supported tabs and closes the mobile drawer.
-Rail and palette repo jumps switch Open to Sessions so the target is reachable.
+**New session** in the Open and Sessions views opens a searchable
+repo/meta-repo picker, including repos without running sessions. In Full,
+each repo row's **+** starts a session in that repo directly. Choose a shell
+or agent and a main checkout or isolated worktree; collection sessions use
+canonical checkouts. Creating a session opens its supported tabs and closes
+the mobile drawer. Rail and palette repo jumps switch Open to Sessions so the
+target is reachable.
+
+![New session picker](screenshots/22-new-session.png)
 
 In Full, the left rail and sidebar provide the complete repository navigation.
 Meta-repositories provide one optional organization level above repos without
@@ -135,11 +156,16 @@ to choose **Split**, **Terminal only**, or **Timeline only**. A hidden
 terminal keeps its connection and scrollback, and the desktop peek action
 temporarily shows the hidden projection.
 
+![Display settings](screenshots/17-display-settings.png)
+
 Mobile uses a timeline-only pane and sidebar drawer. It does not open terminal
 tabs or offer terminal peeking. File and reference tabs remain available, and
 the desktop display preference is preserved.
 
-![Overview](screenshots/01-workspace.png)
+![Mobile timeline](screenshots/23-mobile-timeline.png)
+![Mobile drawer](screenshots/24-mobile-drawer.png)
+
+![Workspace](screenshots/01-workspace.png)
 
 Tabs support file, diff, overview, metrics, and reference kinds alongside terminal
 and timeline, plus the Secrets manager tab. Plans open in a modal. Drag a tab
@@ -163,6 +189,8 @@ input opens filters, text size, and **List / Grid / Hidden** turn navigation.
 Grid mode adds a separate **Turn grid** flyout button. These settings apply to
 every open timeline and persist across reloads; terminal text size is separate.
 
+![Timeline settings](screenshots/18-timeline-settings.png)
+
 Filter chips hide speakers, operation categories, and bookkeeping traffic;
 the **FILE** input selects turns that touched a path. **Follow latest** tracks
 new work; selecting an older turn turns it off so reading stays put. Turn
@@ -183,6 +211,13 @@ Nothing in turn detail navigates the app itself.
 per tool call. Open tool detail for full inputs, results, and diffs; those are
 not embedded in the copied digest.
 
+Long prompts start as a short preview with **Show full prompt**. The **Full
+screen** button opens the turn's output in a reader that keeps tool expansion
+and reading position; on mobile, tapping assistant text opens the same
+reader. Codex agent-to-agent messages show their author, recipient, and
+type, collapsed by default. Transcript bookkeeping such as API request
+records and compaction stays hidden unless the bookkeeping filter is on.
+
 ## Timeline input and prompt recovery
 
 Use the prompt bar to **Send** to an idle agent or **Steer** a running turn.
@@ -200,6 +235,8 @@ that never matched a transcript turn. Each submission is saved before delivery.
 Use copy or retry to recover unmatched text, or dismiss the record. A matched
 record means the prompt appeared in a transcript; it does not mean the agent
 completed the requested work.
+
+![Submitted prompts](screenshots/19-submitted-prompts.png)
 
 If the harness changes away from the session's expected model, Sulion records
 the switch, interrupts its running turn, and opens a model-switch dialog.
@@ -225,11 +262,17 @@ Each repo's **Plans** subsection shows active and paused plans with phase
 progress and the current phase. Open the repo plan index to start a plan with
 named phases, optionally attach it to a live terminal, or reopen closed history.
 The plan detail workspace edits phase descriptions, statuses, status notes,
-attachments, plan metadata, and closure. Its history records meaningful
-transitions. A phase can open a branch plan for a prerequisite or expanded
+attachments, plan metadata, and closure, plus the plan's guidance: an
+outcome, principles, assumptions, and boundaries labeled as user
+requirements, user corrections, or agent proposals. Its history records
+meaningful transitions, including guidance edits with their before and after
+values. A phase can open a branch plan for a prerequisite or expanded
 milestone. Branches appear beneath their parent with a trail back to the root;
 **Return** completes a branch and moves the terminal back, while **Abandon**
 cancels it. A parent cannot close while it has an open branch.
+
+![Plan index](screenshots/20-plan-index.png)
+![Plan detail](screenshots/20-plans.png)
 
 Published plans are a lightweight progress interface, not a replacement for an
 agent's detailed working plan. Agents can publish the same state from a Sulion
@@ -237,7 +280,9 @@ PTY with `sulion plan`; see [`plans.md`](plans.md).
 
 ## Overview — engineering teams
 
-The **Overview** tab shows every live terminal, whether or not its terminal tab
+The rail's Overview button opens **Overview** as a tab; `Cmd+M` / `Ctrl+M`
+opens the same view as a modal whose header links also reach Metrics and
+Display. Overview shows every live terminal, whether or not its terminal tab
 is currently open. Meta-repositories appear as teams containing the current
 member repositories' terminals and open plans; collection sessions appear once
 in that team and are labeled as collection work. Repositories outside a
@@ -249,6 +294,8 @@ transcript reports both current usage and a context window; unavailable signals
 are labeled honestly. Open plans remain visible even when no terminal is
 attached.
 
+![Overview](screenshots/15-overview.png)
+
 ## Metrics and background jobs
 
 Open **Metrics** from Overview to inspect input, cached input, and output
@@ -259,8 +306,19 @@ historical invoices. Unknown model prices leave totals visibly incomplete.
 
 The same view shows Git activity, file-write hotspots, and plan flow. Branch
 plans contribute leaf phases to their root's burndown without double-counting
-the parent phase. **Background jobs** shows active work, progress, stalled
-writers, and recent completed, failed, or interrupted jobs.
+the parent phase. **Delivery flow** also carries five DORA tiles aggregated
+across every repository over the last 30 days: deployment frequency, change
+lead time, change failure rate, failed deployment recovery time, and
+deployment rework rate. Evidence comes from the known deploy pipeline on
+`main`; repositories without it read as unavailable rather than zero. Open
+**Deployment details** to page through deployments and record each one's
+production outcome, failure and recovery times, and whether it was unplanned
+rework; failure and rework rates stay unknown until every deployment in the
+window is classified. **Background jobs** shows active work, progress,
+stalled writers, and recent completed, failed, or interrupted jobs.
+
+![Metrics](screenshots/16-metrics.png)
+![Delivery flow and DORA](screenshots/16-metrics-flow.png)
 
 ## Thinking fly-out
 
@@ -311,6 +369,8 @@ The tab supports secret metadata and explicit key/value pairs. Once a
 secret is saved, the UI shows only env key names; blank values on update
 keep the existing value. Right-click a session or terminal tab and use
 **Secrets** to enable a bundle or revoke an active grant.
+
+![Secrets manager](screenshots/21-secrets.png)
 
 ## Context menus
 

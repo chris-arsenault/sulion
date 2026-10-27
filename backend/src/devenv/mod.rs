@@ -3,7 +3,7 @@
 //! The devenv server owns PTY masters and dials the node over a unix socket
 //! on the shared run volume. The node keeps every piece of bookkeeping it has
 //! today and drives shells through the link. See
-//! `docs/plans/pty-survives-deploy.md`.
+//! `docs/adrs/0017-devenv-server-owns-pty-masters.md`.
 
 pub mod launcher;
 pub mod link;

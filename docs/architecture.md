@@ -1,6 +1,8 @@
 # Architecture
 
-Current shipped shape of sulion. Historical reasoning is at the bottom; the top half describes the system as it runs today.
+Current shipped shape of sulion, as it runs today. The reasons behind each
+shape, with the alternatives that were rejected, live in the
+[architecture decision records](adrs/README.md).
 
 Pointers into the code are the source of truth. This doc exists to orient a reader before they open `backend/src/` or `frontend/src/`.
 
@@ -141,7 +143,7 @@ Fugu uses the same path.
 
 ### Compaction
 
-Schema carries a nullable `parent_session_uuid` from day one so a compacted child agent session links to its parent. Cheap now; avoids a migration when compaction UI lands.
+Schema carries a nullable `parent_session_uuid` so a compacted child agent session links to its parent. Compaction records classify as maintenance: they keep the session's activity and turn timing intact and do not seed turns.
 
 ### Dead and orphaned sessions
 
@@ -266,6 +268,15 @@ required. Missing, invalid, and expired tokens cannot write a cutoff. An already
 revoked token receives an idempotent 204 for a sign-out retry without changing
 the cutoff or invalidating newer logins. This revokes Sulion access; it does not
 perform shared-pool Cognito global sign-out.
+
+Emergency revocation is an internal broker operation: `POST /v1/auth/revoke`
+with JSON `{"sub":"<Cognito subject>"}` and the broker registration credential
+as a bearer token, reachable through the pinned LAN gateway as
+`/broker/v1/auth/revoke` and never through the public proxy. WebSocket tickets
+carry their principal and access expiry, are single-use, and expire after 30
+seconds; open sockets end at access expiry or within a few seconds of
+revocation, and ending an attachment never ends its PTY. The decision is
+recorded in [ADR 0010](adrs/0010-cognito-authentication-with-broker-held-revocation.md).
 
 ### Control API
 
@@ -540,12 +551,14 @@ brokered runtime. Full setup is in
 [`deploy.md`](deploy.md), and the completed topology decision is in
 [`adrs/0002-hybrid-control-plane-and-dev-node.md`](adrs/0002-hybrid-control-plane-and-dev-node.md).
 
-## Historical reasoning
+## Decision records
 
-Kept because it still explains *why* the shape is what it is. Removed when it no longer matches the code.
-
-- **Live vs history split.** Terminals aren't built to replay cursor-movement streams as scrollback. Separating rendering pipelines avoids ANSI-replay garbage and is the key ergonomic insight.
-- **Web frontend, not native.** Zero-install on any LAN device beats the small latency edge a native terminal would give.
-- **PTY runs a general shell.** Lets the user navigate, clone, run `claude --resume` manually. The PTY is the workbench.
-- **Postgres, not SQLite.** The ahara ecosystem runs a shared TrueNAS Postgres; sulion joins it rather than running a sidecar.
-- **Polling, not `LISTEN`/`NOTIFY`.** Claude responses span minutes; 1–2s timeline lag is imperceptible, and a turn that is still streaming tolerates up to 5s (see [ingestion.md](ingestion.md#live-projection-cadence)).
+The shape above follows from decisions recorded one per file under
+[`adrs/`](adrs/README.md). The founding ones are the separation of the live
+terminal from the projected history ([ADR 0004](adrs/0004-live-terminal-and-projected-history.md)),
+the browser workspace over a server-side general shell on the shared Postgres
+([ADR 0005](adrs/0005-web-workspace-over-server-shell-and-shared-postgres.md)),
+the canonical event schema ([ADR 0006](adrs/0006-canonical-event-schema.md)),
+and the hybrid control plane and development node
+([ADR 0002](adrs/0002-hybrid-control-plane-and-dev-node.md)). Each later
+section of this document names the record that explains it where one exists.

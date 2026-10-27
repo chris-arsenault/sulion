@@ -42,6 +42,7 @@ def main() -> int:
     entries = json.loads(manifest_path.read_text())
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    produced: set[str] = set()
     for entry in entries:
         src = raw_dir / entry["source"]
         if not src.exists():
@@ -49,6 +50,9 @@ def main() -> int:
             continue
 
         with Image.open(src) as image:
+            if entry["width"] <= 0 or entry["height"] <= 0:
+                print(f"skip {entry['name']}: empty box", file=sys.stderr)
+                continue
             box = clamp_box(
                 image.width,
                 image.height,
@@ -61,7 +65,19 @@ def main() -> int:
             cropped = image.crop(box)
             target = out_dir / f"{entry['name']}.png"
             cropped.save(target, format="PNG", optimize=True)
+            produced.add(target.name)
             print(f"{target.relative_to(repo_root)}  {box}")
+
+    # Crops the manifest no longer names are left in place but called out,
+    # so a tour that lost a step is visible instead of silently serving an
+    # old image to the guide.
+    stale = sorted(
+        path.name
+        for path in out_dir.glob("*.png")
+        if path.name not in produced
+    )
+    for name in stale:
+        print(f"stale (not produced this run): {name}", file=sys.stderr)
 
     return 0
 

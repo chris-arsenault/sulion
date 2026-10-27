@@ -35,6 +35,7 @@ Read these before editing:
 - [docs/secrets.md](docs/secrets.md) — brokered secrets, wrappers, trust boundary
 - [docs/e2e-coverage-plan.md](docs/e2e-coverage-plan.md) — Playwright suite shape and gaps
 - [docs/code-intel.md](docs/code-intel.md) — agent-facing structural code navigation contract
+- [docs/adrs/README.md](docs/adrs/README.md) — decision records; add one when a change picks between real alternatives
 
 ## Invariants — do not break
 

@@ -63,8 +63,8 @@ development node.
 - [E2E coverage plan](docs/e2e-coverage-plan.md) — real-stack Playwright suite
 - [Deploy](docs/deploy.md) — TrueNAS / Komodo first-run and ongoing
 - [Agent instructions](docs/agent-instructions/README.md) — user-wide CLAUDE.md / AGENTS.md templates that teach agents the sulion tooling
+- [Architecture decisions](docs/adrs/README.md) — one record per decision, with the alternatives rejected
 - [Backlog](docs/backlog.md) — active candidates and speculative bets
-- [Implementation plans](docs/plans/README.md) — pending proposals and completed records
 - [Changelog](CHANGELOG.md) — user-visible feature history
 
 ## Development checks

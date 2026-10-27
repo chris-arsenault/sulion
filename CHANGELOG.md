@@ -4,142 +4,68 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
-### Claude compaction
+### Sessions and navigation
 
-- Idle compaction preserves completed turns, their duration, and agent activity.
-  Active compaction keeps subsequent work and usage on the original turn.
-- Repair affected retained history and stale summary-derived activity from
-  stored events, preserving newer explicit activity reports.
+- Added **Open**, **Sessions**, and **Full** sidebar views. Open lists live
+  sessions with repo context, Sessions groups every session by repo and
+  meta-repo, and Full keeps the complete repository tools. Mobile defaults to
+  Open and desktop to Sessions, with separate saved preferences.
+- Added session search, agent activity, unread and queued-prompt indicators,
+  session actions, and a searchable repository picker for new sessions to the
+  compact views. Mobile has a wider drawer and larger touch controls, and
+  Library folds into one button.
+- Changed session names to use the user label, then the agent task name, then
+  the ID. When both names differ, the sidebar and Overview show the user name
+  as primary and the agent name as secondary; tabs, the palette, and session
+  dialogs follow the same priority.
+- Added **Go to repo** and **Open latest CI run** to the repo context menu.
+  GitHub repos show the latest Actions run on the checked-out branch with its
+  age beside the branch badge. With an every-terminal `GH_TOKEN`, private
+  repos are included and every repo is checked every 10 minutes.
+- Added home-screen installation metadata and icons so Sulion launches in a
+  standalone window without browser controls. Installation adds no service
+  worker or offline cache, and existing LAN HTTP access is unchanged.
+- Changed Codex and Fugu launches to run without the shared Codex daemon, so
+  each session owns its own process.
 
-### Plan boundaries
+### Authentication and security
 
-- Plans carry Boundaries with source labels for user requirements, user
-  corrections, and agent proposals. Agents and the plan editor can record
-  excluded scope and rejected approaches, with live ancestor inheritance and
-  before/after history.
-- Every plan command surfaces the applicable outcome and boundaries, including
-  progress updates, help, list, history, and branch transitions. JSON output
-  retains its existing shape, with the reminder on stderr.
-
-### Mobile installation
-
-- Add home-screen installation metadata and icons so Sulion launches in a
-  standalone window without browser controls. Existing LAN HTTP access remains
-  available; installation adds no service worker or offline cache.
-
-### DORA metrics
-
-- Metrics shows a compact 30-day aggregate across all repositories for
-  deployment frequency, change lead time, change failure rate, failed deployment
-  recovery time and deployment rework rate inside Delivery flow, directly above
-  the burndowns.
-- Collect production deployment evidence from known Ahara deploy steps on
-  `main`, including successful deployments followed by failed reporting steps.
-  Deployment details let operators record production outcomes, failure and
-  recovery times, and unplanned incident rework. Missing evidence remains
-  unavailable rather than appearing as zero.
-- Keep deployment history out of routine metrics polling. Details load in
-  indexed 25-record pages when opened; portfolio medians use commit and incident
-  samples directly. Outcome edits refresh DORA without reloading other metrics.
-
-### Authentication
-
-- Refresh browser tokens before expiry and share refreshes across concurrent
-  requests. Recover one rejected request with fresh credentials, preserve login
-  through temporary Cognito, broker, or database failures, and protect newer
-  logins from late refresh results. Expired and revoked credentials remain
-  blocked; terminal attachments reconnect without terminating their PTYs.
-- Refresh public signing keys every 15 minutes and keep successfully fetched
-  keys usable for 60 minutes. Temporary refresh failures preserve browser
-  logins; if cached keys expire, requests report temporary unavailability until
-  a refresh succeeds.
-
-### Session navigation
-
-- Session names use the user label, then the agent task name, then the ID.
-  When both names differ, the sidebar and Overview show the user name as
-  primary and the agent name as secondary. Tabs, the palette, and session
-  dialogs follow the same primary-name priority.
-- Choose **Open** for live sessions, **Sessions** for compact repository groups,
-  or **Full** for the existing repository tools. Mobile defaults to Open and
-  desktop to Sessions, with separate saved preferences.
-- Compact views include session search, agent activity, unread and queued-prompt
-  indicators, session actions, and a searchable repository picker for new sessions.
-  Mobile has a wider drawer and larger touch controls; Library folds into one button.
-
-### Model pricing
-
-- Add API-equivalent rates for GPT-6.1 Sol and Claude Opus 5.5.
-- Include Fugu in cost estimates using Fugu Ultra rates as an approximate proxy.
-  Model prices carry a published or estimated basis; approximate rates show
-  their reference model and explanation in the Metrics pane.
-
-### Repository links and CI status
-
-- The repo context menu offers **Go to repo**, which opens the GitHub page for
-  the `origin` remote in a new tab, and **Open latest CI run**.
-- GitHub repos show the latest Actions run on the checked-out branch
-  (succeeded, failed, or in progress) with its age beside the branch badge.
-  With an every-terminal `GH_TOKEN`, private repos are included and every repo
-  is checked every 10 minutes.
-
-### Repository secrets
-
-- Secret menus offer **Always for this repository** for access without an expiry.
-  Existing and future sessions inherit the grant; revoking it removes repository
-  access while preserving any separate timed terminal grant.
-- The Secrets tab can make a secret a default for every terminal, limited to
-  listed programs such as `gh`. `with-cred` injects it only into those
-  programs; any other command still needs a grant. Terminal and repository
-  grants that set the same variable take precedence over it.
-- `with-cred -- <command>` is the only credential path. It injects everything
-  granted to the terminal. The `aws` wrapper and `with-cred <secret-id>` are
-  removed.
-
-### Timeline loading
-
-- Recorded `sulion plan` commands have a **plans** filter, distinct badges and
-  styling, and parsed action, phase, status, title, note, and guidance details.
-  Retained history is enriched in place on upgrade. Mixed command cells keep
-  their existing category and show the plan metadata alongside other work.
-- New Codex sessions ignore historical thread locks checked during startup
-  cleanup, keeping the terminal timeline on the active conversation.
-- Turn details arrive in batches and resume interrupted loads. Cached turns show
-  immediately on revisit; display filters no longer reload the full turn.
-- Live updates coalesce into incremental reads, including late tool results and
-  child-agent changes. Large tool bodies load when opened, and long turns mount
-  only nearby rows. Subagent views share the cache; copying fetches a complete digest.
-- Codex code-mode edits are marked as errors only when an edit or the cell's
-  script failed. A failed build or test in the same cell shows a **command
-  failed** marker instead, and file edits the runtime rejected are tagged
-  **failed**. History is rebuilt on upgrade.
+- Changed the browser to refresh tokens before expiry and share one refresh
+  across concurrent requests. One rejected request is retried with fresh
+  credentials, logins survive temporary Cognito, broker, or database failures,
+  and a late refresh cannot overwrite a newer login. Expired and revoked
+  credentials stay blocked; terminal attachments reconnect without ending
+  their PTYs.
+- Changed signing-key handling to refresh Cognito's public keys every 15
+  minutes and keep each fetched set usable for 60 minutes. Temporary refresh
+  failures preserve browser logins; once cached keys expire, requests report
+  temporary unavailability until a refresh succeeds.
+- Added **Sign out (this device)**, which clears this browser's credentials,
+  and **Sign out (all devices)**, which records a broker-held cutoff so every
+  earlier login for the principal loses Sulion access, including tokens
+  refreshed from them.
+- Removed device pairing, device tokens, and the device file routes, retiring
+  the Ableton integration. Browser file access uses Cognito only.
+- Changed the public edge to forward only the application shell, build assets,
+  WebSocket, and health. Retrieval, secret redemption, and PTY key registration
+  are reachable only on the LAN node endpoint, and query-string credentials
+  are no longer accepted.
+- Added browser security headers: a content security policy, framing denial,
+  nosniff, a restrictive referrer policy, and HSTS at the HTTPS boundary.
+- Changed production roles to refuse to start without a valid issuer and
+  client configuration; the unauthenticated bypass is an explicit development
+  and test choice.
 
 ### Remote uploads
 
-- Remote Explorer uploads and clipboard files use private S3 staging to keep
-  file bodies out of the public application ingress. Uploads return the installed
-  path or an error for manual retry.
-- Failed clipboard uploads retain their content for retry; text is pasted
-  inline only by explicit choice. Attachments follow the session's workspace.
-- Security-policy LFI responses show a specific error while preserving the
-  prompt draft. Enforcement remains unchanged.
-
-### Plan guidance
-
-- Plans carry an outcome, principles, and assumptions, editable through the CLI
-  and browser. Plan reads show guidance before phases, including current
-  ancestor guidance for branch work. History preserves guidance changes with
-  before/after values and their author.
-
-### Transcript compatibility
-
-- Preserve queued Claude prompts and pasted text, reconcile submitted prompts,
-  and replace partial response usage with the latest receipt.
-- Keep Codex child lineage intact across inherited history, display agent
-  messages, link current subagent-start records, and enrich tool operations with
-  completed runtime evidence without double-counting operations.
-- Repair retained canonical, timeline, and usage projections on startup and
-  reindex while preserving raw transcripts and archived digests.
+- Changed Remote Explorer uploads and clipboard files on the public hostname to
+  stage through a private S3 bucket, keeping file bodies out of the public
+  ingress. An upload returns the installed path or an error for manual retry.
+- Changed failed clipboard uploads to retain their content for retry; text is
+  pasted inline only by explicit choice, and attachments follow the session's
+  workspace.
+- Changed security-policy responses for blocked uploads to show a specific
+  error while preserving the prompt draft.
 
 ### Transcript archive
 
@@ -158,6 +84,9 @@ All notable user-visible changes to Sulion are recorded here.
   Deletion is off until `SULION_ARCHIVE_PURGE_ENABLED` in `compose.yaml` is
   committed as `"1"`: until then a cycle exports and dumps only, and
   `sulion archive verify --deep` re-reads every object of the export.
+- Changed the purge phase to wait while any startup repair is behind or a
+  session's timeline cursor lags its events, so purged digests and rollups
+  always reflect the current projection.
 
 ### Retrieval
 
@@ -170,6 +99,42 @@ All notable user-visible changes to Sulion are recorded here.
 
 ### Timeline
 
+- Changed turn details to arrive in batches and resume interrupted loads.
+  Cached turns show immediately on revisit, and display filters no longer
+  reload the full turn.
+- Changed live updates to coalesce into incremental reads, including late tool
+  results and child-agent changes. Large tool bodies load when opened, long
+  turns mount only nearby rows, subagent views share the cache, and copying
+  fetches a complete digest.
+- Added a **plans** filter for recorded `sulion plan` commands, with distinct
+  badges and parsed action, phase, status, title, note, and guidance details.
+  Retained history is enriched in place on upgrade, and mixed command cells
+  keep their category alongside the plan metadata.
+- Changed Codex code-mode edits to be marked as errors only when an edit or the
+  cell's script failed. A failed build or test in the same cell shows a
+  **command failed** marker, and edits the runtime rejected are tagged
+  **failed**. History is rebuilt on upgrade.
+- Changed Codex agent messages to render with their author, recipient, type,
+  and Markdown body, collapsed by default and stripped of harness envelopes.
+  API request records and inter-agent metadata hide with bookkeeping, and
+  retained history is rebuilt on upgrade.
+- Changed ingestion to preserve queued Claude prompts and pasted text,
+  reconcile submitted prompts, and replace partial response usage with the
+  latest receipt. Codex child lineage stays intact across inherited history,
+  current subagent-start records link to their child, and tool operations gain
+  completed runtime evidence without double counting.
+- Changed startup and reindex to repair retained canonical, timeline, and usage
+  projections independently while preserving raw transcripts and archived
+  digests.
+- Changed Claude compaction handling so idle compaction preserves completed
+  turns, their duration, and agent activity, and active compaction keeps
+  subsequent work and usage on the original turn. Affected retained history
+  and stale summary-derived activity are repaired from stored events, keeping
+  newer explicit activity reports.
+- Added long-prompt collapsing with a short preview and a full-screen turn
+  reader. On mobile, tapping assistant text opens the reader; the **Full
+  screen** button opens it from any viewport, preserving tool expansion and
+  reading position.
 - Moved timeline filters, text size, and List/Grid/Hidden navigation into a
   shared settings flyout above the prompt input. Changing a setting now
   updates every open timeline and survives reloads. Grid navigation opens
@@ -318,6 +283,16 @@ All notable user-visible changes to Sulion are recorded here.
 - Changed plan flow metrics to read leaf phases only and to draw one burndown
   per plan tree rather than one per plan, so a sub-plan no longer double-counts
   the phase it sits under or displaces its own parent from the chart.
+- Added plan guidance: an outcome, principles, and assumptions editable through
+  the CLI and browser. Plan reads show guidance before phases, including
+  current ancestor guidance for branch work, and history keeps before/after
+  values with their author.
+- Added plan boundaries with source labels for user requirements, user
+  corrections, and agent proposals, so excluded scope and rejected approaches
+  are recorded with live ancestor inheritance.
+- Changed every plan command to repeat the applicable outcome and boundaries,
+  including progress updates, help, list, history, and branch transitions.
+  JSON output keeps its shape, with the reminder on stderr.
 
 ### Workspace and sessions
 
@@ -351,6 +326,16 @@ All notable user-visible changes to Sulion are recorded here.
 - Added multiline secret values, preserving embedded and trailing newlines
   through storage and credential redemption. Fixed delivered secret-file
   ownership so the service user can read files written during bootstrap.
+- Added **Always for this repository** to the secret menus for access without
+  an expiry. Existing and future sessions inherit the grant; revoking it
+  removes repository access while preserving any separate timed terminal grant.
+- Added every-terminal secrets in the Secrets tab, limited to listed programs
+  such as `gh`. `with-cred` injects such a secret only into those programs;
+  any other command still needs a grant, and terminal and repository grants
+  for the same variable take precedence.
+- Changed `with-cred -- <command>` to be the only credential path. It injects
+  everything granted to the terminal; the `aws` wrapper and
+  `with-cred <secret-id>` are removed.
 
 ### Metrics and background work
 
@@ -375,6 +360,32 @@ All notable user-visible changes to Sulion are recorded here.
   vector schema setup out of the indexing loop. Git activity is materialized
   by the node, database inventory runs outside the frequent stats sample,
   and app-state polling uses bounded refresh work.
+- Added API-equivalent rates for Claude Fable 5.1, Claude Haiku 4.5, GPT-6.1
+  Sol, and Claude Opus 5.5, and included Fugu in cost estimates using Fugu
+  Ultra rates as an approximate proxy. Model prices carry a published or
+  estimated basis; approximate rates show their reference model in the Metrics
+  pane.
+- Added a compact 30-day DORA aggregate across all repositories to Delivery
+  flow, directly above the burndowns: deployment frequency, change lead time,
+  change failure rate, failed deployment recovery time, and deployment rework
+  rate.
+- Added production deployment evidence from the known Ahara deploy steps on
+  `main`, including successful deployments followed by failed reporting steps.
+  Deployment details let operators record production outcomes, failure and
+  recovery times, and unplanned incident rework; missing evidence stays
+  unavailable rather than appearing as zero.
+- Changed deployment history to load in indexed 25-record pages when opened,
+  outside routine metrics polling. Portfolio medians use commit and incident
+  samples directly, and outcome edits refresh DORA without reloading other
+  metrics.
+
+### Bug fixes
+
+- Fixed new Codex sessions binding to historical thread locks checked during
+  startup cleanup, keeping the terminal timeline on the active conversation.
+- Fixed repository and workspace uploads following symlinks outside their
+  destination; every upload installs through the same descriptor-relative
+  writer.
 
 ## v2.1.0 - 2026-08-03
 

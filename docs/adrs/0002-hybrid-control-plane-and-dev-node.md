@@ -2,7 +2,11 @@
 
 ## Status
 
-Accepted, 2026-07-27.
+Accepted, 2026-07-27. Amended by
+[ADR 0017](0017-devenv-server-owns-pty-masters.md): the devenv server, not the
+node process, owns PTY handles and shadow emulators. Amended by
+[ADR 0015](0015-userspace-tls-node-endpoint-instead-of-wireguard.md): the
+node's encrypted channel is a pinned userspace-TLS endpoint, not a tunnel.
 
 ## Context
 

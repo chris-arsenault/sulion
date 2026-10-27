@@ -6,8 +6,8 @@
 //! submitted-prompts reconciler. The database is already the only complete
 //! copy of transcript history (Claude Code deletes its own files after 30
 //! days), so `events.payload` is the archive source and no transcript file
-//! is read or written here. Design and table plan:
-//! docs/plans/transcript-archive-and-purge.md.
+//! is read or written here. Design and retention tiers:
+//! docs/adrs/0003-tiered-transcript-retention.md.
 
 pub mod dump;
 pub mod export;

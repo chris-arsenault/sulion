@@ -333,6 +333,6 @@ response records (with a legacy cumulative-snapshot prefix) into
 writes, cache reads, output, cumulative spend, and the latest context footprint
 stay separate.
 
-File-backed implementation records are indexed in
-[`plans/README.md`](plans/README.md). Completed records are historical evidence;
-the pending archive proposal remains separate from shipped product behavior.
+The design of published plans and branch plans, with the shapes that were
+rejected, is recorded in
+[ADR 0014](adrs/0014-published-plans-and-branch-plans.md).
