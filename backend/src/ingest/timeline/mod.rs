@@ -28,4 +28,4 @@ pub use types::{
 };
 
 pub(crate) use render::{compose_turn_markdown, subagent_title};
-pub(crate) use types::{is_bookkeeping_system_subtype, is_local_command_text, BOOKKEEPING_KINDS};
+pub(crate) use types::{is_bookkeeping_record, record_speaker};

@@ -1,14 +1,6 @@
 import type { TimelineItem, TimelineTurn } from "../../api/types";
 import type { TimelineFilters } from "./filters";
 
-const bookkeeping = new Set([
-  "agent-name", "api-request", "api-request-blob", "ai-title", "attachment", "bridge-session", "custom-title",
-  "file-history-delta", "file-history-snapshot", "frame-link", "last-prompt",
-  "mode", "permission-mode", "queue-operation", "world_state", "token_usage_record", "atis-latch",
-  "inter_agent_communication_metadata",
-]);
-const telemetry = new Set(["stop_hook_summary", "turn_duration", "runtime_evidence"]);
-const commandPrefix = /^\s*<(command-name|command-message|local-command-stdout|local-command-stderr|local-command-caveat)>/;
 const filteredAssistant = new WeakMap<TimelineItem, { signature: string; item: TimelineItem }>();
 
 export function filterTurn(turn: TimelineTurn, filters: TimelineFilters): TimelineTurn {
@@ -30,12 +22,7 @@ export function filterTurn(turn: TimelineTurn, filters: TimelineFilters): Timeli
       filteredAssistant.set(item, { signature, item: filtered });
       return [filtered];
     }
-    if (!filters.showBookkeeping) {
-      if (item.kind === "system" && (item.is_meta || telemetry.has(item.subtype ?? ""))) return [];
-      if (item.kind === "generic" && (bookkeeping.has(item.label) || commandPrefix.test(
-        item.details.blocks.find((block) => block.kind === "text")?.text ?? "",
-      ))) return [];
-    }
+    if (!filters.showBookkeeping && (item.kind === "system" || item.kind === "generic") && item.is_meta) return [];
     return [item];
   });
   const hideResults = filters.hiddenSpeakers.has("tool_result");

@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 
-use crate::ingest::canonical::BlockKind;
 use crate::ingest::timeline::{
-    is_bookkeeping_system_subtype, is_local_command_text, ProjectionFilters, SpeakerFacet,
-    TimelineAssistantItem, TimelineChunk, TimelineItem, TimelineToolPair, TimelineTurn,
-    BOOKKEEPING_KINDS,
+    ProjectionFilters, SpeakerFacet, TimelineAssistantItem, TimelineChunk, TimelineItem,
+    TimelineToolPair, TimelineTurn,
 };
 
 /// Drops the turn's items and results the filters hide. An item's
@@ -37,10 +35,11 @@ pub(super) fn apply_projection_filters(turn: &mut TimelineTurn, filters: &Projec
 }
 
 fn filter_chunk(
-    chunk: TimelineChunk,
+    mut chunk: TimelineChunk,
     pair_by_id: &HashMap<&str, &TimelineToolPair>,
     filters: &ProjectionFilters,
 ) -> Option<TimelineChunk> {
+    chunk.classify_bookkeeping();
     match chunk {
         TimelineChunk::Assistant { items, thinking } => {
             if filters.hidden_speakers.contains(&SpeakerFacet::Assistant) {
@@ -67,11 +66,7 @@ fn filter_chunk(
             text,
             is_meta,
         } => {
-            // Turn telemetry (hook summaries, durations) hides with the
-            // meta-flagged system records.
-            if !filters.show_bookkeeping
-                && (is_meta || is_bookkeeping_system_subtype(subtype.as_deref()))
-            {
+            if !filters.show_bookkeeping && is_meta {
                 None
             } else {
                 Some(TimelineChunk::System {
@@ -81,21 +76,19 @@ fn filter_chunk(
                 })
             }
         }
-        TimelineChunk::Generic { label, details } => {
-            // Local slash-command user records project as generic chunks;
-            // they hide with the rest of the bookkeeping.
-            let local_command = details
-                .blocks
-                .iter()
-                .find(|block| block.kind == BlockKind::Text)
-                .and_then(|block| block.text.as_deref())
-                .is_some_and(is_local_command_text);
-            if !filters.show_bookkeeping
-                && (BOOKKEEPING_KINDS.contains(&label.as_str()) || local_command)
-            {
+        TimelineChunk::Generic {
+            label,
+            details,
+            is_meta,
+        } => {
+            if !filters.show_bookkeeping && is_meta {
                 None
             } else {
-                Some(TimelineChunk::Generic { label, details })
+                Some(TimelineChunk::Generic {
+                    label,
+                    details,
+                    is_meta,
+                })
             }
         }
         other => Some(other),
@@ -187,6 +180,7 @@ mod tests {
 
         let chunk = TimelineChunk::Generic {
             label: "user".to_string(),
+            is_meta: false,
             details: TimelineGenericDetails {
                 event_uuid: None,
                 parent_event_uuid: None,
@@ -231,6 +225,7 @@ mod tests {
             offset: offset as i64,
             chunk: TimelineChunk::Generic {
                 label: kind.into(),
+                is_meta: false,
                 details: TimelineGenericDetails {
                     event_uuid: None,
                     parent_event_uuid: None,
@@ -267,6 +262,66 @@ mod tests {
             },
         );
         assert_eq!(turn.items.len(), 4);
+    }
+
+    #[test]
+    fn generic_visibility_uses_content_and_meta_flags_instead_of_unknown_kind_names() {
+        use crate::ingest::canonical::Block;
+
+        for (kind, speaker, blocks, is_meta, expected_meta) in [
+            ("session-owner", "other", vec![], false, true),
+            ("future-metadata", "other", vec![], false, true),
+            (
+                "legacy-metadata",
+                "other",
+                vec![Block::text(0, "state")],
+                true,
+                true,
+            ),
+            (
+                "future-text",
+                "other",
+                vec![Block::text(0, "notice")],
+                false,
+                false,
+            ),
+            (
+                "future-block",
+                "other",
+                vec![Block::unknown(0, serde_json::json!({"data":"keep"}))],
+                false,
+                false,
+            ),
+            ("future-user", "user", vec![], false, false),
+        ] {
+            // Older stored generic chunks lack is_meta; deserialization must
+            // still classify them on both filtered and unfiltered reads.
+            let mut body = serde_json::json!({"kind":"generic", "label":kind, "details":{
+                "event_uuid":null, "parent_event_uuid":null, "related_tool_use_id":null,
+                "subtype":null, "speaker":speaker, "content_kind":"none", "blocks":blocks,
+            }});
+            if is_meta {
+                body["is_meta"] = serde_json::json!(true);
+            }
+            let chunk = serde_json::from_value(body).unwrap();
+            let mut shown = turn_with_pair();
+            shown.items.push(TimelineItem { offset: 1, chunk });
+            let mut hidden = shown.clone();
+            apply_projection_filters(&mut hidden, &ProjectionFilters::default());
+            assert_eq!(hidden.items.is_empty(), expected_meta, "{kind}");
+            apply_projection_filters(
+                &mut shown,
+                &ProjectionFilters {
+                    show_bookkeeping: true,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(
+                serde_json::to_value(&shown.items[0]).unwrap()["is_meta"],
+                expected_meta,
+                "{kind}"
+            );
+        }
     }
 
     #[test]

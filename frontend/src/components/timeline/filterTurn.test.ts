@@ -29,22 +29,26 @@ describe("local turn visibility", () => {
   it("keeps agent messages while hiding bookkeeping telemetry", () => {
     const turn = makeTurn({ items: [
       { offset: 1, kind: "system", subtype: "agent_message", text: "message", is_meta: false },
-      { offset: 2, kind: "system", subtype: "turn_duration", text: "telemetry", is_meta: false },
+      { offset: 2, kind: "system", subtype: "turn_duration", text: "telemetry", is_meta: true },
       { offset: 3, kind: "system", subtype: "notice", text: "meta", is_meta: true },
+      { offset: 4, kind: "system", subtype: "future-telemetry", text: "state", is_meta: true },
     ] });
     expect(filterTurn(turn, DEFAULT_FILTERS).items.map((item) => item.offset)).toEqual([1]);
     expect(filterTurn(turn, { ...DEFAULT_FILTERS, showBookkeeping: true }).items).toEqual(turn.items);
   });
 
-  it("hides API and collaboration metadata while keeping agent communication", () => {
+  it("uses server bookkeeping flags for existing and future records while keeping communication", () => {
     const details = { event_uuid: null, parent_event_uuid: null, related_tool_use_id: null,
       subtype: null, speaker: "other", content_kind: "none", blocks: [] };
     const turn = makeTurn({ items: [
-      { offset: 1, kind: "generic", label: "api-request", details },
-      { offset: 2, kind: "generic", label: "api-request-blob", details },
-      { offset: 3, kind: "generic", label: "inter_agent_communication_metadata", details },
+      { offset: 1, kind: "generic", label: "api-request", details, is_meta: true },
+      { offset: 2, kind: "generic", label: "api-request-blob", details, is_meta: true },
+      { offset: 3, kind: "generic", label: "inter_agent_communication_metadata", details, is_meta: true },
       { offset: 4, kind: "agent_message", author: "/root/worker", recipient: "/root", message_type: "MESSAGE", text: "hello" },
-      { offset: 5, kind: "generic", label: "unknown-future-event", details },
+      { offset: 5, kind: "generic", label: "unknown-future-event", details, is_meta: false },
+      { offset: 6, kind: "generic", label: "session-owner", details, is_meta: true },
+      { offset: 7, kind: "generic", label: "unknown-future-event", details, is_meta: true },
+      { offset: 8, kind: "generic", label: "cost-state", details, is_meta: true },
     ] });
     expect(filterTurn(turn, DEFAULT_FILTERS).items.map((item) => item.offset)).toEqual([4, 5]);
     expect(filterTurn(turn, { ...DEFAULT_FILTERS, showBookkeeping: true }).items).toEqual(turn.items);

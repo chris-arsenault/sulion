@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::ingest::canonical::{Block, OperationCategory};
+use crate::ingest::canonical::{Block, BlockKind, OperationCategory};
 
 /// Claude Code writes local slash-command activity (`/model`, `/login`,
 /// …) as plain `user` records whose text is wrapped in these tags. They
@@ -63,6 +63,36 @@ pub(crate) const BOOKKEEPING_KINDS: &[&str] = &[
     // turns: session-scoped state with no content of its own.
     "atis-latch",
 ];
+
+pub(crate) fn record_speaker<'a>(kind: &'a str, speaker: Option<&'a str>) -> &'a str {
+    speaker.unwrap_or(match kind {
+        "assistant" | "user" | "system" | "summary" => kind,
+        _ => "other",
+    })
+}
+
+/// Shared by the reducer and readers, including reads of older stored items.
+/// Records with speaker `other` and no blocks are metadata, whatever their kind.
+/// Retain unknown blocks: their content may need a newer parser.
+pub(crate) fn is_bookkeeping_record(
+    kind: &str,
+    speaker: Option<&str>,
+    subtype: Option<&str>,
+    is_meta: bool,
+    blocks: &[Block],
+) -> bool {
+    let speaker = record_speaker(kind, speaker);
+    (speaker == "other" && blocks.is_empty())
+        || is_meta
+        || (BOOKKEEPING_KINDS.contains(&kind) && subtype != Some("queued_user_prompt"))
+        || (speaker == "system" && is_bookkeeping_system_subtype(subtype))
+        || (speaker == "user"
+            && blocks
+                .iter()
+                .find(|block| block.kind == BlockKind::Text)
+                .and_then(|block| block.text.as_deref())
+                .is_some_and(is_local_command_text))
+}
 
 #[derive(Debug, Clone)]
 pub struct StoredEvent {
@@ -333,7 +363,35 @@ pub enum TimelineChunk {
     Generic {
         label: String,
         details: TimelineGenericDetails,
+        #[serde(default)]
+        is_meta: bool,
     },
+}
+
+impl TimelineChunk {
+    /// Classify on read as well as write so stored items from older projections
+    /// expose the same bookkeeping flag to REST and streaming clients.
+    pub(crate) fn classify_bookkeeping(&mut self) {
+        match self {
+            Self::System {
+                subtype, is_meta, ..
+            } => *is_meta |= is_bookkeeping_system_subtype(subtype.as_deref()),
+            Self::Generic {
+                label,
+                details,
+                is_meta,
+            } => {
+                *is_meta = is_bookkeeping_record(
+                    label,
+                    details.speaker.as_deref(),
+                    details.subtype.as_deref(),
+                    *is_meta,
+                    &details.blocks,
+                );
+            }
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

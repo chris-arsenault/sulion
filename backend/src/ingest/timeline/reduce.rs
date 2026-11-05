@@ -663,11 +663,12 @@ fn visible_item(event: &StoredEvent) -> Option<TimelineChunk> {
         TimelineChunk::System {
             subtype: event.subtype.clone(),
             text,
-            is_meta: event.is_meta,
+            is_meta: is_bookkeeping_event(event),
         }
     } else {
         TimelineChunk::Generic {
             label: event.kind.clone(),
+            is_meta: is_bookkeeping_event(event),
             details: TimelineGenericDetails {
                 event_uuid: event.event_uuid.clone(),
                 parent_event_uuid: event.parent_event_uuid.clone(),

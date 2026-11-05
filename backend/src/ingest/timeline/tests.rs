@@ -304,6 +304,44 @@ fn bookkeeping_before_the_first_turn_is_not_projected() {
     assert_eq!(turns[0].event_count, 2);
 }
 
+#[test]
+fn unnamed_metadata_neither_seeds_turns_nor_extends_work_time_for_either_agent() {
+    for agent in ["claude-code", "codex"] {
+        let mut records = vec![
+            event(0, "session-owner", vec![]),
+            event(1, "future-harness-metadata", vec![]),
+            event(2, "user", vec![text("work")]),
+            event(3, "assistant", vec![text("reply")]),
+            event(
+                4,
+                "future-content",
+                vec![Block::unknown(0, json!({"data":"keep"}))],
+            ),
+            event(1000, "future-harness-metadata", vec![]),
+        ];
+        for record in &mut records {
+            record.agent = agent.into();
+        }
+        assert!(project(&records[..2]).is_empty());
+        let turns = project(&records);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].start_timestamp, ts(2));
+        assert_eq!(turns[0].end_timestamp, ts(4));
+        assert!(matches!(
+            turns[0].items[1].chunk,
+            TimelineChunk::Generic { is_meta: false, .. }
+        ));
+        assert!(matches!(
+            turns[0].items[2].chunk,
+            TimelineChunk::Generic { is_meta: true, .. }
+        ));
+        for record in &mut records[..2] {
+            record.is_sidechain = true;
+        }
+        assert!(project(&records[..2]).is_empty());
+    }
+}
+
 fn claude_record(offset: i64, value: Value) -> StoredEvent {
     use crate::ingest::canonical::{ClaudeParser, EventParser};
     let parsed = ClaudeParser.parse(&value);

@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::db::Pool;
-use crate::ingest::timeline::{TimelineItem, TimelineTurn};
+use crate::ingest::timeline::{TimelineChunk, TimelineItem, TimelineTurn};
 
 use super::{build_operations_by_turn, ProjectedOperationRow, ProjectedTouchRow};
 
@@ -233,10 +233,9 @@ pub async fn next(
             .bind(BATCH_SIZE).fetch_all(pool).await?;
         cursor.items_done = rows.len() < BATCH_SIZE as usize;
         for (offset, body) in rows {
-            items.push(TimelineItem {
-                offset,
-                chunk: serde_json::from_value(body)?,
-            });
+            let mut chunk: TimelineChunk = serde_json::from_value(body)?;
+            chunk.classify_bookkeeping();
+            items.push(TimelineItem { offset, chunk });
             cursor.item_after = offset;
         }
         let references: Vec<_> = items

@@ -232,6 +232,7 @@ pub async fn rebuild_session_projection(pool: &Pool, session_uuid: Uuid) -> anyh
 pub async fn backfill_conversation_events(
     pool: &Pool,
     job: Option<&crate::ingest::jobs::JobHandle>,
+    include_compaction: bool,
 ) -> anyhow::Result<usize> {
     let sessions: Vec<Uuid> = sqlx::query_scalar(
         "SELECT cs.session_uuid FROM claude_sessions cs \
@@ -239,37 +240,19 @@ pub async fn backfill_conversation_events(
              SELECT 1 FROM events e WHERE e.session_uuid = cs.session_uuid AND ( \
                  e.kind IN ('api-request', 'api-request-blob', 'inter_agent_communication_metadata') \
                  OR (e.agent = 'codex' AND e.subtype = 'agent_message') \
+                 OR ($1 AND e.agent = 'claude-code' AND ( \
+                     e.payload ->> 'isCompactSummary' = 'true' \
+                     OR e.payload ->> 'subtype' = 'compact_boundary')) \
+                 OR (e.speaker = 'user' AND e.is_meta) \
+                 OR (COALESCE(e.speaker, CASE \
+                         WHEN e.kind IN ('user', 'assistant', 'system', 'summary') THEN e.kind \
+                         ELSE 'other' END) = 'other' \
+                     AND (e.is_meta OR NOT EXISTS (SELECT 1 FROM event_blocks b \
+                         WHERE b.session_uuid = e.session_uuid AND b.byte_offset = e.byte_offset))) \
              ) \
          ) ORDER BY cs.started_at DESC, cs.session_uuid",
     )
-    .fetch_all(pool)
-    .await?;
-    if let Some(job) = job {
-        job.set_total(sessions.len() as i64).await;
-    }
-    for session in &sessions {
-        rebuild_session_projection(pool, *session).await?;
-        if let Some(job) = job {
-            job.advance(Some(&session.to_string())).await;
-        }
-    }
-    Ok(sessions.len())
-}
-
-pub(crate) async fn backfill_compaction_events(
-    pool: &Pool,
-    job: Option<&crate::ingest::jobs::JobHandle>,
-) -> anyhow::Result<usize> {
-    let sessions: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT cs.session_uuid FROM claude_sessions cs \
-         WHERE cs.purged_at IS NULL AND EXISTS ( \
-             SELECT 1 FROM events e WHERE e.session_uuid = cs.session_uuid \
-             AND e.agent = 'claude-code' AND ( \
-                 e.payload ->> 'isCompactSummary' = 'true' OR \
-                 e.payload ->> 'subtype' = 'compact_boundary' \
-             ) \
-         ) ORDER BY cs.started_at DESC, cs.session_uuid",
-    )
+    .bind(include_compaction)
     .fetch_all(pool)
     .await?;
     if let Some(job) = job {

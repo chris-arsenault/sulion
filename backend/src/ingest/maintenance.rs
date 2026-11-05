@@ -41,7 +41,8 @@ const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // v14: classify recorded plan commands and enrich their operation rows in place.
 // v15: structured agent messages and API/collaboration bookkeeping classification.
 // v16: compaction preserves turns/activity; maintenance no longer advances turn time.
-const TIMELINE_PROJECTION_VERSION: i32 = 16;
+// v17: content-free non-conversation records are bookkeeping regardless of kind.
+const TIMELINE_PROJECTION_VERSION: i32 = 17;
 const USAGE_PROJECTION_KEY: &str = "usage_projection";
 // v2: include Codex per-response usage, including compaction, and retain the
 // legacy prefix before a session first supplies response records.
@@ -183,14 +184,10 @@ async fn repair_timeline_projection_if_behind(
         } else {
             0
         };
-        let conversation_sessions = if current < 15 {
-            super::projection::backfill_conversation_events(pool, job.as_ref()).await?
-        } else {
-            0
-        };
-        let compaction_sessions =
-            super::projection::backfill_compaction_events(pool, job.as_ref()).await?;
-        Ok(plan_sessions + conversation_sessions + compaction_sessions)
+        let conversation_sessions =
+            super::projection::backfill_conversation_events(pool, job.as_ref(), current < 16)
+                .await?;
+        Ok(plan_sessions + conversation_sessions)
     }
     .await;
     let result = match result {

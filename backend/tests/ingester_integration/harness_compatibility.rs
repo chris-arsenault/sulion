@@ -260,6 +260,196 @@ fn codex(fx: &CodexFixture, ordinal: u64, kind: &str, payload: Value) {
 }
 
 #[tokio::test]
+async fn metadata_classification_covers_live_legacy_streamed_and_repaired_turns() {
+    use sulion::ingest::{load_timeline_response, turn_stream, ProjectionFilters};
+
+    let pool = fresh_pool().await;
+    let fx = Fixture::new();
+    for value in [
+        json!({"type":"session-owner","timestamp":"2026-11-05T12:00:00Z","owner":"claude"}),
+        json!({"type":"future-metadata","timestamp":"2026-11-05T12:00:00Z","state":1}),
+        json!({"type":"user","uuid":"prompt","timestamp":"2026-11-05T12:00:01Z","message":{"content":"work"}}),
+        json!({"type":"assistant","timestamp":"2026-11-05T12:00:02Z","message":{"content":"reply"}}),
+        json!({"type":"future-content","timestamp":"2026-11-05T12:00:03Z","message":{"content":[{"type":"future-block","data":"keep"}]}}),
+        json!({"type":"system","subtype":"notice","timestamp":"2026-11-05T12:00:04Z"}),
+        json!({"type":"system","subtype":"turn_duration","timestamp":"2026-11-05T12:00:05Z"}),
+        json!({"type":"future-meta-with-content","isMeta":true,"timestamp":"2026-11-05T12:01:00Z","message":{"content":"state"}}),
+        json!({"type":"session-owner","timestamp":"2026-11-05T12:10:00Z","owner":"claude"}),
+        json!({"type":"future-metadata","timestamp":"2026-11-05T12:11:00Z","state":2}),
+    ] {
+        claude(&fx, value);
+        Ingester::new().tick(&pool, &fx.config()).await.unwrap();
+    }
+    let hidden = load_timeline_response(&pool, fx.session_uuid, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        hidden.turns.len(),
+        1,
+        "metadata must not create an orphan turn"
+    );
+    assert_eq!(
+        hidden.turns[0].duration_ms, 4000,
+        "metadata must not extend work time"
+    );
+    assert_eq!(
+        hidden.turns[0].items.len(),
+        3,
+        "reply, unknown block, and system notice remain"
+    );
+    let filters = ProjectionFilters {
+        show_bookkeeping: true,
+        ..Default::default()
+    };
+    let shown = load_timeline_response(&pool, fx.session_uuid, &filters)
+        .await
+        .unwrap();
+    let expected_items = serde_json::to_value(&shown.turns[0].items).unwrap();
+    assert_eq!(expected_items.as_array().unwrap().len(), 7);
+    assert!(expected_items
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["label"] == "future-meta-with-content" && item["is_meta"] == true));
+    let source: Value = sqlx::query_scalar(
+        "SELECT jsonb_agg(payload ORDER BY byte_offset) FROM events WHERE session_uuid=$1",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // Older chunks did not carry generic flags, and completion telemetry used
+    // to carry false. Both API paths must classify these without a rebuild.
+    sqlx::query("UPDATE timeline_items SET body=body-'is_meta' WHERE session_uuid=$1 AND body->>'kind'='generic' AND body->>'label'<>'future-meta-with-content'")
+        .bind(fx.session_uuid).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE timeline_items SET body=jsonb_set(body,'{is_meta}','false') WHERE session_uuid=$1 AND body->>'subtype'='turn_duration'")
+        .bind(fx.session_uuid).execute(&pool).await.unwrap();
+    let legacy = load_timeline_response(&pool, fx.session_uuid, &filters)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&legacy.turns[0].items).unwrap(),
+        expected_items
+    );
+    let turn_id = hidden.turns[0].id;
+    let turn_stream::Record::Header { cursor, .. } =
+        turn_stream::begin(&pool, fx.session_uuid, turn_id, None)
+            .await
+            .unwrap()
+    else {
+        panic!("expected stream header")
+    };
+    let turn_stream::Record::Batch { items, .. } =
+        turn_stream::next(&pool, fx.session_uuid, turn_id, cursor)
+            .await
+            .unwrap()
+    else {
+        panic!("expected streamed items")
+    };
+    assert_eq!(serde_json::to_value(items).unwrap(), expected_items);
+
+    // Codex already marks unknown transport records as metadata, even when
+    // their canonical blocks contain the raw record. Preserve that signal.
+    let codex_fx = CodexFixture::new();
+    codex(
+        &codex_fx,
+        0,
+        "response_item",
+        json!({"type":"message","role":"user",
+        "content":[{"type":"input_text","text":"codex work"}]}),
+    );
+    codex(
+        &codex_fx,
+        1,
+        "future-codex-state",
+        json!({"state":"internal"}),
+    );
+    Ingester::new()
+        .tick(&pool, &codex_fx.config())
+        .await
+        .unwrap();
+    let codex_hidden = load_timeline_response(&pool, codex_fx.session_uuid, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(codex_hidden.turns.len(), 1);
+    assert!(codex_hidden.turns[0].items.is_empty());
+    let codex_shown = load_timeline_response(&pool, codex_fx.session_uuid, &filters)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&codex_shown.turns[0].items[0]).unwrap()["is_meta"],
+        true
+    );
+    // Older generic items also lost explicit canonical flags. Rebuild them
+    // from the retained source, rather than guessing from their content.
+    sqlx::query("UPDATE timeline_items SET body=body-'is_meta' WHERE session_uuid=ANY($1) AND body->>'kind'='generic'")
+        .bind(vec![fx.session_uuid, codex_fx.session_uuid]).execute(&pool).await.unwrap();
+
+    // Upgrade the previous projection's inflated duration, leaving unrelated
+    // sessions and canonical payloads intact. The next startup is a no-op.
+    let unrelated = Fixture::new();
+    claude(
+        &unrelated,
+        json!({"type":"user","uuid":"unrelated","timestamp":"2026-11-05T12:00:00Z","message":{"content":"other work"}}),
+    );
+    Ingester::new()
+        .tick(&pool, &unrelated.config())
+        .await
+        .unwrap();
+    let untouched = turn_stream::position(&pool, unrelated.session_uuid)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE timeline_turns SET duration_ms=660000,end_timestamp='2026-11-05T12:11:00Z' WHERE session_uuid=$1")
+        .bind(fx.session_uuid).execute(&pool).await.unwrap();
+    sulion::ingest::mark_projection_versions_current(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE ingest_projection_versions SET version=16 WHERE name='timeline_projection'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let stats = sulion::ingest::run_required_startup_maintenance(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stats.timeline_sessions_backfilled, 2);
+    let repaired = load_timeline_response(&pool, fx.session_uuid, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&repaired.turns).unwrap(),
+        serde_json::to_value(&hidden.turns).unwrap()
+    );
+    let codex_repaired = load_timeline_response(&pool, codex_fx.session_uuid, &Default::default())
+        .await
+        .unwrap();
+    assert!(codex_repaired.turns[0].items.is_empty());
+    assert_eq!(
+        turn_stream::position(&pool, unrelated.session_uuid)
+            .await
+            .unwrap(),
+        untouched
+    );
+    let after: Value = sqlx::query_scalar(
+        "SELECT jsonb_agg(payload ORDER BY byte_offset) FROM events WHERE session_uuid=$1",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(after, source);
+    assert_eq!(
+        sulion::ingest::run_required_startup_maintenance(&pool)
+            .await
+            .unwrap()
+            .timeline_sessions_backfilled,
+        0
+    );
+}
+
+#[tokio::test]
 async fn conversation_upgrade_repairs_legacy_messages_once_without_touching_other_sessions() {
     let pool = fresh_pool().await;
     let fx = CodexFixture::new();

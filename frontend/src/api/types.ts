@@ -696,6 +696,7 @@ export type TimelineChunk =
   | {
       kind: "generic";
       label: string;
+      is_meta: boolean;
       details: {
         event_uuid: string | null;
         parent_event_uuid: string | null;

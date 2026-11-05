@@ -159,6 +159,16 @@ including per-response usage and Claude latch records, do not seed user turns.
 Codex code-mode calls are unwrapped into operations so commands and native
 patches remain visible in tool detail and file-touch evidence.
 
+The backend owns timeline bookkeeping classification. Any record with
+canonical speaker `other` and no content blocks is metadata, regardless of its
+event name. Unknown records with blocks remain visible unless explicitly marked
+as metadata or already classified as harness bookkeeping. REST and streamed
+items expose `is_meta`; the browser uses that flag for its bookkeeping toggle.
+Read-time structural classification also covers older stored items. Timeline
+version 17 repairs affected retained sessions, restores canonical metadata flags
+on generic items, and prevents metadata from seeding turns or extending work
+timing. Canonical events and raw payloads remain intact.
+
 Queued Claude attachments become human turns only when their origin identifies
 human input. Paired harness paste delimiters are removed from canonical text;
 the pasted body and raw payload remain intact. Duplicate prompt UUIDs produce
