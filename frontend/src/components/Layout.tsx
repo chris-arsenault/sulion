@@ -256,6 +256,7 @@ export function Layout() {
           onClose={closeSubmittedPrompts}
         />
         <PlanModal
+          key="plan-browser"
           open={planTarget !== null}
           repo={planTarget?.repo ?? null}
           planId={planTarget?.planId}
@@ -320,6 +321,7 @@ export function Layout() {
         onClose={closeSubmittedPrompts}
       />
       <PlanModal
+        key="plan-browser"
         open={planTarget !== null}
         repo={planTarget?.repo ?? null}
         planId={planTarget?.planId}

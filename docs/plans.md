@@ -8,6 +8,14 @@ They are deliberately not an agent's internal working plan. Agents should keep
 using their native detailed planning mechanism for reasoning, dependencies, and
 implementation steps. A published plan is the smaller user-facing projection.
 
+The browser shows published plans as a collapsible tree beside the selected
+plan on desktop. On mobile, selecting a plan opens its detail; Back to plans
+returns to the same tree without discarding draft edits. Search retains each
+match's ancestors and temporarily reveals collapsed branches. Show closed
+includes completed and canceled plans; ancestors and the selected plan remain
+visible for context. Arrow keys move through visible plans, Left/Right collapse
+or expand branches, and Enter or Space opens the focused plan.
+
 ## Plan commands in the timeline
 
 Recorded `sulion plan` shell invocations have a **plans** operation filter,

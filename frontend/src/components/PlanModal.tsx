@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -33,12 +34,14 @@ import type {
   UpdatePlanPhaseInput,
 } from "../api/types";
 import { Icon } from "../icons";
+import { useIsMobileLayout } from "../hooks/useSessionNavigation";
 import { cleanGuidance, EMPTY_GUIDANCE } from "../lib/planGuidance";
 import { sessionName as sessionLabel } from "../lib/sessionIdentity";
 import type { Maybe } from "../lib/types";
 import { useSessions } from "../state/SessionStore";
 import { FileRefText } from "./common/FileRefText";
 import { GuidanceContent, GuidanceFields } from "./PlanGuidance";
+import { PlanTree } from "./PlanTree";
 import { Overlay } from "./ui";
 import "./PlanModal.css";
 
@@ -51,48 +54,62 @@ interface PlanModalProps {
 
 type PlanMutation = (operation: () => Promise<PlanView>) => Promise<boolean>;
 
-/** Published plans live in a compact modal, not a workspace tab. It opens
- * either on a repo's plan index (list + create) or straight onto one plan's
- * detail; navigation between the two is local modal state. */
+/** Tree navigation and fetched detail stay local to the plan browser. */
 export function PlanModal({ open, repo, planId, onClose }: PlanModalProps) {
   const [selectedPlanId, setSelectedPlanId] = useState<Maybe<string>>(planId);
   const [detailTitle, setDetailTitle] = useState<string | null>(null);
+  const [showTree, setShowTree] = useState(!planId);
+  const browserRef = useRef<HTMLDivElement>(null);
+  const isMobile = useIsMobileLayout();
 
   // Re-seed whenever the modal is (re)opened against a new target.
   useEffect(() => {
     if (open) {
       setSelectedPlanId(planId);
       setDetailTitle(null);
+      setShowTree(!planId);
     }
   }, [open, planId, repo]);
 
   const backToIndex = useCallback(() => {
-    setSelectedPlanId(undefined);
-    setDetailTitle(null);
+    setShowTree(true);
   }, []);
-  const openDetail = useCallback((nextPlanId: string) => {
-    setSelectedPlanId(nextPlanId);
-    setDetailTitle(null);
-  }, []);
+  const openDetail = useCallback(
+    (nextPlanId: string) => {
+      setSelectedPlanId(nextPlanId);
+      if (nextPlanId !== selectedPlanId) setDetailTitle(null);
+      setShowTree(false);
+    },
+    [selectedPlanId],
+  );
+
+  useEffect(() => {
+    if (!open || !isMobile) return;
+    const target = showTree
+      ? browserRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
+        ?? browserRef.current?.querySelector<HTMLElement>('[role="treeitem"]')
+      : browserRef.current?.querySelector<HTMLElement>(".plan-modal__reader");
+    target?.focus();
+  }, [isMobile, open, selectedPlanId, showTree]);
 
   if (!open || !repo) return null;
 
-  const inDetail = Boolean(selectedPlanId);
+  const inDetail = Boolean(selectedPlanId) && !showTree;
 
   return (
     <Overlay
       open={open}
       onClose={onClose}
       modal
-      className="plan-modal"
-      width={620}
-      maxWidth="min(94vw, 620px)"
-      maxHeight="82vh"
+      className={`plan-modal ${inDetail ? "plan-modal--reading" : "plan-modal--browsing"}`}
+      width={1080}
+      maxWidth="94vw"
+      maxHeight="90dvh"
       leading={
         inDetail ? (
           <button
             type="button"
-            className="plan-modal__back"
+            className="plan-modal__back plan-modal__mobile-back"
             onClick={backToIndex}
             aria-label="Back to plans"
           >
@@ -105,30 +122,45 @@ export function PlanModal({ open, repo, planId, onClose }: PlanModalProps) {
       title={inDetail ? detailTitle ?? "Plan" : "Published plans"}
       subtitle={inDetail ? `${repo} · plan` : repo}
     >
-      {selectedPlanId ? (
-        <PlanDetail
-          key={selectedPlanId}
+      <div ref={browserRef} className="plan-modal__browser">
+        <PlanIndex
+          key={repo}
           repo={repo}
-          planId={selectedPlanId}
-          onTitle={setDetailTitle}
+          selectedPlanId={selectedPlanId}
           onOpenPlan={openDetail}
         />
-      ) : (
-        <PlanIndex repo={repo} onOpenPlan={openDetail} />
-      )}
+        <div className="plan-modal__reader" tabIndex={-1} aria-label="Selected plan">
+          {selectedPlanId ? (
+            <PlanDetail
+              key={selectedPlanId}
+              repo={repo}
+              planId={selectedPlanId}
+              onTitle={setDetailTitle}
+              onOpenPlan={openDetail}
+            />
+          ) : (
+            <div className="plan-modal__empty-detail">
+              <Icon name="git-branch" size={20} />
+              <p>Select a plan to read its phases and sub-plans.</p>
+            </div>
+          )}
+        </div>
+      </div>
     </Overlay>
   );
 }
 
 function PlanIndex({
   repo,
+  selectedPlanId,
   onOpenPlan,
 }: {
   repo: string;
+  selectedPlanId: Maybe<string>;
   onOpenPlan: (planId: string) => void;
 }) {
   const [plans, setPlans] = useState<PlanView[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showClosed, setShowClosed] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -152,7 +184,6 @@ function PlanIndex({
     () => sessions.filter((session) => session.repo === repo && session.state === "live"),
     [repo, sessions],
   );
-  const orderedPlans = useMemo(() => nestPlans(plans), [plans]);
   const onShowClosedChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => setShowClosed(event.target.checked),
     [],
@@ -178,14 +209,14 @@ function PlanIndex({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setPlans(await listRepoPlans(repo, showClosed));
+      setPlans(await listRepoPlans(repo, true));
       setError(null);
     } catch (err) {
       setError(messageOf(err));
     } finally {
       setLoading(false);
     }
-  }, [repo, showClosed]);
+  }, [repo]);
 
   useEffect(() => {
     void load();
@@ -232,10 +263,10 @@ function PlanIndex({
 
   // The create form defaults open when the repo has no plans yet, and can be
   // toggled otherwise. It stays put while the list loads so it never flickers.
-  const formOpen = showCreate || plans.length === 0;
+  const formOpen = showCreate || (!loading && plans.length === 0);
 
   return (
-    <div className="plan-modal__index">
+    <nav className="plan-modal__index" aria-label="Plan browser">
       <div className="plan-modal__toolbar">
         <button
           type="button"
@@ -314,11 +345,14 @@ function PlanIndex({
         {!loading && plans.length === 0 ? (
           <div className="plan-modal__empty">No published plans in this repo yet.</div>
         ) : null}
-        {orderedPlans.map((plan) => (
-          <PlanRow key={plan.id} plan={plan} onOpen={onOpenPlan} />
-        ))}
+        <PlanTree
+          plans={plans}
+          selectedPlanId={selectedPlanId}
+          showClosed={showClosed}
+          onOpenPlan={onOpenPlan}
+        />
       </div>
-    </div>
+    </nav>
   );
 }
 
@@ -892,55 +926,6 @@ function BranchChip({
       <span className="plan-modal__muted">
         {branch.completed_phases}/{branch.total_phases}
       </span>
-    </button>
-  );
-}
-
-/** Roots in server order, each followed by its own subtree depth-first, so a
- * branch reads as belonging to the plan above it rather than as a peer. */
-function nestPlans(plans: PlanView[]): PlanView[] {
-  const children = new Map<string, PlanView[]>();
-  for (const plan of plans) {
-    if (!plan.parent_plan_id) continue;
-    const siblings = children.get(plan.parent_plan_id);
-    if (siblings) siblings.push(plan);
-    else children.set(plan.parent_plan_id, [plan]);
-  }
-  const out: PlanView[] = [];
-  const visit = (plan: PlanView) => {
-    out.push(plan);
-    for (const child of children.get(plan.id) ?? []) visit(child);
-  };
-  const known = new Set(plans.map((plan) => plan.id));
-  for (const plan of plans) {
-    // A branch whose parent is filtered out of this list still needs a home.
-    if (!plan.parent_plan_id || !known.has(plan.parent_plan_id)) visit(plan);
-  }
-  return out;
-}
-
-function PlanRow({
-  plan,
-  onOpen,
-}: {
-  plan: PlanView;
-  onOpen: (planId: string) => void;
-}) {
-  const open = useCallback(() => onOpen(plan.id), [onOpen, plan.id]);
-  return (
-    <button
-      type="button"
-      // Depth is unbounded; indentation stops at 4 so a deep tree stays legible
-      // in a 620px modal.
-      className={`plan-modal__plan-row plan-modal__plan-row--depth-${Math.min(plan.depth, 4)}`}
-      onClick={open}
-    >
-      <span className="plan-modal__plan-main">
-        {plan.depth > 0 ? <Icon name="git-branch" size={12} /> : null}
-        <span className={`plan-status plan-status--${plan.status}`}>{plan.status}</span>
-        <strong>{plan.title}</strong>
-      </span>
-      <PlanProgress phases={plan.phases} />
     </button>
   );
 }

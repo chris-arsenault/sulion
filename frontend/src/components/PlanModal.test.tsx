@@ -16,6 +16,7 @@ import { PlanModal } from "./PlanModal";
 const NOW = "2026-07-23T00:00:00Z";
 const ROOT_TITLE = "Native plans";
 const APP_STATE_URL = "/api/app-state";
+const PLANS_URL = "/api/repos/alpha/plans";
 const noop = () => {};
 
 function liveSession(): SessionView {
@@ -123,7 +124,7 @@ describe("PlanModal", () => {
 
     render(<PlanModal open repo="alpha" onClose={noop} />);
     const user = userEvent.setup();
-    await user.type(screen.getByLabelText("Title"), ROOT_TITLE);
+    await user.type(await screen.findByLabelText("Title"), ROOT_TITLE);
     await user.type(
       screen.getByLabelText("Short description"),
       "Publish durable phases",
@@ -172,6 +173,7 @@ describe("PlanModal", () => {
     let reject = true;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.url;
+      if (url.startsWith(PLANS_URL)) return jsonResponse([current]);
       if (url === APP_STATE_URL) return jsonResponse(appStatePayload());
       if (url.endsWith("/events")) return jsonResponse(requests.length > 1 ? [{
         id: 1, event_type: "guidance_changed", actor_kind: "user", created_at: NOW,
@@ -218,6 +220,7 @@ describe("PlanModal", () => {
     const branch = { ...plan(), id: "plan-2", parent_plan_id: "plan-1", depth: 1, outcome: "Branch intent" };
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo) => {
       const url = typeof input === "string" ? input : input.url;
+      if (url.startsWith(PLANS_URL)) return jsonResponse([ancestor, branch]);
       if (url.endsWith("/events")) return jsonResponse([]);
       return jsonResponse({ ...branch, ancestors: [ancestor] });
     }));
@@ -237,6 +240,27 @@ describe("PlanModal", () => {
     expect(await within(inherited).findByText("No recovery machinery")).toBeDefined();
     expect(within(inherited).queryByText("No backend")).toBeNull();
     expect(screen.getByText("Branch intent")).toBeDefined();
+  });
+
+  it("keeps the tree and unsaved detail when switching back to plans", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url.startsWith(PLANS_URL)) return jsonResponse([plan()]);
+      if (url.endsWith("/events")) return jsonResponse([]);
+      return jsonResponse(plan());
+    }));
+    render(<PlanModal open repo="alpha" planId="plan-1" onClose={noop} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    await user.type(screen.getByLabelText("Outcome"), "Draft intent");
+    await user.type(screen.getByRole("searchbox", { name: "Search plans" }), "Native");
+    await user.click(screen.getByRole("button", { name: "Back to plans" }));
+    expect(document.querySelector(".plan-modal--browsing")).not.toBeNull();
+    await user.click(screen.getByRole("treeitem", { name: ROOT_TITLE }));
+    expect(document.querySelector(".plan-modal--reading")).not.toBeNull();
+    expect(document.querySelector(".ui-overlay__title")?.textContent).toBe(ROOT_TITLE);
+    expect((screen.getByLabelText("Outcome") as HTMLTextAreaElement).value).toBe("Draft intent");
+    expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("Native");
   });
 
   it("updates a published phase from the plan detail view", async () => {
@@ -259,6 +283,7 @@ describe("PlanModal", () => {
       vi.fn(async (input: RequestInfo, init?: RequestInit) => {
         const url = typeof input === "string" ? input : input.url;
         const method = init?.method ?? "GET";
+        if (url.startsWith(PLANS_URL)) return jsonResponse([initial]);
         if (url === APP_STATE_URL) return jsonResponse(appStatePayload());
         requests.push({
           url,
@@ -308,6 +333,7 @@ describe("PlanModal", () => {
       "fetch",
       vi.fn(async (input: RequestInfo) => {
         const url = typeof input === "string" ? input : input.url;
+        if (url.startsWith(PLANS_URL)) return jsonResponse([withRef]);
         if (url === APP_STATE_URL) return jsonResponse(appStatePayload());
         if (url.endsWith("/events")) return jsonResponse([]);
         return jsonResponse(withRef);
@@ -356,6 +382,7 @@ describe("PlanModal", () => {
       vi.fn(async (input: RequestInfo, init?: RequestInit) => {
         const url = typeof input === "string" ? input : input.url;
         const method = init?.method ?? "GET";
+        if (url.startsWith(PLANS_URL)) return jsonResponse([initial]);
         if (url === APP_STATE_URL) return jsonResponse(appStatePayload());
         if (url.endsWith("/events")) return jsonResponse([]);
         if (method === "PATCH") {
@@ -406,6 +433,7 @@ describe("PlanModal", () => {
       vi.fn(async (input: RequestInfo, init?: RequestInit) => {
         const url = typeof input === "string" ? input : input.url;
         const method = init?.method ?? "GET";
+        if (url.startsWith(PLANS_URL)) return jsonResponse([root, branch]);
         if (url === APP_STATE_URL) return jsonResponse(appStatePayload());
         if (url.endsWith("/events")) return jsonResponse([]);
         requests.push({
@@ -480,6 +508,7 @@ describe("PlanModal", () => {
       vi.fn(async (input: RequestInfo, init?: RequestInit) => {
         const url = typeof input === "string" ? input : input.url;
         const method = init?.method ?? "GET";
+        if (url.startsWith(PLANS_URL)) return jsonResponse([parent, branch]);
         if (url === APP_STATE_URL) return jsonResponse(appStatePayload());
         if (url.endsWith("/events")) return jsonResponse([]);
         requests.push({
