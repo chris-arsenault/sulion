@@ -58,6 +58,7 @@ import { LibraryPanel } from "./LibraryPanel";
 import { ReindexButton } from "./ReindexButton";
 import { RepoCiChip } from "./RepoCiChip";
 import { StatsStrip } from "./StatsStrip";
+import { PlanTree } from "./PlanTree";
 import "./Sidebar.css";
 import "./LibrarySection.css";
 
@@ -1657,9 +1658,14 @@ function RepoGroup({
                   — start a published plan —
                 </button>
               ) : null}
-              {group.plans.map((plan) => (
-                <PlanRow key={plan.id} plan={plan} onOpen={openPlans} />
-              ))}
+              {group.plans.length > 0 ? (
+                <PlanTree
+                  plans={group.plans}
+                  variant="sidebar"
+                  label={`Plans for ${group.name}`}
+                  onOpenPlan={openPlans}
+                />
+              ) : null}
             </Subsection>
           )}
 
@@ -1758,45 +1764,6 @@ function RepoGroup({
         </div>
       )}
     </li>
-  );
-}
-
-function PlanRow({
-  plan,
-  onOpen,
-}: {
-  plan: PlanSummaryView;
-  onOpen: (planId: string) => void;
-}) {
-  const total = Math.max(plan.total_phases, 1);
-  const progress = Math.round((plan.completed_phases / total) * 100);
-  const open = useCallback(() => onOpen(plan.id), [onOpen, plan.id]);
-  const progressStyle = useMemo(() => ({ width: `${progress}%` }), [progress]);
-  return (
-    <button
-      type="button"
-      className={`sidebar__plan sidebar__plan--${plan.status}`}
-      onClick={open}
-      title={plan.summary || plan.title}
-    >
-      <span className="sidebar__plan-main">
-        <span className="sidebar__plan-title">{plan.title}</span>
-        <span className="sidebar__plan-count">
-          {plan.completed_phases}/{plan.total_phases}
-        </span>
-      </span>
-      <span className="sidebar__plan-progress">
-        <i
-          // eslint-disable-next-line local/no-inline-styles -- plan progress is data-driven
-          style={progressStyle}
-        />
-      </span>
-      <span className="sidebar__plan-phase">
-        {plan.blocked_phases > 0
-          ? `${plan.blocked_phases} blocked`
-          : (plan.current_phase_title ?? plan.status)}
-      </span>
-    </button>
   );
 }
 

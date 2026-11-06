@@ -8,7 +8,11 @@ They are deliberately not an agent's internal working plan. Agents should keep
 using their native detailed planning mechanism for reasoning, dependencies, and
 implementation steps. A published plan is the smaller user-facing projection.
 
-The browser shows published plans as a collapsible tree beside the selected
+The main sidebar's Plans section shows a collapsible tree with each sub-plan
+under its parent, plus progress and current-phase text. Plan titles wrap so
+they remain readable at narrow widths. Selecting a row opens its detail.
+
+The plan modal shows the same tree navigation beside the selected
 plan on desktop. On mobile, selecting a plan opens its detail; Back to plans
 returns to the same tree without discarding draft edits. Search retains each
 match's ancestors and temporarily reveals collapsed branches. Show closed

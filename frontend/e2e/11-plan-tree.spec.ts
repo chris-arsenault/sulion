@@ -7,6 +7,8 @@ import {
 
 import { gotoApp } from "./helpers";
 
+const LEAF_PHASE_TITLE = "Work at depth 8";
+
 interface PlanFixture {
   id: string;
   title: string;
@@ -40,17 +42,166 @@ async function createHierarchy(
   return plans;
 }
 
-async function openPlans(page: Page) {
-  await page.addInitScript(() =>
-    localStorage.setItem("sulion.sidebar.view.desktop.v1", "full"),
-  );
+async function openMainPlans(page: Page) {
+  await page.addInitScript(() => {
+    localStorage.setItem("sulion.sidebar.view.desktop.v1", "full");
+    localStorage.setItem("sulion.sidebar.view.mobile.v1", "full");
+  });
   await gotoApp(page);
+  const drawerButton = page.getByRole("button", {
+    name: "Open sessions drawer",
+  });
+  if (await drawerButton.isVisible()) await drawerButton.click();
   const group = page.locator('[data-repo-name="atlas"]');
   const toggle = group.locator(".sidebar__group-toggle");
   if ((await toggle.getAttribute("aria-expanded")) === "false")
     await toggle.click();
-  await group.getByRole("button", { name: "Open plans for atlas" }).click();
+  return group.getByRole("tree", { name: "Plans for atlas", exact: true });
 }
+
+async function openPlans(page: Page) {
+  await openMainPlans(page);
+  await page
+    .getByRole("button", { name: "Open plans for atlas", exact: true })
+    .click();
+}
+
+test("shows the main Plans sidebar as a nested tree on desktop and mobile", async ({
+  page,
+  request,
+}, testInfo) => {
+  const plans = await createHierarchy(request);
+  try {
+    const tree = await openMainPlans(page);
+    await expect(tree.getByRole("treeitem")).toHaveCount(9);
+    const leaf = tree.getByRole("treeitem", {
+      name: plans[8]!.title,
+      exact: true,
+    });
+    await expect(leaf).toHaveAttribute("aria-level", "9");
+    expect(await leaf.locator("..").getAttribute("role")).toBe("group");
+    await expect(
+      leaf.getByText(LEAF_PHASE_TITLE, { exact: true }),
+    ).toBeVisible();
+    await expect(leaf.getByRole("progressbar")).toHaveAttribute("max", "1");
+
+    await tree
+      .getByRole("button", { name: `Collapse ${plans[2]!.title}`, exact: true })
+      .click();
+    await expect(tree.getByRole("treeitem")).toHaveCount(3);
+    await page.screenshot({
+      path: testInfo.outputPath("desktop-main-plans.png"),
+    });
+    await tree
+      .getByRole("button", { name: `Collapse ${plans[0]!.title}`, exact: true })
+      .click();
+    await expect(tree.getByRole("treeitem")).toHaveCount(1);
+    await tree
+      .getByRole("button", { name: `Expand ${plans[0]!.title}`, exact: true })
+      .click();
+    await expect(tree.getByRole("treeitem")).toHaveCount(3);
+    await tree
+      .getByRole("button", { name: `Expand ${plans[2]!.title}`, exact: true })
+      .click();
+    await leaf.locator(".plan-tree__body > strong").click();
+    await expect(
+      page
+        .getByLabel("Selected plan")
+        .getByText(LEAF_PHASE_TITLE, { exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByRole("button", { name: "Open sessions drawer" }).click();
+    const drawer = page.getByRole("complementary", { name: "Sessions" });
+    await expect
+      .poll(() =>
+        drawer.evaluate((element) => element.getBoundingClientRect().x),
+      )
+      .toBe(0);
+    await expect(tree.getByRole("treeitem")).toHaveCount(9);
+    expect(
+      await tree.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBeTruthy();
+    const disclosure = tree.getByRole("button", {
+      name: `Collapse ${plans[0]!.title}`,
+      exact: true,
+    });
+    const bounds = await disclosure.boundingBox();
+    expect(bounds!.width).toBeGreaterThanOrEqual(44);
+    expect(bounds!.height).toBeGreaterThanOrEqual(44);
+    await tree
+      .getByRole("button", { name: `Collapse ${plans[2]!.title}`, exact: true })
+      .click();
+    expect(
+      await drawer.evaluate((element) => ({
+        left: element.getBoundingClientRect().left,
+        rightFits: element.getBoundingClientRect().right <= window.innerWidth,
+        scrollLeft: element.scrollLeft,
+        sidebarScrollLeft: element.querySelector(".sidebar")?.scrollLeft,
+      })),
+    ).toMatchObject({
+      left: 0,
+      rightFits: true,
+      scrollLeft: 0,
+      sidebarScrollLeft: 0,
+    });
+    expect(
+      await tree.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        return Array.from(element.querySelectorAll(".plan-tree__body")).every(
+          (row) => {
+            const rect = row.getBoundingClientRect();
+            return (
+              rect.left >= bounds.left &&
+              rect.right <= bounds.right &&
+              row.scrollWidth <= row.clientWidth
+            );
+          },
+        );
+      }),
+    ).toBeTruthy();
+    await tree
+      .getByText(plans[0]!.title, { exact: true })
+      .scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: testInfo.outputPath("mobile-main-plans.png"),
+    });
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      expect(
+        await tree.evaluate(
+          (element) => element.scrollWidth <= element.clientWidth,
+        ),
+      ).toBeTruthy();
+      expect(
+        await tree
+          .locator(".plan-tree__body > strong")
+          .first()
+          .evaluate((element) => getComputedStyle(element).whiteSpace),
+      ).toBe("normal");
+    }
+    await tree
+      .getByRole("button", { name: `Expand ${plans[2]!.title}`, exact: true })
+      .click();
+    await leaf.locator(".plan-tree__body > strong").click();
+    await expect(tree).toBeHidden();
+    await expect(
+      page
+        .getByLabel("Selected plan")
+        .getByText(LEAF_PHASE_TITLE, { exact: true }),
+    ).toBeVisible();
+  } finally {
+    for (const plan of [...plans].reverse()) {
+      const response = await request.patch(`/api/plans/${plan.id}`, {
+        data: { status: "canceled" },
+      });
+      expect(response.ok()).toBeTruthy();
+    }
+  }
+});
 
 test("navigates eight nested sub-plans on desktop and mobile without losing tree or draft state", async ({
   page,
@@ -68,7 +219,7 @@ test("navigates eight nested sub-plans on desktop and mobile without losing tree
     await expect(leaf).toHaveAttribute("aria-level", "9");
     await leaf.locator(".plan-tree__row").first().click();
     await expect(
-      detail.getByText("Work at depth 8", { exact: true }),
+      detail.getByText(LEAF_PHASE_TITLE, { exact: true }),
     ).toBeVisible();
     await expect(tree).toBeVisible();
     await expect(leaf).toHaveAttribute("aria-selected", "true");
@@ -90,7 +241,7 @@ test("navigates eight nested sub-plans on desktop and mobile without losing tree
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(tree).toBeHidden();
     await expect(
-      detail.getByText("Work at depth 8", { exact: true }),
+      detail.getByText(LEAF_PHASE_TITLE, { exact: true }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Edit", exact: true }).click();
     await page
@@ -112,9 +263,9 @@ test("navigates eight nested sub-plans on desktop and mobile without losing tree
       path: testInfo.outputPath("mobile-plan-tree.png"),
     });
     await leaf.locator(".plan-tree__row").first().click();
-    await expect(page.getByRole("textbox", { name: "Outcome", exact: true })).toHaveValue(
-      "Preserve my draft when browsing the tree",
-    );
+    await expect(
+      page.getByRole("textbox", { name: "Outcome", exact: true }),
+    ).toHaveValue("Preserve my draft when browsing the tree");
     await page.screenshot({
       path: testInfo.outputPath("mobile-plan-detail.png"),
     });

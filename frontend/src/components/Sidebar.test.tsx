@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("./LibraryPanel", () => ({
@@ -25,6 +25,7 @@ import { appCommands, subscribeToAppCommands } from "../state/AppCommands";
 import { appStatePayload, jsonResponse } from "../test/appState";
 import { resetDisplayStore, useDisplay } from "../state/DisplayStore";
 import { useSessionStore } from "../state/SessionStore";
+import type { PlanSummaryView } from "../api/types";
 
 const REPO_ALPHA = "alpha";
 const REPO_ALPHA_PATH = "/tmp/alpha";
@@ -35,6 +36,7 @@ interface MockState {
   repos: Array<Record<string, unknown>>;
   metaRepos: Array<Record<string, unknown>>;
   workspaces: Array<Record<string, unknown>>;
+  plans: PlanSummaryView[];
   secrets: Array<Record<string, unknown>>;
   grantsBySession: Record<string, Array<Record<string, unknown>>>;
   createSessionCalls: Array<unknown>;
@@ -55,6 +57,7 @@ function installFetchMock(): MockState {
     repos: [],
     metaRepos: [],
     workspaces: [],
+    plans: [],
     secrets: [],
     grantsBySession: {},
     createSessionCalls: [],
@@ -83,6 +86,7 @@ function installFetchMock(): MockState {
             repos: state.repos,
             metaRepos: state.metaRepos,
             workspaces: state.workspaces,
+            plans: state.plans,
           }),
         );
       }
@@ -464,6 +468,59 @@ describe("Sidebar", () => {
       }
     },
   );
+
+  it("nests published plans in the main sidebar, retains progress, and keeps collapsed branches on refresh", async () => {
+    const state = installFetchMock();
+    state.repos.push({ name: REPO_ALPHA, path: REPO_ALPHA_PATH });
+    const plans = Array.from({ length: 9 }, (_, depth): PlanSummaryView => ({
+      id: `plan-${depth}`,
+      repo_name: REPO_ALPHA,
+      title: depth ? `Sub-plan ${depth}: investigate regional terrain generation` : "World relief: make the built mechanism visible",
+      summary: "Nested atlas delivery",
+      status: "active",
+      revision: 1,
+      total_phases: 12,
+      completed_phases: 6,
+      blocked_phases: depth === 8 ? 1 : 0,
+      current_phase_id: `phase-${depth}`,
+      current_phase_title: `Current phase at depth ${depth}`,
+      current_phase_status: "in_progress",
+      attached_pty_ids: [],
+      parent_plan_id: depth ? `plan-${depth - 1}` : null,
+      root_plan_id: "plan-0",
+      depth,
+      open_branches: depth < 8 ? 1 : 0,
+      updated_at: "2026-11-06T00:00:00Z",
+    }));
+    state.plans.push(...[...plans].reverse());
+    setup();
+    const tree = await screen.findByRole("tree", { name: "Plans for alpha" });
+    const leaf = within(tree).getByRole("treeitem", { name: plans[8]!.title });
+    expect(leaf.getAttribute("aria-level")).toBe("9");
+    expect(leaf.closest('[role="group"]')?.parentElement?.getAttribute("aria-label")).toBe(plans[7]!.title);
+    expect(within(leaf).getByText("6/12 phases")).toBeDefined();
+    expect(within(leaf).getByText("Current phase at depth 8")).toBeDefined();
+    expect(within(leaf).getByText("1 blocked")).toBeDefined();
+    const progress = within(leaf).getByRole("progressbar") as HTMLProgressElement;
+    expect(progress.value).toBe(6);
+    expect(progress.max).toBe(12);
+    const opened: unknown[] = [];
+    const unsubscribe = subscribeToAppCommands((command) => {
+      if (command.type === "open-plan") opened.push(command);
+    });
+    const user = userEvent.setup();
+    await user.click(within(tree).getByRole("button", { name: `Collapse ${plans[0]!.title}` }));
+    expect(within(tree).getAllByRole("treeitem")).toHaveLength(1);
+    expect(opened).toEqual([]);
+    await act(async () => { await useSessionStore.getState().refresh(); });
+    expect(within(tree).getAllByRole("treeitem")).toHaveLength(1);
+    await user.click(within(tree).getByRole("button", { name: `Expand ${plans[0]!.title}` }));
+    expect(within(tree).getAllByRole("treeitem")).toHaveLength(9);
+    await user.click(within(tree).getByText(plans[8]!.title));
+    expect(opened).toEqual([{ type: "open-plan", repo: REPO_ALPHA, planId: "plan-8" }]);
+    unsubscribe();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).startsWith("/api/plans/"))).toBe(false);
+  });
 
   it("shows only running sessions in Open with stable pin order, collection scope and attention", async () => {
     const state = installFetchMock();

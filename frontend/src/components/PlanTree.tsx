@@ -11,26 +11,33 @@ import {
   useState,
 } from "react";
 
-import type { PlanView } from "../api/types";
+import type { PlanSummaryView, PlanView } from "../api/types";
 import { Icon } from "../icons";
 import type { Maybe } from "../lib/types";
+import "./PlanTree.css";
+
+type NavigablePlan = PlanView | PlanSummaryView;
 
 interface TreeNode {
-  plan: PlanView;
+  plan: NavigablePlan;
   children: TreeNode[];
 }
 
 interface PlanTreeProps {
-  plans: PlanView[];
-  selectedPlanId: Maybe<string>;
-  showClosed: boolean;
+  plans: NavigablePlan[];
+  selectedPlanId?: string;
+  showClosed?: boolean;
+  variant?: "browser" | "sidebar";
+  label?: string;
   onOpenPlan: (id: string) => void;
 }
 
 export function PlanTree({
   plans,
   selectedPlanId,
-  showClosed,
+  showClosed = false,
+  variant = "browser",
+  label = "Plans",
   onOpenPlan,
 }: PlanTreeProps) {
   const [query, setQuery] = useState("");
@@ -46,6 +53,7 @@ export function PlanTree({
 
   // Reveal a newly selected path without discarding other branch choices.
   useEffect(() => {
+    if (!selectedPlanId) return;
     setCollapsed((previous) => {
       const next = new Set(previous);
       let parentId = selectedPlanId
@@ -74,7 +82,7 @@ export function PlanTree({
       )
         continue;
       // Retain every ancestor so filtering never promotes a branch to a root.
-      let current: Maybe<PlanView> = plan;
+      let current: Maybe<NavigablePlan> = plan;
       while (current && !nodes.has(current.id)) {
         nodes.set(current.id, { plan: current, children: [] });
         current = current.parent_plan_id
@@ -187,30 +195,39 @@ export function PlanTree({
 
   return (
     <>
-      <input
-        type="search"
-        aria-label="Search plans"
-        placeholder="Find a plan…"
-        value={query}
-        onChange={onQueryChange}
-      />
-      <div className="plan-tree__controls">
-        <button
-          type="button"
-          onClick={expandAll}
-          disabled={Boolean(search) || plans.length === 0}
-        >
-          Expand all
-        </button>
-        <button
-          type="button"
-          onClick={collapseAll}
-          disabled={Boolean(search) || plans.length === 0}
-        >
-          Collapse all
-        </button>
-      </div>
-      <div ref={treeRef} role="tree" aria-label="Plans" className="plan-tree">
+      {variant === "browser" ? (
+        <>
+          <input
+            type="search"
+            aria-label="Search plans"
+            placeholder="Find a plan…"
+            value={query}
+            onChange={onQueryChange}
+          />
+          <div className="plan-tree__controls">
+            <button
+              type="button"
+              onClick={expandAll}
+              disabled={Boolean(search) || plans.length === 0}
+            >
+              Expand all
+            </button>
+            <button
+              type="button"
+              onClick={collapseAll}
+              disabled={Boolean(search) || plans.length === 0}
+            >
+              Collapse all
+            </button>
+          </div>
+        </>
+      ) : null}
+      <div
+        ref={treeRef}
+        role="tree"
+        aria-label={label}
+        className={`plan-tree plan-tree--${variant}`}
+      >
         {roots.map((node, index) => (
           <PlanTreeRow
             key={node.plan.id}
@@ -230,7 +247,7 @@ export function PlanTree({
         ))}
       </div>
       {plans.length > 0 && roots.length === 0 ? (
-        <p className="plan-modal__muted">
+        <p className="plan-tree__empty">
           {search
             ? "No matching plans."
             : "No open plans. Turn on Show closed to browse history."}
@@ -295,12 +312,7 @@ function PlanTreeRow({
     },
     [onToggle, plan.id],
   );
-  const completed = plan.phases.filter(
-    (phase) => phase.status === "completed" || phase.status === "skipped",
-  ).length;
-  const blocked = plan.phases.filter(
-    (phase) => phase.status === "blocked",
-  ).length;
+  const { completed, total, blocked, currentPhase } = planProgress(plan);
 
   return (
     <div
@@ -342,16 +354,27 @@ function PlanTreeRow({
         <span className="plan-tree__body">
           <strong>{plan.title}</strong>
           <span id={metadataId} className="plan-tree__meta">
-            <span className={`plan-status plan-status--${plan.status}`}>
+            <span
+              className={`plan-tree__status plan-tree__status--${plan.status}`}
+            >
               {plan.status}
             </span>
             <span>
-              {completed}/{plan.phases.length} phases
+              {completed}/{total} phases
             </span>
             {blocked ? (
               <span className="plan-tree__blocked">{blocked} blocked</span>
             ) : null}
           </span>
+          <progress
+            className="plan-tree__progress"
+            value={completed}
+            max={Math.max(total, 1)}
+            aria-label={`Phase progress for ${plan.title}`}
+          />
+          {currentPhase ? (
+            <span className="plan-tree__phase">{currentPhase}</span>
+          ) : null}
         </span>
       </div>
       {children.length && expanded ? (
@@ -377,4 +400,23 @@ function PlanTreeRow({
       ) : null}
     </div>
   );
+}
+
+function planProgress(plan: NavigablePlan) {
+  if ("phases" in plan) {
+    return {
+      completed: plan.phases.filter(
+        (phase) => phase.status === "completed" || phase.status === "skipped",
+      ).length,
+      total: plan.phases.length,
+      blocked: plan.phases.filter((phase) => phase.status === "blocked").length,
+      currentPhase: null,
+    };
+  }
+  return {
+    completed: plan.completed_phases,
+    total: plan.total_phases,
+    blocked: plan.blocked_phases,
+    currentPhase: plan.current_phase_title,
+  };
 }
