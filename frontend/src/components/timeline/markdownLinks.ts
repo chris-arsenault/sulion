@@ -10,6 +10,7 @@ import type { Maybe } from "../../lib/types";
 export interface FileLinkTarget {
   repo: string;
   workspaceId?: string;
+  rootPath?: string;
 }
 
 export type MarkdownLink =
@@ -27,6 +28,7 @@ const HASH_LINE = /#L(\d{1,7})(?:-L?\d{1,7})?$/;
 export function classifyMarkdownLink(
   href: Maybe<string>,
   repo: Maybe<string | null>,
+  rootPath?: string,
 ): MarkdownLink {
   if (!href) return { kind: "inert" };
   const trimmed = href.trim();
@@ -35,16 +37,16 @@ export function classifyMarkdownLink(
   if (ABSOLUTE_URL.test(trimmed)) {
     if (/^https?:|^mailto:/i.test(trimmed)) return { kind: "external", href: trimmed };
     if (/^file:\/\//i.test(trimmed)) {
-      return fileLink(decodeURIComponent(trimmed.replace(/^file:\/\//i, "")), repo);
+      return fileLink(safeDecode(trimmed.replace(/^file:\/\//i, "")), repo, rootPath);
     }
     // javascript:, data:, and friends never reach the browser.
     return { kind: "inert" };
   }
 
-  return fileLink(safeDecode(trimmed), repo);
+  return fileLink(safeDecode(trimmed), repo, rootPath);
 }
 
-function fileLink(raw: string, repo: Maybe<string | null>): MarkdownLink {
+function fileLink(raw: string, repo: Maybe<string | null>, rootPath?: string): MarkdownLink {
   if (!repo) return { kind: "inert" };
   let path = raw;
   let line: Maybe<number>;
@@ -66,21 +68,24 @@ function fileLink(raw: string, repo: Maybe<string | null>): MarkdownLink {
     path = path.slice(0, colon.index);
   }
 
-  path = relativeToRepo(path, repo);
+  path = relativeToRepo(path, repo, rootPath);
   if (path === "" || path.split("/").includes("..")) return { kind: "inert" };
   return line == null ? { kind: "file", path } : { kind: "file", path, line };
 }
 
 /** Strip `./` prefixes and, for an absolute checkout path, everything up
- * to and including the `/<repo>/` segment. A path that is absolute but
- * does not pass through the repo directory is left alone; the file API
- * will report it as missing rather than the browser navigating. */
-function relativeToRepo(path: string, repo: string): string {
+ * to and including the `/<repo>/` segment. Workspace roots are supplied
+ * explicitly because their directory includes a workspace ID. Absolute paths
+ * outside the target checkout stay inert. */
+function relativeToRepo(path: string, repo: string, rootPath?: string): string {
   let out = path.replace(/^(?:\.\/)+/, "");
   if (out.startsWith("/")) {
+    const root = rootPath?.replace(/\/+$/, "");
+    if (root && out.startsWith(`${root}/`)) return out.slice(root.length + 1).replace(/\/+$/, "");
     const marker = `/${repo}/`;
     const at = out.indexOf(marker);
-    out = at === -1 ? out.slice(1) : out.slice(at + marker.length);
+    if (at === -1) return "";
+    out = out.slice(at + marker.length);
   }
   return out.replace(/\/+$/, "");
 }

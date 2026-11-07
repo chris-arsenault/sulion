@@ -14,6 +14,9 @@ import "./Markdown.css";
 import { appCommands } from "../../state/AppCommands";
 import { classifyMarkdownLink, type FileLinkTarget } from "./markdownLinks";
 import { normalizeMathDelimiters } from "./mathDelimiters";
+import { remarkFileReferences } from "./remarkFileReferences";
+import { AuthenticatedImage } from "../common/AuthenticatedImage";
+import { Tooltip } from "../ui";
 
 // Single-dollar math is off: agent transcripts mention `$HOME`, `$1`, and
 // prices far more often than they carry `$x$` formulas, and a stray pair
@@ -44,6 +47,10 @@ interface Props {
 
 export const Markdown = memo(function Markdown({ source, compact = false, fileTarget = null }: Props) {
   const normalized = useMemo(() => normalizeMathDelimiters(source), [source]);
+  const remarkPlugins = useMemo<NonNullable<Options["remarkPlugins"]>>(
+    () => [...REMARK_PLUGINS, [remarkFileReferences, fileTarget]],
+    [fileTarget],
+  );
   const components = useMemo<NonNullable<Options["components"]>>(
     () => ({
       a: ({ href, children }: { href?: string; children?: ReactNode }) => (
@@ -51,13 +58,14 @@ export const Markdown = memo(function Markdown({ source, compact = false, fileTa
           {children}
         </MarkdownAnchor>
       ),
+      img: ({ src, alt }) => <MarkdownImage src={src} alt={alt ?? ""} fileTarget={fileTarget} />,
     }),
     [fileTarget],
   );
   return (
     <div className={`md ${compact ? "md--compact" : ""}`}>
       <ReactMarkdown
-        remarkPlugins={REMARK_PLUGINS}
+        remarkPlugins={remarkPlugins}
         rehypePlugins={REHYPE_PLUGINS}
         components={components}
         // react-markdown v9 only allows safe HTML by default; no
@@ -83,8 +91,8 @@ function MarkdownAnchor({
   children?: ReactNode;
 }) {
   const link = useMemo(
-    () => classifyMarkdownLink(href, fileTarget?.repo),
-    [href, fileTarget?.repo],
+    () => classifyMarkdownLink(href, fileTarget?.repo, fileTarget?.rootPath),
+    [href, fileTarget?.repo, fileTarget?.rootPath],
   );
   const openFile = useCallback(
     (event: MouseEvent<HTMLAnchorElement>) => {
@@ -110,15 +118,28 @@ function MarkdownAnchor({
   if (link.kind === "file") {
     const label = link.line == null ? link.path : `${link.path}:${link.line}`;
     return (
-      <a
-        href={href}
-        className="md__file-link"
-        title={`Open ${label}`}
-        onClick={openFile}
-      >
-        {children}
-      </a>
+      <Tooltip label={`Open ${label}`}>
+        <a href={href} className="md__file-link" onClick={openFile}>
+          {children}
+        </a>
+      </Tooltip>
     );
   }
   return <span className="md__dead-link">{children}</span>;
+}
+
+function MarkdownImage({ src, alt, fileTarget }: {
+  src?: string;
+  alt: string;
+  fileTarget: FileLinkTarget | null;
+}) {
+  const image = classifyMarkdownLink(src, fileTarget?.repo, fileTarget?.rootPath);
+  if (image.kind === "file" && fileTarget) {
+    return <AuthenticatedImage repo={fileTarget.repo} workspaceId={fileTarget.workspaceId}
+      path={image.path} alt={alt || image.path} className="md__image" />;
+  }
+  if (image.kind === "external" && /^https?:/i.test(image.href)) {
+    return <img src={image.href} alt={alt} className="md__image" loading="lazy" />;
+  }
+  return <span className="md__dead-link">{alt}</span>;
 }

@@ -122,12 +122,20 @@ export function TimelinePane({
   // the repo itself.
   const fileTargetRepo = session?.repo ?? repo ?? null;
   const fileTargetWorkspaceId = session?.workspace?.id;
+  const repoRootPath = useSessions((store) =>
+    store.repos.find((candidate) => candidate.name === fileTargetRepo)?.path,
+  );
+  const fileTargetRootPath = session?.workspace?.path ?? repoRootPath;
   const fileTarget = useMemo<FileLinkTarget | null>(
     () =>
       fileTargetRepo
-        ? { repo: fileTargetRepo, workspaceId: fileTargetWorkspaceId }
+        ? {
+            repo: fileTargetRepo,
+            workspaceId: fileTargetWorkspaceId,
+            rootPath: fileTargetRootPath,
+          }
         : null,
-    [fileTargetRepo, fileTargetWorkspaceId],
+    [fileTargetRepo, fileTargetWorkspaceId, fileTargetRootPath],
   );
 
   const [inspectorFraction, setInspectorFraction] = useState<number>(() => {

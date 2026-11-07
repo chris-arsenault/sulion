@@ -1,0 +1,6 @@
+.authenticated-image__status {
+  display: block;
+  margin: 6px 0;
+  color: var(--text-lo);
+  font-size: var(--t-ui);
+}

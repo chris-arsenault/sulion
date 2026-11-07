@@ -58,5 +58,14 @@ describe("classifyMarkdownLink", () => {
     expect(classifyMarkdownLink("../outside.md", "sulion")).toEqual({ kind: "inert" });
     expect(classifyMarkdownLink("javascript:alert(1)", "sulion")).toEqual({ kind: "inert" });
     expect(classifyMarkdownLink(undefined, "sulion")).toEqual({ kind: "inert" });
+    expect(classifyMarkdownLink("/tmp/outside.png", "sulion")).toEqual({ kind: "inert" });
+    expect(classifyMarkdownLink("file:///tmp/outside.png", "sulion")).toEqual({ kind: "inert" });
+  });
+
+  it("uses the explicit workspace root for absolute paths", () => {
+    expect(classifyMarkdownLink("/home/sulion/workspaces/atlas/ws-1/.artifacts/draft.png", "atlas", "/home/sulion/workspaces/atlas/ws-1"))
+      .toEqual({ kind: "file", path: ".artifacts/draft.png" });
+    expect(classifyMarkdownLink("file:///home/u/repos/sulion/map%ZZ.png", "sulion"))
+      .toEqual({ kind: "file", path: "map%ZZ.png" });
   });
 });

@@ -18,7 +18,7 @@ describe("Markdown links", () => {
     );
     const anchor = container.querySelector("a.md__file-link") as HTMLAnchorElement;
     expect(anchor.textContent).toBe("review brief");
-    expect(anchor.title).toBe("Open worlds/research/BRIEF.md:12");
+    expect(anchor.getAttribute("href")).toBe("worlds/research/BRIEF.md#L12");
 
     const click = fireEvent.click(anchor);
     expect(click).toBe(false); // default prevented: no browser navigation

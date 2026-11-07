@@ -26,6 +26,7 @@ import type { FileResponse } from "../api/types";
 import { useRepos } from "../state/RepoStore";
 import { useTabs } from "../state/TabStore";
 import { JsonTree } from "./common/JsonTree";
+import { AuthenticatedImage } from "./common/AuthenticatedImage";
 import { FileTracePanel } from "./FileTracePanel";
 import { Markdown } from "./timeline/Markdown";
 import { canToggleRaw, chooseRenderKind } from "./fileRenderKind";
@@ -200,6 +201,7 @@ function FileBody({
         workspaceId={workspaceId}
         path={data.path}
         alt={data.path}
+        className="ft__img"
       />
     );
   }
@@ -305,47 +307,6 @@ function HighlightedCode({
     );
   }
   return <HighlightedBody html={html} focusLine={focusLine} focusKey={focusKey} />;
-}
-
-function AuthenticatedImage({
-  repo,
-  workspaceId,
-  path,
-  alt,
-}: {
-  repo: string;
-  workspaceId?: string;
-  path: string;
-  alt: string;
-}) {
-  const [src, setSrc] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    let objectUrl: string | null = null;
-    setSrc(null);
-    setError(null);
-    void (async () => {
-      try {
-        const blob = await fetchFileBlob(fileRawUrl({ repo, workspaceId }, path));
-        if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setSrc(objectUrl);
-      } catch (err) {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : "image fetch failed");
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [repo, path, workspaceId]);
-
-  if (error) return <div className="ft__muted">image preview failed: {error}</div>;
-  if (!src) return <div className="ft__muted">loading image…</div>;
-  return <img src={src} alt={alt} className="ft__img" />;
 }
 
 /** Downloads a file's bytes through the authenticated raw route. Used for

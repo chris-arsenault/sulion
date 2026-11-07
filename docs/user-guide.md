@@ -207,6 +207,14 @@ optional `:line` or `#L12` suffix, opens that file in a Sulion file tab for the
 session's repo and workspace; `http(s)` links open in a new browser tab.
 Nothing in turn detail navigates the app itself.
 
+File paths in prose or inline code also open file tabs. Absolute checkout
+paths resolve to the session's repository or workspace. When a message states
+a directory and then lists filenames, those names resolve within that
+directory. Referenced images appear inline; click an image or its filename
+to open the full file. This works in existing turns as well as new ones.
+Image reads use the same authenticated file routes as the file viewer. If a
+preview fails, its file link remains available. Fenced code stays literal.
+
 **Copy turn as markdown** copies the prompt, assistant text, and one header
 per tool call. Open tool detail for full inputs, results, and diffs; those are
 not embedded in the copied digest.
