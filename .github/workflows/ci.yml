@@ -14,7 +14,15 @@ permissions:
   packages: write
 
 jobs:
+  storage-maintenance:
+    name: Storage maintenance tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: make test-storage-maintenance
+
   ci:
+    needs: storage-maintenance
     uses: chris-arsenault/ahara/.github/workflows/ci.yml@main
     secrets: inherit
 

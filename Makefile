@@ -1,6 +1,6 @@
-.PHONY: ci validate-deploy validate-nix test-nix lint-rust fmt-rust test-rust test-rust-integration lint-ts typecheck-ts test-ts e2e e2e-install screenshots
+.PHONY: ci validate-deploy validate-nix test-nix lint-rust fmt-rust test-rust test-rust-integration test-storage-maintenance lint-ts typecheck-ts test-ts e2e e2e-install screenshots
 
-ci: validate-deploy lint-rust fmt-rust test-rust lint-ts typecheck-ts test-ts
+ci: validate-deploy lint-rust fmt-rust test-rust test-storage-maintenance lint-ts typecheck-ts test-ts
 
 validate-deploy:
 	# Every binary CI builds for an image must actually be copied into it.
@@ -64,6 +64,9 @@ test-rust:
 
 test-rust-integration:
 	./scripts/run-backend-integration-tests.sh
+
+test-storage-maintenance:
+	python3 -B -m unittest discover -s backend/tests -p 'test_storage_maintenance.py'
 
 lint-ts:
 	cd frontend && pnpm exec eslint .

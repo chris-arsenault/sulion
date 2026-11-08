@@ -27,6 +27,7 @@ use crate::repo_state::RepoStateManager;
 use crate::worktree::{WorkspaceManager, WorkspaceRecord};
 
 mod host;
+mod maintenance;
 mod messages;
 mod requests;
 mod uploads;
@@ -292,6 +293,7 @@ impl NodeRuntime {
         }
         tokio::spawn(self.repo_state.clone().run());
         tokio::spawn(self.workspace_state.clone().run());
+        maintenance::start(self.repos_root.clone());
     }
 }
 

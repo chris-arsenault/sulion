@@ -174,6 +174,38 @@ persistent home on first start. Its own updater can subsequently update that
 copy without sudo, and the copy survives image changes. This is distinct from
 the explicit shell/toolset upgrade above.
 
+## Development-node storage maintenance
+
+Direct-Docker nodes run `/opt/sulion/storage-maintenance.py --apply` at startup
+and every 24 hours, from the backend image. The node owns the schedule; devenv,
+ingester and control-plane processes do not start copies. A home-directory
+file lock also excludes overlapping manual cycles.
+
+Investigation payloads under repository and worktree `.artifacts/`,
+`frontend/.artifacts/` and `frontend/harness/artifacts/` expire after 21 days.
+The newest file or directory in a run determines its age. Recent runs and
+paths used by live devenv processes remain intact. Cleanup keeps Git-tracked
+files, Markdown, text/source files, symlinks, ledger/registry files and manifests.
+It preserves `.artifacts/bin`, saved product data outside these investigation
+roots, datasets and agent transcripts. Registry summaries remain available after
+their payloads expire.
+
+Monte Carlo runs use the project's built Release CLI to mark completed/failed
+runs deleted before removing their payloads. Manifests stay at the recorded
+`.deleted` paths. Missing tooling, unregistered runs and unfinished runs are
+preserved and reported; the maintenance task never edits that registry itself.
+
+Every cycle prunes Docker build cache unused for seven days and unreferenced
+images created more than 14 days ago. Weekly it also runs `uv cache prune` and
+`python3 -m pip cache purge`. It never prunes Docker volumes, running containers,
+Rust target directories or installed browser/tool versions. A later build may
+need to download packages or rebuild removed cache entries.
+
+Run a preview from the checkout with `python3 backend/storage-maintenance.py`.
+Add `--apply` to clean, `--artifacts-only` to omit cache commands, or `--weekly`
+to include package-cache cleanup immediately. Container logs contain candidates,
+deletions, command failures, and free space before/after each cycle.
+
 ## Retrieval Search
 
 The retrieval service reads the existing Sulion Postgres tables directly. Migrations add non-blocking indexes for lexical search and a `retrieval_embeddings` table that stores embedding vectors plus source keys only; transcript text remains in the canonical event/timeline tables.

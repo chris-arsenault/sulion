@@ -17,6 +17,7 @@ make lint-rust               # clippy
 make fmt-rust                # fmt --check
 make test-rust               # backend unit / non-DB tests
 make test-rust-integration   # Postgres-backed integration suite
+make test-storage-maintenance # investigation retention and deletion safety
 make lint-ts                 # eslint
 make typecheck-ts            # tsc --noEmit
 make test-ts                 # vitest
@@ -98,6 +99,7 @@ coverage and the prioritized next-test list live in
 ## CI
 
 `.github/workflows/ci.yml` is a minimal caller of the shared ahara workflow at `chris-arsenault/ahara/.github/workflows/ci.yml@main`. Lint / test / build / Docker push / Komodo deploy are driven by `platform.yml`.
+The storage-maintenance Python tests run before that shared deployment workflow.
 Browser journeys run through `make e2e` separately from CI and do not gate
 deployments.
 After the shared CI job succeeds on `main`, the caller advances `node-release` to the
