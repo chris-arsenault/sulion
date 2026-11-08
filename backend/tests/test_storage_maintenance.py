@@ -96,7 +96,9 @@ class ArtifactCleanupTests(unittest.TestCase):
             self.assertEqual(process.stdout.readline().strip(), "ready")
             try:
                 paths = json.loads(
-                    maintenance.command(["python3", "-c", maintenance.PROC_PATHS])
+                    maintenance.command(
+                        ["python3", "-c", maintenance.PROC_PATHS, str(process.pid)]
+                    )
                 )
             except subprocess.CalledProcessError as error:
                 self.fail(f"process scanner failed: {error.stderr}")

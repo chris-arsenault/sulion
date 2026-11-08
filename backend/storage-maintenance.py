@@ -34,9 +34,10 @@ RECORDS = ("ledger.db", "registry.duckdb")
 # Read paths only, never process environments. A quiet run can still have an
 # old checkpoint open, or name its next output in argv between writes.
 PROC_PATHS = r"""
-import glob,json,os
+import glob,json,os,sys
 paths=set()
-for proc in glob.glob('/proc/[0-9]*'):
+procs=['/proc/'+str(int(pid)) for pid in sys.argv[1:]] or glob.glob('/proc/[0-9]*')
+for proc in procs:
     try:
         status=open(proc+'/status').read().splitlines()
         uid=next(line.split()[2] for line in status if line.startswith('Uid:'))
