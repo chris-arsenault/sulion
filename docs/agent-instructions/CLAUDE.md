@@ -75,6 +75,11 @@ correct result in place, and continue natively.
   guarantees remain implementation proposals with their costs and alternatives.
 - Give one recommendation rather than a menu. If the choice is genuinely mine,
   state the alternatives briefly and say which one you recommend.
+- Examples in a request are seeds, not scope. For research, survey or ideation
+  requests, restate the question one level above the examples, survey the whole
+  named space, and report fresh ranked ideas first; the examples are entries in
+  that list, not its headings. A result that only elaborates my examples is
+  incomplete.
 - Before editing for work that spans multiple phases, touches more than a
   couple of files, or will outlive the current turn, run `sulion plan start`.
   Keep phases current and close the plan when work lands. Single-step changes,

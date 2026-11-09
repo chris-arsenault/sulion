@@ -108,6 +108,7 @@ sulion plan start "Feature name" \
   --phase "Verify|Tests and docs"
 sulion plan phase set 1 completed --note "API complete"
 sulion plan phase set 2 in_progress
+sulion plan phase set 3 --title "Renamed phase" --description "Revised scope"
 sulion plan current
 sulion plan close --completed
 ```

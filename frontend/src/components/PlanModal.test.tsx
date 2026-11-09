@@ -215,6 +215,24 @@ describe("PlanModal", () => {
     await waitFor(() => expect(requests[2]).toMatchObject({ boundaries: [] }));
   });
 
+  it("shows the old and new title of a renamed phase in history", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url.startsWith(PLANS_URL)) return jsonResponse([plan()]);
+      if (url.endsWith("/events")) return jsonResponse([{
+        id: 1, event_type: "phase_updated", actor_kind: "agent", created_at: NOW,
+        from_status: "pending", to_status: "pending", note: null,
+        from_title: "Old phase", to_title: "New phase",
+        guidance_before: null, guidance_after: null,
+      }]);
+      return jsonResponse(plan());
+    }));
+    render(<PlanModal open repo="alpha" planId="plan-1" onClose={noop} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByText("History · 1"));
+    expect(screen.getByText("Renamed “Old phase” → “New phase”")).toBeDefined();
+  });
+
   it("refreshes inherited guidance when the ancestor revision changes", async () => {
     let ancestor: PlanView = { ...plan(), outcome: "Initial intent", boundaries: [{ source: "user_requirement", text: "No backend" }] };
     const branch = { ...plan(), id: "plan-2", parent_plan_id: "plan-1", depth: 1, outcome: "Branch intent" };

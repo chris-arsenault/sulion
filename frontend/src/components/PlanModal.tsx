@@ -876,6 +876,11 @@ function PlanDetail({
               <strong>{humanEvent(event.event_type)}</strong>
               <span>{event.note || statusChange(event) || event.actor_kind}</span>
               <time dateTime={event.created_at}>{relativeAge(event.created_at)}</time>
+              {event.from_title && event.to_title ? (
+                <span>
+                  Renamed “{event.from_title}” → “{event.to_title}”
+                </span>
+              ) : null}
               {event.guidance_after ? (
                 <details>
                   <summary>Guidance changes</summary>

@@ -654,6 +654,72 @@ async fn control_socket_publishes_plans_and_preserves_explicit_attention() {
     assert!(updated.ok, "{:?}", updated.error);
     assert_eq!(updated.data.unwrap()["phases"][0]["status"], "completed");
 
+    let renamed = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::PlanUpdatePhase {
+            plan_id: None,
+            phase_reference: "1".to_string(),
+            input: UpdatePhaseInput {
+                title: Some("Renamed phase".to_string()),
+                description: Some("Revised scope".to_string()),
+                status: None,
+                status_note: None,
+                position: None,
+                size: None,
+            },
+        },
+    )
+    .await
+    .unwrap();
+    assert!(renamed.ok, "{:?}", renamed.error);
+    let renamed_phase = &renamed.data.unwrap()["phases"][0];
+    assert_eq!(renamed_phase["title"], "Renamed phase");
+    assert_eq!(renamed_phase["description"], "Revised scope");
+    assert_eq!(renamed_phase["status"], "completed");
+    assert_eq!(renamed_phase["status_note"], "done");
+    let history =
+        correlate::send_control(&sock, pty_id, ControlRequest::PlanHistory { plan_id: None })
+            .await
+            .unwrap();
+    assert!(history.ok, "{:?}", history.error);
+    let history = history.data.unwrap();
+    let events = history.as_array().unwrap();
+    let rename = &events[0];
+    assert_eq!(rename["event_type"], "phase_updated");
+    assert_eq!(rename["from_title"], "Build");
+    assert_eq!(rename["to_title"], "Renamed phase");
+    assert!(
+        events[1..]
+            .iter()
+            .all(|event| event["from_title"].is_null()),
+        "only the renaming event carries titles: {events:?}"
+    );
+
+    let retitled = correlate::send_control(
+        &sock,
+        pty_id,
+        ControlRequest::PlanUpdate {
+            plan_id: None,
+            input: UpdatePlanInput {
+                title: Some("Retitled work".to_string()),
+                ..Default::default()
+            },
+        },
+    )
+    .await
+    .unwrap();
+    assert!(retitled.ok, "{:?}", retitled.error);
+    let history =
+        correlate::send_control(&sock, pty_id, ControlRequest::PlanHistory { plan_id: None })
+            .await
+            .unwrap();
+    let plan_rename = &history.data.unwrap()[0];
+    assert_eq!(plan_rename["event_type"], "plan_updated");
+    assert_eq!(plan_rename["phase_id"], serde_json::Value::Null);
+    assert_eq!(plan_rename["from_title"], "Published work");
+    assert_eq!(plan_rename["to_title"], "Retitled work");
+
     let attention = correlate::send_control(
         &sock,
         pty_id,

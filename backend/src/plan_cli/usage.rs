@@ -24,7 +24,8 @@ Commands:
   return [--completed|--canceled] [--skip-remaining] [--note text]
   tree [plan-id]
   phase add <title> [--description text] [--status status] [--size s|m|l]
-  phase set <id|position> <status> [--note text] [--position n] [--size s|m|l]
+  phase set <id|position> [status] [--title text] [--description text]
+            [--note text] [--position n] [--size s|m|l]
   attach <plan-uuid>
   detach [plan-uuid]
   history [plan-id]
@@ -46,7 +47,8 @@ Guidance (start, branch, update):
   close/detach/return retain the command target's context after attachment changes
   --json keeps stdout data unchanged; the recurring reminder goes to stderr
   unavailable context is reported; it never hides a command failure or undoes success
-  history retains guidance before/after, including cleared values
+  history retains guidance before/after, including cleared values, and the
+    old/new title of each plan or phase rename
 
 Execution:
   write guidance from the request; label uncertain interpretations as assumptions
@@ -75,7 +77,9 @@ Rules:
     --all-pending
   close --completed rejects unfinished phases unless --skip-remaining
   most commands target this PTY's current plan; --plan <uuid> overrides
-  `step` is an alias for `phase`
+  `step` is an alias for `phase`; `phase update` is an alias for `phase set`
+  phase set edits a phase in place: --title renames it, --description replaces
+    its description, --position moves it; its id, status, and history stay
 
 Branching:
   branch opens a sub-plan under the current plan and moves this PTY onto it
@@ -89,6 +93,7 @@ Start:
   sulion plan current
   sulion plan start \"<title>\" --summary \"<text>\" --phase \"Title|Description\"
   sulion plan phase set 1 completed --note \"...\"
+  sulion plan phase set 3 --title \"New title\" --description \"Revised scope\"
   sulion plan branch \"Unblock X\" --from 4 --phase \"Diagnose\" --phase \"Fix\"
   sulion plan return --completed --note \"...\"
   sulion plan close --completed"

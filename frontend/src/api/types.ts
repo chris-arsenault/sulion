@@ -453,6 +453,8 @@ export interface PlanEventView {
   from_status: string | null;
   to_status: string | null;
   note: string | null;
+  from_title: string | null;
+  to_title: string | null;
   guidance_before: PlanGuidance | null;
   guidance_after: PlanGuidance | null;
   created_at: string;

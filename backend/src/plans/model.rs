@@ -222,6 +222,9 @@ pub struct PlanEventView {
     pub from_status: Option<String>,
     pub to_status: Option<String>,
     pub note: Option<String>,
+    /// Set only on the event that renamed the plan or phase.
+    pub from_title: Option<String>,
+    pub to_title: Option<String>,
     pub guidance_before: Option<sqlx::types::Json<PlanGuidance>>,
     pub guidance_after: Option<sqlx::types::Json<PlanGuidance>>,
     pub created_at: DateTime<Utc>,

@@ -216,6 +216,8 @@ sulion plan phase add "Polish" --description "Final interaction pass"
 sulion plan phase set 1 completed --note "API and CLI complete"
 sulion plan phase set 2 blocked --note "Needs a product decision"
 sulion plan phase set 2 in_progress
+sulion plan phase set 3 --title "Renamed phase" --description "Revised scope"
+sulion plan phase set 3 --position 1
 
 sulion plan branch "Unblock the checkpoint gate" \
   --from 4 \

@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use super::model::{NewPhase, PlanActor, PlanPhaseView, PlanView, UpdatePhaseInput};
 use super::{
-    bump_revision, clean_note, ensure_plan_open, get, insert_event, limited_text, required_text,
-    validate_actor, MAX_DESCRIPTION_CHARS, MAX_TITLE_CHARS,
+    bump_revision, clean_note, ensure_plan_open, get, insert_event, insert_event_with_rename,
+    limited_text, required_text, validate_actor, Rename, MAX_DESCRIPTION_CHARS, MAX_TITLE_CHARS,
 };
 use crate::db::Pool;
 
@@ -90,7 +90,7 @@ pub async fn update_phase(
     .ok_or_else(|| anyhow::anyhow!("phase not found: {phase_id}"))?;
     let title = match input.title.as_deref() {
         Some(value) => required_text(value, "phase title", MAX_TITLE_CHARS)?,
-        None => current.title,
+        None => current.title.clone(),
     };
     let description = match input.description.as_deref() {
         Some(value) => limited_text(value, "phase description", MAX_DESCRIPTION_CHARS)?,
@@ -121,7 +121,7 @@ pub async fn update_phase(
     )
     .bind(phase_id)
     .bind(plan_id)
-    .bind(title)
+    .bind(&title)
     .bind(description)
     .bind(status)
     .bind(status_note.as_deref())
@@ -129,7 +129,7 @@ pub async fn update_phase(
     .execute(&mut *tx)
     .await?;
     bump_revision(&mut tx, plan_id).await?;
-    insert_event(
+    insert_event_with_rename(
         &mut tx,
         plan_id,
         Some(phase_id),
@@ -142,6 +142,7 @@ pub async fn update_phase(
         Some(&current.status),
         Some(status),
         status_note.as_deref(),
+        Rename::between(&current.title, &title),
     )
     .await?;
     tx.commit().await?;

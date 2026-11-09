@@ -169,7 +169,7 @@ pub async fn update(
     let parent_plan_id = current.parent_plan_id;
     let title = match input.title.as_deref() {
         Some(value) => required_text(value, "plan title", MAX_TITLE_CHARS)?,
-        None => current.title,
+        None => current.title.clone(),
     };
     let summary = match input.summary.as_deref() {
         Some(value) => limited_text(value, "plan summary", MAX_SUMMARY_CHARS)?,
@@ -230,7 +230,7 @@ pub async fn update(
           WHERE id = $1",
     )
     .bind(plan_id)
-    .bind(title)
+    .bind(&title)
     .bind(summary)
     .bind(status)
     .bind(&guidance.outcome)
@@ -259,7 +259,7 @@ pub async fn update(
     } else {
         "plan_updated"
     };
-    insert_event(
+    insert_event_with_rename(
         &mut tx,
         plan_id,
         None,
@@ -268,6 +268,7 @@ pub async fn update(
         Some(&current.status),
         Some(status),
         note.as_deref(),
+        Rename::between(&current.title, &title),
     )
     .await?;
 
@@ -337,7 +338,8 @@ pub async fn detach(
 pub async fn events(pool: &Pool, plan_id: Uuid) -> anyhow::Result<Vec<PlanEventView>> {
     let rows = sqlx::query_as(
         "SELECT id, plan_id, phase_id, event_type, actor_kind, pty_session_id, \
-                agent_session_uuid, from_status, to_status, note, guidance_before, guidance_after, created_at \
+                agent_session_uuid, from_status, to_status, note, from_title, to_title, \
+                guidance_before, guidance_after, created_at \
            FROM plan_events WHERE plan_id = $1 \
           ORDER BY created_at DESC, id DESC",
     )
@@ -658,11 +660,49 @@ async fn insert_event(
     to_status: Option<&str>,
     note: Option<&str>,
 ) -> anyhow::Result<()> {
+    insert_event_with_rename(
+        tx,
+        plan_id,
+        phase_id,
+        event_type,
+        actor,
+        from_status,
+        to_status,
+        note,
+        None,
+    )
+    .await
+}
+
+/// Old and new title of a plan or phase, recorded on the event that renamed it.
+struct Rename<'a> {
+    from: &'a str,
+    to: &'a str,
+}
+
+impl<'a> Rename<'a> {
+    fn between(from: &'a str, to: &'a str) -> Option<Self> {
+        (from != to).then_some(Self { from, to })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_event_with_rename(
+    tx: &mut Transaction<'_, Postgres>,
+    plan_id: Uuid,
+    phase_id: Option<Uuid>,
+    event_type: &str,
+    actor: &PlanActor,
+    from_status: Option<&str>,
+    to_status: Option<&str>,
+    note: Option<&str>,
+    rename: Option<Rename<'_>>,
+) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO plan_events \
              (plan_id, phase_id, event_type, actor_kind, pty_session_id, \
-              agent_session_uuid, from_status, to_status, note, created_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())",
+              agent_session_uuid, from_status, to_status, note, from_title, to_title, created_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())",
     )
     .bind(plan_id)
     .bind(phase_id)
@@ -673,6 +713,8 @@ async fn insert_event(
     .bind(from_status)
     .bind(to_status)
     .bind(note)
+    .bind(rename.as_ref().map(|r| r.from))
+    .bind(rename.as_ref().map(|r| r.to))
     .execute(&mut **tx)
     .await?;
     Ok(())

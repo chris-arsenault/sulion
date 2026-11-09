@@ -498,6 +498,11 @@ fn print_plan_data(data: &Value, full_guidance: bool) {
                         .map(|note| format!(" — {note}"))
                         .unwrap_or_default()
                 );
+                if let (Some(from), Some(to)) =
+                    (event["from_title"].as_str(), event["to_title"].as_str())
+                {
+                    println!("  renamed \"{from}\" → \"{to}\"");
+                }
                 for key in ["guidance_before", "guidance_after"] {
                     if event.get(key).is_some_and(|value| !value.is_null()) {
                         println!("  {}", key.replace('_', " "));
@@ -864,5 +869,30 @@ mod tests {
         assert_eq!(phase_reference, "2");
         assert_eq!(input.status.as_deref(), Some("completed"));
         assert_eq!(input.status_note.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn phase_set_renames_without_changing_status() {
+        let mut args = vec![
+            "set".to_string(),
+            "3".to_string(),
+            "--title".to_string(),
+            "Renamed".to_string(),
+            "--description".to_string(),
+            "Revised scope".to_string(),
+        ];
+        let request = parse_plan_request("phase", &mut args).unwrap();
+        let ControlRequest::PlanUpdatePhase {
+            phase_reference,
+            input,
+            ..
+        } = request
+        else {
+            panic!("expected phase update");
+        };
+        assert_eq!(phase_reference, "3");
+        assert_eq!(input.title.as_deref(), Some("Renamed"));
+        assert_eq!(input.description.as_deref(), Some("Revised scope"));
+        assert_eq!(input.status, None);
     }
 }
