@@ -528,6 +528,38 @@ fn parse_agent(value: &str) -> Result<AgentType, RuntimeError> {
         .map_err(|_| RuntimeError::BadRequest("agent must be claude, codex, or fugu".into()))
 }
 
+/// What a toolset upgrade restarts: an agent that was starting or running
+/// comes back in the same conversation when one is correlated to the session
+/// (fresh otherwise); anything else gets a default shell.
+fn upgrade_launch(session: Option<&PtyMetadata>) -> SessionLaunch {
+    let Some(session) = session else {
+        return SessionLaunch::Shell;
+    };
+    let runtime = &session.agent_runtime;
+    if !matches!(runtime.state.as_str(), "starting" | "running") {
+        return SessionLaunch::Shell;
+    }
+    let Some(agent) = runtime
+        .agent
+        .as_deref()
+        .or(session.current_session_agent.as_deref())
+        .and_then(|agent| AgentType::parse(agent).ok())
+    else {
+        return SessionLaunch::Shell;
+    };
+    let conversation_agent = session
+        .current_session_agent
+        .as_deref()
+        .and_then(|agent| AgentType::parse(agent).ok());
+    let resume_session_uuid = session
+        .current_session_uuid
+        .filter(|_| conversation_agent == Some(agent));
+    SessionLaunch::Agent {
+        agent: agent.as_str().into(),
+        resume_session_uuid,
+    }
+}
+
 fn agent_launch_command(
     agent: AgentType,
     resume_session_uuid: Option<Uuid>,
@@ -624,5 +656,93 @@ impl TerminalStream {
             .send(envelope)
             .await
             .map_err(|_| anyhow::anyhow!("node connection closed"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(
+        runtime_state: &str,
+        runtime_agent: Option<&str>,
+        conversation: Option<(Uuid, &str)>,
+    ) -> PtyMetadata {
+        PtyMetadata {
+            id: Uuid::new_v4(),
+            repo: "repo".into(),
+            working_dir: PathBuf::from("/repos/repo"),
+            workspace: None,
+            meta_repo: None,
+            state: crate::pty::PtyState::Live,
+            created_at: chrono::Utc::now(),
+            ended_at: None,
+            exit_code: None,
+            current_session_uuid: conversation.map(|(id, _)| id),
+            current_session_agent: conversation.map(|(_, agent)| agent.into()),
+            last_event_at: None,
+            label: None,
+            pinned: false,
+            color: None,
+            agent_runtime: crate::pty::AgentRuntimeMetadata {
+                agent: runtime_agent.map(Into::into),
+                state: runtime_state.into(),
+                ..Default::default()
+            },
+        }
+    }
+
+    fn resumed(launch: SessionLaunch) -> Option<(String, Option<Uuid>)> {
+        match launch {
+            SessionLaunch::Agent {
+                agent,
+                resume_session_uuid,
+            } => Some((agent, resume_session_uuid)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn upgrade_resumes_a_running_agent_into_its_conversation() {
+        let conversation = Uuid::new_v4();
+        let launch = upgrade_launch(Some(&session(
+            "running",
+            Some("claude"),
+            Some((conversation, "claude-code")),
+        )));
+        assert_eq!(resumed(launch), Some(("claude".into(), Some(conversation))));
+
+        let launch = upgrade_launch(Some(&session(
+            "starting",
+            Some("codex"),
+            Some((conversation, "codex")),
+        )));
+        assert_eq!(resumed(launch), Some(("codex".into(), Some(conversation))));
+    }
+
+    #[test]
+    fn upgrade_restarts_a_running_agent_fresh_without_its_own_conversation() {
+        let launch = upgrade_launch(Some(&session("running", Some("codex"), None)));
+        assert_eq!(resumed(launch), Some(("codex".into(), None)));
+
+        // A conversation correlated from a different agent is not this one's.
+        let launch = upgrade_launch(Some(&session(
+            "running",
+            Some("codex"),
+            Some((Uuid::new_v4(), "claude-code")),
+        )));
+        assert_eq!(resumed(launch), Some(("codex".into(), None)));
+    }
+
+    #[test]
+    fn upgrade_without_a_running_agent_starts_a_shell() {
+        let conversation = Some((Uuid::new_v4(), "claude-code"));
+        for state in ["none", "exited"] {
+            let launch = upgrade_launch(Some(&session(state, Some("claude"), conversation)));
+            assert!(matches!(launch, SessionLaunch::Shell), "state {state}");
+        }
+        let launch = upgrade_launch(Some(&session("running", Some("mystery"), None)));
+        assert!(matches!(launch, SessionLaunch::Shell));
+        assert!(matches!(upgrade_launch(None), SessionLaunch::Shell));
     }
 }

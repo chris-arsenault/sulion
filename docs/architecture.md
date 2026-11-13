@@ -106,9 +106,13 @@ run volume. A running devenv keeps the executable it started with. Separately,
 the node atomically updates `/run/sulion/bin/sulion` on every start, so existing
 shells get current CLI commands on their next invocation without restarting.
 
-The explicit session upgrade action ends that session's shell and starts a
-fresh default shell on the current toolset, preserving its ID, label, working
-directory, and workspace binding. It does not resume the agent automatically.
+The explicit session upgrade action ends that session's shell and restarts it
+on the current toolset, preserving its ID, label, working directory, and
+workspace binding. The node reads the session row before ending the shell: an
+agent runtime that was `starting` or `running` relaunches through the same
+resume command as a session create, into its correlated conversation when that
+conversation belongs to the same agent and fresh otherwise, falling back to
+bash when the agent exits. Any other session gets a default shell.
 Other sessions keep running. The launcher removes non-current containers once
 they are stopped or connected with an empty inventory. It preserves the
 current container and does not treat a disconnected inventory as proof that

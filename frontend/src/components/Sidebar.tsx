@@ -2569,8 +2569,9 @@ function buildSessionMenuItems({
           {
             kind: "item",
             id: "upgrade",
-            // Restarts the shell in place on the current toolset; the node
-            // refuses with a plain error when there is nothing newer.
+            // Restarts the shell in place on the current toolset, resuming a
+            // running agent; the node refuses with a plain error when there
+            // is nothing newer.
             label: "Upgrade toolset (restarts shell)",
             onSelect: onUpgrade,
           } as MenuItem,

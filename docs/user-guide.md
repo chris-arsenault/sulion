@@ -143,8 +143,9 @@ the resume action to create a new PTY and resume the conversation; this moves
 the current association instead of creating a second live owner of the history.
 On the dedicated node, releases preserve running shells. **Upgrade toolset
 (restarts shell)** in a live session's menu explicitly replaces that shell on
-the current toolset, preserving its session identity and workspace. Resume the
-agent separately afterward. Combined standalone deployments do not preserve
+the current toolset, preserving its session identity and workspace. An agent
+that was running comes back resumed in the same conversation; a session with no
+running agent gets a plain shell. Combined standalone deployments do not preserve
 shells across backend replacement.
 
 ## Workspace — terminal and timeline panes

@@ -194,6 +194,25 @@ pub struct SpawnParams {
     pub initial_agent_runtime_agent: Option<String>,
 }
 
+/// What a toolset upgrade starts in place of the ended process.
+#[derive(Debug, Clone)]
+pub struct UpgradeLaunch {
+    pub shell: PathBuf,
+    pub args: Vec<String>,
+    /// Agent the launch starts, recorded as `starting` like a create launch.
+    pub agent: Option<String>,
+}
+
+impl UpgradeLaunch {
+    pub fn default_shell() -> Self {
+        Self {
+            shell: default_shell(),
+            args: Vec::new(),
+            agent: None,
+        }
+    }
+}
+
 impl Default for SpawnParams {
     fn default() -> Self {
         Self {
@@ -517,14 +536,16 @@ impl PtyManager {
     }
 
     /// Moves one session's shell to the current devenv: the process ends
-    /// where it is and a fresh default shell starts on the current toolset,
-    /// keeping the session's identity, workspace binding, and working
-    /// directory. Neighbouring sessions are untouched.
+    /// where it is and `launch` starts on the current toolset, keeping the
+    /// session's identity, workspace binding, and working directory. The
+    /// caller chooses the launch (a default shell, or the agent resumed into
+    /// its conversation). Neighbouring sessions are untouched.
     pub async fn upgrade(
         self: &Arc<Self>,
         id: Uuid,
         node_id: Option<Uuid>,
         node_boot_id: Option<Uuid>,
+        launch: UpgradeLaunch,
     ) -> anyhow::Result<PtyMetadata> {
         let session = self
             .get(id)
@@ -573,8 +594,9 @@ impl PtyManager {
             workspace,
             meta_repo: persisted.meta_repo,
             additional_repo_roots,
-            shell: default_shell(),
-            args: Vec::new(),
+            shell: launch.shell,
+            args: launch.args,
+            initial_agent_runtime_agent: launch.agent,
             ..Default::default()
         })
         .await

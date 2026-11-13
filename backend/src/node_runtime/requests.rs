@@ -96,11 +96,19 @@ impl NodeRuntime {
             }
             NodeRequestKind::SessionUpgrade => {
                 let request: ResourceRequest = decode(request)?;
+                let session = crate::pty::read_meta(&self.pool, request.id).await?;
+                let (shell, args, agent) =
+                    self.resolve_launch(&upgrade_launch(session.as_ref()))?;
                 // Refusals ("already on the current toolset", "not live")
                 // are caller-actionable, not node malfunctions.
                 value(
                     self.pty
-                        .upgrade(request.id, Some(self.node_id), Some(self.boot_id))
+                        .upgrade(
+                            request.id,
+                            Some(self.node_id),
+                            Some(self.boot_id),
+                            crate::pty::UpgradeLaunch { shell, args, agent },
+                        )
                         .await
                         .map_err(|err| RuntimeError::BadRequest(err.to_string()))?,
                 )

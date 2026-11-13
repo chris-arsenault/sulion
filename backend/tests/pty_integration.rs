@@ -209,10 +209,28 @@ async fn upgrade_moves_one_session_and_leaves_neighbours_alone() {
     let a = mgr.spawn(spawn("upgrade-a")).await.expect("spawn a");
     let b = mgr.spawn(spawn("upgrade-b")).await.expect("spawn b");
 
-    // The toolset rolls; only the explicitly upgraded session moves.
+    // A new toolset arrives; only the explicitly upgraded session moves, and
+    // it restarts the launch the caller chose — here a stand-in agent.
     link.set_current_ident(Some("new-toolset".into())).await;
-    let upgraded = mgr.upgrade(a.id, None, None).await.expect("upgrade a");
+    let relaunch = sulion::pty::UpgradeLaunch {
+        shell: PathBuf::from("/bin/sleep"),
+        args: vec!["60".into()],
+        agent: Some("claude".into()),
+    };
+    let upgraded = mgr
+        .upgrade(a.id, None, None, relaunch.clone())
+        .await
+        .expect("upgrade a");
     assert_eq!(upgraded.id, a.id);
+    let (runtime_agent, runtime_state): (Option<String>, String) = sqlx::query_as(
+        "SELECT agent_runtime_agent, agent_runtime_state FROM pty_sessions WHERE id = $1",
+    )
+    .bind(a.id)
+    .fetch_one(&pool)
+    .await
+    .expect("read agent runtime");
+    assert_eq!(runtime_agent.as_deref(), Some("claude"));
+    assert_eq!(runtime_state, "starting");
 
     let ident_of = |id: uuid::Uuid| {
         let pool = pool.clone();
@@ -239,7 +257,7 @@ async fn upgrade_moves_one_session_and_leaves_neighbours_alone() {
 
     // A second upgrade has nothing to do.
     let err = mgr
-        .upgrade(a.id, None, None)
+        .upgrade(a.id, None, None, relaunch)
         .await
         .expect_err("already current");
     assert!(err.to_string().contains("already on the current toolset"));

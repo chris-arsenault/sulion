@@ -164,8 +164,9 @@ symlink on every node start, including when it adopts an existing container.
 Running shells therefore pick up new CLI commands on their next invocation.
 
 Use **Upgrade toolset (restarts shell)** on one live session to move it to the
-current image. It starts a default shell with the same session ID and workspace;
-resume the agent separately. Non-current containers are removed when stopped
+current image. It restarts the session with the same ID and workspace, resuming
+the agent in its conversation when one was running and starting a default shell
+otherwise. Non-current containers are removed when stopped
 or empty. Host reboot and combined-role replacement still end their shells.
 See [architecture](architecture.md#pty-lifetime-and-toolset-upgrades).
 
