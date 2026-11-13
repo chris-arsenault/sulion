@@ -1,0 +1,3 @@
+#!/bin/sh
+# Ohm ships no rust-analyzer; the stable toolchain carries the component.
+RUSTUP_TOOLCHAIN=stable-x86_64-unknown-linux-gnu exec /usr/local/cargo/bin/rust-analyzer "$@"

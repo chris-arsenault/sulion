@@ -19,8 +19,8 @@ Claude Code's own updater expects a native install under `~/.local/bin` and
 `~/.local/share/claude/versions`, upgrades in the background during sessions,
 and needs no privileges when that layout is owned by the running user. The
 persistent home on the dedicated node already survives image rolls (ADR
-0017), while the image itself is content-addressed and rolls devenv
-containers only when toolset content changes.
+0017), while the image itself is content-addressed: a toolset change starts
+a sibling devenv container for new sessions and leaves existing ones running.
 
 The user declined any manual repair and asked for the shipped toolset
 container to be fixed so that upgrades work automatically.

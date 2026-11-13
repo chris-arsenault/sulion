@@ -2,9 +2,11 @@
 #
 # This image is content-addressed in CI (platform.yml
 # content_addressed_images): its ID changes exactly when this directory
-# changes, and the node rolls devenv containers only when the ID does — so a
-# backend release leaves running shells alone. That property forbids baking
-# per-commit Rust binaries here. The node delivers `sulion-devenv` (the PTY
+# changes. A new ID makes the node start a sibling container for new
+# sessions; existing containers keep serving their shells until each session
+# is explicitly upgraded. A backend release keeps the ID, so the node adopts
+# the running container. Per-commit Rust binaries baked here would move the
+# ID on every release. The node delivers `sulion-devenv` (the PTY
 # server this container runs) and `sulion` (the CLI the wrappers exec)
 # through the shared run volume instead; /usr/local/bin/sulion is a symlink
 # into that volume, dangling until it is mounted.
@@ -128,12 +130,11 @@ RUN corepack enable \
 # clippy/fmt`) assume cargo is on PATH, and PTY sessions doing backend
 # work inherit this image. Installed system-wide under /usr/local so
 # every user sees it; minimal profile + clippy + rustfmt covers the
-# `make lint-rust / test-rust` surface. Pin shells to the explicit
-# host-triple toolchain name too: some environments end up with a
-# broken named `1.xx.x-<triple>` toolchain while the healthy
-# `stable-<triple>` install still works. Exporting RUSTUP_TOOLCHAIN
-# keeps every default shell, make invocation, and agent subprocess on
-# the known-good stable toolchain without needing per-command overrides.
+# `make lint-rust / test-rust` surface. Name the explicit host-triple
+# toolchain: some environments end up with a broken named
+# `1.xx.x-<triple>` toolchain while the healthy `stable-<triple>`
+# install still works. RUSTUP_TOOLCHAIN holds stable while the layers
+# below build; the Ohm layer then switches the shell default.
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     RUSTUP_TOOLCHAIN=stable-x86_64-unknown-linux-gnu \
@@ -164,6 +165,23 @@ RUN dnf groupinstall -y "Development Tools" \
   # /usr/local/bin so cargo/rustc/clippy/rustfmt stay reachable from
   # the default shell regardless of how PATH is initialised.
   && find /usr/local/cargo/bin -maxdepth 1 -type f -exec ln -sf {} /usr/local/bin/ \;
+
+# Ohm (github.com/astral-experiments/ohm), an experimental Rust toolchain
+# fork built for fast incremental local builds, is the shell default:
+# RUSTUP_TOOLCHAIN=ohm sends every plain cargo, rustc, rustfmt, and clippy
+# through it, so agents get it without `+ohm`. Stable stays installed beside
+# it: bin/cargo falls back to stable for targets Ohm ships no standard library
+# for (the Windows MSVC targets above), bin/rust-analyzer runs stable's
+# component, and `cargo +stable-x86_64-unknown-linux-gnu` still selects it.
+# CI and release binaries build on GitHub runners, never here, so Ohm only
+# reaches local iteration. The versioned installer embeds the archive
+# checksum and registers both `ohm` and the exact version with rustup.
+ARG OHM_VERSION=ohm-1.99.0-33
+RUN curl --proto '=https' --tlsv1.2 -LsSf "https://labs.astral.sh/ohm/releases/${OHM_VERSION}/install.sh" \
+     | env OHM_INSTALL_DIR="/usr/local/ohm/${OHM_VERSION}" sh \
+  && chmod -R a+rX /usr/local/ohm \
+  && RUSTUP_TOOLCHAIN=ohm rustc --version | grep -F "(${OHM_VERSION})"
+ENV RUSTUP_TOOLCHAIN=ohm
 
 # .NET SDKs for C# builds in PTYs. Some repos in the shared workspace
 # still target .NET 8 while others pin .NET 10 via global.json and
@@ -348,11 +366,13 @@ COPY bin/docker-compose /opt/sulion/bin/docker-compose
 COPY bin/with-cred /opt/sulion/bin/with-cred
 COPY bin/sulion-retrieve /opt/sulion/bin/sulion-retrieve
 COPY bin/sulion-code /opt/sulion/bin/sulion-code
+COPY bin/cargo /opt/sulion/bin/cargo
+COPY bin/rust-analyzer /opt/sulion/bin/rust-analyzer
 COPY docs/toolset.md /opt/sulion/docs/toolset.md
 COPY hooks/session-start.sh /opt/sulion/hooks/session-start.sh
 COPY hooks/activity-hook.sh /opt/sulion/hooks/activity-hook.sh
 COPY entrypoint.sh /opt/sulion/entrypoint.sh
-RUN chmod +x /opt/sulion/bin/sulion-agent /opt/sulion/bin/cl /opt/sulion/bin/co /opt/sulion/bin/fugu /opt/sulion/bin/docker /opt/sulion/bin/docker-compose /opt/sulion/bin/with-cred /opt/sulion/bin/sulion-retrieve /opt/sulion/bin/sulion-code /opt/sulion/hooks/session-start.sh /opt/sulion/hooks/activity-hook.sh /opt/sulion/entrypoint.sh
+RUN chmod +x /opt/sulion/bin/sulion-agent /opt/sulion/bin/cl /opt/sulion/bin/co /opt/sulion/bin/fugu /opt/sulion/bin/docker /opt/sulion/bin/docker-compose /opt/sulion/bin/with-cred /opt/sulion/bin/sulion-retrieve /opt/sulion/bin/sulion-code /opt/sulion/bin/cargo /opt/sulion/bin/rust-analyzer /opt/sulion/hooks/session-start.sh /opt/sulion/hooks/activity-hook.sh /opt/sulion/entrypoint.sh
 USER sulion
 WORKDIR /home/sulion
 

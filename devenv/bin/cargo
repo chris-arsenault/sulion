@@ -1,0 +1,46 @@
+#!/bin/sh
+# cargo on the shell's RUSTUP_TOOLCHAIN (Ohm in the toolset images), except
+# when the invocation builds for a target that toolchain ships no standard
+# library for. Ohm carries only x86_64 Linux and wasm32; the Windows MSVC
+# targets used with `cargo xwin` live in the stable toolchain, so those
+# invocations run on stable instead of failing with a missing `core`.
+# An explicit `cargo +<toolchain>` passes through untouched.
+proxy=/usr/local/cargo/bin/cargo
+fallback=stable-x86_64-unknown-linux-gnu
+
+case "${1:-}" in
+  +*) exec "$proxy" "$@" ;;
+esac
+
+toolchain=${RUSTUP_TOOLCHAIN:-}
+[ -n "$toolchain" ] && [ "$toolchain" != "$fallback" ] || exec "$proxy" "$@"
+rustlib=${RUSTUP_HOME:-$HOME/.rustup}/toolchains/$toolchain/lib/rustlib
+
+missing=
+check() {
+  [ -d "$rustlib/$1" ] || missing=1
+}
+
+xwin=
+explicit=
+[ -z "${CARGO_BUILD_TARGET:-}" ] || { explicit=1; check "$CARGO_BUILD_TARGET"; }
+want_target=
+for arg in "$@"; do
+  if [ -n "$want_target" ]; then
+    explicit=1; check "$arg"; want_target=
+    continue
+  fi
+  case "$arg" in
+    --) break ;;
+    --target) want_target=1 ;;
+    --target=*) explicit=1; check "${arg#--target=}" ;;
+    xwin) xwin=1 ;;
+  esac
+done
+# cargo-xwin defaults to x86_64-pc-windows-msvc when no target is given.
+[ -z "$xwin" ] || [ -n "$explicit" ] || check x86_64-pc-windows-msvc
+
+if [ -n "$missing" ]; then
+  RUSTUP_TOOLCHAIN=$fallback exec "$proxy" "$@"
+fi
+exec "$proxy" "$@"

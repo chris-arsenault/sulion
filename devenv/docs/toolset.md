@@ -242,17 +242,27 @@ workspace dataset and shadow system binaries only for that user.
 
 ## Rust
 
-Rust is installed system-wide through rustup. The default toolchain is:
+Rust is installed system-wide through rustup. Shells default to
+[Ohm](https://github.com/astral-experiments/ohm), an experimental toolchain
+fork built for fast incremental local builds, through `RUSTUP_TOOLCHAIN=ohm`.
+Plain `cargo`, `rustc`, `rustfmt`, and `cargo clippy` run on Ohm; no `+ohm`
+is needed. `RUSTUP_TOOLCHAIN` overrides `rust-toolchain.toml` pins.
+
+The stable toolchain is installed beside it:
 
 ```text
 stable-x86_64-unknown-linux-gnu
 ```
 
-`cargo`, `rustc`, `rustfmt`, and `cargo clippy` are available from a plain
-shell. `cargo xwin` is installed for Windows MSVC cross-builds, with
-`x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc` targets preinstalled.
-If another named local toolchain is broken, prefer the stable toolchain above
-instead of debugging unrelated rustup state.
+Ohm ships standard libraries for `x86_64-unknown-linux-gnu` and
+`wasm32-unknown-unknown` only. `cargo` builds for any other target, including
+`cargo xwin` and the preinstalled `x86_64-pc-windows-msvc` and
+`aarch64-pc-windows-msvc` targets, run on stable automatically.
+`rust-analyzer` always runs stable's component. To use stable for anything
+else, name it: `cargo +stable-x86_64-unknown-linux-gnu test`. CI builds with
+stable, so a stable run is the reference when Ohm and CI disagree. If another
+named local toolchain is broken, use stable instead of debugging unrelated
+rustup state.
 
 ## Nix
 

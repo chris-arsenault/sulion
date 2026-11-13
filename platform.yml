@@ -36,8 +36,9 @@ truenas_roles_anywhere:
     env_prefix: AWS_RA_CODE_INTEL
 # The devenv image is the PTY toolset with no per-commit binaries: tagged by
 # its directory's git tree hash and skipped entirely when unchanged, so its
-# image ID moves only when toolset content does. The node rolls devenv
-# containers on image-ID change, never on release.
+# image ID moves only when toolset content does. A new image ID starts a
+# sibling devenv container for new sessions; existing containers and their
+# shells keep running.
 content_addressed_images:
   - devenv
 rust_artifacts:
