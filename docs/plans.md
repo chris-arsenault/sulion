@@ -416,9 +416,9 @@ S256 PKCE. Before sign-in, `/mcp` returns a `401` that points to resource discov
 Terraform provisions the confidential `sulion-plan-mcp` app client in the
 same Cognito pool as the Sulion browser app. The Komodo deployment supplies
 the MCP client ID and Cognito domain through `secret-paths.yml`. Terraform
-registers Claude's fixed callback, so discovery can go live before ChatGPT
-assigns its exact callback. Add that connection's callback in
-`infrastructure/terraform/plan-mcp.tf` once ChatGPT shows it.
+registers Claude's fixed callback and the exact ChatGPT callback in
+`infrastructure/terraform/plan-mcp.tf`. Update that URL if ChatGPT assigns a
+new one when the connection is recreated.
 
 The backend checks the dedicated client ID, the configured Cognito owner,
 and broker revocation. Resource-bound access tokens must name the MCP URL.

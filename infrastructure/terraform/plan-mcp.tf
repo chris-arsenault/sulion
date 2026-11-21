@@ -1,10 +1,11 @@
 module "cognito_plan_mcp" {
   source = "git::https://github.com/chris-arsenault/ahara-tf-patterns.git//modules/cognito-app"
   name   = "sulion-plan-mcp"
-  # Claude's fixed callback bootstraps the client. Add the exact ChatGPT
-  # callback for this connection after the live discovery endpoints respond.
-  callback_urls = ["https://claude.ai/api/mcp/auth_callback"]
-  cognito       = module.ctx.cognito
+  callback_urls = [
+    "https://claude.ai/api/mcp/auth_callback",
+    "https://chatgpt.com/connector/oauth/Lm5TBtxM2lQP",
+  ]
+  cognito = module.ctx.cognito
 }
 
 moved {
