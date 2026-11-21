@@ -7,12 +7,18 @@ use uuid::Uuid;
 
 use crate::activity::ActivityState;
 use crate::correlate::{ControlRequest, ControlResponse};
-use crate::plans::{BranchPlanInput, NewPhase, PlanGuidance, UpdatePhaseInput, UpdatePlanInput};
+use crate::plans::{
+    BranchPlanInput, NewPhase, PlanEdit, PlanFields, PlanGuidance, UpdatePhaseInput,
+    UpdatePlanInput,
+};
 
 mod archive;
+mod display;
 mod guidance;
+mod nested;
 mod reminder;
 mod usage;
+pub(crate) use display::print_plan_data;
 
 pub use archive::run_archive;
 use usage::{print_activity_usage, print_name_usage, print_plan_usage};
@@ -30,6 +36,14 @@ pub async fn run_plan(args: &[OsString]) -> anyhow::Result<i32> {
         reminder::print_attached(json).await;
         return Ok(0);
     }
+    if command == "patch" && args.get(1).is_some_and(|flag| flag == "--help") {
+        println!(
+            "Send related changes in one JSON object at the authoring revision from plan show.\n{}",
+            serde_json::to_string_pretty(&schemars::schema_for!(crate::plans::PlanPatch))?
+        );
+        reminder::print_attached(true).await;
+        return Ok(0);
+    }
     args.remove(0);
     let request = match parse_plan_request(&command, &mut args) {
         Ok(request) => request,
@@ -39,12 +53,9 @@ pub async fn run_plan(args: &[OsString]) -> anyhow::Result<i32> {
             return Ok(code);
         }
     };
-    reminder::run(
-        request,
-        json,
-        matches!(command.as_str(), "current" | "show"),
-    )
-    .await
+    let full = matches!(command.as_str(), "current" | "show")
+        || matches!(request, ControlRequest::PlanEdit { .. });
+    reminder::run(request, json, full).await
 }
 
 pub async fn run_activity(args: &[OsString]) -> anyhow::Result<i32> {
@@ -194,6 +205,12 @@ pub(crate) fn parse_plan_request(
             reject_unknown_options(args)?;
             Ok(ControlRequest::PlanShow { plan_id })
         }
+        "review" => {
+            let phase_id = take_uuid_option(args, "--phase")?;
+            let plan_id = optional_plan_id(args)?;
+            reject_unknown_options(args)?;
+            Ok(ControlRequest::PlanReview { plan_id, phase_id })
+        }
         "status" => {
             let plan_id = take_uuid_option(args, "--plan")?;
             let note = take_option(args, "--note")?;
@@ -228,31 +245,17 @@ pub(crate) fn parse_plan_request(
                 },
             })
         }
-        "update" => {
+        "update" => parse_plan_update(args),
+        "patch" => {
             let plan_id = take_uuid_option(args, "--plan")?;
-            let title = take_option(args, "--title")?;
-            let summary = take_option(args, "--summary")?;
-            let note = take_option(args, "--note")?;
-            let outcome = take_option(args, "--outcome")?;
-            let principles = guidance::parse_items(args, "--principle", "--clear-principles")?;
-            let assumptions = guidance::parse_items(args, "--assumption", "--clear-assumptions")?;
-            let boundaries = guidance::parse_boundaries(args)?;
+            let payload =
+                take_positional(args).ok_or_else(|| anyhow!("plan patch needs a JSON payload"))?;
+            let input = serde_json::from_str(&payload)?;
             reject_unknown_options(args)?;
-            Ok(ControlRequest::PlanUpdate {
-                plan_id,
-                input: UpdatePlanInput {
-                    title,
-                    summary,
-                    note,
-                    outcome,
-                    principles,
-                    assumptions,
-                    boundaries,
-                    ..Default::default()
-                },
-            })
+            Ok(ControlRequest::PlanPatch { plan_id, input })
         }
         "phase" | "step" => parse_phase_request(args),
+        "entry" => nested::entry(args),
         "attach" => {
             let raw = take_positional(args).ok_or_else(|| anyhow!("plan id is required"))?;
             reject_unknown_options(args)?;
@@ -272,6 +275,41 @@ pub(crate) fn parse_plan_request(
         }
         other => bail!("unknown plan command: {other}"),
     }
+}
+
+fn parse_plan_update(args: &mut Vec<String>) -> anyhow::Result<ControlRequest> {
+    let plan_id = take_uuid_option(args, "--plan")?;
+    let authoring_revision = nested::revision(args)?;
+    let technical_details = take_option(args, "--technical-details")?;
+    let input = UpdatePlanInput {
+        authoring_revision,
+        title: take_option(args, "--title")?,
+        summary: take_option(args, "--summary")?,
+        note: take_option(args, "--note")?,
+        outcome: take_option(args, "--outcome")?,
+        principles: guidance::parse_items(args, "--principle", "--clear-principles")?,
+        assumptions: guidance::parse_items(args, "--assumption", "--clear-assumptions")?,
+        boundaries: guidance::parse_boundaries(args)?,
+        ..Default::default()
+    };
+    reject_unknown_options(args)?;
+    if technical_details.is_some() {
+        let replaces_lists =
+            input.principles.is_some() || input.assumptions.is_some() || input.boundaries.is_some();
+        anyhow::ensure!(!replaces_lists, "edit individual guidance entries or use plan patch to combine them with technical details");
+        return Ok(nested::request(
+            plan_id,
+            authoring_revision,
+            input.note,
+            PlanEdit::EditPlan(PlanFields {
+                title: input.title,
+                summary: input.summary,
+                outcome: input.outcome,
+                technical_details,
+            }),
+        ));
+    }
+    Ok(ControlRequest::PlanUpdate { plan_id, input })
 }
 
 /// `branch` opens a sub-plan; `return` closes one and pops this PTY back to the
@@ -356,6 +394,9 @@ fn parse_phase_request(args: &mut Vec<String>) -> anyhow::Result<ControlRequest>
         "set" | "update" => {
             let status_option = take_option(args, "--status")?;
             let plan_id = take_uuid_option(args, "--plan")?;
+            let authoring_revision = take_option(args, "--revision")?
+                .map(|value| value.parse::<i64>())
+                .transpose()?;
             let status_note = take_option(args, "--note")?;
             let title = take_option(args, "--title")?;
             let description = take_option(args, "--description")?;
@@ -372,6 +413,7 @@ fn parse_phase_request(args: &mut Vec<String>) -> anyhow::Result<ControlRequest>
                 plan_id,
                 phase_reference,
                 input: UpdatePhaseInput {
+                    authoring_revision,
                     title,
                     description,
                     status,
@@ -381,7 +423,7 @@ fn parse_phase_request(args: &mut Vec<String>) -> anyhow::Result<ControlRequest>
                 },
             })
         }
-        other => bail!("unknown phase command: {other}"),
+        other => nested::phase(other, args),
     }
 }
 
@@ -478,144 +520,6 @@ fn print_name_data(data: &Value) {
     match data.get("agent_label").and_then(Value::as_str) {
         Some(name) => println!("{name}"),
         None => println!("No agent name set."),
-    }
-}
-
-fn print_plan_data(data: &Value, full_guidance: bool) {
-    if let Some(items) = data.as_array() {
-        if items.is_empty() {
-            println!("No plans.");
-            return;
-        }
-        if items[0].get("event_type").is_some() {
-            for event in items {
-                println!(
-                    "{} {}{}",
-                    event["created_at"].as_str().unwrap_or(""),
-                    event["event_type"].as_str().unwrap_or("event"),
-                    event["note"]
-                        .as_str()
-                        .map(|note| format!(" — {note}"))
-                        .unwrap_or_default()
-                );
-                if let (Some(from), Some(to)) =
-                    (event["from_title"].as_str(), event["to_title"].as_str())
-                {
-                    println!("  renamed \"{from}\" → \"{to}\"");
-                }
-                for key in ["guidance_before", "guidance_after"] {
-                    if event.get(key).is_some_and(|value| !value.is_null()) {
-                        println!("  {}", key.replace('_', " "));
-                        print!("{}", guidance::format_fields(&event[key]));
-                    }
-                }
-            }
-            return;
-        }
-        // `plan tree` nodes carry a depth but no summary; indent them instead.
-        if items[0].get("depth").is_some() && items[0].get("summary").is_none() {
-            for node in items {
-                let depth = node["depth"].as_i64().unwrap_or_default().max(0) as usize;
-                let attached = node["attached_pty_ids"]
-                    .as_array()
-                    .map(|ids| ids.len())
-                    .unwrap_or_default();
-                println!(
-                    "{}{} [{}] {} ({}/{} phases{}{})",
-                    "  ".repeat(depth),
-                    node["id"].as_str().unwrap_or(""),
-                    node["status"].as_str().unwrap_or("unknown"),
-                    node["title"].as_str().unwrap_or(""),
-                    node["completed_phases"].as_i64().unwrap_or_default(),
-                    node["total_phases"].as_i64().unwrap_or_default(),
-                    match node["blocked_phases"].as_i64().unwrap_or_default() {
-                        0 => String::new(),
-                        n => format!(", {n} blocked"),
-                    },
-                    if attached > 0 { ", attached" } else { "" },
-                );
-            }
-            return;
-        }
-        for item in items {
-            print_plan_header(item);
-        }
-        return;
-    }
-    if data.get("event_type").is_some() {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string())
-        );
-        return;
-    }
-    print_plan_header(data);
-    if full_guidance {
-        print!("{}", guidance::format_context(data));
-    }
-    let branches = data
-        .get("branches")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    if let Some(phases) = data.get("phases").and_then(Value::as_array) {
-        for phase in phases {
-            println!(
-                "  {}. [{}] {}{}",
-                phase["position"].as_i64().unwrap_or_default(),
-                phase["status"].as_str().unwrap_or("unknown"),
-                phase["title"].as_str().unwrap_or(""),
-                phase["status_note"]
-                    .as_str()
-                    .map(|note| format!(" — {note}"))
-                    .unwrap_or_default()
-            );
-            let phase_id = phase["id"].as_str().unwrap_or("");
-            for branch in branches.iter().filter(|branch| {
-                branch["anchor_phase_ids"]
-                    .as_array()
-                    .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(phase_id)))
-            }) {
-                println!(
-                    "     ↳ {} [{}] {} ({}/{} phases)",
-                    branch["id"].as_str().unwrap_or(""),
-                    branch["status"].as_str().unwrap_or("unknown"),
-                    branch["title"].as_str().unwrap_or(""),
-                    branch["completed_phases"].as_i64().unwrap_or_default(),
-                    branch["total_phases"].as_i64().unwrap_or_default(),
-                );
-            }
-        }
-    }
-}
-
-fn print_plan_header(plan: &Value) {
-    // A branch leads with where it sits, so a resumed session sees the trail
-    // back to the root before it sees this plan's own phases.
-    if let Some(ancestors) = plan
-        .get("ancestors")
-        .and_then(Value::as_array)
-        .filter(|value| !value.is_empty())
-    {
-        let trail: Vec<&str> = ancestors
-            .iter()
-            .map(|node| node["title"].as_str().unwrap_or(""))
-            .chain(std::iter::once(plan["title"].as_str().unwrap_or("")))
-            .collect();
-        println!(
-            "branch depth {}: {}",
-            plan["depth"].as_i64().unwrap_or(0),
-            trail.join(" › ")
-        );
-    }
-    println!(
-        "{} [{}] {}",
-        plan["id"].as_str().unwrap_or(""),
-        plan["status"].as_str().unwrap_or("unknown"),
-        plan["title"].as_str().unwrap_or("")
-    );
-    if let Some(summary) = plan["summary"].as_str().filter(|value| !value.is_empty()) {
-        println!("  {summary}");
     }
 }
 

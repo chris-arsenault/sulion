@@ -17,6 +17,7 @@ sulion-retrieve search "exec_command" --include tools --include-low-value --tool
 sulion-retrieve search "words the user said" --include user --mode lexical
 sulion-retrieve file-history backend/src/retrieval/search.rs
 sulion-retrieve turn <agent-session-uuid> <turn-id>
+sulion-retrieve plan <plan-uuid> --phase <phase-uuid> --history
 sulion-retrieve reindex --repo sulion
 sulion-retrieve reset --confirm
 sulion-retrieve index-status
@@ -38,11 +39,43 @@ sulion-retrieve search "exact thing" --scope session --session <agent-session-uu
 
 Use `--json` when another tool needs stable machine-readable output.
 
-Default search includes assistant text, not user instructions. Add
-`--include user` when looking for what the user requested or decided, and use
+Default search returns matching plans followed by assistant transcript hits.
+Add `--include user` when looking for standalone user prompts, and use
 `--mode lexical` when their wording is known. `facets` reports indexed scope;
 `index-status` reports semantic backlog. A pending-index warning means
 semantic results may lag even though lexical history is available.
+
+## Plan lookup and source turns
+
+Text searches put matching plans first within the requested scope and limit.
+Lexical and hybrid search match plan and phase content, including authored
+implementation details and linked user prompts. A matching transcript hit
+can also surface its plan. Plan hits carry the title, synopsis, stable plan ID,
+and any phase or turn that supplied the best match. Tool and file filters
+return the corresponding transcript evidence.
+
+`sulion-retrieve plan <plan-uuid>` reads the plan, branch references, and source
+turns. Add `--phase <phase-uuid>` to inspect one phase, or `--history` to see its
+audit events and before/after details. Open any source with
+`sulion-retrieve turn <agent-session-uuid> <turn-id>`.
+
+- `change` links an audit event to the primary turn that contains it. A phase
+  edit links to each phase explicitly affected by the edit.
+- `execution` identifies turns that started while the plan was attached and a
+  phase was in progress. When several phases were in progress, the execution
+  link belongs to the plan.
+- `planning_context` covers earlier turns in the creating session after the
+  previous plan detached, and turns on an attached active plan between
+  execution phases. It indicates surrounding discussion.
+
+Links resolve from retained timeline and plan records, including turns
+projected after the audit event was written. Changes made without a transcript
+session still appear in the audit. Branches have their own turn links and are
+reachable from their parent phases.
+
+`GET /v1/plans?plan_id=<uuid>` serves the same record. Optional `phase_id` scopes
+it to one phase and `history=true` adds audit events. The route uses the same
+retrieval bearer authentication as search and turn lookup.
 
 ## Turn lookup and file history
 
@@ -109,7 +142,7 @@ coarse group. The low-value group covers shell/session mechanics
 (`apply_patch`, `edit`, `write`), and inspection call mechanics
 (`read`, `glob`, `grep`, `view_image`).
 
-Results include:
+Plan results use `source_kind: "plan"` and `plan_id`. Transcript results include:
 
 - source identity (`source_kind`, `agent_session_uuid`, turn/offset fields)
 - repo/session metadata

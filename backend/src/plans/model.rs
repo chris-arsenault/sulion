@@ -4,6 +4,8 @@ use uuid::Uuid;
 
 use crate::db::Pool;
 
+use super::authoring::{AuthoredPlanView, PlanEntry};
+
 #[derive(Debug, Clone)]
 pub struct PlanActor {
     pub kind: String,
@@ -93,6 +95,7 @@ pub struct BranchPlanInput {
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct UpdatePlanInput {
+    pub authoring_revision: Option<i64>,
     pub title: Option<String>,
     pub summary: Option<String>,
     pub outcome: Option<String>,
@@ -111,6 +114,7 @@ pub struct UpdatePlanInput {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct UpdatePhaseInput {
+    pub authoring_revision: Option<i64>,
     pub title: Option<String>,
     pub description: Option<String>,
     pub status: Option<String>,
@@ -131,6 +135,8 @@ pub struct PlanPhaseView {
     pub size: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retired_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -208,6 +214,17 @@ pub struct PlanView {
     pub ancestors: Vec<PlanAncestorView>,
     /// Direct sub-plans, open ones first.
     pub branches: Vec<PlanBranchView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authoring: Option<AuthoredPlanView>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub inherited_authoring: Vec<InheritedAuthoring>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InheritedAuthoring {
+    pub plan_id: Uuid,
+    pub revision: i64,
+    pub entries: Vec<PlanEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -227,6 +244,10 @@ pub struct PlanEventView {
     pub to_title: Option<String>,
     pub guidance_before: Option<sqlx::types::Json<PlanGuidance>>,
     pub guidance_after: Option<sqlx::types::Json<PlanGuidance>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authoring_revision: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authoring_change: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -295,7 +316,7 @@ pub struct PlanBoundary {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BoundarySource {
     UserRequirement,

@@ -1,13 +1,20 @@
-use sqlx::{Postgres, Transaction};
+use sqlx::{PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::db::Pool;
 
+mod authoring;
 mod branches;
 mod guidance;
 mod model;
+mod patch;
 mod phases;
+pub mod review;
 
+pub use authoring::{
+    AuthoredPlanView, DirectEdit, EntryContent, EntryFields, EntryKind, HypothesisResult,
+    PhaseFields, PlanEdit, PlanFields, PlanPatch,
+};
 use branches::{ancestors, anchor_phase_ids, branch_views, close_branch_into_parent};
 pub use branches::{branch, tree};
 use model::PlanRow;
@@ -16,6 +23,7 @@ pub use model::{
     PlanAttachmentView, PlanBoundary, PlanBranchView, PlanEventView, PlanGuidance, PlanPhaseView,
     PlanSummaryView, PlanTreeNodeView, PlanView, UpdatePhaseInput, UpdatePlanInput,
 };
+pub use patch::{apply as apply_patch, apply_direct, AuthoringConflict};
 pub use phases::{add_phase, resolve_phase_id, update_phase};
 use phases::{initial_phase_status, skip_remaining_phases, validate_phase_size};
 
@@ -35,6 +43,15 @@ pub async fn create(
     input: CreatePlanInput,
     actor: &PlanActor,
 ) -> anyhow::Result<PlanView> {
+    create_with_connector(pool, input, actor, None).await
+}
+
+pub async fn create_with_connector(
+    pool: &Pool,
+    input: CreatePlanInput,
+    actor: &PlanActor,
+    connector_subject: Option<&str>,
+) -> anyhow::Result<PlanView> {
     validate_actor(actor)?;
     let repo_name = required_text(&input.repo_name, "repo name", MAX_TITLE_CHARS)?;
     let title = required_text(&input.title, "plan title", MAX_TITLE_CHARS)?;
@@ -48,6 +65,18 @@ pub async fn create(
         &mut tx, plan_id, &repo_name, &title, &summary, &guidance, None, plan_id, 0, actor,
     )
     .await?;
+    if let Some(subject) = connector_subject {
+        sqlx::query(
+            "UPDATE plan_events SET authoring_revision = 0, authoring_change = $2 \
+             WHERE plan_id = $1 AND event_type = 'plan_created'",
+        )
+        .bind(plan_id)
+        .bind(sqlx::types::Json(
+            serde_json::json!({"client": "mcp", "subject": subject}),
+        ))
+        .execute(&mut *tx)
+        .await?;
+    }
     insert_phases(&mut tx, plan_id, phases, actor).await?;
 
     if input.attach_current_pty {
@@ -60,12 +89,67 @@ pub async fn create(
 }
 
 pub async fn get(pool: &Pool, plan_id: Uuid) -> anyhow::Result<PlanView> {
-    let row: PlanRow = sqlx::query_as(&format!("SELECT {PLAN_COLUMNS} FROM plans WHERE id = $1"))
-        .bind(plan_id)
-        .fetch_optional(pool)
+    let mut tx = read_snapshot(pool).await?;
+    let plan = read_plan(&mut tx, plan_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("plan not found: {plan_id}"))?;
-    hydrate(pool, row).await
+    tx.commit().await?;
+    Ok(plan)
+}
+
+pub(crate) async fn read_snapshot(pool: &Pool) -> sqlx::Result<Transaction<'_, Postgres>> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    Ok(tx)
+}
+
+pub(crate) async fn read_plan(
+    tx: &mut Transaction<'_, Postgres>,
+    plan_id: Uuid,
+) -> anyhow::Result<Option<PlanView>> {
+    let row: Option<PlanRow> =
+        sqlx::query_as(&format!("SELECT {PLAN_COLUMNS} FROM plans WHERE id = $1"))
+            .bind(plan_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+    let Some(row) = row else { return Ok(None) };
+    let (mut authoring, _) = patch::read_authoring(tx, plan_id, &row.guidance).await?;
+    let mut view = hydrate(tx, row).await?;
+    for ancestor in &view.ancestors {
+        let (authored, _) = patch::read_authoring(tx, ancestor.id, &ancestor.guidance).await?;
+        view.inherited_authoring.push(model::InheritedAuthoring {
+            plan_id: ancestor.id,
+            revision: authored.revision,
+            entries: authored.document.entries,
+        });
+    }
+    let active_entries = authoring
+        .document
+        .entries
+        .iter()
+        .chain(
+            view.inherited_authoring
+                .iter()
+                .flat_map(|ancestor| &ancestor.entries),
+        )
+        .filter(|entry| !entry.retired)
+        .map(|entry| entry.id)
+        .collect::<std::collections::HashSet<_>>();
+    for (id, phase) in &authoring.document.phases {
+        let outdated: Vec<_> = phase
+            .basis
+            .iter()
+            .filter(|basis| !active_entries.contains(basis))
+            .copied()
+            .collect();
+        if !outdated.is_empty() {
+            authoring.needs_review.insert(*id, outdated);
+        }
+    }
+    view.authoring = Some(authoring);
+    Ok(Some(view))
 }
 
 pub async fn current_for_pty(pool: &Pool, pty_session_id: Uuid) -> anyhow::Result<PlanView> {
@@ -98,8 +182,9 @@ pub async fn list_for_repo(
     .fetch_all(pool)
     .await?;
     let mut out = Vec::with_capacity(rows.len());
+    let mut connection = pool.acquire().await?;
     for row in rows {
-        out.push(hydrate(pool, row).await?);
+        out.push(hydrate(&mut connection, row).await?);
     }
     Ok(out)
 }
@@ -122,7 +207,7 @@ pub async fn list_open_summaries(pool: &Pool) -> anyhow::Result<Vec<PlanSummaryV
                SELECT COUNT(*) AS total_phases, \
                       COUNT(*) FILTER (WHERE status = 'completed') AS completed_phases, \
                       COUNT(*) FILTER (WHERE status = 'blocked') AS blocked_phases \
-                 FROM plan_phases pp WHERE pp.plan_id = p.id \
+                 FROM plan_phases pp WHERE pp.plan_id = p.id AND retired_at IS NULL \
            ) stats ON TRUE \
            LEFT JOIN LATERAL ( \
                SELECT id, title, status \
@@ -173,51 +258,40 @@ pub async fn update(
     };
     let summary = match input.summary.as_deref() {
         Some(value) => limited_text(value, "plan summary", MAX_SUMMARY_CHARS)?,
-        None => current.summary,
+        None => current.summary.clone(),
     };
     let guidance = current.guidance.with_update(&input)?;
     let status = input.status.as_deref().unwrap_or(&current.status);
     validate_plan_status(status)?;
     let note = clean_note(input.note.as_deref())?;
+    let content_changed =
+        title != current.title || summary != current.summary || guidance != current.guidance;
+    let authored_write = if content_changed || input.authoring_revision.is_some() {
+        let (mut authoring, managed) =
+            patch::read_authoring(&mut tx, plan_id, &current.guidance).await?;
+        match input.authoring_revision {
+            Some(expected) => patch::check_revision(expected, authoring.revision)?,
+            None if managed => anyhow::bail!("this plan requires an authoring revision for content edits; reread it and use plan patch or update --revision"),
+            None => (),
+        }
+        let before = serde_json::json!({"title": current.title, "summary": current.summary, "guidance": current.guidance});
+        if managed
+            && (guidance.principles != current.guidance.principles
+                || guidance.assumptions != current.guidance.assumptions
+                || guidance.boundaries != current.guidance.boundaries)
+        {
+            authoring.document.replace_guidance(plan_id, &guidance);
+        }
+        Some((authoring, managed, before))
+    } else {
+        None
+    };
 
     if input.require_branch && parent_plan_id.is_none() {
         anyhow::bail!("this plan is not a branch; close it with plan close instead of plan return");
     }
 
-    // A closed parent would strand its open branches: they stay attachable and
-    // reachable but can never pop back. Close the tree bottom-up instead.
-    if matches!(status, "completed" | "canceled") {
-        let open_branches: Vec<String> = sqlx::query_scalar(
-            "SELECT title FROM plans \
-              WHERE parent_plan_id = $1 AND status IN ('active', 'paused') \
-              ORDER BY created_at",
-        )
-        .bind(plan_id)
-        .fetch_all(&mut *tx)
-        .await?;
-        if !open_branches.is_empty() {
-            anyhow::bail!(
-                "plan has {} open branch(es): {}; close them first",
-                open_branches.len(),
-                open_branches.join(", ")
-            );
-        }
-    }
-
-    if status == "completed" {
-        let unfinished: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*)::BIGINT FROM plan_phases \
-              WHERE plan_id = $1 AND status NOT IN ('completed', 'skipped')",
-        )
-        .bind(plan_id)
-        .fetch_one(&mut *tx)
-        .await?;
-        if unfinished > 0 && !input.skip_remaining {
-            anyhow::bail!(
-                "plan has {unfinished} unfinished phase(s); use skip_remaining to complete it"
-            );
-        }
-    }
+    validate_close(&mut tx, plan_id, status, input.skip_remaining).await?;
     if matches!(status, "completed" | "canceled") && input.skip_remaining {
         skip_remaining_phases(&mut tx, plan_id, actor, note.as_deref()).await?;
     }
@@ -231,7 +305,7 @@ pub async fn update(
     )
     .bind(plan_id)
     .bind(&title)
-    .bind(summary)
+    .bind(&summary)
     .bind(status)
     .bind(&guidance.outcome)
     .bind(&guidance.principles)
@@ -249,6 +323,17 @@ pub async fn update(
         note.as_deref(),
     )
     .await?;
+
+    if let Some((authoring, managed, before)) = authored_write.filter(|_| content_changed) {
+        sqlx::query("UPDATE plans SET authoring_revision = authoring_revision + 1, authoring = $2 WHERE id = $1")
+            .bind(plan_id)
+            .bind(managed.then_some(sqlx::types::Json(authoring.document)))
+            .execute(&mut *tx)
+            .await?;
+        patch::record_change(&mut tx, plan_id, authoring.revision + 1, actor, "legacy", note.as_deref(),
+            serde_json::json!({"changes": [{"op": "update_plan", "before": before, "after": {"title": title, "summary": summary, "guidance": guidance}}]}),
+        ).await?;
+    }
 
     let event_type = if status != current.status {
         if matches!(status, "completed" | "canceled") {
@@ -285,6 +370,49 @@ pub async fn update(
     }
     tx.commit().await?;
     get(pool, plan_id).await
+}
+
+async fn validate_close(
+    tx: &mut Transaction<'_, Postgres>,
+    plan_id: Uuid,
+    status: &str,
+    skip_remaining: bool,
+) -> anyhow::Result<()> {
+    // A closed parent would strand its open branches: they stay attachable and
+    // reachable but can never pop back. Close the tree bottom-up instead.
+    if matches!(status, "completed" | "canceled") {
+        let open_branches: Vec<String> = sqlx::query_scalar(
+            "SELECT title FROM plans \
+              WHERE parent_plan_id = $1 AND status IN ('active', 'paused') \
+              ORDER BY created_at",
+        )
+        .bind(plan_id)
+        .fetch_all(&mut **tx)
+        .await?;
+        if !open_branches.is_empty() {
+            anyhow::bail!(
+                "plan has {} open branch(es): {}; close them first",
+                open_branches.len(),
+                open_branches.join(", ")
+            );
+        }
+    }
+
+    if status == "completed" {
+        let unfinished: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::BIGINT FROM plan_phases \
+              WHERE plan_id = $1 AND status NOT IN ('completed', 'skipped')",
+        )
+        .bind(plan_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        if unfinished > 0 && !skip_remaining {
+            anyhow::bail!(
+                "plan has {unfinished} unfinished phase(s); use skip_remaining to complete it"
+            );
+        }
+    }
+    Ok(())
 }
 
 pub async fn attach(
@@ -336,17 +464,23 @@ pub async fn detach(
 }
 
 pub async fn events(pool: &Pool, plan_id: Uuid) -> anyhow::Result<Vec<PlanEventView>> {
-    let rows = sqlx::query_as(
+    Ok(read_events(pool, plan_id).await?)
+}
+
+pub(crate) async fn read_events<'e>(
+    db: impl sqlx::PgExecutor<'e>,
+    plan_id: Uuid,
+) -> sqlx::Result<Vec<PlanEventView>> {
+    sqlx::query_as(
         "SELECT id, plan_id, phase_id, event_type, actor_kind, pty_session_id, \
                 agent_session_uuid, from_status, to_status, note, from_title, to_title, \
-                guidance_before, guidance_after, created_at \
+                guidance_before, guidance_after, authoring_revision, authoring_change, created_at \
            FROM plan_events WHERE plan_id = $1 \
           ORDER BY created_at DESC, id DESC",
     )
     .bind(plan_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows)
+    .fetch_all(db)
+    .await
 }
 
 pub async fn resolve_plan_id(
@@ -379,14 +513,14 @@ pub async fn resolve_plan_id(
     Ok(id)
 }
 
-async fn hydrate(pool: &Pool, row: PlanRow) -> anyhow::Result<PlanView> {
+async fn hydrate(connection: &mut PgConnection, row: PlanRow) -> anyhow::Result<PlanView> {
     let phases = sqlx::query_as(
         "SELECT id, plan_id, position, title, description, status, status_note, size, \
-                started_at, completed_at, created_at, updated_at \
+                started_at, completed_at, retired_at, created_at, updated_at \
            FROM plan_phases WHERE plan_id = $1 ORDER BY position",
     )
     .bind(row.id)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await?;
     let attachments = sqlx::query_as(
         "SELECT pty_session_id, agent_session_uuid, attached_at \
@@ -395,15 +529,15 @@ async fn hydrate(pool: &Pool, row: PlanRow) -> anyhow::Result<PlanView> {
           ORDER BY attached_at",
     )
     .bind(row.id)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await?;
-    let anchor_phase_ids = anchor_phase_ids(pool, row.id).await?;
+    let anchor_phase_ids = anchor_phase_ids(connection, row.id).await?;
     let ancestors = if row.parent_plan_id.is_some() {
-        ancestors(pool, row.id).await?
+        ancestors(connection, row.id).await?
     } else {
         Vec::new()
     };
-    let branches = branch_views(pool, row.id).await?;
+    let branches = branch_views(connection, row.id).await?;
     Ok(PlanView {
         id: row.id,
         repo_name: row.repo_name,
@@ -425,6 +559,8 @@ async fn hydrate(pool: &Pool, row: PlanRow) -> anyhow::Result<PlanView> {
         anchor_phase_ids,
         ancestors,
         branches,
+        authoring: None,
+        inherited_authoring: Vec::new(),
     })
 }
 

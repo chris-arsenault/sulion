@@ -16,7 +16,10 @@ Commands:
   current
   list [--all]
   show [plan-id]
-  update [--plan uuid] [--title text] [--summary text] [--note text]
+  review [plan-id] [--phase uuid]
+  update [--plan uuid] [--revision n] [--title text] [--summary text]
+         [--outcome text] [--technical-details text] [--note text]
+  patch <json> [--plan uuid]  (patch --help shows the batch schema)
   status <active|paused> [--plan uuid] [--note text]
   close (--completed|--canceled) [--skip-remaining] [--note text]
   branch <title> [--from <id|position>]... --phase <title[|description[|size]]>...
@@ -25,10 +28,32 @@ Commands:
   tree [plan-id]
   phase add <title> [--description text] [--status status] [--size s|m|l]
   phase set <id|position> [status] [--title text] [--description text]
-            [--note text] [--position n] [--size s|m|l]
+            [--note text] [--position n] [--size s|m|l] [--revision n]
+  phase edit <id> [--title text] [--description text] [--size s|m|l]
+             [--implementation text] [--acceptance text] [--basis id,id]
+             [--depends-on id,id] [--follows-up id,id]
+  phase move <id> [--after id]
+  phase retire <id> [--successors id,id]
+  phase evidence <id> <observation> --observed-revision n
+                 [--reference text] [--ancestor <id>=<revision>]...
+  entry add <kind> <text> [entry fields]
+  entry set <id> [entry fields]
+  entry move <id> [--after id]
+  entry retire <id> [--successors id,id]
   attach <plan-uuid>
   detach [plan-uuid]
   history [plan-id]
+
+Entry fields:
+  all: --text, --source, --rationale
+  boundary: --attribution user_requirement|user_correction|agent_proposal
+  decision: --provisional true|false
+  question: --answer <decision-id> or --reopen
+  hypothesis: --goal <id>, --test <text>, --result <supported|contradicted|inconclusive|set_aside>, --evidence <text>
+  example: --illustrates <id>, --generalization <text>
+  other kinds: requirement, principle, assumption
+  Direct entry and phase edits accept --plan, --revision and --reason.
+  Omit --after to move to the beginning. Pass an empty ID list to clear it.
 
 Guidance (start, branch, update):
   --outcome <text>       user-visible improvement and evidence of success
@@ -71,20 +96,22 @@ Statuses:
 
 Rules:
   repo and acting PTY are inferred from the current terminal
-  a plan is the compact user-facing projection; keep detailed reasoning in
-    your native plan tool
+  keep the synopsis compact. Edit entries and phase details directly by ID.
+  use patch when several edits need to commit together
   start requires at least one --phase; the first begins in_progress unless
     --all-pending
   close --completed rejects unfinished phases unless --skip-remaining
   most commands target this PTY's current plan; --plan <uuid> overrides
   `step` is an alias for `phase`; `phase update` is an alias for `phase set`
   phase set edits a phase in place: --title renames it, --description replaces
-    its description, --position moves it; its id, status, and history stay
+    its description, --position moves it; its id and history stay
+    edits to authored phase content require the current --revision
 
 Branching:
   branch opens a sub-plan under the current plan and moves this PTY onto it
   --from names the parent phases the branch covers; repeat it for a span
     (--from 4 --from 5 --from 6). Omit it to anchor to the current phase
+  --all-pending attaches draft scope without starting the parent phases
   return closes the branch and puts this PTY back on the parent, clearing any
     anchor phase the branch was blocked on. It refuses on a root plan
   branches nest to depth 8; a parent cannot close while a branch is open

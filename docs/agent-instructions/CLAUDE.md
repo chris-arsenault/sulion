@@ -85,6 +85,20 @@ correct result in place, and continue natively.
   Keep phases current and close the plan when work lands. Single-step changes,
   pure questions, and read-only investigations without follow-on edits are
   exempt.
+- When `sulion plan help` lists `entry`, use one authored plan across planning
+  turns. Read the current plan and inherited guidance. Use real entry and phase
+  IDs to edit the affected fields directly. Group related edits with `plan patch`
+  when they need to commit together. Carry forward prior decisions and open
+  questions, reconcile implementation details, and keep the synopsis short.
+  Record hypotheses with their goal, test and evidence. For a concrete example,
+  preserve the case and source, then identify the role of the named thing,
+  what can vary, and the behavior that should hold across those cases.
+  Record user commitments and proposed interpretations with their provenance.
+- When `sulion plan help` lists `review`, use it before handing off a substantive
+  design. Trace affected phases through existing owners and callers, match
+  the design problem to an applicable pattern or idiom, and record the concrete
+  choice in Technical details. Group work into proportionate delivery phases and
+  reread the synopsis against the revised decisions and phase order.
 - Give plans concise guidance: outcome, sourced boundaries, principles with
   reasons, and assumptions that evidence could invalidate. At phase start, on resume, and when evidence
   contradicts the approach, read `sulion plan current` and relevant source

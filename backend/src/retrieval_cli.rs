@@ -63,6 +63,7 @@ pub async fn run(args: &[OsString]) -> anyhow::Result<i32> {
         }
         "file-history" => file_history(&client, &env, &command_args).await,
         "turn" => turn(&client, &env, &command_args).await,
+        "plan" => plan(&client, &env, &command_args).await,
         "reindex" => reindex(&client, &env, &command_args).await,
         "reset" => reset(&client, &env, &command_args).await,
         "index-status" => {
@@ -212,6 +213,52 @@ async fn turn(
     Ok(0)
 }
 
+async fn plan(
+    client: &reqwest::Client,
+    env: &RetrievalCliEnv,
+    args: &[String],
+) -> anyhow::Result<i32> {
+    let mut options = parse_options(args)?;
+    let [plan_id] = options.positionals.as_slice() else {
+        return Err(anyhow!(
+            "usage: sulion retrieve plan <plan_uuid> [--phase uuid] [--history] [--json]"
+        ));
+    };
+    options.query_pairs.push(("plan_id", plan_id.clone()));
+    let body = request_json(client, env, "GET", "/v1/plans", &options.query_pairs, None).await?;
+    if options.json {
+        print_json(&body);
+    } else {
+        crate::plan_cli::print_plan_data(&body["plan"], true);
+        if let Some(turns) = body["turns"].as_array().filter(|turns| !turns.is_empty()) {
+            println!("Source turns");
+            for turn in turns {
+                let session = turn["agent_session_uuid"].as_str().unwrap_or_default();
+                let id = turn["turn_id"].as_i64().unwrap_or_default();
+                let phase = turn["phase_id"].as_str().unwrap_or("plan");
+                let kinds = turn["kinds"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let preview = turn["preview"].as_str().unwrap_or_default();
+                let events = &turn["event_ids"];
+                println!("  {session} {id} [{phase}] ({kinds}) {preview}");
+                if events.as_array().is_some_and(|ids| !ids.is_empty()) {
+                    println!("    Audit events {events}");
+                }
+            }
+        }
+        if let Some(history) = body.get("history") {
+            println!("Audit history");
+            print_json(history);
+        }
+    }
+    Ok(0)
+}
+
 async fn reindex(
     client: &reqwest::Client,
     env: &RetrievalCliEnv,
@@ -341,6 +388,7 @@ fn parse_options(args: &[String]) -> anyhow::Result<CliOptions> {
         match arg.as_str() {
             "--json" => out.json = true,
             "--errors-only" => out.query_pairs.push(("errors_only", "true".to_string())),
+            "--history" => out.query_pairs.push(("history", "true".to_string())),
             "--all" => out.query_pairs.push(("scope", "all".to_string())),
             "--tools" => out.query_pairs.push(("include", "tools".to_string())),
             "--include-low-value" => out
@@ -349,6 +397,7 @@ fn parse_options(args: &[String]) -> anyhow::Result<CliOptions> {
             "--confirm" => out.query_pairs.push(("confirm", "true".to_string())),
             "--no-reschedule" => out.query_pairs.push(("reschedule", "false".to_string())),
             "--repo" => push_value(args, &mut idx, &mut out, "repo")?,
+            "--phase" => push_value(args, &mut idx, &mut out, "phase_id")?,
             "--scope" => push_value(args, &mut idx, &mut out, "scope")?,
             "--session" | "--agent-session" | "--agent-session-uuid" => {
                 push_value(args, &mut idx, &mut out, "agent_session_uuid")?
@@ -403,6 +452,7 @@ fn option_takes_value(value: &str) -> bool {
     matches!(
         value,
         "--repo"
+            | "--phase"
             | "--scope"
             | "--session"
             | "--agent-session"
@@ -426,6 +476,7 @@ fn is_flag_option(value: &str) -> bool {
     matches!(
         value,
         "--json"
+            | "--history"
             | "--errors-only"
             | "--all"
             | "--tools"
@@ -471,6 +522,31 @@ fn print_search(body: &Value) {
         let source = result["source_kind"].as_str().unwrap_or("unknown");
         let score = result["score"].as_f64().unwrap_or_default();
         let repo = result["repo"].as_str().unwrap_or("-");
+        if source == "plan" {
+            let title = result["title"].as_str().unwrap_or_default();
+            let summary = result["summary"].as_str().unwrap_or_default();
+            let id = result["plan_id"].as_str().unwrap_or_default();
+            let status = result["status"].as_str().unwrap_or_default();
+            println!("{}. plan {id} [{status}] {title} (repo={repo})", idx + 1);
+            if !summary.is_empty() {
+                println!("   {summary}");
+            }
+            if let (Some(phase), Some(phase_title)) =
+                (result["phase_id"].as_str(), result["phase_title"].as_str())
+            {
+                println!("   Matching phase {phase} {phase_title}");
+                println!("   sulion-retrieve plan {id} --phase {phase} --history");
+            } else {
+                println!("   sulion-retrieve plan {id} --history");
+            }
+            if let (Some(session), Some(turn)) = (
+                result["agent_session_uuid"].as_str(),
+                result["turn_id"].as_i64(),
+            ) {
+                println!("   Matching discussion: sulion-retrieve turn {session} {turn}");
+            }
+            continue;
+        }
         let session = result["agent_session_uuid"].as_str().unwrap_or("-");
         let turn = result["turn_id"]
             .as_i64()
@@ -529,6 +605,7 @@ fn print_usage() {
   sulion retrieve search <query> [--mode hybrid|lexical|semantic] [--include assistant|tools] [--include-low-value] [--repo repo] [--limit n]
   sulion retrieve file-history <repo/path> [--repo repo]
   sulion retrieve turn <agent_session_uuid> <turn_id>
+  sulion retrieve plan <plan_uuid> [--phase uuid] [--history]
   sulion retrieve sessions [--repo repo]
   sulion retrieve facets [--repo repo]
   sulion retrieve index-status

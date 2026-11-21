@@ -39,7 +39,10 @@ fn context_request(request: &ControlRequest) -> ControlRequest {
         ControlRequest::PlanBranch { plan_id, .. }
         | ControlRequest::PlanTree { plan_id }
         | ControlRequest::PlanShow { plan_id }
+        | ControlRequest::PlanEdit { plan_id, .. }
+        | ControlRequest::PlanReview { plan_id, .. }
         | ControlRequest::PlanUpdate { plan_id, .. }
+        | ControlRequest::PlanPatch { plan_id, .. }
         | ControlRequest::PlanAddPhase { plan_id, .. }
         | ControlRequest::PlanUpdatePhase { plan_id, .. }
         | ControlRequest::PlanDetach { plan_id }
@@ -76,7 +79,12 @@ pub(super) async fn run(
     let data = response.data.unwrap_or(Value::Null);
     // Mutations return their target plan, even when closing/detaching it has
     // changed the PTY attachment. Never substitute an unrelated current plan.
-    if data.get("phases").is_some() {
+    if let Some(plan) = data
+        .get("plan")
+        .filter(|value| value.get("phases").is_some())
+    {
+        print_reminder(plan, json);
+    } else if data.get("phases").is_some() {
         if json || !full_guidance {
             print_reminder(&data, json);
         }

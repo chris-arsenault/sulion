@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
+use axum::{Extension, Json};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -104,6 +104,26 @@ pub(super) async fn patch_plan(
         .map_err(plan_api_error)
 }
 
+pub(super) async fn patch_authoring(
+    State(state): State<Arc<AppState>>,
+    Path(plan_id): Path<Uuid>,
+    Extension(user): Extension<crate::auth::AuthenticatedUser>,
+    Json(request): Json<plans::PlanPatch>,
+) -> ApiResult<Json<PlanView>> {
+    plans::apply_patch(
+        &state.pool,
+        plan_id,
+        request,
+        &PlanActor::user(),
+        "browser",
+        Some(&user.sub),
+        None,
+    )
+    .await
+    .map(Json)
+    .map_err(plan_api_error)
+}
+
 pub(super) async fn add_plan_phase(
     State(state): State<Arc<AppState>>,
     Path(plan_id): Path<Uuid>,
@@ -184,6 +204,9 @@ pub(super) async fn plan_events(
 }
 
 fn plan_api_error(error: anyhow::Error) -> ApiError {
+    if error.downcast_ref::<plans::AuthoringConflict>().is_some() {
+        return ApiError::Conflict(error.to_string());
+    }
     if error.downcast_ref::<sqlx::Error>().is_some() {
         return ApiError::Internal(error);
     }

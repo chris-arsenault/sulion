@@ -3,6 +3,7 @@ use super::*;
 mod semantic;
 mod types;
 
+use super::plan_records::{find_plans, PlanSearch};
 use semantic::semantic_search;
 pub(super) use types::EvidencePacket;
 use types::*;
@@ -100,46 +101,99 @@ async fn search_inner(
             ));
         }
         let embedder = state.embedding_client();
-        let query_embedding = match embedder.embed_one(&q).await {
-            Ok(embedding) => embedding,
+        match embedder.embed_one(&q).await {
+            Ok(embedding) => {
+                for result in semantic_search(state, &embedding, &filters).await? {
+                    let key = ResultKey::from_result(&result);
+                    match merged.get_mut(&key) {
+                        Some(existing) => {
+                            existing.semantic_score = result.semantic_score;
+                            existing.score =
+                                combined_score(existing.lexical_score, existing.semantic_score);
+                        }
+                        None => {
+                            merged.insert(key, result);
+                        }
+                    }
+                }
+            }
             Err(err) if search_mode == SearchMode::Hybrid => {
                 warnings.push(format!("semantic search skipped: {err}"));
-                let mut results = merged.into_values().collect::<Vec<_>>();
-                finalize_results(&state.pool, &mut results, limit, filters.include_low_value)
-                    .await?;
-                return Ok(SearchResponse {
-                    context,
-                    search_mode: search_mode.as_str().to_string(),
-                    warnings,
-                    results,
-                });
             }
             Err(err) => return Err(err),
-        };
-        let semantic = semantic_search(state, &query_embedding, &filters).await?;
-        for result in semantic {
-            let key = ResultKey::from_result(&result);
-            match merged.get_mut(&key) {
-                Some(existing) => {
-                    existing.semantic_score = result.semantic_score;
-                    existing.score =
-                        combined_score(existing.lexical_score, existing.semantic_score);
-                }
-                None => {
-                    merged.insert(key, result);
-                }
-            }
         }
     }
 
-    let mut results = merged.into_values().collect::<Vec<_>>();
-    finalize_results(&state.pool, &mut results, limit, filters.include_low_value).await?;
+    let mut transcript = merged.into_values().collect::<Vec<_>>();
+    let mut results = search_plan_hits(&state.pool, &q, search_mode, &filters, &transcript).await?;
+    let transcript_limit = limit - results.len() as i64;
+    finalize_results(
+        &state.pool,
+        &mut transcript,
+        transcript_limit,
+        filters.include_low_value,
+    )
+    .await?;
+    results.extend(
+        transcript
+            .into_iter()
+            .map(|result| SearchHit::Transcript(Box::new(result))),
+    );
     Ok(SearchResponse {
         context,
         search_mode: search_mode.as_str().to_string(),
         warnings,
         results,
     })
+}
+
+async fn search_plan_hits(
+    pool: &Pool,
+    text: &str,
+    mode: SearchMode,
+    filters: &SearchFilters,
+    transcript: &[SearchResult],
+) -> Result<Vec<SearchHit>, RetrievalError> {
+    if !filters.include.iter().any(|kind| kind.covers_digest())
+        || filters.file_path.is_some()
+        || filters.tool_category.is_some()
+        || filters.tool_name.is_some()
+        || filters.errors_only
+    {
+        return Ok(Vec::new());
+    }
+    let context = &filters.context;
+    let matches = find_plans(
+        pool,
+        PlanSearch {
+            text,
+            repo: context.repo.as_deref().filter(|_| context.scope == "repo"),
+            session: context
+                .agent_session_uuid
+                .filter(|_| context.scope == "session"),
+            since: filters.since,
+            until: filters.until,
+            matching_turns: transcript
+                .iter()
+                .filter(|result| result.tool.is_none())
+                .filter_map(|result| {
+                    Some((result.agent_session_uuid, result.turn_id?, result.score))
+                })
+                .collect(),
+            limit: filters.limit,
+            lexical: mode != SearchMode::Semantic,
+            agent: filters.agent.as_deref(),
+            model: filters.model.as_deref(),
+        },
+    )
+    .await?;
+    Ok(matches
+        .into_iter()
+        .map(|matched| SearchHit::Plan {
+            source_kind: "plan",
+            matched: Box::new(matched),
+        })
+        .collect())
 }
 
 async fn lexical_search(

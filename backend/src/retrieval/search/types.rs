@@ -28,7 +28,18 @@ pub(in crate::retrieval) struct SearchResponse {
     pub(super) context: ResolvedContext,
     pub(super) search_mode: String,
     pub(super) warnings: Vec<String>,
-    pub(super) results: Vec<SearchResult>,
+    pub(super) results: Vec<SearchHit>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub(super) enum SearchHit {
+    Plan {
+        source_kind: &'static str,
+        #[serde(flatten)]
+        matched: Box<super::super::plan_records::PlanMatch>,
+    },
+    Transcript(Box<SearchResult>),
 }
 
 #[derive(Debug, Clone, Serialize)]

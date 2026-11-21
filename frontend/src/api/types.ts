@@ -333,6 +333,7 @@ export interface PlanPhaseView {
   size: "s" | "m" | "l" | null;
   started_at: string | null;
   completed_at: string | null;
+  retired_at?: string;
   created_at: string;
   updated_at: string;
 }
@@ -410,6 +411,48 @@ export interface PlanView extends PlanGuidance {
   ancestors: PlanAncestorView[];
   /** Direct sub-plans, open ones first. */
   branches: PlanBranchView[];
+  authoring?: AuthoredPlan;
+  inherited_authoring?: { plan_id: string; revision: number; entries: PlanEntry[] }[];
+}
+
+export interface PlanEntry {
+  id: string;
+  kind: string;
+  text: string;
+  source?: string;
+  rationale?: string;
+  generalization?: string;
+  test?: string;
+  result?: string | null;
+  evidence?: string | null;
+  retired: boolean;
+  successors?: string[];
+}
+
+export interface PhaseAuthoringDetails {
+  implementation: string;
+  acceptance: string;
+  basis: string[];
+  depends_on: string[];
+  follows_up?: string[];
+  evidence: { observation: string; reference: string | null; revision: number }[];
+  successors: string[];
+}
+
+export interface AuthoredPlan {
+  revision: number;
+  technical_details: string;
+  entries: PlanEntry[];
+  phases: Record<string, PhaseAuthoringDetails>;
+  needs_review?: Record<string, string[]>;
+}
+
+export interface PlanAuthoringPatch {
+  revision: number;
+  operations: (
+    | { op: "edit_plan"; technical_details: string }
+    | { op: "edit_phase"; id: string; implementation: string; acceptance: string }
+  )[];
 }
 
 export interface BranchPlanRequest extends Partial<PlanGuidance> {
@@ -475,6 +518,7 @@ export interface CreatePlanInput extends Partial<PlanGuidance> {
 }
 
 export interface UpdatePlanInput extends Partial<PlanGuidance> {
+  authoring_revision?: number;
   title?: string;
   summary?: string;
   status?: PlanStatus;
@@ -483,6 +527,7 @@ export interface UpdatePlanInput extends Partial<PlanGuidance> {
 }
 
 export interface UpdatePlanPhaseInput {
+  authoring_revision?: number;
   title?: string;
   description?: string;
   status?: PlanPhaseStatus;

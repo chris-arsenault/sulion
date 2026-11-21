@@ -1,12 +1,10 @@
-# Published plans and terminal activity
+# Conversational plans and terminal activity
 
-Sulion published plans are durable, repo-scoped progress summaries. They let an
-agent publish a handful of named phases with short descriptions and statuses so
-the same work remains visible across terminal tabs and over time.
-
-They are deliberately not an agent's internal working plan. Agents should keep
-using their native detailed planning mechanism for reasoning, dependencies, and
-implementation steps. A published plan is the smaller user-facing projection.
+Sulion plans are durable, repo-scoped records for authoring and delivery. The
+sidebar and Overview carry a compact synopsis and progress. The selected plan
+also contains current requirements and decisions, open questions, hypotheses,
+examples, technical design, and phase implementation and evidence. An agent can
+resume the plan by UUID across terminal sessions and connected clients.
 
 The main sidebar's Plans section shows a collapsible tree with each sub-plan
 under its parent, plus progress and current-phase text. Plan titles wrap so
@@ -47,11 +45,14 @@ Purged sessions retain their frozen digests.
 
 A plan has:
 
-- a repo, title, short summary, status, revision, and audit timestamps
+- a repo, title, short summary, status, operational revision, authoring revision,
+  and audit timestamps
 - guidance: outcome text, an ordered list of principles, and an ordered list
   of assumptions, plus sourced boundaries; existing plans default to empty guidance
 - ordered phases with a title, short description, status, and optional status
   note
+- a full authored document with stable entry IDs and implementation details
+  keyed by phase UUID
 - zero or more attached live PTYs; each PTY can have only one current plan
 - an append-only event history for meaningful mutations
 - an optional parent plan plus the parent phases it covers, giving plan trees
@@ -61,6 +62,52 @@ Plan statuses are `active`, `paused`, `completed`, and `canceled`. Phase
 statuses are `pending`, `in_progress`, `blocked`, `completed`, and `skipped`.
 Closing a plan detaches all PTYs. Plans survive terminal exit and remain in the
 repo's closed-plan history.
+
+## Author across turns
+
+Read the selected plan and its inherited entries before applying a change.
+Preserve unrelated entries and delivery details. Edit only the fields the
+turn changes. `show` and `current` display the native entry and phase IDs.
+Editing wording keeps the ID. Sulion assigns IDs when adding entries and
+phases. When a commitment
+changes, retire its entry and name the successor IDs. Reopen a question by
+clearing its answer and recording why. Evidence remains linked to the revisions
+it actually checked, including any governing ancestor revisions.
+
+A hypothesis records a testable idea in service of the goal, the expected
+observation, and what the test found. Record acceptance of the overall outcome
+independently. An example preserves the concrete case and its source. Ask what
+role the named thing plays, what varies, and what broader behavior should hold.
+Record that behavior within the user's scope and link its plan entry when one
+exists. Keep both types distinct from commitments.
+
+```sh
+sulion plan --json current
+sulion plan update --technical-details "Extend the existing refinement path."
+sulion plan entry add example "An inn seeds nearby development" \
+  --generalization "Site conditions and the template determine the seed"
+sulion plan entry set "$entry_id" --rationale "Keep the source example with its interpretation"
+sulion plan phase edit "$phase_id" --acceptance "The next round reads the updated fields"
+sulion plan patch --help
+sulion plan history
+sulion plan review
+```
+
+Direct content edits accept an optional `--revision` from the read. Use
+`plan patch` to send several related changes in one JSON transaction. The
+batch requires the authoring revision. After a conflict, reread the plan and
+inspect the intervening history before reapplying the intent. Terminal
+attachment and status updates do not advance
+the authoring revision. Changed execution state can still prevent a patch from
+moving or retiring work. Retired pending phases stay in history with their
+successors and carry no remaining workload.
+
+Near handoff, use `sulion plan review [plan-id] [--phase <uuid>]`. Trace each
+affected phase through the existing entry point, owner, contracts, and
+consumers. Research patterns by the actual design problem and record the
+chosen idiom and its participants in Technical details. Keep implementation,
+callers, and verification together when they establish one deliverable. After
+revisions, read the synopsis alongside the resulting decisions and phases.
 
 ## Guidance during execution
 
@@ -143,7 +190,9 @@ sulion plan history
 `--assumption`, and `--boundary "source|text"`. Boundary sources are `requirement`,
 `correction`, and `proposal`; the text may contain additional `|` characters.
 An update replaces each supplied list in order; omitted fields stay unchanged.
-Retain existing applicable boundaries when recording a correction.
+Use an identity-based patch for a targeted change. For deliberate whole-list
+replacement of a plan with stored authored detail, include
+`--revision <authoring-revision>` and retain the boundaries still in effect.
 `--clear-principles`, `--clear-assumptions`, and `--clear-boundaries` clear lists
 and cannot be combined with entries for the same list. Use
 `--outcome ""` to clear the outcome. The API uses `outcome`, `principles`, and
@@ -179,9 +228,9 @@ anchor phases:
   is the common case; several rows let a branch cover a span, such as parent
   steps 4 through 6. Every anchor must belong to the branch's parent — anchors
   never span two plans, which is what keeps the return path unambiguous.
-- Branching moves the acting PTY onto the branch. Any anchor still `pending`
-  becomes `in_progress`; anchors the agent already marked `in_progress` or
-  `blocked` keep the status it chose.
+- Branching moves the acting PTY onto the branch. An execution branch starts
+  pending anchors. Use `--all-pending` for a drafting expansion that leaves
+  its anchors pending. Existing active and blocked anchors retain their status.
 - Closing a branch puts the PTY back on the parent. Completing one also clears
   any anchor left `blocked`, since the branch existed to resolve that blocker.
   Canceling leaves anchor statuses untouched.
@@ -247,6 +296,8 @@ the phase they cover; `plan tree` prints the whole tree indented by depth.
 current PTY's attached plan; `--plan <uuid>` or an explicit plan id targets
 another plan. `sulion plan attach <uuid>` moves the PTY from any previous plan
 to that plan. Add `--json` for stable machine-readable output.
+When editing phase content on an authored plan, use a patch or pass the
+current authoring revision with `phase set --revision`.
 
 Phases carry an optional t-shirt size (`--size s|m|l`, or a third `|size`
 segment in `--phase "Title|Description|m"`). Sizes weight the burndown and
@@ -347,6 +398,30 @@ response records (with a legacy cumulative-snapshot prefix) into
 writes, cache reads, output, cumulative spend, and the latest context footprint
 stay separate.
 
-The design of published plans and branch plans, with the shapes that were
-rejected, is recorded in
-[ADR 0014](adrs/0014-published-plans-and-branch-plans.md).
+## Plans MCP
+
+The optional Streamable HTTP connector serves `/mcp` and
+`/.well-known/oauth-protected-resource/mcp`. It lists connected repositories,
+reads plans and history, and creates unattached drafts with pending phases.
+Tools such as `update_plan_entry` and `update_plan_phase` edit named fields
+directly. `patch_plan` commits JSON batches to the same records. Select the plan UUID,
+then attach and read the current revision from a Sulion terminal to pick up work.
+
+The two exact paths follow the existing ALB, reverse proxy, and WireGuard route
+to the TrueNAS frontend. Terraform accepts a `plan_mcp` object with the allowed
+Cognito subject, connected repository names, and exact OAuth callback URLs.
+On deployment the workflow passes the nonsecret JSON from
+`SULION_TERRAFORM_VARIABLES` to Terraform. Terraform provisions the dedicated
+client and publishes the connector configuration to SSM. The existing Komodo
+deploy action passes it to the backend as `SULION_PLAN_MCP_CONFIG`. A null
+`plan_mcp` value leaves the connector disabled.
+
+The route requires access tokens issued for the configured resource and client.
+It checks the subject and broker revocation before dispatching plan tools.
+Set up provider registration and access only for an approved endpoint and
+workspace. Connector authorization is separate from terminal attachment and
+does not confer permission to execute a plan.
+
+See [ADR 0014](adrs/0014-published-plans-and-branch-plans.md) for plan trees and
+[ADR 0031](adrs/0031-revisioned-plan-authoring.md) for the authored record and
+its shared service boundary.

@@ -258,6 +258,10 @@ fn plan_router() -> Router<Arc<AppState>> {
         )
         .route("/api/plans/:id/phases", post(plan_routes::add_plan_phase))
         .route(
+            "/api/plans/:id/authoring",
+            patch(plan_routes::patch_authoring),
+        )
+        .route(
             "/api/plans/:id/phases/:phase_id",
             patch(plan_routes::patch_plan_phase),
         )
@@ -334,6 +338,8 @@ pub enum ApiError {
     NotFound,
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("conflict: {0}")]
+    Conflict(String),
     #[error("unavailable: {0}")]
     Unavailable(String),
     #[error("internal: {0}")]
@@ -349,6 +355,7 @@ impl IntoResponse for ApiError {
         let (status, msg) = match &self {
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
+            ApiError::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
             ApiError::Unavailable(m) => (StatusCode::SERVICE_UNAVAILABLE, m.clone()),
             ApiError::Internal(e) => {
                 tracing::error!(%e, "internal error");

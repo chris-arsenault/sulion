@@ -729,3 +729,11 @@
     margin-left: 12px;
   }
 }
+.plan-authoring-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.plan-modal__phase-authoring {
+  margin-block: 0.4rem;
+}

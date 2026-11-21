@@ -7,7 +7,7 @@
 //! the parent at the same moment. That makes cycles structurally impossible and
 //! keeps ancestry reads off the recursive path everywhere except the breadcrumb.
 
-use sqlx::{Postgres, Transaction};
+use sqlx::{PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::model::{
@@ -38,6 +38,7 @@ pub async fn branch(
     let guidance = input.guidance.validated()?;
     let note = clean_note(input.note.as_deref())?;
     let phases = validate_new_phases(&input.phases, input.all_pending)?;
+    let starts_work = phases.iter().any(|(_, _, status, _)| status != "pending");
 
     let mut tx = pool.begin().await?;
     ensure_plan_open(&mut tx, parent_plan_id).await?;
@@ -55,6 +56,15 @@ pub async fn branch(
     }
 
     let anchors = resolve_anchor_phases(&mut tx, parent_plan_id, &input.parent_phase_refs).await?;
+    let retired_anchor: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM plan_phases WHERE id = ANY($1) AND retired_at IS NOT NULL)",
+    )
+    .bind(&anchors)
+    .fetch_one(&mut *tx)
+    .await?;
+    if retired_anchor {
+        anyhow::bail!("a branch must be anchored to work still in the plan");
+    }
 
     let plan_id = Uuid::new_v4();
     insert_plan(
@@ -81,17 +91,30 @@ pub async fn branch(
         .bind(anchor)
         .execute(&mut *tx)
         .await?;
-        // A phase whose work has moved into a sub-plan is under way. Anything
-        // already in_progress or blocked keeps the status the agent chose.
-        sqlx::query(
-            "UPDATE plan_phases \
-                SET status = 'in_progress', started_at = COALESCE(started_at, NOW()), \
-                    updated_at = NOW() \
-              WHERE id = $1 AND status = 'pending'",
-        )
-        .bind(anchor)
-        .execute(&mut *tx)
-        .await?;
+        if starts_work {
+            let started = sqlx::query(
+                "UPDATE plan_phases \
+                    SET status = 'in_progress', started_at = COALESCE(started_at, NOW()), \
+                        updated_at = NOW() \
+                  WHERE id = $1 AND status = 'pending'",
+            )
+            .bind(anchor)
+            .execute(&mut *tx)
+            .await?;
+            if started.rows_affected() > 0 {
+                insert_event(
+                    &mut tx,
+                    parent_plan_id,
+                    Some(*anchor),
+                    "phase_status_changed",
+                    actor,
+                    Some("pending"),
+                    Some("in_progress"),
+                    note.as_deref(),
+                )
+                .await?;
+            }
+        }
         insert_event(
             &mut tx,
             parent_plan_id,
@@ -133,7 +156,7 @@ pub async fn tree(pool: &Pool, plan_id: Uuid) -> anyhow::Result<Vec<PlanTreeNode
                       COUNT(*) FILTER (WHERE status IN ('completed', 'skipped')) \
                           AS completed_phases, \
                       COUNT(*) FILTER (WHERE status = 'blocked') AS blocked_phases \
-                 FROM plan_phases pp WHERE pp.plan_id = p.id \
+                 FROM plan_phases pp WHERE pp.plan_id = p.id AND retired_at IS NULL \
            ) stats ON TRUE \
            LEFT JOIN LATERAL ( \
                SELECT ARRAY_AGG(pa.pty_session_id ORDER BY pa.attached_at) AS pty_ids \
@@ -251,7 +274,10 @@ pub(super) async fn close_branch_into_parent(
 }
 
 /// Phases in the parent plan that this plan covers.
-pub(super) async fn anchor_phase_ids(pool: &Pool, plan_id: Uuid) -> anyhow::Result<Vec<Uuid>> {
+pub(super) async fn anchor_phase_ids(
+    connection: &mut PgConnection,
+    plan_id: Uuid,
+) -> anyhow::Result<Vec<Uuid>> {
     let rows = sqlx::query_scalar(
         "SELECT a.parent_phase_id \
            FROM plan_branch_anchors a \
@@ -260,13 +286,16 @@ pub(super) async fn anchor_phase_ids(pool: &Pool, plan_id: Uuid) -> anyhow::Resu
           ORDER BY p.position",
     )
     .bind(plan_id)
-    .fetch_all(pool)
+    .fetch_all(connection)
     .await?;
     Ok(rows)
 }
 
 /// Root first, immediate parent last. Empty for a root plan.
-pub(super) async fn ancestors(pool: &Pool, plan_id: Uuid) -> anyhow::Result<Vec<PlanAncestorView>> {
+pub(super) async fn ancestors(
+    connection: &mut PgConnection,
+    plan_id: Uuid,
+) -> anyhow::Result<Vec<PlanAncestorView>> {
     let rows = sqlx::query_as(
         "WITH RECURSIVE chain AS ( \
              SELECT id, title, status, depth, parent_plan_id, revision, outcome, principles, assumptions, boundaries \
@@ -278,7 +307,7 @@ pub(super) async fn ancestors(pool: &Pool, plan_id: Uuid) -> anyhow::Result<Vec<
          SELECT id, title, status, depth, revision, outcome, principles, assumptions, boundaries FROM chain WHERE id <> $1 ORDER BY depth",
     )
     .bind(plan_id)
-    .fetch_all(pool)
+    .fetch_all(connection)
     .await?;
     Ok(rows)
 }
@@ -286,7 +315,7 @@ pub(super) async fn ancestors(pool: &Pool, plan_id: Uuid) -> anyhow::Result<Vec<
 /// Direct sub-plans of `plan_id`, open first, each with the anchor phases it
 /// covers so the caller can hang it off the right step.
 pub(super) async fn branch_views(
-    pool: &Pool,
+    connection: &mut PgConnection,
     plan_id: Uuid,
 ) -> anyhow::Result<Vec<PlanBranchView>> {
     let rows: Vec<(Uuid, String, String, String, i32, i32, i32)> = sqlx::query_as(
@@ -298,14 +327,14 @@ pub(super) async fn branch_views(
                SELECT COUNT(*) AS total_phases, \
                       COUNT(*) FILTER (WHERE status IN ('completed', 'skipped')) \
                           AS completed_phases \
-                 FROM plan_phases pp WHERE pp.plan_id = c.id \
+                 FROM plan_phases pp WHERE pp.plan_id = c.id AND retired_at IS NULL \
            ) stats ON TRUE \
           WHERE c.parent_plan_id = $1 \
           ORDER BY CASE WHEN c.status IN ('active', 'paused') THEN 0 ELSE 1 END, \
                    c.created_at",
     )
     .bind(plan_id)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await?;
     let mut out = Vec::with_capacity(rows.len());
     for (id, title, summary, status, depth, total_phases, completed_phases) in rows {
@@ -317,7 +346,7 @@ pub(super) async fn branch_views(
             depth,
             total_phases,
             completed_phases,
-            anchor_phase_ids: anchor_phase_ids(pool, id).await?,
+            anchor_phase_ids: anchor_phase_ids(connection, id).await?,
         });
     }
     Ok(out)

@@ -663,7 +663,7 @@ async fn load_sessions(pool: &crate::db::Pool) -> ApiResult<Vec<AppSessionView>>
            LEFT JOIN LATERAL ( \
                SELECT COUNT(*) AS total_phases, \
                       COUNT(*) FILTER (WHERE status = 'completed') AS completed_phases \
-                 FROM plan_phases pp WHERE pp.plan_id = plan.id \
+                 FROM plan_phases pp WHERE pp.plan_id = plan.id AND retired_at IS NULL \
            ) plan_stats ON TRUE \
            LEFT JOIN LATERAL ( \
                SELECT id, title, status \

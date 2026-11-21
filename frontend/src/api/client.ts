@@ -37,6 +37,7 @@ import type {
   NewPlanPhaseInput,
   PlanEventView,
   PlanTreeNodeView,
+  PlanAuthoringPatch,
   PlanView,
   RenameRepoRequest,
   RepoDirtyPathsResponse,
@@ -443,6 +444,13 @@ export function updatePlan(
   body: UpdatePlanInput,
 ): Promise<PlanView> {
   return request<PlanView>(`/api/plans/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function patchPlanAuthoring(id: string, body: PlanAuthoringPatch): Promise<PlanView> {
+  return request<PlanView>(`/api/plans/${encodeURIComponent(id)}/authoring`, {
     method: "PATCH",
     body: JSON.stringify(body),
   });

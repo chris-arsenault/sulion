@@ -58,8 +58,8 @@ Full list in [docs/architecture.md](docs/architecture.md#invariants--do-not-brea
 - Codex and Claude share the same canonical event schema. When editing ingest code, assume both agents flow through it.
 - Follow the implementation mechanism already agreed in the plan or conversation. Simplification may remove supporting machinery, but must not substitute a different architecture; ask before doing so.
 - In Sulion PTYs, run `sulion-code help` before structural code navigation.
-- `sulion plan` publishes a durable user-facing phase summary when useful; it
-  complements rather than replaces an agent's detailed internal plan. When a
+- `sulion plan` keeps a compact user-facing synopsis and durable implementation
+  detail. Use `plan entry`, `plan phase edit`, and `plan review` when listed in CLI help. When a
   step turns out to need its own multi-step job, `sulion plan branch` opens a
   sub-plan under it and `sulion plan return` comes back. See `docs/plans.md`.
 - Write concise plan guidance from the request: outcome, sourced boundaries,

@@ -23,6 +23,7 @@ use crate::db::{self, Pool};
 
 mod context;
 mod embeddings;
+mod plan_records;
 mod routes_extra;
 mod search;
 
@@ -335,6 +336,7 @@ pub fn app(state: Arc<RetrievalState>) -> Router {
         .route("/v1/files/history", get(file_history_route))
         .route("/v1/facets", get(facets_route))
         .route("/v1/turns", get(turn_route))
+        .route("/v1/plans", get(plan_records::plan_route))
         .route("/v1/reindex", post(reindex_route))
         .route("/v1/index/status", get(index_status_route))
         .route("/v1/index/reset", post(reset_route))

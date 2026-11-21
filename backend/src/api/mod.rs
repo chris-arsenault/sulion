@@ -19,6 +19,7 @@ mod library_routes;
 mod meta_repo_routes;
 mod model_switch_routes;
 mod node_proxy;
+mod plan_mcp;
 mod plan_routes;
 mod repo_lifecycle_routes;
 mod repo_routes;
@@ -37,6 +38,8 @@ pub use app_state_routes::AppStateCache;
 pub use model_switch_routes::{
     enforce_once as enforce_model_switches_once, run_model_switch_enforcer,
 };
+#[cfg(feature = "integration-tests")]
+pub use plan_mcp::test_plan_mcp_router;
 pub use routes::ApiError;
 #[cfg(feature = "integration-tests")]
 pub use stats::sample_runtime_stats_once_for_tests;
@@ -60,6 +63,7 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/health", get(health))
         .route("/ws/sessions/:id", get(ws::attach))
         .merge(crate::node_protocol::public_router())
+        .merge(plan_mcp::router(&state))
         .merge(protected)
 }
 

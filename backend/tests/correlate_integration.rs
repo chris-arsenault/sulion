@@ -640,6 +640,7 @@ async fn control_socket_publishes_plans_and_preserves_explicit_attention() {
             plan_id: None,
             phase_reference: "1".to_string(),
             input: UpdatePhaseInput {
+                authoring_revision: None,
                 title: None,
                 description: None,
                 status: Some("completed".to_string()),
@@ -661,6 +662,7 @@ async fn control_socket_publishes_plans_and_preserves_explicit_attention() {
             plan_id: None,
             phase_reference: "1".to_string(),
             input: UpdatePhaseInput {
+                authoring_revision: None,
                 title: Some("Renamed phase".to_string()),
                 description: Some("Revised scope".to_string()),
                 status: None,
@@ -837,6 +839,7 @@ async fn control_socket_branches_to_arbitrary_depth_and_returns_to_the_parent() 
             plan_id: None,
             phase_reference: "4".to_string(),
             input: UpdatePhaseInput {
+                authoring_revision: None,
                 status: Some("blocked".to_string()),
                 status_note: Some("needs a prerequisite".to_string()),
                 title: None,

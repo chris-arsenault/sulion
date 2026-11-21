@@ -431,6 +431,51 @@ describe("PlanModal", () => {
     ).toBe("completed");
   });
 
+  it.each([
+    { form: "metadata", editButton: "Edit", label: "Plan title" },
+    { form: "phase", editButton: "Edit phase 1", label: "Phase 1 title" },
+  ])("preserves the revision a $form form started from across refreshes", async ({ editButton, label }) => {
+    const initial: PlanView = {
+      ...plan(),
+      authoring: { revision: 4, entries: [], technical_details: "", phases: {} },
+    };
+    const requests: unknown[] = [];
+    let remote = initial;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url === APP_STATE_URL) return jsonResponse(appStatePayload());
+      if (url.startsWith(PLANS_URL)) return jsonResponse([remote]);
+      if (url.endsWith("/events")) return jsonResponse([]);
+      if (init?.method === "PATCH") {
+        requests.push(JSON.parse(init.body as string));
+        return jsonResponse({ error: "plan authoring revision conflict" }, 409);
+      }
+      return jsonResponse(remote);
+    }));
+    render(<PlanModal open repo="alpha" planId="plan-1" onClose={noop} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: editButton }));
+    const title = screen.getByLabelText(label);
+    await user.clear(title);
+    await user.type(title, "Unsent draft");
+    remote = {
+      ...initial,
+      revision: 3,
+      authoring: { ...initial.authoring!, revision: 5 },
+      phases: [{ ...initial.phases[0]!, title: "Concurrent phase edit" }],
+    };
+    act(() => useSessionStore.setState({ plans: [{
+      ...remote, total_phases: 1, completed_phases: 0, blocked_phases: 0,
+      current_phase_id: "phase-1", current_phase_title: "Backend",
+      current_phase_status: "in_progress", attached_pty_ids: [], open_branches: 0,
+    }] }));
+    await screen.findByText("revision 3");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("plan authoring revision conflict");
+    expect(requests[0]).toMatchObject({ title: "Unsent draft", authoring_revision: 4 });
+    expect((screen.getByLabelText(label) as HTMLInputElement).value).toBe("Unsent draft");
+  });
+
   it("branches from a phase over a span and opens the new sub-plan", async () => {
     const root = plan();
     const branch: PlanView = {

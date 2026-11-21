@@ -1,13 +1,15 @@
 //! Phase-level operations on a published plan: adding, editing, reordering,
 //! and the bulk skip that an explicit `skip_remaining` close performs.
 
+use serde_json::json;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use super::model::{NewPhase, PlanActor, PlanPhaseView, PlanView, UpdatePhaseInput};
 use super::{
     bump_revision, clean_note, ensure_plan_open, get, insert_event, insert_event_with_rename,
-    limited_text, required_text, validate_actor, Rename, MAX_DESCRIPTION_CHARS, MAX_TITLE_CHARS,
+    limited_text, patch, required_text, validate_actor, Rename, MAX_DESCRIPTION_CHARS,
+    MAX_TITLE_CHARS,
 };
 use crate::db::Pool;
 
@@ -46,13 +48,27 @@ pub async fn add_phase(
     .bind(phase_id)
     .bind(plan_id)
     .bind(position)
-    .bind(title)
-    .bind(description)
+    .bind(&title)
+    .bind(&description)
     .bind(status)
-    .bind(size)
+    .bind(&size)
     .execute(&mut *tx)
     .await?;
-    bump_revision(&mut tx, plan_id).await?;
+    let revision = bump_authored_phase_revision(&mut tx, plan_id).await?;
+    patch::record_change(
+        &mut tx,
+        plan_id,
+        revision,
+        actor,
+        "legacy",
+        None,
+        json!({
+            "changes": [{"op": "add_phase", "id": phase_id, "after": {
+                "title": title, "description": description, "position": position, "size": size
+            }}]
+        }),
+    )
+    .await?;
     insert_event(
         &mut tx,
         plan_id,
@@ -78,9 +94,28 @@ pub async fn update_phase(
     validate_actor(actor)?;
     let mut tx = pool.begin().await?;
     ensure_plan_open(&mut tx, plan_id).await?;
+    let authored = input.title.is_some()
+        || input.description.is_some()
+        || input.position.is_some()
+        || input.size.is_some();
+    if authored {
+        let (revision, managed): (i64, bool) = sqlx::query_as(
+            "SELECT authoring_revision, authoring IS NOT NULL FROM plans WHERE id = $1",
+        )
+        .bind(plan_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        match input.authoring_revision {
+            Some(expected) => patch::check_revision(expected, revision)?,
+            None if managed => {
+                anyhow::bail!("use the current authoring revision to edit this phase")
+            }
+            None => (),
+        }
+    }
     let current: PlanPhaseView = sqlx::query_as(
         "SELECT id, plan_id, position, title, description, status, status_note, size, \
-                started_at, completed_at, created_at, updated_at \
+                started_at, completed_at, retired_at, created_at, updated_at \
            FROM plan_phases WHERE id = $1 AND plan_id = $2 FOR UPDATE",
     )
     .bind(phase_id)
@@ -88,6 +123,10 @@ pub async fn update_phase(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| anyhow::anyhow!("phase not found: {phase_id}"))?;
+    if current.retired_at.is_some() {
+        anyhow::bail!("phase has been retired: {phase_id}");
+    }
+    let before = authored.then(|| json!({"title": current.title, "description": current.description, "position": current.position, "size": current.size}));
     let title = match input.title.as_deref() {
         Some(value) => required_text(value, "phase title", MAX_TITLE_CHARS)?,
         None => current.title.clone(),
@@ -122,13 +161,22 @@ pub async fn update_phase(
     .bind(phase_id)
     .bind(plan_id)
     .bind(&title)
-    .bind(description)
+    .bind(&description)
     .bind(status)
     .bind(status_note.as_deref())
     .bind(size.as_deref())
     .execute(&mut *tx)
     .await?;
-    bump_revision(&mut tx, plan_id).await?;
+    if let Some(before) = before {
+        let revision = bump_authored_phase_revision(&mut tx, plan_id).await?;
+        patch::record_change(&mut tx, plan_id, revision, actor, "legacy", status_note.as_deref(), json!({
+            "changes": [{"op": "edit_phase", "id": phase_id, "before": before, "after": {
+                "title": title, "description": description, "position": input.position.unwrap_or(current.position), "size": size
+            }}]
+        })).await?;
+    } else {
+        bump_revision(&mut tx, plan_id).await?;
+    }
     insert_event_with_rename(
         &mut tx,
         plan_id,
@@ -147,6 +195,18 @@ pub async fn update_phase(
     .await?;
     tx.commit().await?;
     get(pool, plan_id).await
+}
+
+async fn bump_authored_phase_revision(
+    tx: &mut Transaction<'_, Postgres>,
+    plan_id: Uuid,
+) -> anyhow::Result<i64> {
+    let revision = sqlx::query_scalar("UPDATE plans SET authoring_revision = authoring_revision + 1 WHERE id = $1 RETURNING authoring_revision")
+        .bind(plan_id)
+        .fetch_one(&mut **tx)
+        .await?;
+    bump_revision(tx, plan_id).await?;
+    Ok(revision)
 }
 
 pub async fn resolve_phase_id(pool: &Pool, plan_id: Uuid, reference: &str) -> anyhow::Result<Uuid> {
@@ -170,7 +230,7 @@ pub async fn resolve_phase_id(pool: &Pool, plan_id: Uuid, reference: &str) -> an
         .ok_or_else(|| anyhow::anyhow!("phase not found at position {position}"))
 }
 
-async fn move_phase(
+pub(super) async fn move_phase(
     tx: &mut Transaction<'_, Postgres>,
     plan_id: Uuid,
     phase_id: Uuid,

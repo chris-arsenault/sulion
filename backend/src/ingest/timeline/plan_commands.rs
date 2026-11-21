@@ -197,6 +197,10 @@ fn metadata(tokens: &[Option<String>]) -> Value {
             .get(1)
             .and_then(Option::as_deref)
             .map_or_else(|| "phase".into(), |action| format!("phase {action}")),
+        "entry" => tokens
+            .get(1)
+            .and_then(Option::as_deref)
+            .map_or_else(|| "entry".into(), |action| format!("entry {action}")),
         "-h" | "--help" => "help".into(),
         _ => command.to_owned(),
     };
@@ -212,10 +216,11 @@ fn metadata(tokens: &[Option<String>]) -> Value {
     let Ok(request) = serde_json::to_value(request) else {
         return output;
     };
-    let fields = request
+    let input = request
         .get("input")
         .or_else(|| request.get("phase"))
         .unwrap_or(&request);
+    let fields = input.get("operation").unwrap_or(input);
     for key in [
         "title",
         "summary",
@@ -233,8 +238,19 @@ fn metadata(tokens: &[Option<String>]) -> Value {
             output[key] = value.clone();
         }
     }
-    if let Some(note) = fields.get("status_note").filter(|value| !value.is_null()) {
+    if let Some(note) = fields
+        .get("status_note")
+        .or_else(|| input.get("reason"))
+        .filter(|value| !value.is_null())
+    {
         output["note"] = note.clone();
+    }
+    if let Some(id) = fields.get("id") {
+        match command {
+            "phase" | "step" => output["phase"] = id.clone(),
+            "entry" => output["entry"] = id.clone(),
+            _ => (),
+        }
     }
     for (source, target) in [
         ("plan_id", "plan_id"),

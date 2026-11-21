@@ -94,13 +94,13 @@ module "edge" {
   routes = []
 }
 
-# Unauthenticated forwards are an allowlist: the SPA shell and its build output,
-# the ticket-authenticated WebSocket and health. The SPA routes by query string,
-# so no client-side paths need forwarding.
+# Exact public forwards include the MCP discovery and transport endpoints.
+# The MCP backend authenticates the transport and emits its OAuth challenge.
 resource "aws_lb_listener_rule" "public_paths" {
   for_each = {
     "175" = ["/ws/*", "/health", "/assets/*"]
     "176" = ["/", "/index.html", "/config.js", "/favicon.svg"]
+    "178" = ["/mcp", "/.well-known/oauth-protected-resource/mcp"]
   }
   listener_arn = module.ctx.alb.listener_arn
   priority     = tonumber(each.key)

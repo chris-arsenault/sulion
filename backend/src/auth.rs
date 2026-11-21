@@ -95,6 +95,34 @@ impl AuthState {
     }
 
     pub async fn validate_bearer(&self, token: &str) -> anyhow::Result<AuthenticatedUser> {
+        self.validate_client_token(token, &self.config.client_id, None)
+            .await
+    }
+
+    pub(crate) fn issuer_url(&self) -> &str {
+        &self.config.issuer_url
+    }
+
+    pub(crate) async fn validate_plan_connector(
+        &self,
+        token: &str,
+        client_id: &str,
+        resource: &str,
+    ) -> anyhow::Result<AuthenticatedUser> {
+        anyhow::ensure!(
+            client_id != self.config.client_id,
+            "use an OAuth application dedicated to plan MCP"
+        );
+        self.validate_client_token(token, client_id, Some(resource))
+            .await
+    }
+
+    async fn validate_client_token(
+        &self,
+        token: &str,
+        client_id: &str,
+        audience: Option<&str>,
+    ) -> anyhow::Result<AuthenticatedUser> {
         let header = decode_header(token).context("invalid jwt header")?;
         anyhow::ensure!(header.alg == Algorithm::RS256, "unsupported jwt algorithm");
         let kid = header
@@ -104,15 +132,19 @@ impl AuthState {
         let key = self.keys.find_key(&kid).await?;
         let mut validation = Validation::new(Algorithm::RS256);
         validation.leeway = 0;
-        validation.validate_aud = false; // Access tokens bind the application through client_id.
+        validation.validate_aud = audience.is_some();
         validation.set_required_spec_claims(&["exp", "iss", "sub", "iat", "auth_time"]);
         validation.set_issuer(std::slice::from_ref(&self.config.issuer_url));
+        if let Some(audience) = audience {
+            validation.set_audience(&[audience]);
+            validation.required_spec_claims.insert("aud".to_string());
+        }
         let claims = decode::<JwtClaims>(token, &key, &validation)
             .context("jwt validation failed")?
             .claims;
 
         let matches_client = match claims.token_use.as_deref() {
-            Some("access") => claims.client_id.as_deref() == Some(self.config.client_id.as_str()),
+            Some("access") => claims.client_id.as_deref() == Some(client_id),
             Some(other) => return Err(anyhow!("unsupported token_use {other}")),
             None => return Err(anyhow!("jwt missing token_use")),
         };

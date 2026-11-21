@@ -18,6 +18,8 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 mod common;
+#[path = "rest_integration/plan_mcp.rs"]
+mod plan_mcp;
 #[path = "rest_integration/turn_stream.rs"]
 mod turn_stream_tests;
 
@@ -1871,6 +1873,186 @@ async fn health_endpoint_reports_ok_when_db_reachable() {
     // The harness attaches an in-process node over loopback, which is what
     // standalone does, so the node reads as connected rather than absent.
     assert_eq!(body["development_node"], "connected");
+}
+
+#[tokio::test]
+async fn plan_editor_rejects_an_old_draft_after_a_patch() {
+    let h = Harness::new().await;
+    let initial: serde_json::Value = h
+        .client
+        .post(format!("{}/api/repos/authoring/plans", h.base))
+        .json(&json!({"title": "Draft", "all_pending": true, "phases": [{"title": "Implement"}]}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = initial["id"].as_str().unwrap();
+    let revision = &initial["authoring"]["revision"];
+    let url = format!("{}/api/plans/{id}", h.base);
+    let changed: serde_json::Value = h.client.patch(format!("{url}/authoring"))
+        .json(&json!({"revision": revision, "operations": [{"op": "edit_plan", "summary": "Current decision", "technical_details": "Reuse the existing owner"}]}))
+        .send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+    assert_eq!(changed["summary"], "Current decision");
+    let stale = h
+        .client
+        .patch(&url)
+        .json(&json!({"authoring_revision": revision, "summary": "Stale form"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), reqwest::StatusCode::CONFLICT);
+    let without_revision = h
+        .client
+        .patch(&url)
+        .json(&json!({"summary": "Old client"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(without_revision.status(), reqwest::StatusCode::BAD_REQUEST);
+    let phase_id = initial["phases"][0]["id"].as_str().unwrap();
+    let phase_url = format!("{url}/phases/{phase_id}");
+    let stale_phase = h
+        .client
+        .patch(&phase_url)
+        .json(
+            &json!({"authoring_revision": revision, "title": "Stale phase", "status": "completed"}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale_phase.status(), reqwest::StatusCode::CONFLICT);
+    let listed: serde_json::Value = h
+        .client
+        .get(format!("{}/api/repos/authoring/plans", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(listed[0].get("authoring").is_none());
+    let current: serde_json::Value = h
+        .client
+        .get(&url)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(current, changed);
+    let saved: serde_json::Value = h.client.patch(&phase_url)
+        .json(&json!({"authoring_revision": current["authoring"]["revision"], "title": "Current phase", "status": "in_progress"}))
+        .send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+    assert_eq!(saved["authoring"]["revision"], 2);
+    assert_eq!(saved["phases"][0]["title"], "Current phase");
+    assert_eq!(saved["phases"][0]["status"], "in_progress");
+    assert_eq!(
+        saved["authoring"]["technical_details"],
+        "Reuse the existing owner"
+    );
+}
+
+#[tokio::test]
+async fn plan_lineage_preserves_branch_evidence_and_retires_pending_scope() {
+    let h = Harness::new().await;
+    let root: serde_json::Value = h.client.post(format!("{}/api/repos/lineage/plans", h.base))
+        .json(&json!({"title": "City", "all_pending": true, "phases": [{"title": "Explore"}, {"title": "Future work"}]}))
+        .send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+    let root_id = root["id"].as_str().unwrap();
+    let root_url = format!("{}/api/plans/{root_id}", h.base);
+    let old = Uuid::new_v4();
+    let new = Uuid::new_v4();
+    let question = Uuid::new_v4();
+    let blocks = Uuid::new_v4();
+    let landmarks = Uuid::new_v4();
+    let delivery = Uuid::new_v4();
+    let first: serde_json::Value = h.client.patch(format!("{root_url}/authoring"))
+        .json(&json!({"revision": 0, "operations": [
+            {"op": "put_entry", "id": old, "entry": {"kind": "decision", "text": "Use street scale"}},
+            {"op": "put_entry", "id": question, "entry": {"kind": "question", "text": "Which scale?", "answer": old}}
+        ]})).send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+    let branch: serde_json::Value = h.client.post(format!("{root_url}/branches"))
+        .json(&json!({"title": "Prototype", "all_pending": true, "phases": [{"title": "Try it"}], "parent_phase_refs": [root["phases"][0]["id"]]}))
+        .send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+    let branch_id = branch["id"].as_str().unwrap();
+    let branch_url = format!("{}/api/plans/{branch_id}", h.base);
+    let branch_phase = branch["phases"][0]["id"].as_str().unwrap();
+    let root_pending: serde_json::Value = h
+        .client
+        .get(&root_url)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(root_pending["phases"][0]["status"], "pending");
+    h.client.patch(format!("{branch_url}/authoring"))
+        .json(&json!({"revision": 0, "operations": [
+            {"op": "edit_phase", "id": branch_phase, "basis": [old], "implementation": "Grow an ordinary town"}
+        ]})).send().await.unwrap().error_for_status().unwrap();
+    h.client.patch(format!("{branch_url}/authoring"))
+        .json(&json!({"revision": 1, "operations": [
+            {"op": "record_evidence", "id": branch_phase, "observation": "The model builds street-scale features", "revision": 1, "ancestors": { (root_id): first["authoring"]["revision"] }}
+        ]})).send().await.unwrap().error_for_status().unwrap();
+    let changed: serde_json::Value = h.client.patch(format!("{root_url}/authoring"))
+        .json(&json!({"revision": first["authoring"]["revision"], "operations": [
+            {"op": "retire_entry", "id": old, "successors": [new]},
+            {"op": "put_entry", "id": new, "entry": {"kind": "decision", "text": "Use city scale"}},
+            {"op": "put_entry", "id": question, "entry": {"kind": "question", "text": "Which scale?", "answer": new}},
+            {"op": "retire_phase", "id": root["phases"][1]["id"], "successors": [blocks, landmarks]},
+            {"op": "add_phase", "id": blocks, "title": "Grow city blocks"},
+            {"op": "add_phase", "id": landmarks, "title": "Grow city landmarks"}
+        ]})).send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+    assert_eq!(changed["phases"][1]["status"], "skipped");
+    assert!(changed["phases"][1]["retired_at"].is_string());
+    assert!(changed["phases"][1]["completed_at"].is_null());
+    let replaced_id = root["phases"][1]["id"].as_str().unwrap();
+    assert_eq!(
+        changed["authoring"]["phases"][replaced_id]["successors"],
+        json!([blocks, landmarks])
+    );
+    let reconsidered: serde_json::Value = h.client.patch(format!("{root_url}/authoring"))
+        .json(&json!({"revision": changed["authoring"]["revision"], "reason": "The prototype leaves the scale open", "operations": [
+            {"op": "retire_entry", "id": new},
+            {"op": "put_entry", "id": question, "entry": {"kind": "question", "text": "Which scale?"}},
+            {"op": "add_phase", "id": delivery, "title": "Develop city fabric"},
+            {"op": "edit_phase", "id": delivery, "follows_up": [root["phases"][0]["id"]]},
+            {"op": "retire_phase", "id": blocks, "successors": [delivery]},
+            {"op": "retire_phase", "id": landmarks, "successors": [delivery]}
+        ]})).send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+    assert!(reconsidered["authoring"]["entries"][1]["answer"].is_null());
+    assert_eq!(
+        reconsidered["phases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|phase| phase["retired_at"].is_null())
+            .count(),
+        2
+    );
+    let inherited: serde_json::Value = h
+        .client
+        .get(&branch_url)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        inherited["authoring"]["needs_review"][branch_phase],
+        json!([old])
+    );
+    assert_eq!(
+        inherited["authoring"]["phases"][branch_phase]["evidence"][0]["ancestors"][root_id],
+        first["authoring"]["revision"]
+    );
 }
 
 #[tokio::test]

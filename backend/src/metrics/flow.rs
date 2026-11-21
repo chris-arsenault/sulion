@@ -307,6 +307,12 @@ fn plan_burndowns(
         }
         let total_weight: i64 = plan_phases
             .iter()
+            .filter(|phase| {
+                transitions
+                    .get(&phase.id)
+                    .and_then(|history| status_at(history, now))
+                    != Some("retired")
+            })
             .map(|phase| size_weight(phase.size.as_deref()))
             .sum();
         let series = days
@@ -319,11 +325,14 @@ fn plan_burndowns(
                     if phase.created_at > at {
                         continue;
                     }
-                    let weight = size_weight(phase.size.as_deref());
-                    total += weight;
                     let status = transitions
                         .get(&phase.id)
                         .and_then(|history| status_at(history, at));
+                    if status == Some("retired") {
+                        continue;
+                    }
+                    let weight = size_weight(phase.size.as_deref());
+                    total += weight;
                     if matches!(status, Some("completed") | Some("skipped")) {
                         done += weight;
                     }

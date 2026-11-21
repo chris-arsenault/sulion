@@ -18,12 +18,14 @@ import {
   getPlan,
   getPlanEvents,
   listRepoPlans,
+  patchPlanAuthoring,
   updatePlan,
   updatePlanPhase,
 } from "../api/client";
 import type {
   NewPlanPhaseInput,
   PlanAncestorView,
+  PlanAuthoringPatch,
   PlanBranchView,
   PlanEventView,
   PlanPhaseStatus,
@@ -41,6 +43,7 @@ import type { Maybe } from "../lib/types";
 import { useSessions } from "../state/SessionStore";
 import { FileRefText } from "./common/FileRefText";
 import { GuidanceContent, GuidanceFields } from "./PlanGuidance";
+import { PhaseAuthoring, PlanAuthoringDetail } from "./PlanAuthoringDetail";
 import { PlanTree } from "./PlanTree";
 import { Overlay } from "./ui";
 import "./PlanModal.css";
@@ -375,6 +378,7 @@ function PlanDetail({
   const [newPhaseDescription, setNewPhaseDescription] = useState("");
   const [attachPty, setAttachPty] = useState("");
   const [editMeta, setEditMeta] = useState(false);
+  const [metaRevision, setMetaRevision] = useState<number | null>(null);
   const [guidance, setGuidance] = useState(EMPTY_GUIDANCE);
   const [title, setTitle] = useState("");
   const [summary, setSummary] = useState("");
@@ -458,13 +462,18 @@ function PlanDetail({
       event.preventDefault();
       if (!plan) return;
       const saved = await mutate(() => updatePlan(plan.id, {
+        ...(metaRevision === null ? {} : { authoring_revision: metaRevision }),
         title: title.trim(),
         summary: summary.trim(),
         ...cleanGuidance(guidance),
       }));
       if (saved) setEditMeta(false);
     },
-    [guidance, mutate, plan, summary, title],
+    [guidance, metaRevision, mutate, plan, summary, title],
+  );
+  const saveAuthoring = useCallback(
+    (patch: PlanAuthoringPatch) => mutate(() => patchPlanAuthoring(planId, patch)),
+    [mutate, planId],
   );
   const setPlanStatus = useCallback(
     (status: PlanStatus, skipRemaining = false) => {
@@ -606,6 +615,7 @@ function PlanDetail({
     setTitle(plan.title);
     setSummary(plan.summary);
     setGuidance(cleanGuidance(plan));
+    setMetaRevision(plan.authoring?.revision ?? null);
     setEditMeta(true);
   }, [plan]);
   const cancelMetaEdit = useCallback(() => setEditMeta(false), []);
@@ -729,7 +739,7 @@ function PlanDetail({
             ) : null}
           </span>
         </div>
-        <PlanProgress phases={plan.phases} />
+        <PlanProgress phases={plan.phases.filter((phase) => !phase.retired_at)} />
       </div>
 
       <section className="plan-guidance" aria-label="Plan guidance">
@@ -746,18 +756,25 @@ function PlanDetail({
         </section>
       </section>
 
+      {plan.authoring && (
+        <PlanAuthoringDetail plan={plan} authoring={plan.authoring} canEdit={editable && !busy} onSave={saveAuthoring} />
+      )}
       <ol className="plan-modal__phase-list">
         {plan.phases.map((phase) => (
           <li key={phase.id}>
             <PhaseRow
               phase={phase}
               planId={plan.id}
+              authoringRevision={plan.authoring?.revision}
               repo={repo}
-              disabled={busy || locked}
+              disabled={busy || locked || Boolean(phase.retired_at)}
               onMutate={mutate}
-              canBranch={editable}
+              canBranch={editable && !phase.retired_at}
               onBranch={openBranchForm}
             />
+            {plan.authoring && (
+              <PhaseAuthoring phase={phase} plan={plan} authoring={plan.authoring} canEdit={editable && !busy} onSave={saveAuthoring} />
+            )}
             {plan.branches
               .filter((branch) => branch.anchor_phase_ids.includes(phase.id))
               .map((branch) => (
@@ -974,6 +991,7 @@ function AttachmentRow({
 function PhaseRow({
   phase,
   planId,
+  authoringRevision,
   repo,
   disabled,
   onMutate,
@@ -982,13 +1000,14 @@ function PhaseRow({
 }: {
   phase: PlanPhaseView;
   planId: string;
+  authoringRevision?: number;
   repo: string;
   disabled: boolean;
   onMutate: PlanMutation;
   canBranch: boolean;
   onBranch: (position: number) => void;
 }) {
-  const [editing, setEditing] = useState(false);
+  const [editBase, setEditBase] = useState<{ phase: PlanPhaseView; revision?: number } | null>(null);
   const [title, setTitle] = useState(phase.title);
   const [description, setDescription] = useState(phase.description);
   const [status, setStatus] = useState<PlanPhaseStatus>(phase.status);
@@ -996,28 +1015,34 @@ function PhaseRow({
   const [position, setPosition] = useState(phase.position);
 
   useEffect(() => {
+    if (editBase) return;
     setTitle(phase.title);
     setDescription(phase.description);
     setStatus(phase.status);
     setNote(phase.status_note ?? "");
     setPosition(phase.position);
-  }, [phase]);
+  }, [editBase, phase]);
+
+  const base = editBase?.phase ?? phase;
 
   const submit = useCallback(
     async (event: FormEvent) => {
       event.preventDefault();
-      const patch: UpdatePlanPhaseInput = {};
-      if (title.trim() !== phase.title) patch.title = title.trim();
-      if (description.trim() !== phase.description) patch.description = description.trim();
-      if (status !== phase.status) patch.status = status;
-      if (note.trim() !== (phase.status_note ?? "")) patch.status_note = note.trim();
-      if (position !== phase.position) patch.position = position;
-      await onMutate(() => updatePlanPhase(planId, phase.id, patch));
-      setEditing(false);
+      const patch: UpdatePlanPhaseInput = { authoring_revision: editBase?.revision };
+      if (title.trim() !== base.title) patch.title = title.trim();
+      if (description.trim() !== base.description) patch.description = description.trim();
+      if (status !== base.status) patch.status = status;
+      if (note.trim() !== (base.status_note ?? "")) patch.status_note = note.trim();
+      if (position !== base.position) patch.position = position;
+      const saved = await onMutate(() => updatePlanPhase(planId, phase.id, patch));
+      if (saved) setEditBase(null);
     },
-    [description, note, onMutate, phase, planId, position, status, title],
+    [base, description, editBase, note, onMutate, phase.id, planId, position, status, title],
   );
-  const beginEdit = useCallback(() => setEditing(true), []);
+  const beginEdit = useCallback(
+    () => setEditBase({ phase, revision: authoringRevision }),
+    [authoringRevision, phase],
+  );
   const branch = useCallback(() => onBranch(phase.position), [onBranch, phase.position]);
   const cancelEdit = useCallback(() => {
     setTitle(phase.title);
@@ -1025,7 +1050,7 @@ function PhaseRow({
     setStatus(phase.status);
     setNote(phase.status_note ?? "");
     setPosition(phase.position);
-    setEditing(false);
+    setEditBase(null);
   }, [phase]);
   const onTitleChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => setTitle(event.target.value),
@@ -1049,14 +1074,14 @@ function PhaseRow({
     [],
   );
   const dirty =
-    title.trim() !== phase.title ||
-    description.trim() !== phase.description ||
-    status !== phase.status ||
-    note.trim() !== (phase.status_note ?? "") ||
-    position !== phase.position;
+    title.trim() !== base.title ||
+    description.trim() !== base.description ||
+    status !== base.status ||
+    note.trim() !== (base.status_note ?? "") ||
+    position !== base.position;
   const validPosition = Number.isInteger(position) && position >= 1;
 
-  if (!editing) {
+  if (!editBase) {
     return (
       <div className={`plan-phase plan-phase--${phase.status}`}>
         <span className="plan-phase__position">{phase.position}</span>
@@ -1074,7 +1099,7 @@ function PhaseRow({
           ) : null}
         </div>
         <span className="plan-phase__tail">
-          <span className="plan-phase__status">{phase.status.replace("_", " ")}</span>
+          <span className="plan-phase__status">{phase.retired_at ? "retired" : phase.status.replace("_", " ")}</span>
           {canBranch && !disabled ? (
             <button
               type="button"

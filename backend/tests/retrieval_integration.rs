@@ -11,6 +11,9 @@ use sulion::{db, retrieval};
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
+#[path = "retrieval_integration/plan_provenance.rs"]
+mod plan_provenance;
+
 fn test_db_url() -> Option<String> {
     std::env::var("SULION_TEST_DB").ok()
 }

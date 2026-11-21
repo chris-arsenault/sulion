@@ -32,6 +32,7 @@ use tokio::net::{UnixListener, UnixStream};
 use uuid::Uuid;
 
 use crate::db::Pool;
+use crate::plans;
 
 const CORRELATE_IO_TIMEOUT: Duration = Duration::from_millis(750);
 const CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -95,9 +96,21 @@ pub enum ControlRequest {
     PlanShow {
         plan_id: Option<Uuid>,
     },
+    PlanEdit {
+        plan_id: Option<Uuid>,
+        input: Box<crate::plans::DirectEdit>,
+    },
+    PlanReview {
+        plan_id: Option<Uuid>,
+        phase_id: Option<Uuid>,
+    },
     PlanUpdate {
         plan_id: Option<Uuid>,
         input: crate::plans::UpdatePlanInput,
+    },
+    PlanPatch {
+        plan_id: Option<Uuid>,
+        input: crate::plans::PlanPatch,
     },
     PlanAddPhase {
         plan_id: Option<Uuid>,
@@ -267,8 +280,6 @@ async fn handle_conn(pool: &Pool, stream: UnixStream) -> anyhow::Result<()> {
 }
 
 async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value> {
-    use crate::plans;
-
     let (actor, repo_name) = plans::PlanActor::for_pty(pool, msg.pty_id).await?;
     match msg.control {
         ControlRequest::PlanStart {
@@ -307,14 +318,26 @@ async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value>
         ControlRequest::PlanList { include_closed } => Ok(serde_json::to_value(
             plans::list_for_repo(pool, &repo_name, include_closed).await?,
         )?),
-        ControlRequest::PlanShow { plan_id } => {
+        request @ (ControlRequest::PlanShow { .. } | ControlRequest::PlanReview { .. }) => {
+            dispatch_plan_read(pool, msg.pty_id, &repo_name, request).await
+        }
+        ControlRequest::PlanEdit { plan_id, input } => {
             let id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
-            Ok(serde_json::to_value(plans::get(pool, id).await?)?)
+            Ok(serde_json::to_value(
+                plans::apply_direct(pool, id, *input, &actor, "pty", None, Some(&repo_name))
+                    .await?,
+            )?)
         }
         ControlRequest::PlanUpdate { plan_id, input } => {
             let id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
             Ok(serde_json::to_value(
                 plans::update(pool, id, input, &actor).await?,
+            )?)
+        }
+        ControlRequest::PlanPatch { plan_id, input } => {
+            let id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
+            Ok(serde_json::to_value(
+                plans::apply_patch(pool, id, input, &actor, "pty", None, Some(&repo_name)).await?,
             )?)
         }
         ControlRequest::PlanAddPhase { plan_id, phase } => {
@@ -377,6 +400,41 @@ async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value>
             .await?;
             Ok(serde_json::to_value(activity)?)
         }
+        control @ (ControlRequest::SessionNameSet { .. } | ControlRequest::SessionNameGet) => {
+            dispatch_session_name(pool, msg.pty_id, control).await
+        }
+        // Every remaining variant is an archive command; the helper refuses
+        // anything else, so a new non-archive variant cannot fall through.
+        archive => dispatch_archive(pool, msg.pty_id, archive).await,
+    }
+}
+
+async fn dispatch_plan_read(
+    pool: &Pool,
+    pty_id: Uuid,
+    repo_name: &str,
+    request: ControlRequest,
+) -> anyhow::Result<Value> {
+    let plan_id = match &request {
+        ControlRequest::PlanShow { plan_id } | ControlRequest::PlanReview { plan_id, .. } => {
+            *plan_id
+        }
+        _ => unreachable!("called for plan reads"),
+    };
+    let id = plans::resolve_plan_id(pool, pty_id, plan_id, repo_name).await?;
+    let plan = plans::get(pool, id).await?;
+    match request {
+        ControlRequest::PlanReview { phase_id, .. } => plans::review::review(plan, phase_id),
+        _ => Ok(serde_json::to_value(plan)?),
+    }
+}
+
+async fn dispatch_session_name(
+    pool: &Pool,
+    pty_id: Uuid,
+    control: ControlRequest,
+) -> anyhow::Result<Value> {
+    match control {
         ControlRequest::SessionNameSet { name } => {
             let cleaned = match name.as_deref().map(str::trim) {
                 None | Some("") => None,
@@ -386,7 +444,7 @@ async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value>
                 Some(value) => Some(value.to_string()),
             };
             sqlx::query("UPDATE pty_sessions SET agent_label = $2 WHERE id = $1")
-                .bind(msg.pty_id)
+                .bind(pty_id)
                 .bind(cleaned.as_deref())
                 .execute(pool)
                 .await?;
@@ -395,15 +453,13 @@ async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value>
         ControlRequest::SessionNameGet => {
             let label: Option<String> =
                 sqlx::query_scalar("SELECT agent_label FROM pty_sessions WHERE id = $1")
-                    .bind(msg.pty_id)
+                    .bind(pty_id)
                     .fetch_optional(pool)
                     .await?
                     .flatten();
             Ok(serde_json::json!({ "agent_label": label }))
         }
-        // Every remaining variant is an archive command; the helper refuses
-        // anything else, so a new non-archive variant cannot fall through.
-        archive => dispatch_archive(pool, msg.pty_id, archive).await,
+        _ => anyhow::bail!("invalid session name command"),
     }
 }
 
