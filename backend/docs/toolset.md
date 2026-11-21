@@ -264,6 +264,11 @@ stable, so a stable run is the reference when Ohm and CI disagree. If another
 named local toolchain is broken, use stable instead of debugging unrelated
 rustup state.
 
+Native builds have GCC, G++, binutils, Make, CMake and Ninja on `PATH`.
+The threaded Emscripten build used by Vellum & Vector has SDK 6.0.10,
+`nightly-2026-11-14` with `rust-src`, and `wasm-bindgen` 0.2.130.
+`emcc`, `em++` and `wasm-bindgen` are available in a fresh shell.
+
 ## Nix
 
 `nix` is installed single-user, with the store owned by `sulion` and flakes

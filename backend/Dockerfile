@@ -7,6 +7,9 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ARG DUCKDB_VERSION=1.5.2
 ARG CARGO_XWIN_VERSION=0.22.0
+ARG WASM_RUST_TOOLCHAIN=nightly-2026-11-14
+ARG EMSDK_VERSION=6.0.10
+ARG WASM_BINDGEN_VERSION=0.2.130
 
 # Base shell + dev workbench tools. The PTYs that the backend forks
 # inherit this image's filesystem, so every tool the user needs in
@@ -124,6 +127,7 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     PATH=/usr/local/cargo/bin:$PATH
 RUN dnf groupinstall -y "Development Tools" \
   && dnf install -y --setopt=install_weak_deps=False \
+      gcc gcc-c++ binutils make cmake ninja-build \
       openssl-devel \
       pkgconf-pkg-config \
   && dnf clean all \
@@ -135,6 +139,7 @@ RUN dnf groupinstall -y "Development Tools" \
   && rustup target add --toolchain stable-x86_64-unknown-linux-gnu \
        x86_64-pc-windows-msvc \
        aarch64-pc-windows-msvc \
+  && rustup toolchain install "${WASM_RUST_TOOLCHAIN}" --profile minimal --component rust-src \
   && rustup default stable-x86_64-unknown-linux-gnu \
   && cargo install --locked cargo-xwin --version "${CARGO_XWIN_VERSION}" \
   # a+rwX so non-root PTY users can populate the registry / target
@@ -165,6 +170,24 @@ RUN curl --proto '=https' --tlsv1.2 -LsSf "https://labs.astral.sh/ohm/releases/$
   && chmod -R a+rX /usr/local/ohm \
   && RUSTUP_TOOLCHAIN=ohm rustc --version | grep -F "(${OHM_VERSION})"
 ENV RUSTUP_TOOLCHAIN=ohm
+
+# Use a complete SDK so emcc, LLVM and Binaryen come from the same release.
+# Vellum & Vector uses these versions for its threaded browser engine.
+ENV PATH=/opt/emsdk:/opt/emsdk/upstream/emscripten:$PATH
+RUN mkdir -p /opt/emsdk \
+  && curl -fsSL "https://github.com/emscripten-core/emsdk/archive/refs/tags/${EMSDK_VERSION}.tar.gz" \
+    | tar -xz --strip-components=1 -C /opt/emsdk \
+  && emsdk install "${EMSDK_VERSION}" \
+  && emsdk activate "${EMSDK_VERSION}" \
+  && mkdir -p /opt/emsdk/upstream/emscripten/cache \
+  && chmod -R a+rwX /opt/emsdk/upstream/emscripten/cache \
+  && printf '%s\n' 'export PATH="/opt/emsdk:/opt/emsdk/upstream/emscripten:$PATH"' > /etc/profile.d/emsdk.sh \
+  && emcc --version | grep -F " ${EMSDK_VERSION} " \
+  && package="wasm-bindgen-${WASM_BINDGEN_VERSION}-x86_64-unknown-linux-musl" \
+  && curl -fsSL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${WASM_BINDGEN_VERSION}/${package}.tar.gz" \
+    | tar -xz --strip-components=1 -C /usr/local/bin \
+      "${package}/wasm-bindgen" "${package}/wasm-bindgen-test-runner" "${package}/wasm2es6js" \
+  && wasm-bindgen --version | grep -Fx "wasm-bindgen ${WASM_BINDGEN_VERSION}"
 
 # .NET SDKs for C# builds in PTYs. Some repos in the shared workspace
 # still target .NET 8 while others pin .NET 10 via global.json and
