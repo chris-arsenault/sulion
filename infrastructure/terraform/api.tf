@@ -100,7 +100,7 @@ resource "aws_lb_listener_rule" "public_paths" {
   for_each = {
     "175" = ["/ws/*", "/health", "/assets/*"]
     "176" = ["/", "/index.html", "/config.js", "/favicon.svg"]
-    "178" = ["/mcp", "/.well-known/oauth-protected-resource/mcp"]
+    "178" = ["/mcp", "/.well-known/oauth-protected-resource", "/.well-known/oauth-authorization-server"]
   }
   listener_arn = module.ctx.alb.listener_arn
   priority     = tonumber(each.key)

@@ -24,8 +24,6 @@ jobs:
   ci:
     needs: storage-maintenance
     uses: chris-arsenault/ahara/.github/workflows/ci.yml@main
-    with:
-      terraform_variables: ${{ vars.SULION_TERRAFORM_VARIABLES || '{}' }}
     secrets: inherit
 
   publish-node-release:

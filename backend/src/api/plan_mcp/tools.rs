@@ -14,8 +14,8 @@ use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use super::Grant;
 use crate::{
+    auth::AuthenticatedUser,
     db::Pool,
     plans::{
         self, CreatePlanInput, DirectEdit, EntryContent, EntryFields, NewPhase, PhaseFields,
@@ -129,26 +129,23 @@ impl PlanTools {
         Self { pool }
     }
 
-    async fn view(&self, plan_id: Uuid, grant: &Grant) -> anyhow::Result<PlanView> {
-        let allowed: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM plans WHERE id = $1 AND repo_name = ANY($2))",
-        )
-        .bind(plan_id)
-        .bind(&grant.repos)
-        .fetch_one(&self.pool)
-        .await?;
-        if !allowed {
-            anyhow::bail!("plan not found in connected repositories");
-        }
-        plans::get(&self.pool, plan_id).await
-    }
-
-    async fn call(&self, request: CallToolRequestParams, grant: &Grant) -> anyhow::Result<Value> {
+    async fn call(&self, request: CallToolRequestParams, subject: &str) -> anyhow::Result<Value> {
         match request.name.as_ref() {
-            "list_plan_repositories" => Ok(json!({"repositories": grant.repos})),
+            "list_plan_repositories" => {
+                let repositories: Vec<String> = sqlx::query_scalar(
+                    "SELECT repo_name FROM repo_runtime_state WHERE exists = TRUE \
+                     UNION SELECT repo_name FROM plans ORDER BY repo_name",
+                )
+                .fetch_all(&self.pool)
+                .await?;
+                Ok(json!({"repositories": repositories}))
+            }
             "list_plans" => {
                 let args: ListPlans = arguments(request.arguments)?;
-                ensure_repo(&args.repo, grant)?;
+                anyhow::ensure!(
+                    crate::workspace::is_valid_repo_name(&args.repo),
+                    "invalid repo name"
+                );
                 let plans =
                     plans::list_for_repo(&self.pool, &args.repo, args.include_closed).await?;
                 Ok(json!({"plans": plans.into_iter().map(|plan| json!({
@@ -158,7 +155,7 @@ impl PlanTools {
             }
             "read_plan" => {
                 let args: ReadPlan = arguments(request.arguments)?;
-                let plan = self.view(args.plan_id, grant).await?;
+                let plan = plans::get(&self.pool, args.plan_id).await?;
                 if args.review || args.phase_id.is_some() {
                     let mut review = plans::review::review(plan, args.phase_id)?;
                     trim_attachment_data(&mut review["plan"]);
@@ -169,7 +166,7 @@ impl PlanTools {
             }
             "read_plan_history" => {
                 let args: PlanHistory = arguments(request.arguments)?;
-                self.view(args.plan_id, grant).await?;
+                plans::get(&self.pool, args.plan_id).await?;
                 let events = plans::events(&self.pool, args.plan_id).await?;
                 Ok(
                     json!({"events": events.into_iter().filter(|event| args.after_revision.is_none_or(|revision| event.authoring_revision.is_some_and(|current| current > revision))).map(|event| {
@@ -184,7 +181,10 @@ impl PlanTools {
             }
             "create_plan" => {
                 let args: CreatePlan = arguments(request.arguments)?;
-                ensure_repo(&args.repo, grant)?;
+                anyhow::ensure!(
+                    crate::workspace::is_valid_repo_name(&args.repo),
+                    "invalid repo name"
+                );
                 let plan = plans::create_with_connector(
                     &self.pool,
                     CreatePlanInput {
@@ -209,37 +209,35 @@ impl PlanTools {
                         attach_current_pty: false,
                     },
                     &PlanActor::user(),
-                    Some(&grant.subject),
+                    Some(subject),
                 )
                 .await?;
                 Ok(json!({"plan": plan_result(plan)}))
             }
             "patch_plan" => {
                 let args: BatchEdit = arguments(request.arguments)?;
-                let before = self.view(args.plan_id, grant).await?;
                 let plan = plans::apply_patch(
                     &self.pool,
                     args.plan_id,
                     args.patch,
                     &PlanActor::user(),
                     "mcp",
-                    Some(&grant.subject),
-                    Some(&before.repo_name),
+                    Some(subject),
+                    None,
                 )
                 .await?;
                 Ok(json!({"plan": plan_result(plan)}))
             }
             name => {
                 let (id, edit) = direct_edit(name, request.arguments)?;
-                let before = self.view(id, grant).await?;
                 let plan = plans::apply_direct(
                     &self.pool,
                     id,
                     edit,
                     &PlanActor::user(),
                     "mcp",
-                    Some(&grant.subject),
-                    Some(&before.repo_name),
+                    Some(subject),
+                    None,
                 )
                 .await?;
                 Ok(json!({"plan": plan_result(plan)}))
@@ -263,7 +261,7 @@ impl ServerHandler for PlanTools {
         _: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult::with_all_items(vec![
-            tool::<Empty>("list_plan_repositories", "List repositories connected for planning.", true, false),
+            tool::<Empty>("list_plan_repositories", "List Sulion repositories and repositories with saved plans.", true, false),
             tool::<ListPlans>("list_plans", "Find the existing plan by repository and title before creating one.", true, false),
             tool::<ReadPlan>("read_plan", "Read the full authored plan and revision by UUID. Optionally get a guided plan or phase review.", true, false),
             tool::<PlanHistory>("read_plan_history", "Explain changes since an authoring revision, including why an entry was superseded.", true, false),
@@ -287,12 +285,12 @@ impl ServerHandler for PlanTools {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let grant = context
+        let user = context
             .extensions
             .get::<axum::http::request::Parts>()
-            .and_then(|parts| parts.extensions.get::<Grant>())
-            .ok_or_else(|| ErrorData::invalid_request("missing authenticated plan grant", None))?;
-        let result = match self.call(request, grant).await {
+            .and_then(|parts| parts.extensions.get::<AuthenticatedUser>())
+            .ok_or_else(|| ErrorData::invalid_request("missing authenticated user", None))?;
+        let result = match self.call(request, &user.sub).await {
             Ok(value) => CallToolResult::structured(value),
             Err(error) if error.downcast_ref::<sqlx::Error>().is_some() => {
                 tracing::error!(%error, "MCP plan operation failed");
@@ -397,14 +395,6 @@ fn decode_edit<T: DeserializeOwned>(
             operation: operation(args.fields),
         },
     ))
-}
-
-fn ensure_repo(repo: &str, grant: &Grant) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        grant.repos.iter().any(|name| name == repo),
-        "repository is outside the connector's scope"
-    );
-    Ok(())
 }
 
 fn plan_result(plan: PlanView) -> Value {

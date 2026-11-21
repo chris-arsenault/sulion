@@ -11,7 +11,6 @@ use axum::{
 use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
-use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
@@ -21,25 +20,15 @@ use crate::{
 
 mod tools;
 
-#[derive(Clone)]
-struct Grant {
-    subject: String,
-    repos: Vec<String>,
-}
+const RESOURCE_METADATA: &str = "/.well-known/oauth-protected-resource";
+const OAUTH_SCOPES: [&str; 3] = ["openid", "profile", "email"];
 
 struct Connector {
     auth: Arc<AuthState>,
     resource: reqwest::Url,
+    cognito_domain: reqwest::Url,
     client_id: String,
-    grant: Grant,
-}
-
-#[derive(Deserialize)]
-struct ConnectorSettings {
-    resource: String,
-    client_id: String,
-    subject: String,
-    repos: Vec<String>,
+    owner: String,
 }
 
 pub(super) fn router(state: &AppState) -> Router<Arc<AppState>> {
@@ -60,11 +49,9 @@ pub fn test_plan_mcp_router(state: Arc<AppState>, auth: Arc<AuthState>) -> Route
         Arc::new(Connector {
             auth,
             resource: "https://sulion.test/mcp".parse().unwrap(),
+            cognito_domain: "https://login.sulion.test".parse().unwrap(),
             client_id: "fixture-mcp".to_owned(),
-            grant: Grant {
-                subject: "fixture-user".to_owned(),
-                repos: vec!["alpha".to_owned()],
-            },
+            owner: "fixture-owner".to_owned(),
         }),
     )
     .with_state(state)
@@ -72,36 +59,15 @@ pub fn test_plan_mcp_router(state: Arc<AppState>, auth: Arc<AuthState>) -> Route
 
 impl Connector {
     fn from_env(state: &AppState) -> anyhow::Result<Option<Self>> {
-        let Some(value) = crate::config::env_optional("SULION_PLAN_MCP_CONFIG") else {
+        use crate::config::env_optional;
+
+        let Some(client_id) = env_optional("SULION_PLAN_MCP_CLIENT_ID") else {
             return Ok(None);
         };
-        let Some(ConnectorSettings {
-            resource,
-            client_id,
-            subject,
-            repos,
-        }) = serde_json::from_str::<Option<ConnectorSettings>>(&value)?
-        else {
-            return Ok(None);
-        };
-        let resource = reqwest::Url::parse(&resource)?;
-        anyhow::ensure!(
-            resource.scheme() == "https"
-                && resource.path() == "/mcp"
-                && resource.query().is_none()
-                && resource.fragment().is_none()
-                && resource.username().is_empty()
-                && resource.password().is_none(),
-            "plan MCP resource must be the connector's HTTPS /mcp URL"
-        );
-        anyhow::ensure!(
-            !client_id.trim().is_empty() && !subject.trim().is_empty() && !repos.is_empty(),
-            "plan MCP requires a client ID, subject and connected repositories"
-        );
-        for repo in &repos {
-            super::routes::validate_repo_name(repo)
-                .map_err(|_| anyhow::anyhow!("invalid repository in SULION_PLAN_MCP_REPOS"))?;
-        }
+        let resource = https_url("SULION_PLAN_MCP_URL", "/mcp")?;
+        let cognito_domain = https_url("SULION_COGNITO_DOMAIN", "/")?;
+        let owner = env_optional("SULION_PLAN_MCP_OWNER")
+            .ok_or_else(|| anyhow::anyhow!("SULION_PLAN_MCP_OWNER must name the Cognito owner"))?;
         let auth = state
             .auth
             .clone()
@@ -109,10 +75,31 @@ impl Connector {
         Ok(Some(Self {
             auth,
             resource,
+            cognito_domain,
             client_id,
-            grant: Grant { subject, repos },
+            owner,
         }))
     }
+}
+
+fn https_url(key: &str, path: &str) -> anyhow::Result<reqwest::Url> {
+    let value =
+        crate::config::env_optional(key).ok_or_else(|| anyhow::anyhow!("{key} must be set"))?;
+    let url = if key == "SULION_COGNITO_DOMAIN" && !value.contains("://") {
+        reqwest::Url::parse(&format!("https://{value}"))?
+    } else {
+        reqwest::Url::parse(&value)?
+    };
+    anyhow::ensure!(
+        url.scheme() == "https"
+            && url.path() == path
+            && url.query().is_none()
+            && url.fragment().is_none()
+            && url.username().is_empty()
+            && url.password().is_none(),
+        "invalid HTTPS address for {key}"
+    );
+    Ok(url)
 }
 
 fn connected_router(pool: crate::db::Pool, connector: Arc<Connector>) -> Router<Arc<AppState>> {
@@ -133,14 +120,42 @@ fn connected_router(pool: crate::db::Pool, connector: Arc<Connector>) -> Router<
             .with_allowed_hosts([host])
             .enforce_origin_validation(),
     );
-    let metadata = json!({"resource": connector.resource.as_str(), "authorization_servers": [connector.auth.issuer_url()]});
+    let origin = connector.resource.origin().ascii_serialization();
+    let metadata = json!({
+        "resource": connector.resource.as_str(),
+        "authorization_servers": [origin],
+        "bearer_methods_supported": ["header"],
+        "scopes_supported": OAUTH_SCOPES,
+    });
+    let oauth = authorization_metadata(&connector);
     Router::new()
         .route_service("/mcp", service)
         .route_layer(middleware::from_fn_with_state(connector, authenticate))
         .route(
-            "/.well-known/oauth-protected-resource/mcp",
+            RESOURCE_METADATA,
             get(move || async move { Json(metadata) }),
         )
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(move || async move { Json(oauth) }),
+        )
+}
+
+fn authorization_metadata(connector: &Connector) -> serde_json::Value {
+    let domain = connector.cognito_domain.as_str().trim_end_matches('/');
+    let issuer = connector.auth.issuer_url();
+    json!({
+        "issuer": issuer,
+        "authorization_endpoint": format!("{domain}/oauth2/authorize"),
+        "token_endpoint": format!("{domain}/oauth2/token"),
+        "revocation_endpoint": format!("{domain}/oauth2/revoke"),
+        "jwks_uri": format!("{issuer}/.well-known/jwks.json"),
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
+        "code_challenge_methods_supported": ["S256"],
+        "scopes_supported": OAUTH_SCOPES,
+    })
 }
 
 async fn authenticate(
@@ -171,7 +186,7 @@ async fn authenticate(
             };
         }
     };
-    if user.sub != connector.grant.subject {
+    if user.username.as_deref() != Some(connector.owner.as_str()) {
         return StatusCode::FORBIDDEN.into_response();
     }
     if let Err(error) = user.check_authority().await {
@@ -182,7 +197,7 @@ async fn authenticate(
             response
         };
     }
-    request.extensions_mut().insert(connector.grant.clone());
+    request.extensions_mut().insert(user);
     next.run(request).await
 }
 
@@ -190,7 +205,7 @@ fn challenge(connector: &Connector) -> Response {
     let mut response = StatusCode::UNAUTHORIZED.into_response();
     let metadata = connector
         .resource
-        .join("/.well-known/oauth-protected-resource/mcp")
+        .join(RESOURCE_METADATA)
         .expect("same HTTPS origin");
     if let Ok(value) = HeaderValue::from_str(&format!("Bearer resource_metadata=\"{metadata}\"")) {
         response

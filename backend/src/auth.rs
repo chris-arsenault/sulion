@@ -137,7 +137,6 @@ impl AuthState {
         validation.set_issuer(std::slice::from_ref(&self.config.issuer_url));
         if let Some(audience) = audience {
             validation.set_audience(&[audience]);
-            validation.required_spec_claims.insert("aud".to_string());
         }
         let claims = decode::<JwtClaims>(token, &key, &validation)
             .context("jwt validation failed")?

@@ -5,7 +5,7 @@
 Related changes from a planning turn must reach the next agent together.
 Compact progress surfaces need a short summary. Handoff requires the full
 intent, phase implementation, and evidence, including superseded decisions.
-Terminal, browser, and scoped MCP clients edit the same plan.
+Terminal, browser, and authenticated MCP clients edit the same plan.
 
 ## Decision
 
@@ -19,8 +19,9 @@ IDs for legacy guidance until the first native patch materializes the document.
 
 Use the existing plan service as the transaction boundary and adapt each
 transport to it. The MCP SDK owns Streamable HTTP and tool discovery. The
-connector authenticates a dedicated resource audience, client and subject and
-scopes its tools to explicitly connected repositories. The existing branch
+connector uses a dedicated OAuth client in the shared Cognito pool. It checks
+the resource audience when present and records the authenticated subject. The
+owner can work with plans across Sulion repositories. The existing branch
 model continues to own execution hierarchy and live inherited guidance.
 
 This amends ADR 0014's decision to keep detailed planning outside Sulion.

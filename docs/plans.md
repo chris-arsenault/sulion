@@ -400,27 +400,31 @@ stay separate.
 
 ## Plans MCP
 
-The optional Streamable HTTP connector serves `/mcp` and
-`/.well-known/oauth-protected-resource/mcp`. It lists connected repositories,
+The Streamable HTTP connector serves `/mcp`. It lists Sulion repositories,
 reads plans and history, and creates unattached drafts with pending phases.
 Tools such as `update_plan_entry` and `update_plan_phase` edit named fields
 directly. `patch_plan` commits JSON batches to the same records. Select the plan UUID,
 then attach and read the current revision from a Sulion terminal to pick up work.
 
-The two exact paths follow the existing ALB, reverse proxy, and WireGuard route
-to the TrueNAS frontend. Terraform accepts a `plan_mcp` object with the allowed
-Cognito subject, connected repository names, and exact OAuth callback URLs.
-On deployment the workflow passes the nonsecret JSON from
-`SULION_TERRAFORM_VARIABLES` to Terraform. Terraform provisions the dedicated
-client and publishes the connector configuration to SSM. The existing Komodo
-deploy action passes it to the backend as `SULION_PLAN_MCP_CONFIG`. A null
-`plan_mcp` value leaves the connector disabled.
+The MCP route and exact OAuth discovery paths follow the existing ALB, reverse
+proxy, and WireGuard route to the TrueNAS frontend. Like Tastebase, Sulion
+serves `/.well-known/oauth-protected-resource` and
+`/.well-known/oauth-authorization-server` on its own host. The latter points to
+the shared Cognito login endpoints and advertises authorization-code flow with
+S256 PKCE. Before sign-in, `/mcp` returns a `401` that points to resource discovery.
 
-The route requires access tokens issued for the configured resource and client.
-It checks the subject and broker revocation before dispatching plan tools.
-Set up provider registration and access only for an approved endpoint and
-workspace. Connector authorization is separate from terminal attachment and
-does not confer permission to execute a plan.
+Terraform provisions the confidential `sulion-plan-mcp` app client in the
+same Cognito pool as the Sulion browser app. The Komodo deployment supplies
+the MCP client ID and Cognito domain through `secret-paths.yml`. Terraform
+registers Claude's fixed callback, so discovery can go live before ChatGPT
+assigns its exact callback. Add that connection's callback in
+`infrastructure/terraform/plan-mcp.tf` once ChatGPT shows it.
+
+The backend checks the dedicated client ID, the configured Cognito owner,
+and broker revocation. Resource-bound access tokens must name the MCP URL.
+Audit events use the authenticated Cognito subject. MCP can work with plans
+across Sulion repositories. In the web client, add `https://sulion.services.ahara.io/mcp`
+with the dedicated OAuth client credentials, then sign in as the owner.
 
 See [ADR 0014](adrs/0014-published-plans-and-branch-plans.md) for plan trees and
 [ADR 0031](adrs/0031-revisioned-plan-authoring.md) for the authored record and

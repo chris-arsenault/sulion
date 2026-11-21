@@ -259,12 +259,12 @@ one set of rules.
 ## MCP boundary
 
 Use one authenticated Streamable HTTP endpoint limited to Sulion planning.
-Expose discovery within connected repositories, structured plan and history
+Expose repository discovery, structured plan and history
 reads, plan creation, and the planning edits needed for handoff, including edits
 to phases and existing plan trees. Invoke the shared plan service so the same
 records, validation, revisions, and history serve the CLI, browser, and MCP.
-Record the authenticated actor and connector origin. Keep the connector's grant
-revocable and limited to plan operations in the selected repositories. Its
+Record the authenticated actor and connector origin. Keep access revocable
+and limited to plan operations across Sulion repositories. The connector's
 tools need no database credentials, shell, file, transcript, broker, or PTY access.
 The terminal agent attaches by UUID and reads `sulion plan current` before acting.
 
@@ -311,7 +311,7 @@ publication rules. [Claude connector requirements](https://support.claude.com/en
 4. **Add a scoped MCP adapter** (`0f7e8e89-2a42-4a2f-8a88-3038c858e3f6`).
    With a local MCP client, create and revise an unattached plan, then read the
    same IDs, revision, and execution details through the CLI. Verify repository
-   scope, authentication, attribution, and conflict behavior at the boundary.
+   discovery, authentication, attribution, and conflict behavior at the boundary.
    Expose the same hypothesis, example, and review guidance where MCP clients
    read or patch the relevant plan details.
 5. **Verify web-to-terminal handoff** (`419432ae-1137-475d-bc0d-500b3cda9406`).
@@ -384,10 +384,10 @@ transaction for the commit.
 Expansion `f359027a-1809-4ca2-bdb4-87fc00360ad0`, step
 `c5030cba-0217-4497-bea7-8bdc74c88fdb`.
 
-Mount the optional plans-only route in the control plane. Scope the token
-to the configured resource, client, subject, and repositories. The isolated
+Mount the plans-only route in the control plane. Verify the dedicated client
+and Cognito owner, checking any resource binding against the MCP URL. The isolated
 Postgres test creates and revises an unattached draft over Streamable HTTP,
-rejects stale edits and out-of-scope access, reads guided review, and attaches
+works across repositories, rejects stale edits, reads guided review, and attaches
 a fresh terminal to the same UUID. The terminal reads the same revision,
 typed entries, and phase details.
 
@@ -409,3 +409,10 @@ Expansion `30143d98-cd93-4959-8aac-9772650000cc`.
 Expansion `338f6643-5df9-4534-98f5-1dc3da861b55` replaces the prose-save
 interface. Verify targeted CLI and MCP updates by stable ID, server-assigned
 IDs on create, and revision checks and rollback on optional JSON batches.
+
+Expansion `583c3bb9-0da2-4a35-856c-0a4809b5c40a` follows Tastebase's OAuth
+discovery setup. Register Claude's fixed callback on the dedicated client in
+the shared Cognito pool and bring up the protected resource and authorization
+metadata through the existing edge. Add the exact ChatGPT callback after the
+client can discover the endpoint. Discover repositories from Sulion's catalog
+and saved plans.

@@ -3,7 +3,7 @@ use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde_json::Value;
 
 #[tokio::test]
-async fn plan_connector_scopes_oauth_and_shares_durable_plans() {
+async fn plan_connector_authenticates_and_shares_plans_across_repositories() {
     let h = Harness::new().await;
     let issuer_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let issuer = format!("http://{}", issuer_listener.local_addr().unwrap());
@@ -36,7 +36,7 @@ async fn plan_connector_scopes_oauth_and_shares_durable_plans() {
     let url = format!("{base}/mcp");
     let metadata: Value = h
         .client
-        .get(format!("{base}/.well-known/oauth-protected-resource/mcp"))
+        .get(format!("{base}/.well-known/oauth-protected-resource"))
         .send()
         .await
         .unwrap()
@@ -44,26 +44,68 @@ async fn plan_connector_scopes_oauth_and_shares_durable_plans() {
         .await
         .unwrap();
     assert_eq!(metadata["resource"], "https://sulion.test/mcp");
+    assert_eq!(
+        metadata["authorization_servers"],
+        json!(["https://sulion.test"])
+    );
+    let oauth: Value = h
+        .client
+        .get(format!("{base}/.well-known/oauth-authorization-server"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(oauth["issuer"], issuer);
+    assert_eq!(
+        oauth["authorization_endpoint"],
+        "https://login.sulion.test/oauth2/authorize"
+    );
+    assert_eq!(
+        oauth["token_endpoint"],
+        "https://login.sulion.test/oauth2/token"
+    );
+    assert_eq!(oauth["code_challenge_methods_supported"], json!(["S256"]));
     let mut header = Header::new(Algorithm::RS256);
     header.kid = Some("fixture".into());
     let key =
         EncodingKey::from_rsa_pem(include_bytes!("../fixtures/auth-test-private.pem")).unwrap();
-    let sign = |subject, client, audience| {
+    let sign = |subject, username, client, audience: Option<&str>| {
         let now = chrono::Utc::now().timestamp();
-        encode(&header, &json!({"sub": subject, "client_id": client, "token_use": "access", "iss": issuer, "aud": audience, "iat": now, "auth_time": now, "exp": now + 300}), &key).unwrap()
+        let mut claims = json!({"sub": subject, "username": username, "client_id": client, "token_use": "access", "iss": issuer, "iat": now, "auth_time": now, "exp": now + 300});
+        if let Some(audience) = audience {
+            claims["aud"] = json!(audience);
+        }
+        encode(&header, &claims, &key).unwrap()
     };
-    let token = sign("fixture-user", "fixture-mcp", "https://sulion.test/mcp");
+    let token = sign(
+        "fixture-user",
+        "fixture-owner",
+        "fixture-mcp",
+        Some("https://sulion.test/mcp"),
+    );
+    let unbound = sign("fixture-user", "fixture-owner", "fixture-mcp", None);
     let request = || {
         h.client
             .post(&url)
             .header("Host", "sulion.test")
             .header("Accept", "application/json, text/event-stream")
     };
+    let challenge = request().send().await.unwrap();
+    assert_eq!(challenge.status(), reqwest::StatusCode::UNAUTHORIZED);
     assert_eq!(
-        request().send().await.unwrap().status(),
-        reqwest::StatusCode::UNAUTHORIZED
+        challenge.headers()["www-authenticate"],
+        "Bearer resource_metadata=\"https://sulion.test/.well-known/oauth-protected-resource\""
     );
-    let wrong_token = sign("fixture-user", "fixture-browser", "https://sulion.test/mcp");
+    let wrong_token = sign(
+        "fixture-user",
+        "fixture-owner",
+        "fixture-browser",
+        Some("https://sulion.test/mcp"),
+    );
     assert_eq!(
         request()
             .bearer_auth(wrong_token)
@@ -73,7 +115,12 @@ async fn plan_connector_scopes_oauth_and_shares_durable_plans() {
             .status(),
         reqwest::StatusCode::UNAUTHORIZED
     );
-    let wrong_audience = sign("fixture-user", "fixture-mcp", "https://other.test/mcp");
+    let wrong_audience = sign(
+        "fixture-user",
+        "fixture-owner",
+        "fixture-mcp",
+        Some("https://other.test/mcp"),
+    );
     assert_eq!(
         request()
             .bearer_auth(wrong_audience)
@@ -83,7 +130,12 @@ async fn plan_connector_scopes_oauth_and_shares_durable_plans() {
             .status(),
         reqwest::StatusCode::UNAUTHORIZED
     );
-    let other_user = sign("other-user", "fixture-mcp", "https://sulion.test/mcp");
+    let other_user = sign(
+        "other-user",
+        "other-account",
+        "fixture-mcp",
+        Some("https://sulion.test/mcp"),
+    );
     assert_eq!(
         request()
             .bearer_auth(other_user)
@@ -93,7 +145,7 @@ async fn plan_connector_scopes_oauth_and_shares_durable_plans() {
             .status(),
         reqwest::StatusCode::FORBIDDEN
     );
-    let initialize: Value = request().bearer_auth(&token).json(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "fixture", "version": "1"}}})).send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+    let initialize: Value = request().bearer_auth(unbound).json(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "fixture", "version": "1"}}})).send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
     assert!(
         initialize["result"]["capabilities"]["tools"].is_object(),
         "{initialize}"
@@ -126,12 +178,18 @@ async fn plan_connector_scopes_oauth_and_shares_durable_plans() {
         .unwrap()
         .iter()
         .any(|tool| tool["name"] == "save_plan"));
-    let denied = rpc(json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "list_plans", "arguments": {"repo": "not-connected"}}})).await;
+    let denied = rpc(json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "list_plans", "arguments": {"repo": "../alpha"}}})).await;
     assert_eq!(denied["result"]["isError"], true);
-    let outside: Value = h
+    sqlx::query(
+        "INSERT INTO repo_runtime_state (repo_name, path) VALUES ('alpha', '/repos/alpha')",
+    )
+    .execute(&h.state.pool)
+    .await
+    .unwrap();
+    let second_repo_plan: Value = h
         .client
-        .post(format!("{}/api/repos/outside/plans", h.base))
-        .json(&json!({"title": "Out of scope", "phases": [{"title": "Private"}]}))
+        .post(format!("{}/api/repos/second-repo/plans", h.base))
+        .json(&json!({"title": "Second project", "phases": [{"title": "Build"}]}))
         .send()
         .await
         .unwrap()
@@ -140,8 +198,27 @@ async fn plan_connector_scopes_oauth_and_shares_durable_plans() {
         .json()
         .await
         .unwrap();
-    let denied = rpc(json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "read_plan", "arguments": {"plan_id": outside["id"]}}})).await;
-    assert_eq!(denied["result"]["isError"], true);
+    let repositories = rpc(json!({"jsonrpc": "2.0", "id": 12, "method": "tools/call", "params": {"name": "list_plan_repositories", "arguments": {}}})).await;
+    assert_eq!(
+        repositories["result"]["structuredContent"]["repositories"],
+        json!(["alpha", "second-repo"])
+    );
+    let second_repo_id = &second_repo_plan["id"];
+    let plans = rpc(json!({"jsonrpc": "2.0", "id": 14, "method": "tools/call", "params": {"name": "list_plans", "arguments": {"repo": "second-repo"}}})).await;
+    assert_eq!(
+        plans["result"]["structuredContent"]["plans"][0]["id"],
+        *second_repo_id
+    );
+    let read = rpc(json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "read_plan", "arguments": {"plan_id": second_repo_id}}})).await;
+    assert_eq!(
+        read["result"]["structuredContent"]["plan"]["id"],
+        *second_repo_id
+    );
+    let edited = rpc(json!({"jsonrpc": "2.0", "id": 13, "method": "tools/call", "params": {"name": "update_plan", "arguments": {"plan_id": second_repo_id, "summary": "Edited from MCP"}}})).await;
+    assert_eq!(
+        edited["result"]["structuredContent"]["plan"]["summary"],
+        "Edited from MCP"
+    );
     let opened = rpc(json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "create_plan", "arguments": {"repo": "alpha", "title": "City design", "phases": [{"title": "Build"}]}}})).await;
     let plan = &opened["result"]["structuredContent"]["plan"];
     let id = plan["id"].as_str().unwrap_or_else(|| panic!("{opened}"));
