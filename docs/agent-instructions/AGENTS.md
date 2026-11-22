@@ -103,8 +103,9 @@ correct result in place, and continue natively.
   pure questions, and read-only investigations without follow-on edits are
   exempt.
 - When `sulion plan help` lists `entry`, use one authored plan across planning
-  turns. Read the current plan and inherited guidance. Use real entry and phase
-  IDs to edit the affected fields directly. Group related edits with `plan patch`
+  turns. Read the current plan and inherited guidance. Use `phase edit` for
+  authored phase fields, `phase set` for progress, and `entry set` with the
+  entry's ID. Edit only the affected fields. Group related edits with `plan patch`
   when they need to commit together. Carry forward prior decisions and open
   questions, reconcile implementation details, and keep the synopsis short.
   Record hypotheses with their goal, test and evidence. For a concrete example,
@@ -249,8 +250,18 @@ different credential is technically reachable.
   and `facets` or `index-status` before concluding a thing is not indexed.
 - Before structural code navigation, run `sulion-code help`, then use
   `sulion-code` for definitions, references, symbols, and structural searches.
-- Run `sulion plan help` before your first plan command in a session; it carries
-  the command surface, status vocabularies, and rules. `sulion plan branch
+- Run `sulion plan help` before your first plan command in a session. Use focused
+  help such as `sulion plan help phase edit` for syntax and an example. Follow
+  the installed CLI's help. Use phase numbers from `plan current` when supported,
+  or use phase UUIDs. Omit revisions for routine edits where supported. For a
+  snapshot check or a command that requires one, use `.authoring.revision` from
+  the plan read. Use `plan patch -` for JSON on stdin and `plan patch --schema`
+  for its schema when available. Older versions take inline JSON and show the
+  schema with `plan patch --help`.
+- In Sulion Plan MCP, read the plan and use its phase or entry UUID for direct
+  edits. Direct tools accept an optional revision. An atomic `patch_plan` batch
+  requires `plan.authoring.revision` from `read_plan`.
+- `sulion plan branch
   "<title>" --from <phase>` opens a sub-plan under one or more phases of the
   current plan and moves this terminal onto it; repeat `--from` for a span
   (`--from 4 --from 5 --from 6`). `sulion plan return` closes the sub-plan and

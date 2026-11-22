@@ -58,6 +58,11 @@ pub(super) async fn run(
     full_guidance: bool,
 ) -> anyhow::Result<i32> {
     let context = context_request(&request);
+    let confirmation = if json {
+        None
+    } else {
+        super::display::plan_confirmation(&request)
+    };
     let response = match call(request).await {
         Ok(response) => response,
         Err(err) => {
@@ -93,6 +98,10 @@ pub(super) async fn run(
     }
     if json {
         println!("{}", serde_json::to_string_pretty(&data)?);
+    } else if let Some(confirmation) = confirmation {
+        let title = data["title"].as_str().unwrap_or("plan");
+        let id = data["id"].as_str().unwrap_or_default();
+        println!("{confirmation} · {title} ({id})");
     } else {
         print_plan_data(&data, full_guidance);
     }

@@ -1,130 +1,130 @@
-//! JIT reference text for the agent-facing CLIs. This is what an agent reads
-//! before its first `plan`/`activity`/`name` call, so it carries the full
-//! command surface, status vocabularies, and rules rather than a synopsis.
+//! Reference text for the agent-facing CLIs.
 
-pub(super) fn print_plan_usage() {
-    println!(
-        "\
-Sulion published plans — durable, repo-scoped phase summaries
+pub(super) fn help_topic(args: &[String]) -> Option<&[String]> {
+    let is_help = |arg: &str| matches!(arg, "-h" | "--help");
+    if args
+        .first()
+        .is_some_and(|arg| arg == "help" || is_help(arg))
+    {
+        return Some(&args[1..]);
+    }
+    let topic = command_topic(args);
+    args.get(topic.len())
+        .filter(|arg| is_help(arg))
+        .map(|_| topic)
+}
 
-Usage:
-  sulion plan [--json] <command> ...
+pub(super) fn command_topic(args: &[String]) -> &[String] {
+    let depth = match args {
+        [group, command, ..]
+            if matches!(group.as_str(), "phase" | "step" | "entry")
+                && !command.starts_with('-') =>
+        {
+            2
+        }
+        _ => 1,
+    };
+    &args[..depth.min(args.len())]
+}
 
-Commands:
-  help
-  start <title> --summary <text> --phase <title[|description[|size]]>... [--all-pending]
-  current
-  list [--all]
-  show [plan-id]
-  review [plan-id] [--phase uuid]
-  update [--plan uuid] [--revision n] [--title text] [--summary text]
-         [--outcome text] [--technical-details text] [--note text]
-  patch <json> [--plan uuid]  (patch --help shows the batch schema)
-  status <active|paused> [--plan uuid] [--note text]
-  close (--completed|--canceled) [--skip-remaining] [--note text]
-  branch <title> [--from <id|position>]... --phase <title[|description[|size]]>...
-                 [--summary text] [--note text] [--all-pending]
-  return [--completed|--canceled] [--skip-remaining] [--note text]
-  tree [plan-id]
-  phase add <title> [--description text] [--status status] [--size s|m|l]
-  phase set <id|position> [status] [--title text] [--description text]
-            [--note text] [--position n] [--size s|m|l] [--revision n]
-  phase edit <id> [--title text] [--description text] [--size s|m|l]
-             [--implementation text] [--acceptance text] [--basis id,id]
-             [--depends-on id,id] [--follows-up id,id]
-  phase move <id> [--after id]
-  phase retire <id> [--successors id,id]
-  phase evidence <id> <observation> --observed-revision n
-                 [--reference text] [--ancestor <id>=<revision>]...
-  entry add <kind> <text> [entry fields]
-  entry set <id> [entry fields]
-  entry move <id> [--after id]
-  entry retire <id> [--successors id,id]
-  attach <plan-uuid>
-  detach [plan-uuid]
-  history [plan-id]
-
-Entry fields:
-  all: --text, --source, --rationale
-  boundary: --attribution user_requirement|user_correction|agent_proposal
-  decision: --provisional true|false
-  question: --answer <decision-id> or --reopen
-  hypothesis: --goal <id>, --test <text>, --result <supported|contradicted|inconclusive|set_aside>, --evidence <text>
-  example: --illustrates <id>, --generalization <text>
-  other kinds: requirement, principle, assumption
-  Direct entry and phase edits accept --plan, --revision and --reason.
-  Omit --after to move to the beginning. Pass an empty ID list to clear it.
-
-Guidance (start, branch, update):
-  --outcome <text>       user-visible improvement and evidence of success
-  --boundary <source|text>... excluded scope, rejected approaches, reassessment triggers
-                        source: requirement, correction, or proposal
-                        example: --boundary \"correction|Smooth curves alone are insufficient\"
-  --principle <text>...  concrete decision rules, constraints, and reasons
-  --assumption <text>... beliefs that evidence might invalidate
-  update replaces each supplied list; omitted fields stay unchanged
-  --clear-principles / --clear-assumptions clear lists; --outcome \"\" clears outcome
-  --clear-boundaries clears this plan's boundaries, not inherited boundaries
-  keep it short: outcome <= 1000 characters; <= 10 entries per list, <= 500 each
-  current/show include live ancestor guidance, root first, before phases
-  every plan command repeats outcome and boundaries, with source plan and revision
-  list/help use the attached plan; explicit targets use that plan's context
-  close/detach/return retain the command target's context after attachment changes
-  --json keeps stdout data unchanged; the recurring reminder goes to stderr
-  unavailable context is reported; it never hides a command failure or undoes success
-  history retains guidance before/after, including cleared values, and the
-    old/new title of each plan or phase rename
-
-Execution:
-  write guidance from the request; label uncertain interpretations as assumptions
-  at phase start, on resume, and when evidence contradicts the approach, read
-    current guidance and relevant source material; check the next step against
-    the outcome, boundaries, and principles
-  revise steps when justified and explain consequential deviations; ask before
-    changing user requirements or agreed architectural boundaries
-  branch guidance adds context; it does not override ancestor requirements
-  record user corrections as boundaries and revise affected phases before continuing
-  preserve requirement/correction/proposal sources; plans do not promote agent choices
-    into user requirements or authorize weakening user boundaries
-  limits bound the approach, not the requested coverage; tests cannot substitute
-    for the outcome. No extra approval is needed for work inside the agreed scope
-
-Statuses:
-  plan   active | paused (close sets completed or canceled)
-  phase  pending | in_progress | blocked | completed | skipped
-  size   optional t-shirt weight s | m | l for weighted burndown
-
-Rules:
-  repo and acting PTY are inferred from the current terminal
-  keep the synopsis compact. Edit entries and phase details directly by ID.
-  use patch when several edits need to commit together
-  start requires at least one --phase; the first begins in_progress unless
-    --all-pending
-  close --completed rejects unfinished phases unless --skip-remaining
-  most commands target this PTY's current plan; --plan <uuid> overrides
-  `step` is an alias for `phase`; `phase update` is an alias for `phase set`
-  phase set edits a phase in place: --title renames it, --description replaces
-    its description, --position moves it; its id and history stay
-    edits to authored phase content require the current --revision
-
-Branching:
-  branch opens a sub-plan under the current plan and moves this PTY onto it
-  --from names the parent phases the branch covers; repeat it for a span
-    (--from 4 --from 5 --from 6). Omit it to anchor to the current phase
-  --all-pending attaches draft scope without starting the parent phases
-  return closes the branch and puts this PTY back on the parent, clearing any
-    anchor phase the branch was blocked on. It refuses on a root plan
-  branches nest to depth 8; a parent cannot close while a branch is open
-
-Start:
-  sulion plan current
-  sulion plan start \"<title>\" --summary \"<text>\" --phase \"Title|Description\"
-  sulion plan phase set 1 completed --note \"...\"
-  sulion plan phase set 3 --title \"New title\" --description \"Revised scope\"
-  sulion plan branch \"Unblock X\" --from 4 --phase \"Diagnose\" --phase \"Fix\"
-  sulion plan return --completed --note \"...\"
-  sulion plan close --completed"
-    );
+pub(super) fn print_plan_help(topic: &[String]) -> anyhow::Result<()> {
+    let first = topic.first().map(String::as_str).unwrap_or_default();
+    let second = topic.get(1).map(String::as_str).unwrap_or_default();
+    let first = if first == "step" { "phase" } else { first };
+    let (usage, example, detail) = match (first, second, topic.len()) {
+        ("", "", 0) => {
+            println!("Sulion plans for the current repository\n\n\
+Usage: sulion plan [--json] <command> ...\n\n\
+  Read:    current, list, show, review, tree, history\n\
+  Write:   start, update, phase, entry, patch, status, close\n\
+  Context: attach, detach, branch, return\n\n\
+Use `sulion plan help <command>` for syntax and an example.\n\
+Start with `sulion plan current`. Writes default to the attached plan.");
+            return Ok(());
+        }
+        ("phase", "", 1) => {
+            println!("Usage: sulion plan phase <add|set|edit|move|retire|evidence> ...\n\n\
+Use a phase number from `plan current`, or a phase UUID.\n\
+  set   change status and add a progress note\n\
+  edit  change the title, description, or implementation details\n\
+Use `sulion plan help phase edit` for an example.");
+            return Ok(());
+        }
+        ("entry", "", 1) => {
+            println!("Usage: sulion plan entry <add|set|move|retire> ...\n\n\
+Use `sulion plan help entry add` to see entry kinds and fields.");
+            return Ok(());
+        }
+        ("start", "", 1) => (
+            "start <title> [--summary <text>] --phase <title[|description[|size]]>... [--all-pending]",
+            r#"start "Improve plan editing" --phase "Simplify the CLI" --phase "Verify the workflow""#,
+            "Guidance flags: --outcome, --boundary <requirement|correction|proposal>|<text>, --principle, --assumption. Repeat list flags as needed. The first phase starts immediately unless --all-pending is supplied.",
+        ),
+        ("current", "", 1) => ("current", "current", "Read the attached plan with guidance, authoring details, and IDs."),
+        ("list", "", 1) => ("list [--all]", "list --all", "Include completed and canceled plans with --all."),
+        ("show", "", 1) => ("show [plan-id]", "show", "Read an explicit plan or the attached plan."),
+        ("review", "", 1) => ("review [plan-id] [--phase <number|uuid>]", "review --phase 2", "Read the plan with the design review checklist."),
+        ("tree", "", 1) => ("tree [plan-id]", "tree", "Show the plan's branch hierarchy."),
+        ("history", "", 1) => ("history [plan-id]", "history", "Show execution events and authored changes."),
+        ("update", "", 1) => (
+            "update [--title <text>] [--summary <text>] [--outcome <text>] [--technical-details <text>] [--note <text>]",
+            r#"update --summary "Support public registration and owner review""#,
+            "Use --plan to select another plan. To compare against an earlier read, pass its .authoring.revision with --revision. Repeat --boundary, --principle, or --assumption to replace the supplied list. Use --clear-boundaries, --clear-principles, or --clear-assumptions to empty a list. See `plan help entry set` to change one entry.",
+        ),
+        ("patch", "", 1) => (
+            "patch <json|-> [--plan <uuid>] [--revision <n>]",
+            r#"printf '%s\n' '{"operations":[{"op":"edit_plan","summary":"Updated scope"}]}' | sulion plan patch -"#,
+            "Use - for stdin. All operations commit together. Batch references use UUIDs. To compare against a read, pass its .authoring.revision in JSON or with --revision. Run `sulion plan patch --schema` for the JSON schema.",
+        ),
+        ("status", "", 1) => ("status <active|paused> [--note <text>]", r#"status paused --note "Waiting for a decision""#, "Use --plan to select another plan."),
+        ("close", "", 1) => ("close <--completed|--canceled> [--skip-remaining] [--note <text>]", "close --completed", "Completing a plan with unfinished phases requires --skip-remaining."),
+        ("branch", "", 1) => (
+            "branch <title> --phase <title[|description[|size]]>... [--from <number|uuid>] [--all-pending]",
+            r#"branch "Repair CI" --from 2 --phase "Verify the build""#,
+            "Uses the in-progress phase by default. Repeat --from for multiple anchors. Accepts the guidance flags from `plan help start`, plus --note and --plan.",
+        ),
+        ("return", "", 1) => ("return [--completed|--canceled] [--skip-remaining] [--note <text>]", "return", "Complete the branch and reattach its parent. Use --canceled to abandon the branch."),
+        ("attach", "", 1) => ("attach <plan-uuid>", r#"attach "$PLAN_ID""#, "Attach the selected plan to this terminal. Get its ID with `plan list`."),
+        ("detach", "", 1) => ("detach [plan-id]", "detach", "Detach the selected or current plan from this terminal."),
+        ("phase", "add", 2) => ("phase add <title> [--description <text>] [--status <status>] [--size <s|m|l>]", r#"phase add "Verify CI""#, "Use --plan to select another plan."),
+        ("phase", "set" | "update", 2) => (
+            "phase set <number|uuid> [status] [--note <text>]",
+            r#"phase set 2 completed --note "CI passed""#,
+            "Statuses: pending, in_progress, blocked, completed, skipped. Use --plan to select another plan. For authored fields see `plan help phase edit`.",
+        ),
+        ("phase", "edit", 2) => (
+            "phase edit <number|uuid> [--title <text>] [--description <text>] [--implementation <text>] [--acceptance <text>]",
+            r#"phase edit 5 --acceptance "Only approved trucks appear in public discovery""#,
+            "Use a phase number from `plan current`. Edits apply to current state by default. To compare against a read, pass its .authoring.revision with --revision. Also accepts --plan, --reason, --size, --basis (entry UUIDs), --depends-on, and --follows-up. Lists are comma-separated.",
+        ),
+        ("phase", "move", 2) => ("phase move <number|uuid> [--after <number|uuid>]", "phase move 3 --after 1", "Omit --after to move to the beginning. Accepts --plan, --reason, and --revision."),
+        ("phase", "retire", 2) => ("phase retire <number|uuid> [--successors <phases>]", "phase retire 3 --successors 4,5", "Retire only unstarted phases without branch anchors. Accepts --plan, --reason, and --revision."),
+        ("phase", "evidence", 2) => (
+            "phase evidence <number|uuid> <observation> --observed-revision <n> [--reference <text>] [--ancestor <plan-id>=<n>]",
+            r#"phase evidence 2 "CI built both apps" --observed-revision 3"#,
+            "Use .authoring.revision from the plan version you checked. Repeat --ancestor with the observed authoring revision of each governing plan. Accepts --plan, --reason, and --revision.",
+        ),
+        ("entry", "add", 2) => (
+            "entry add <kind> <text> [entry fields]",
+            r#"entry add boundary "Use the shared public identity provider" --attribution user_requirement"#,
+            "Kinds: requirement, boundary, principle, assumption, decision, question, hypothesis, example. See `plan help entry set` for the fields.",
+        ),
+        ("entry", "set", 2) => (
+            "entry set <uuid> [--text <text>] [--source <text>] [--rationale <text>]",
+            r#"entry set "$ENTRY_ID" --text "Use shared public Auth0""#,
+            "Kind-specific fields:\n  boundary: --attribution user_requirement|user_correction|agent_proposal\n  decision: --provisional true|false\n  question: --answer <decision-id> or --reopen\n  hypothesis: --goal <id>, --test <text>, --result supported|contradicted|inconclusive|set_aside, --evidence <text>\n  example: --illustrates <id>, --generalization <text>\nAccepts --plan, --reason, and --revision. Get entry IDs with `plan current`.",
+        ),
+        ("entry", "move", 2) => ("entry move <uuid> [--after <uuid>]", r#"entry move "$ENTRY_ID" --after "$OTHER_ENTRY_ID""#, "Omit --after to move to the beginning. Accepts --plan, --reason, and --revision."),
+        ("entry", "retire", 2) => ("entry retire <uuid> [--successors <ids>]", r#"entry retire "$ENTRY_ID" --successors "$SUCCESSOR_ID""#, "Supply comma-separated successor UUIDs. Accepts --plan, --reason, and --revision."),
+        _ => anyhow::bail!("unknown help topic: {}", topic.join(" ")),
+    };
+    let example = if first == "patch" {
+        example.to_owned()
+    } else {
+        format!("sulion plan {example}")
+    };
+    println!("Usage: sulion plan {usage}\n\n{detail}\n\n  {example}");
+    Ok(())
 }
 
 pub(super) fn print_name_usage() {

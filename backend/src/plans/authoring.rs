@@ -122,21 +122,21 @@ pub struct PhaseEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct PlanPatch {
+pub struct PlanPatch<R = i64, P = Uuid> {
     /// Authoring revision returned by the plan detail read.
-    pub revision: i64,
+    pub revision: R,
     #[serde(default)]
     pub reason: Option<String>,
     #[serde(default)]
     pub source: Option<String>,
-    pub operations: Vec<PlanEdit>,
+    pub operations: Vec<PlanEdit<P>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DirectEdit {
+pub struct DirectEdit<P = Uuid> {
     pub revision: Option<i64>,
     pub reason: Option<String>,
-    pub operation: PlanEdit,
+    pub operation: PlanEdit<P>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -148,15 +148,15 @@ pub struct PlanFields {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct PhaseFields {
-    pub id: Uuid,
+pub struct PhaseFields<P = Uuid> {
+    pub id: P,
     pub title: Option<String>,
     pub description: Option<String>,
     pub implementation: Option<String>,
     pub acceptance: Option<String>,
     pub basis: Option<Vec<Uuid>>,
-    pub depends_on: Option<Vec<Uuid>>,
-    pub follows_up: Option<Vec<Uuid>>,
+    pub depends_on: Option<Vec<P>>,
+    pub follows_up: Option<Vec<P>>,
     pub size: Option<String>,
 }
 
@@ -219,7 +219,8 @@ impl EntryFields {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "op", rename_all = "snake_case")]
-pub enum PlanEdit {
+#[serde(bound(deserialize = "P: Deserialize<'de>"))]
+pub enum PlanEdit<P = Uuid> {
     EditPlan(PlanFields),
     AddEntry {
         entry: EntryContent,
@@ -242,7 +243,7 @@ pub enum PlanEdit {
         #[serde(default)]
         successors: Vec<Uuid>,
     },
-    EditPhase(PhaseFields),
+    EditPhase(PhaseFields<P>),
     AddPhase {
         id: Uuid,
         title: String,
@@ -251,13 +252,13 @@ pub enum PlanEdit {
         size: Option<String>,
     },
     MovePhase {
-        id: Uuid,
-        after: Option<Uuid>,
+        id: P,
+        after: Option<P>,
     },
     RetirePhase {
-        id: Uuid,
+        id: P,
         #[serde(default)]
-        successors: Vec<Uuid>,
+        successors: Vec<P>,
     },
     AttachDiagram {
         workspace_id: Uuid,
@@ -267,13 +268,102 @@ pub enum PlanEdit {
         workspace_id: Uuid,
     },
     RecordEvidence {
-        id: Uuid,
+        id: P,
         observation: String,
         reference: Option<String>,
         revision: i64,
         #[serde(default)]
         ancestors: BTreeMap<Uuid, i64>,
     },
+}
+
+impl<P: Into<super::PhaseReference> + Send> PlanEdit<P> {
+    pub(super) async fn resolve_phases(
+        self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        plan: Uuid,
+    ) -> anyhow::Result<PlanEdit> {
+        async fn resolve_list<P: Into<super::PhaseReference> + Send>(
+            tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+            plan: Uuid,
+            values: Vec<P>,
+        ) -> anyhow::Result<Vec<Uuid>> {
+            let mut ids = Vec::with_capacity(values.len());
+            for value in values {
+                ids.push(value.into().resolve(tx, plan).await?);
+            }
+            Ok(ids)
+        }
+
+        Ok(match self {
+            Self::EditPhase(fields) => PlanEdit::EditPhase(PhaseFields {
+                id: fields.id.into().resolve(tx, plan).await?,
+                title: fields.title,
+                description: fields.description,
+                implementation: fields.implementation,
+                acceptance: fields.acceptance,
+                basis: fields.basis,
+                depends_on: match fields.depends_on {
+                    Some(values) => Some(resolve_list(tx, plan, values).await?),
+                    None => None,
+                },
+                follows_up: match fields.follows_up {
+                    Some(values) => Some(resolve_list(tx, plan, values).await?),
+                    None => None,
+                },
+                size: fields.size,
+            }),
+            Self::MovePhase { id, after } => PlanEdit::MovePhase {
+                id: id.into().resolve(tx, plan).await?,
+                after: match after {
+                    Some(after) => Some(after.into().resolve(tx, plan).await?),
+                    None => None,
+                },
+            },
+            Self::RetirePhase { id, successors } => PlanEdit::RetirePhase {
+                id: id.into().resolve(tx, plan).await?,
+                successors: resolve_list(tx, plan, successors).await?,
+            },
+            Self::RecordEvidence {
+                id,
+                observation,
+                reference,
+                revision,
+                ancestors,
+            } => PlanEdit::RecordEvidence {
+                id: id.into().resolve(tx, plan).await?,
+                observation,
+                reference,
+                revision,
+                ancestors,
+            },
+            Self::EditPlan(fields) => PlanEdit::EditPlan(fields),
+            Self::AddEntry { entry } => PlanEdit::AddEntry { entry },
+            Self::EditEntry { id, fields } => PlanEdit::EditEntry { id, fields },
+            Self::PutEntry { id, entry } => PlanEdit::PutEntry { id, entry },
+            Self::MoveEntry { id, after } => PlanEdit::MoveEntry { id, after },
+            Self::RetireEntry { id, successors } => PlanEdit::RetireEntry { id, successors },
+            Self::AddPhase {
+                id,
+                title,
+                description,
+                size,
+            } => PlanEdit::AddPhase {
+                id,
+                title,
+                description,
+                size,
+            },
+            Self::AttachDiagram {
+                workspace_id,
+                phase_links,
+            } => PlanEdit::AttachDiagram {
+                workspace_id,
+                phase_links,
+            },
+            Self::DetachDiagram { workspace_id } => PlanEdit::DetachDiagram { workspace_id },
+        })
+    }
 }
 
 impl AuthoredPlan {

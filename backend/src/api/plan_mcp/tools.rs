@@ -107,7 +107,7 @@ struct NewPhaseContent {
 #[derive(Deserialize, JsonSchema)]
 struct Edit<T> {
     plan_id: Uuid,
-    /// Optional authoring revision from read_plan. A stale revision rejects the edit.
+    /// Omit for an ordinary field edit. Supply plan.authoring.revision from read_plan to compare against that read.
     revision: Option<i64>,
     reason: Option<String>,
     #[serde(flatten)]
@@ -322,10 +322,9 @@ impl PlanTools {
 impl ServerHandler for PlanTools {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions(format!(
-                "Author and review Sulion plans. Read the current plan first. Edit the relevant plan, phase or entry fields directly. Use patch_plan for changes that must commit together. To reuse an Arconis diagram, list the repo's diagrams and open its workspace_id in Arconis. For a new diagram, save it in Arconis and register the returned workspace_id and room_id. Use phase URLs from read_plan as links on the associated canvas objects, save those edits in Arconis, and attach the diagram with the matching phase UUIDs and object IDs. {} {}",
-                plans::review::HYPOTHESIS, plans::review::EXAMPLE
-            ))
+            .with_instructions(
+                "Read the existing plan with read_plan. Use direct tools to edit only the affected fields by UUID. Direct edits can omit revision. Use patch_plan for changes that must commit together and supply plan.authoring.revision from read_plan. For a design review, use read_plan with review enabled. To reuse an Arconis diagram, list the repo's registered diagrams and open its workspace in Arconis.",
+            )
     }
 
     async fn list_tools(
@@ -336,8 +335,8 @@ impl ServerHandler for PlanTools {
         Ok(ListToolsResult::with_all_items(vec![
             tool::<Empty>("list_plan_repositories", "List Sulion repositories and repositories with saved plans or registered diagrams.", true, false),
             tool::<RepoDiagrams>("list_repo_arconis_diagrams", "Find reusable Arconis diagrams in a repository, including diagrams without a plan attachment.", true, false),
-            tool::<RegisterDiagram>("register_arconis_diagram", "Register a saved Arconis workspace for future plans in this repository. Re-registering the same workspace and room updates its title.", false, false),
-            tool::<Edit<AttachDiagram>>("attach_arconis_diagram", "Attach a registered Arconis diagram to the plan and set its phase-to-object links. Give the linked objects the corresponding read_plan phase URLs in Arconis and save the workspace. Supply the current plan revision and preserve links you intend to keep.", false, false),
+            tool::<RegisterDiagram>("register_arconis_diagram", "Register a diagram with the workspace and room IDs returned by Arconis save_workspace. Re-registering the same workspace and room updates its title.", false, false),
+            tool::<Edit<AttachDiagram>>("attach_arconis_diagram", "Attach the diagram and supply its complete set of phase UUID and object ID pairs. Save the linked objects in Arconis with their read_plan phase URLs. When replacing links from an earlier read, pass its plan.authoring.revision.", false, false),
             tool::<Edit<DiagramId>>("detach_arconis_diagram", "Remove a diagram attachment and its links from this plan. The repo registration and Arconis workspace remain available. Remove corresponding backlinks in Arconis.", false, true),
             tool::<ListPlans>("list_plans", "Find the existing plan by repository and title before creating one.", true, false),
             tool::<ReadPlan>("read_plan", "Read the full authored plan and revision by UUID. Optionally get a guided plan or phase review.", true, false),
@@ -349,11 +348,11 @@ impl ServerHandler for PlanTools {
             tool::<Edit<MoveBlock>>("move_plan_entry", "Move an entry after a neighboring entry or to the start.", false, false),
             tool::<Edit<RetireBlock>>("retire_plan_entry", "Retire an entry and optionally link its successors.", false, true),
             tool::<Edit<NewPhaseContent>>("add_plan_phase", "Add a pending phase and let Sulion assign its ID.", false, false),
-            tool::<Edit<PhaseFields>>("update_plan_phase", "Edit the supplied phase fields by ID.", false, false),
+            tool::<Edit<PhaseFields>>("update_plan_phase", "Edit the supplied phase fields using plan_id and the phase UUID as id. Omit revision for ordinary edits.", false, false),
             tool::<Edit<MoveBlock>>("move_plan_phase", "Move a phase after a neighboring phase or to the start.", false, false),
             tool::<Edit<RetireBlock>>("retire_plan_phase", "Retire an unstarted phase and optionally link its successors.", false, true),
-            tool::<Edit<RecordEvidence>>("record_plan_evidence", "Record a phase observation at the revisions it checked.", false, false),
-            tool::<BatchEdit>("patch_plan", "Apply a JSON batch of related edits at the supplied authoring revision.", false, true),
+            tool::<Edit<RecordEvidence>>("record_plan_evidence", "Record a phase observation with the authoring revision of the plan and each governing ancestor you checked.", false, false),
+            tool::<BatchEdit>("patch_plan", "Commit the related edits together. Supply revision from plan.authoring.revision in read_plan.", false, true),
         ]))
     }
 

@@ -25,7 +25,7 @@ pub use model::{
     PlanSummaryView, PlanTreeNodeView, PlanView, UpdatePhaseInput, UpdatePlanInput,
 };
 pub use patch::{apply as apply_patch, apply_direct, AuthoringConflict};
-pub use phases::{add_phase, resolve_phase_id, update_phase};
+pub use phases::{add_phase, update_phase, PhaseReference};
 use phases::{initial_phase_status, skip_remaining_phases, validate_phase_size};
 
 const MAX_TITLE_CHARS: usize = 160;
@@ -244,6 +244,7 @@ pub async fn update(
     plan_id: Uuid,
     input: UpdatePlanInput,
     actor: &PlanActor,
+    require_authored_revision: bool,
 ) -> anyhow::Result<PlanView> {
     validate_actor(actor)?;
     let mut tx = pool.begin().await?;
@@ -274,7 +275,9 @@ pub async fn update(
             patch::read_authoring(&mut tx, plan_id, &current.guidance).await?;
         match input.authoring_revision {
             Some(expected) => patch::check_revision(expected, authoring.revision)?,
-            None if managed => anyhow::bail!("this plan requires an authoring revision for content edits; reread it and use plan patch or update --revision"),
+            None if managed && require_authored_revision => {
+                anyhow::bail!("this plan requires an authoring revision for content edits")
+            }
             None => (),
         }
         let before = serde_json::json!({"title": current.title, "summary": current.summary, "guidance": current.guidance});

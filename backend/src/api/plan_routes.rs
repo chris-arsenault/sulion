@@ -98,7 +98,7 @@ pub(super) async fn patch_plan(
     Path(plan_id): Path<Uuid>,
     Json(request): Json<UpdatePlanInput>,
 ) -> ApiResult<Json<PlanView>> {
-    plans::update(&state.pool, plan_id, request, &PlanActor::user())
+    plans::update(&state.pool, plan_id, request, &PlanActor::user(), true)
         .await
         .map(Json)
         .map_err(plan_api_error)
@@ -140,10 +140,17 @@ pub(super) async fn patch_plan_phase(
     Path((plan_id, phase_id)): Path<(Uuid, Uuid)>,
     Json(request): Json<UpdatePhaseInput>,
 ) -> ApiResult<Json<PlanView>> {
-    plans::update_phase(&state.pool, plan_id, phase_id, request, &PlanActor::user())
-        .await
-        .map(Json)
-        .map_err(plan_api_error)
+    plans::update_phase(
+        &state.pool,
+        plan_id,
+        phase_id,
+        request,
+        &PlanActor::user(),
+        true,
+    )
+    .await
+    .map(Json)
+    .map_err(plan_api_error)
 }
 
 pub(super) async fn attach_plan(

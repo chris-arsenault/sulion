@@ -247,7 +247,11 @@ fn metadata(tokens: &[Option<String>]) -> Value {
     }
     if let Some(id) = fields.get("id") {
         match command {
-            "phase" | "step" => output["phase"] = id.clone(),
+            "phase" | "step" => {
+                output["phase"] = id
+                    .as_i64()
+                    .map_or_else(|| id.clone(), |number| json!(number.to_string()));
+            }
             "entry" => output["entry"] = id.clone(),
             _ => (),
         }

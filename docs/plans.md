@@ -87,16 +87,24 @@ sulion plan update --technical-details "Extend the existing refinement path."
 sulion plan entry add example "An inn seeds nearby development" \
   --generalization "Site conditions and the template determine the seed"
 sulion plan entry set "$entry_id" --rationale "Keep the source example with its interpretation"
-sulion plan phase edit "$phase_id" --acceptance "The next round reads the updated fields"
-sulion plan patch --help
+sulion plan phase edit 2 --acceptance "The next round reads the updated fields"
+sulion plan help phase edit
+sulion plan patch --schema
 sulion plan history
 sulion plan review
 ```
 
-Direct content edits accept an optional `--revision` from the read. Use
-`plan patch` to send several related changes in one JSON transaction. The
-batch requires the authoring revision. After a conflict, reread the plan and
-inspect the intervening history before reapplying the intent. Terminal
+CLI edits use the attached plan unless you select a plan explicitly. Use a
+phase number from `plan current` or a phase UUID. Numbers resolve to stable
+phase IDs under the plan lock for edits. Use `phase set` for status and progress
+notes, and `phase edit` for authored fields.
+
+Use `plan patch -` to send multiple edits as one JSON transaction via stdin.
+Inline JSON is also supported. Batch references use stable UUIDs. CLI edits and
+batches can apply directly to current state. To compare against an earlier
+read, supply `--revision` or the batch's `revision` field using the value from
+`.authoring.revision`. After a conflict, reread the plan and inspect the
+intervening history before reapplying the intent. Terminal
 attachment and status updates do not advance
 the authoring revision. Changed execution state can still prevent a patch from
 moving or retiring work. Retired pending phases stay in history with their
@@ -160,7 +168,9 @@ retain the command target's context in their result; subsequent commands use
 the new attachment. Clearing local boundaries does not clear inherited ones.
 
 `--json` preserves the command's existing stdout shape and prints the recurring
-reminder on stderr. Failed commands also show available context. Usage errors
+reminder on stderr. In text mode, a successful mutation prints a short
+confirmation alongside the reminder. Use `current` or `show` for the full plan.
+Failed commands also show available context. Usage errors
 show the attached plan; service refusals use the requested target. If context
 is unavailable (including no attachment or an unreachable service), the CLI
 says so without hiding the original error or reporting a successful operation
@@ -190,9 +200,9 @@ sulion plan history
 `--assumption`, and `--boundary "source|text"`. Boundary sources are `requirement`,
 `correction`, and `proposal`; the text may contain additional `|` characters.
 An update replaces each supplied list in order; omitted fields stay unchanged.
-Use an identity-based patch for a targeted change. For deliberate whole-list
-replacement of a plan with stored authored detail, include
-`--revision <authoring-revision>` and retain the boundaries still in effect.
+Use an entry edit for a targeted change. When replacing a whole list, retain
+the boundaries still in effect. Supply an authoring revision if the replacement
+depends on a particular prior read.
 `--clear-principles`, `--clear-assumptions`, and `--clear-boundaries` clear lists
 and cannot be combined with entries for the same list. Use
 `--outcome ""` to clear the outcome. The API uses `outcome`, `principles`, and
@@ -265,8 +275,8 @@ sulion plan phase add "Polish" --description "Final interaction pass"
 sulion plan phase set 1 completed --note "API and CLI complete"
 sulion plan phase set 2 blocked --note "Needs a product decision"
 sulion plan phase set 2 in_progress
-sulion plan phase set 3 --title "Renamed phase" --description "Revised scope"
-sulion plan phase set 3 --position 1
+sulion plan phase edit 3 --title "Renamed phase" --description "Revised scope"
+sulion plan phase move 3
 
 sulion plan branch "Unblock the checkpoint gate" \
   --from 4 \
@@ -296,8 +306,6 @@ the phase they cover; `plan tree` prints the whole tree indented by depth.
 current PTY's attached plan; `--plan <uuid>` or an explicit plan id targets
 another plan. `sulion plan attach <uuid>` moves the PTY from any previous plan
 to that plan. Add `--json` for stable machine-readable output.
-When editing phase content on an authored plan, use a patch or pass the
-current authoring revision with `phase set --revision`.
 
 Phases carry an optional t-shirt size (`--size s|m|l`, or a third `|size`
 segment in `--phase "Title|Description|m"`). Sizes weight the burndown and
@@ -306,9 +314,8 @@ throughput charts (s=1, m=2, l=3); unsized phases count as weight 1.
 Errors follow the shared agent-CLI contract (same as `sulion-code`): failures
 print `sulion plan: <message>` plus a `next: <command>` recovery hint on
 stderr, with exit codes 64 (usage), 65 (control socket unreachable), and 66
-(request refused by the service). `sulion plan help` / `sulion activity help`
-carry the full JIT reference — commands, status vocabularies, rules, and a
-starting sequence.
+(request refused by the service). Use `sulion plan help` for the command list
+and `sulion plan help <command>` for syntax and an example.
 
 Creating a plan requires at least one phase. By default the first phase starts
 `in_progress` and the rest start `pending`; `--all-pending` leaves all phases
@@ -403,8 +410,9 @@ stay separate.
 The Streamable HTTP connector serves `/mcp`. It lists Sulion repositories,
 reads plans and history, and creates unattached drafts with pending phases.
 Tools such as `update_plan_entry` and `update_plan_phase` edit named fields
-directly. `patch_plan` commits JSON batches to the same records. Select the plan UUID,
-then attach and read the current revision from a Sulion terminal to pick up work.
+directly by UUID and accept an optional revision comparison. `patch_plan`
+commits JSON batches to the same records and requires `plan.authoring.revision`
+from `read_plan`. To continue from a terminal, attach the plan by UUID and read it.
 
 The MCP route and exact OAuth discovery paths follow the existing ALB, reverse
 proxy, and WireGuard route to the TrueNAS frontend. Like Tastebase, Sulion
@@ -431,7 +439,8 @@ with the dedicated OAuth client credentials, then sign in as the owner.
 Enable the Arconis and Sulion Plan connectors in the same conversation. Ask
 ChatGPT to use both with the plan and repository you name.
 
-1. Use `read_plan` to obtain the phase IDs, phase URLs, and authoring revision.
+1. Use `read_plan` for phase IDs and URLs. Keep the authoring revision when
+   replacing links based on that read.
 2. Use `list_repo_arconis_diagrams` to find reusable diagrams. In Arconis,
    use `open_workspace` with the workspace UUID, or use
    `import_document` with `new_room: true` to create a diagram.

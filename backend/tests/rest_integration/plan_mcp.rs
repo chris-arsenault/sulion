@@ -150,6 +150,9 @@ async fn plan_connector_authenticates_and_shares_plans_across_repositories() {
         initialize["result"]["capabilities"]["tools"].is_object(),
         "{initialize}"
     );
+    let instructions = initialize["result"]["instructions"].as_str().unwrap();
+    assert!(instructions.contains("Direct edits can omit revision"));
+    assert!(instructions.contains("plan.authoring.revision from read_plan"));
     let rpc = |body: Value| {
         let request = request()
             .bearer_auth(&token)
@@ -168,16 +171,19 @@ async fn plan_connector_authenticates_and_shares_plans_across_repositories() {
         }
     };
     let listed = rpc(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})).await;
-    assert!(listed["result"]["tools"]
+    let tools = listed["result"]["tools"].as_array().unwrap();
+    assert!(tools.iter().any(|tool| tool["name"] == "update_plan_entry"));
+    assert!(!tools.iter().any(|tool| tool["name"] == "save_plan"));
+    let schema =
+        |name: &str| &tools.iter().find(|tool| tool["name"] == name).unwrap()["inputSchema"];
+    assert!(!schema("update_plan_phase")["required"]
         .as_array()
         .unwrap()
-        .iter()
-        .any(|tool| tool["name"] == "update_plan_entry"));
-    assert!(!listed["result"]["tools"]
+        .contains(&json!("revision")));
+    assert!(schema("patch_plan")["required"]
         .as_array()
         .unwrap()
-        .iter()
-        .any(|tool| tool["name"] == "save_plan"));
+        .contains(&json!("revision")));
     let denied = rpc(json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "list_plans", "arguments": {"repo": "../alpha"}}})).await;
     assert_eq!(denied["result"]["isError"], true);
     sqlx::query(

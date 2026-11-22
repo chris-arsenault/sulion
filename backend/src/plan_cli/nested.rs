@@ -5,7 +5,7 @@ use serde::de::DeserializeOwned;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::plans::{DirectEdit, EntryContent, EntryFields, PhaseFields, PlanEdit};
+use crate::plans::{DirectEdit, EntryContent, EntryFields, PhaseFields, PhaseReference, PlanEdit};
 
 use super::{
     parse_uuid, reject_unknown_options, take_flag, take_option, take_positional, take_uuid_option,
@@ -22,7 +22,7 @@ pub(super) fn request(
     plan_id: Option<Uuid>,
     revision: Option<i64>,
     reason: Option<String>,
-    operation: PlanEdit,
+    operation: PlanEdit<PhaseReference>,
 ) -> ControlRequest {
     ControlRequest::PlanEdit {
         plan_id,
@@ -85,11 +85,11 @@ pub(super) fn phase(command: &str, args: &mut Vec<String>) -> anyhow::Result<Con
             let implementation = take_option(args, "--implementation")?;
             let acceptance = take_option(args, "--acceptance")?;
             let basis = ids(args, "--basis")?;
-            let depends_on = ids(args, "--depends-on")?;
-            let follows_up = ids(args, "--follows-up")?;
+            let depends_on = phase_refs(args, "--depends-on")?;
+            let follows_up = phase_refs(args, "--follows-up")?;
             let size = take_option(args, "--size")?;
             PlanEdit::EditPhase(PhaseFields {
-                id: id(args, "phase ID")?,
+                id: phase_ref(args)?,
                 title,
                 description,
                 implementation,
@@ -101,12 +101,12 @@ pub(super) fn phase(command: &str, args: &mut Vec<String>) -> anyhow::Result<Con
             })
         }
         "move" => PlanEdit::MovePhase {
-            after: take_uuid_option(args, "--after")?,
-            id: id(args, "phase ID")?,
+            after: phase_option(args, "--after")?,
+            id: phase_ref(args)?,
         },
         "retire" => PlanEdit::RetirePhase {
-            successors: ids(args, "--successors")?.unwrap_or_default(),
-            id: id(args, "phase ID")?,
+            successors: phase_refs(args, "--successors")?.unwrap_or_default(),
+            id: phase_ref(args)?,
         },
         "evidence" => phase_evidence(args)?,
         other => bail!("unknown phase command: {other}"),
@@ -115,7 +115,7 @@ pub(super) fn phase(command: &str, args: &mut Vec<String>) -> anyhow::Result<Con
     Ok(request(plan_id, revision, reason, operation))
 }
 
-fn phase_evidence(args: &mut Vec<String>) -> anyhow::Result<PlanEdit> {
+fn phase_evidence(args: &mut Vec<String>) -> anyhow::Result<PlanEdit<PhaseReference>> {
     let reference = take_option(args, "--reference")?;
     let revision = take_option(args, "--observed-revision")?
         .ok_or_else(|| anyhow!("evidence requires its --observed-revision"))?
@@ -128,7 +128,7 @@ fn phase_evidence(args: &mut Vec<String>) -> anyhow::Result<PlanEdit> {
         ancestors.insert(parse_uuid(id, "ancestor plan ID")?, revision.parse()?);
     }
     Ok(PlanEdit::RecordEvidence {
-        id: id(args, "phase ID")?,
+        id: phase_ref(args)?,
         observation: take_positional(args)
             .ok_or_else(|| anyhow!("evidence observation is required"))?,
         reference,
@@ -168,6 +168,34 @@ fn keyword<T: DeserializeOwned>(args: &mut Vec<String>, flag: &str) -> anyhow::R
 fn id(args: &mut Vec<String>, label: &str) -> anyhow::Result<Uuid> {
     let value = take_positional(args).ok_or_else(|| anyhow!("{label} is required"))?;
     parse_uuid(&value, label)
+}
+
+fn phase_ref(args: &mut Vec<String>) -> anyhow::Result<PhaseReference> {
+    take_positional(args)
+        .ok_or_else(|| anyhow!("phase UUID or number is required"))?
+        .parse()
+}
+
+pub(super) fn phase_option(
+    args: &mut Vec<String>,
+    flag: &str,
+) -> anyhow::Result<Option<PhaseReference>> {
+    take_option(args, flag)?
+        .map(|value| value.parse())
+        .transpose()
+}
+
+fn phase_refs(args: &mut Vec<String>, flag: &str) -> anyhow::Result<Option<Vec<PhaseReference>>> {
+    take_option(args, flag)?
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::parse)
+                .collect()
+        })
+        .transpose()
 }
 
 fn ids(args: &mut Vec<String>, flag: &str) -> anyhow::Result<Option<Vec<Uuid>>> {

@@ -21,41 +21,61 @@ mod usage;
 pub(crate) use display::print_plan_data;
 
 pub use archive::run_archive;
-use usage::{print_activity_usage, print_name_usage, print_plan_usage};
+use usage::{print_activity_usage, print_name_usage, print_plan_help};
 
 pub async fn run_plan(args: &[OsString]) -> anyhow::Result<i32> {
     let mut args = utf8_args(args, "plan")?;
     let json = take_flag(&mut args, "--json");
     let Some(command) = args.first().cloned() else {
-        print_plan_usage();
+        print_plan_help(&[])?;
         reminder::print_attached(json).await;
         return Ok(64);
     };
-    if matches!(command.as_str(), "help" | "-h" | "--help") {
-        print_plan_usage();
-        reminder::print_attached(json).await;
-        return Ok(0);
+    if let Some(topic) = usage::help_topic(&args) {
+        let code = match print_plan_help(topic) {
+            Ok(()) => 0,
+            Err(err) => usage_failure(ResponseKind::Plan, &err),
+        };
+        reminder::print_attached(json || !topic.is_empty()).await;
+        return Ok(code);
     }
-    if command == "patch" && args.get(1).is_some_and(|flag| flag == "--help") {
+    if command == "patch" && args.get(1).is_some_and(|flag| flag == "--schema") {
+        if let Err(error) = reject_unknown_options(&args[2..]) {
+            return Ok(plan_usage_failure("patch", &error).await);
+        }
         println!(
-            "Send related changes in one JSON object at the authoring revision from plan show.\n{}",
-            serde_json::to_string_pretty(&schemars::schema_for!(crate::plans::PlanPatch))?
+            "{}",
+            serde_json::to_string_pretty(&schemars::schema_for!(
+                crate::plans::PlanPatch<Option<i64>>
+            ))?
         );
         reminder::print_attached(true).await;
         return Ok(0);
     }
+    let topic = usage::command_topic(&args).join(" ");
     args.remove(0);
+    if command == "patch" {
+        if let Some(index) = args.iter().position(|arg| arg == "-") {
+            // Drop the stdin lock before reporting any error through the socket.
+            let payload = std::io::read_to_string(std::io::stdin().lock());
+            match payload {
+                Ok(payload) => args[index] = payload,
+                Err(error) => return Ok(plan_usage_failure(&topic, &error.into()).await),
+            }
+        }
+    }
     let request = match parse_plan_request(&command, &mut args) {
         Ok(request) => request,
-        Err(err) => {
-            let code = usage_failure(ResponseKind::Plan, &err);
-            reminder::print_attached(true).await;
-            return Ok(code);
-        }
+        Err(err) => return Ok(plan_usage_failure(&topic, &err).await),
     };
-    let full = matches!(command.as_str(), "current" | "show")
-        || matches!(request, ControlRequest::PlanEdit { .. });
+    let full = matches!(command.as_str(), "current" | "show");
     reminder::run(request, json, full).await
+}
+
+async fn plan_usage_failure(topic: &str, error: &anyhow::Error) -> i32 {
+    eprintln!("sulion plan: {error}\nnext: sulion plan help {topic}");
+    reminder::print_attached(true).await;
+    64
 }
 
 pub async fn run_activity(args: &[OsString]) -> anyhow::Result<i32> {
@@ -206,7 +226,7 @@ pub(crate) fn parse_plan_request(
             Ok(ControlRequest::PlanShow { plan_id })
         }
         "review" => {
-            let phase_id = take_uuid_option(args, "--phase")?;
+            let phase_id = nested::phase_option(args, "--phase")?;
             let plan_id = optional_plan_id(args)?;
             reject_unknown_options(args)?;
             Ok(ControlRequest::PlanReview { plan_id, phase_id })
@@ -248,9 +268,17 @@ pub(crate) fn parse_plan_request(
         "update" => parse_plan_update(args),
         "patch" => {
             let plan_id = take_uuid_option(args, "--plan")?;
-            let payload =
-                take_positional(args).ok_or_else(|| anyhow!("plan patch needs a JSON payload"))?;
-            let input = serde_json::from_str(&payload)?;
+            let revision = nested::revision(args)?;
+            let payload = take_positional(args)
+                .ok_or_else(|| anyhow!("provide inline JSON or use plan patch - to read stdin"))?;
+            let mut input: crate::plans::PlanPatch<Option<i64>> = serde_json::from_str(&payload)?;
+            if revision.is_some() {
+                anyhow::ensure!(
+                    input.revision.is_none(),
+                    "provide the revision in JSON or with --revision"
+                );
+                input.revision = revision;
+            }
             reject_unknown_options(args)?;
             Ok(ControlRequest::PlanPatch { plan_id, input })
         }

@@ -98,11 +98,11 @@ pub enum ControlRequest {
     },
     PlanEdit {
         plan_id: Option<Uuid>,
-        input: Box<crate::plans::DirectEdit>,
+        input: Box<crate::plans::DirectEdit<crate::plans::PhaseReference>>,
     },
     PlanReview {
         plan_id: Option<Uuid>,
-        phase_id: Option<Uuid>,
+        phase_id: Option<crate::plans::PhaseReference>,
     },
     PlanUpdate {
         plan_id: Option<Uuid>,
@@ -110,7 +110,7 @@ pub enum ControlRequest {
     },
     PlanPatch {
         plan_id: Option<Uuid>,
-        input: crate::plans::PlanPatch,
+        input: crate::plans::PlanPatch<Option<i64>>,
     },
     PlanAddPhase {
         plan_id: Option<Uuid>,
@@ -331,7 +331,7 @@ async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value>
         ControlRequest::PlanUpdate { plan_id, input } => {
             let id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
             Ok(serde_json::to_value(
-                plans::update(pool, id, input, &actor).await?,
+                plans::update(pool, id, input, &actor, false).await?,
             )?)
         }
         ControlRequest::PlanPatch { plan_id, input } => {
@@ -352,9 +352,9 @@ async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value>
             input,
         } => {
             let id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
-            let phase_id = plans::resolve_phase_id(pool, id, &phase_reference).await?;
+            let phase = phase_reference.parse::<plans::PhaseReference>()?;
             Ok(serde_json::to_value(
-                plans::update_phase(pool, id, phase_id, input, &actor).await?,
+                plans::update_phase(pool, id, phase, input, &actor, false).await?,
             )?)
         }
         ControlRequest::PlanAttach { plan_id } => Ok(serde_json::to_value(
@@ -424,7 +424,21 @@ async fn dispatch_plan_read(
     let id = plans::resolve_plan_id(pool, pty_id, plan_id, repo_name).await?;
     let plan = plans::get(pool, id).await?;
     match request {
-        ControlRequest::PlanReview { phase_id, .. } => plans::review::review(plan, phase_id),
+        ControlRequest::PlanReview { phase_id, .. } => {
+            use plans::PhaseReference;
+            let phase_id = match phase_id {
+                Some(PhaseReference::Id(id)) => Some(id),
+                Some(PhaseReference::Position(position)) => Some(
+                    plan.phases
+                        .iter()
+                        .find(|phase| phase.position == position)
+                        .ok_or_else(|| anyhow::anyhow!("phase not found at position {position}"))?
+                        .id,
+                ),
+                None => None,
+            };
+            plans::review::review(plan, phase_id)
+        }
         _ => Ok(serde_json::to_value(plan)?),
     }
 }

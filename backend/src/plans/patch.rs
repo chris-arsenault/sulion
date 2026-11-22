@@ -10,8 +10,8 @@ use super::authoring::{
 };
 use super::{
     ancestors, clean_note, get, guidance, insert_event, limited_text, required_text,
-    validate_actor, PlanActor, PlanGuidance, PlanRow, PlanView, MAX_DESCRIPTION_CHARS,
-    MAX_SUMMARY_CHARS, MAX_TITLE_CHARS, PLAN_COLUMNS,
+    validate_actor, PhaseReference, PlanActor, PlanGuidance, PlanRow, PlanView,
+    MAX_DESCRIPTION_CHARS, MAX_SUMMARY_CHARS, MAX_TITLE_CHARS, PLAN_COLUMNS,
 };
 use crate::db::Pool;
 
@@ -56,26 +56,17 @@ pub(super) fn check_revision(expected: i64, current: i64) -> anyhow::Result<()> 
 pub async fn apply_direct(
     pool: &Pool,
     id: Uuid,
-    input: DirectEdit,
+    input: DirectEdit<impl Into<PhaseReference> + Send>,
     actor: &PlanActor,
     client: &str,
     subject: Option<&str>,
     expected_repo: Option<&str>,
 ) -> anyhow::Result<PlanView> {
-    let revision = match input.revision {
-        Some(revision) => revision,
-        None => {
-            sqlx::query_scalar("SELECT authoring_revision FROM plans WHERE id = $1")
-                .bind(id)
-                .fetch_one(pool)
-                .await?
-        }
-    };
     apply(
         pool,
         id,
         PlanPatch {
-            revision,
+            revision: input.revision,
             reason: input.reason,
             source: None,
             operations: vec![input.operation],
@@ -91,7 +82,7 @@ pub async fn apply_direct(
 pub async fn apply(
     pool: &Pool,
     id: Uuid,
-    input: PlanPatch,
+    input: PlanPatch<impl Into<Option<i64>> + Send, impl Into<PhaseReference> + Send>,
     actor: &PlanActor,
     client: &str,
     subject: Option<&str>,
@@ -118,13 +109,16 @@ pub async fn apply(
         anyhow::bail!("plan is closed with status {}", row.status);
     }
     let (authored, _) = read_authoring(&mut tx, id, &row.guidance).await?;
-    check_revision(input.revision, authored.revision)?;
+    if let Some(expected) = input.revision.into() {
+        check_revision(expected, authored.revision)?;
+    }
     let mut document = authored.document;
     let old_guidance = row.guidance.clone();
     let mut changes = Vec::with_capacity(input.operations.len());
     let mut entry_successors = Vec::new();
     let mut phase_successors = Vec::new();
     for operation in input.operations {
+        let operation = operation.resolve_phases(&mut tx, id).await?;
         match &operation {
             PlanEdit::RetireEntry { successors, .. } => {
                 entry_successors.extend_from_slice(successors)

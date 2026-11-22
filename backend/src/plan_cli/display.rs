@@ -1,6 +1,75 @@
 use serde_json::Value;
 
 use super::guidance;
+use crate::{correlate::ControlRequest, plans::PlanEdit};
+
+pub(super) fn plan_confirmation(request: &ControlRequest) -> Option<String> {
+    let message = match request {
+        ControlRequest::PlanStart { .. } => "Started plan".into(),
+        ControlRequest::PlanBranch { .. } => "Started branch".into(),
+        ControlRequest::PlanAttach { .. } => "Attached plan".into(),
+        ControlRequest::PlanDetach { .. } => "Detached plan".into(),
+        ControlRequest::PlanAddPhase { phase, .. } => format!("Added phase ‘{}’", phase.title),
+        ControlRequest::PlanUpdatePhase {
+            phase_reference,
+            input,
+            ..
+        } => match input.status.as_deref() {
+            Some(status) => format!("Set phase {phase_reference} to {status}"),
+            None => format!("Updated phase {phase_reference}"),
+        },
+        ControlRequest::PlanUpdate { input, .. } => match input.status.as_deref() {
+            Some("completed") if input.require_branch => {
+                "Completed branch and returned to parent".into()
+            }
+            Some("canceled") if input.require_branch => {
+                "Canceled branch and returned to parent".into()
+            }
+            Some(status) => format!("Set plan to {status}"),
+            None => "Updated plan".into(),
+        },
+        ControlRequest::PlanPatch { input, .. } if input.operations.len() == 1 => {
+            "Applied 1 plan edit".into()
+        }
+        ControlRequest::PlanPatch { input, .. } => {
+            format!("Applied {} plan edits", input.operations.len())
+        }
+        ControlRequest::PlanEdit { input, .. } => match &input.operation {
+            PlanEdit::EditPlan(_) => "Updated plan".into(),
+            PlanEdit::EditPhase(fields) => {
+                let fields_changed = [
+                    ("title", fields.title.is_some()),
+                    ("description", fields.description.is_some()),
+                    ("implementation", fields.implementation.is_some()),
+                    ("acceptance", fields.acceptance.is_some()),
+                    ("basis", fields.basis.is_some()),
+                    ("dependencies", fields.depends_on.is_some()),
+                    ("follow-ups", fields.follows_up.is_some()),
+                    ("size", fields.size.is_some()),
+                ]
+                .into_iter()
+                .filter_map(|(name, edited)| edited.then_some(name))
+                .collect::<Vec<_>>()
+                .join(", ");
+                if fields_changed.is_empty() {
+                    format!("Updated phase {}", fields.id)
+                } else {
+                    format!("Edited phase {} ({fields_changed})", fields.id)
+                }
+            }
+            PlanEdit::MovePhase { id, .. } => format!("Moved phase {id}"),
+            PlanEdit::RetirePhase { id, .. } => format!("Retired phase {id}"),
+            PlanEdit::RecordEvidence { id, .. } => format!("Recorded evidence for phase {id}"),
+            PlanEdit::AddEntry { .. } => "Added plan entry".into(),
+            PlanEdit::EditEntry { id, .. } => format!("Edited entry {id}"),
+            PlanEdit::MoveEntry { id, .. } => format!("Moved entry {id}"),
+            PlanEdit::RetireEntry { id, .. } => format!("Retired entry {id}"),
+            _ => "Updated plan".into(),
+        },
+        _ => return None,
+    };
+    Some(message)
+}
 
 pub(crate) fn print_plan_data(data: &Value, full_guidance: bool) {
     if let Some(walkthrough) = data.get("walkthrough").and_then(Value::as_array) {

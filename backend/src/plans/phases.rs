@@ -87,18 +87,20 @@ pub async fn add_phase(
 pub async fn update_phase(
     pool: &Pool,
     plan_id: Uuid,
-    phase_id: Uuid,
+    phase: impl Into<PhaseReference>,
     input: UpdatePhaseInput,
     actor: &PlanActor,
+    require_authored_revision: bool,
 ) -> anyhow::Result<PlanView> {
     validate_actor(actor)?;
     let mut tx = pool.begin().await?;
     ensure_plan_open(&mut tx, plan_id).await?;
+    let phase_id = phase.into().resolve(&mut tx, plan_id).await?;
     let authored = input.title.is_some()
         || input.description.is_some()
         || input.position.is_some()
         || input.size.is_some();
-    if authored {
+    if input.authoring_revision.is_some() || (authored && require_authored_revision) {
         let (revision, managed): (i64, bool) = sqlx::query_as(
             "SELECT authoring_revision, authoring IS NOT NULL FROM plans WHERE id = $1",
         )
@@ -209,25 +211,60 @@ async fn bump_authored_phase_revision(
     Ok(revision)
 }
 
-pub async fn resolve_phase_id(pool: &Pool, plan_id: Uuid, reference: &str) -> anyhow::Result<Uuid> {
-    if let Ok(id) = Uuid::parse_str(reference) {
-        let found: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM plan_phases WHERE plan_id = $1 AND id = $2")
-                .bind(plan_id)
-                .bind(id)
-                .fetch_optional(pool)
-                .await?;
-        return found.ok_or_else(|| anyhow::anyhow!("phase not found: {reference}"));
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum PhaseReference {
+    Id(Uuid),
+    Position(i32),
+}
+
+impl From<Uuid> for PhaseReference {
+    fn from(id: Uuid) -> Self {
+        Self::Id(id)
     }
-    let position: i32 = reference
-        .parse()
-        .map_err(|_| anyhow::anyhow!("phase must be a UUID or 1-based position"))?;
-    sqlx::query_scalar("SELECT id FROM plan_phases WHERE plan_id = $1 AND position = $2")
-        .bind(plan_id)
-        .bind(position)
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("phase not found at position {position}"))
+}
+
+impl std::str::FromStr for PhaseReference {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> anyhow::Result<Self> {
+        if let Ok(id) = Uuid::parse_str(value) {
+            return Ok(Self::Id(id));
+        }
+        match value.parse() {
+            Ok(position) if position > 0 => Ok(Self::Position(position)),
+            _ => anyhow::bail!("phase must be a UUID or 1-based position: {value}"),
+        }
+    }
+}
+
+impl std::fmt::Display for PhaseReference {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Id(id) => write!(formatter, "{id}"),
+            Self::Position(position) => write!(formatter, "{position}"),
+        }
+    }
+}
+
+impl PhaseReference {
+    pub(super) async fn resolve(
+        self,
+        tx: &mut Transaction<'_, Postgres>,
+        plan_id: Uuid,
+    ) -> anyhow::Result<Uuid> {
+        match self {
+            Self::Id(id) => Ok(id),
+            Self::Position(position) => sqlx::query_scalar(
+                "SELECT id FROM plan_phases WHERE plan_id = $1 AND position = $2",
+            )
+            .bind(plan_id)
+            .bind(position)
+            .fetch_optional(&mut **tx)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("phase not found at position {position}")),
+        }
+    }
 }
 
 pub(super) async fn move_phase(
