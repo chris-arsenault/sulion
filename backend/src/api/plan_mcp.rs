@@ -111,8 +111,9 @@ fn connected_router(pool: crate::db::Pool, connector: Arc<Connector>) -> Router<
         Some(port) => format!("{host}:{port}"),
         None => host.to_owned(),
     };
+    let browser_url = connector.resource.join("/").expect("same HTTPS origin");
     let service = StreamableHttpService::new(
-        move || Ok(tools::PlanTools::new(pool.clone())),
+        move || Ok(tools::PlanTools::new(pool.clone(), browser_url.clone())),
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default()
             .with_legacy_session_mode(false)

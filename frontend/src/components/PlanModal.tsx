@@ -52,15 +52,18 @@ interface PlanModalProps {
   open: boolean;
   repo: string | null;
   planId?: string;
+  phaseId?: string;
   onClose: () => void;
 }
 
 type PlanMutation = (operation: () => Promise<PlanView>) => Promise<boolean>;
+type PlanHeading = Pick<PlanView, "title" | "repo_name">;
 
 /** Tree navigation and fetched detail stay local to the plan browser. */
-export function PlanModal({ open, repo, planId, onClose }: PlanModalProps) {
+export function PlanModal({ open, repo, planId, phaseId, onClose }: PlanModalProps) {
   const [selectedPlanId, setSelectedPlanId] = useState<Maybe<string>>(planId);
-  const [detailTitle, setDetailTitle] = useState<string | null>(null);
+  const [heading, setHeading] = useState<PlanHeading | null>(null);
+  const activeRepo = heading?.repo_name ?? repo;
   const [showTree, setShowTree] = useState(!planId);
   const browserRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobileLayout();
@@ -69,7 +72,7 @@ export function PlanModal({ open, repo, planId, onClose }: PlanModalProps) {
   useEffect(() => {
     if (open) {
       setSelectedPlanId(planId);
-      setDetailTitle(null);
+      setHeading(null);
       setShowTree(!planId);
     }
   }, [open, planId, repo]);
@@ -80,10 +83,12 @@ export function PlanModal({ open, repo, planId, onClose }: PlanModalProps) {
   const openDetail = useCallback(
     (nextPlanId: string) => {
       setSelectedPlanId(nextPlanId);
-      if (nextPlanId !== selectedPlanId) setDetailTitle(null);
+      if (nextPlanId !== selectedPlanId && activeRepo !== null) {
+        setHeading({ repo_name: activeRepo, title: "Plan" });
+      }
       setShowTree(false);
     },
-    [selectedPlanId],
+    [activeRepo, selectedPlanId],
   );
 
   useEffect(() => {
@@ -95,7 +100,7 @@ export function PlanModal({ open, repo, planId, onClose }: PlanModalProps) {
     target?.focus();
   }, [isMobile, open, selectedPlanId, showTree]);
 
-  if (!open || !repo) return null;
+  if (!open || (!activeRepo && !planId)) return null;
 
   const inDetail = Boolean(selectedPlanId) && !showTree;
 
@@ -122,23 +127,26 @@ export function PlanModal({ open, repo, planId, onClose }: PlanModalProps) {
           <Icon name="list-checks" size={16} />
         )
       }
-      title={inDetail ? detailTitle ?? "Plan" : "Published plans"}
-      subtitle={inDetail ? `${repo} · plan` : repo}
+      title={inDetail ? heading?.title ?? "Plan" : "Published plans"}
+      subtitle={activeRepo ? (inDetail ? `${activeRepo} · plan` : activeRepo) : undefined}
     >
       <div ref={browserRef} className="plan-modal__browser">
-        <PlanIndex
-          key={repo}
-          repo={repo}
-          selectedPlanId={selectedPlanId}
-          onOpenPlan={openDetail}
-        />
+        {activeRepo && (
+          <PlanIndex
+            key={activeRepo}
+            repo={activeRepo}
+            selectedPlanId={selectedPlanId}
+            onOpenPlan={openDetail}
+          />
+        )}
         <div className="plan-modal__reader" tabIndex={-1} aria-label="Selected plan">
           {selectedPlanId ? (
             <PlanDetail
               key={selectedPlanId}
-              repo={repo}
+              repo={activeRepo ?? ""}
               planId={selectedPlanId}
-              onTitle={setDetailTitle}
+              focusPhaseId={selectedPlanId === planId ? phaseId : undefined}
+              onHeading={setHeading}
               onOpenPlan={openDetail}
             />
           ) : (
@@ -362,15 +370,21 @@ function PlanIndex({
 function PlanDetail({
   repo,
   planId,
-  onTitle,
+  focusPhaseId,
+  onHeading,
   onOpenPlan,
 }: {
   repo: string;
   planId: string;
-  onTitle: (title: string) => void;
+  focusPhaseId?: string;
+  onHeading: (heading: PlanHeading) => void;
   onOpenPlan: (planId: string) => void;
 }) {
   const [plan, setPlan] = useState<PlanView | null>(null);
+  const focusPhase = useCallback((node: HTMLLIElement | null) => {
+    node?.focus({ preventScroll: true });
+    node?.scrollIntoView?.({ block: "start" });
+  }, []);
   const [events, setEvents] = useState<PlanEventView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -411,12 +425,12 @@ function PlanDetail({
       ]);
       setPlan(nextPlan);
       setEvents(nextEvents);
-      onTitle(nextPlan.title);
+      onHeading({ title: nextPlan.title, repo_name: nextPlan.repo_name });
       setError(null);
     } catch (err) {
       setError(messageOf(err));
     }
-  }, [onTitle, planId]);
+  }, [onHeading, planId]);
 
   useEffect(() => {
     void load();
@@ -428,7 +442,7 @@ function PlanDetail({
       try {
         const next = await operation();
         setPlan(next);
-        onTitle(next.title);
+        onHeading({ title: next.title, repo_name: next.repo_name });
         setEvents(await getPlanEvents(planId));
         setError(null);
         await refresh();
@@ -440,7 +454,7 @@ function PlanDetail({
         setBusy(false);
       }
     },
-    [onTitle, planId, refresh],
+    [onHeading, planId, refresh],
   );
 
   const liveRepoSessions = useMemo(
@@ -759,9 +773,25 @@ function PlanDetail({
       {plan.authoring && (
         <PlanAuthoringDetail plan={plan} authoring={plan.authoring} canEdit={editable && !busy} onSave={saveAuthoring} />
       )}
+      {Boolean(plan.diagrams?.length) && (
+        <section className="plan-modal__diagram-links" aria-label="Arconis diagrams">
+          <h3>Arconis diagrams</h3>
+          <ul>
+            {plan.diagrams?.map((diagram) => (
+              <li key={diagram.workspace_id}>
+                <a href={diagram.url} target="_blank" rel="noreferrer">{diagram.title}</a>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <ol className="plan-modal__phase-list">
         {plan.phases.map((phase) => (
-          <li key={phase.id}>
+          <li
+            key={phase.id}
+            ref={phase.id === focusPhaseId ? focusPhase : undefined}
+            tabIndex={phase.id === focusPhaseId ? -1 : undefined}
+          >
             <PhaseRow
               phase={phase}
               planId={plan.id}
@@ -774,6 +804,21 @@ function PlanDetail({
             />
             {plan.authoring && (
               <PhaseAuthoring phase={phase} plan={plan} authoring={plan.authoring} canEdit={editable && !busy} onSave={saveAuthoring} />
+            )}
+            {plan.diagrams?.flatMap((diagram) =>
+              diagram.phase_links
+                .filter((link) => link.phase_id === phase.id)
+                .map((link) => (
+                  <a
+                    key={`${diagram.workspace_id}:${link.object_id}`}
+                    className="plan-modal__diagram-link"
+                    href={link.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {diagram.title} · {link.object_id}
+                  </a>
+                ))
             )}
             {plan.branches
               .filter((branch) => branch.anchor_phase_ids.includes(phase.id))

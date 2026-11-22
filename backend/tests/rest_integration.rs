@@ -1735,6 +1735,16 @@ async fn rename_repo_moves_checkout_and_updates_session_records() {
         .bind(deployment_id).execute(&h.state.pool).await.unwrap();
     sqlx::query("INSERT INTO dora_run_checks(repo_name, source_key, production_source) VALUES ('oldrepo', 'rename-fixture', TRUE)")
         .execute(&h.state.pool).await.unwrap();
+    let workspace_id = Uuid::new_v4();
+    sulion::plans::diagrams::register(
+        &h.state.pool,
+        "oldrepo",
+        workspace_id,
+        &"a".repeat(48),
+        "System diagram",
+    )
+    .await
+    .unwrap();
     let mutation_guard = gate.hold_write_for_test().await;
     let workspace_state = h.runtime.workspace_state();
     let mut discovery =
@@ -1773,6 +1783,14 @@ async fn rename_repo_moves_checkout_and_updates_session_records() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["name"], "newrepo");
+    assert!(sulion::plans::diagrams::list(&h.state.pool, "oldrepo")
+        .await
+        .unwrap()
+        .is_empty());
+    let diagrams = sulion::plans::diagrams::list(&h.state.pool, "newrepo")
+        .await
+        .unwrap();
+    assert_eq!(diagrams[0].workspace_id, workspace_id);
     for table in [
         "dora_deployments",
         "dora_commit_deployments",

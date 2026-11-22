@@ -208,6 +208,8 @@ pub struct PlanView {
     pub closed_at: Option<DateTime<Utc>>,
     pub phases: Vec<PlanPhaseView>,
     pub attachments: Vec<PlanAttachmentView>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub diagrams: Vec<super::diagrams::DiagramAttachment>,
     /// Phases in the parent plan that this plan covers. Empty for a root.
     pub anchor_phase_ids: Vec<Uuid>,
     /// Root first, immediate parent last. Empty for a root.

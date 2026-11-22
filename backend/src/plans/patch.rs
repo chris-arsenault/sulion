@@ -372,6 +372,26 @@ async fn apply_edit(
         PlanEdit::RetirePhase { id, successors } => {
             retire_phase(tx, row.id, id, successors, document, actor).await?
         }
+        PlanEdit::AttachDiagram {
+            workspace_id,
+            phase_links,
+        } => {
+            super::diagrams::validate_attachment(
+                tx,
+                &row.repo_name,
+                row.id,
+                workspace_id,
+                &phase_links,
+            )
+            .await?;
+            let before = document.diagrams.insert(workspace_id, phase_links);
+            json!({"op": "attach_diagram", "id": workspace_id, "before": before,
+                "after": document.diagrams[&workspace_id]})
+        }
+        PlanEdit::DetachDiagram { workspace_id } => {
+            let before = document.diagrams.remove(&workspace_id);
+            json!({"op": "detach_diagram", "id": workspace_id, "before": before})
+        }
         PlanEdit::RecordEvidence {
             id,
             observation,

@@ -18,13 +18,41 @@ use crate::{
     auth::AuthenticatedUser,
     db::Pool,
     plans::{
-        self, CreatePlanInput, DirectEdit, EntryContent, EntryFields, NewPhase, PhaseFields,
-        PlanActor, PlanEdit, PlanFields, PlanPatch, PlanView,
+        self, diagrams, CreatePlanInput, DirectEdit, EntryContent, EntryFields, NewPhase,
+        PhaseFields, PlanActor, PlanEdit, PlanFields, PlanPatch, PlanView,
     },
 };
 
 pub(super) struct PlanTools {
     pool: Pool,
+    browser_url: reqwest::Url,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct RepoDiagrams {
+    repo: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct RegisterDiagram {
+    repo: String,
+    /// Durable workspace UUID returned by Arconis save_workspace or open_workspace.
+    workspace_id: Uuid,
+    /// Ordinary Arconis room ID returned with the workspace.
+    room_id: String,
+    title: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct DiagramId {
+    workspace_id: Uuid,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct AttachDiagram {
+    workspace_id: Uuid,
+    /// Complete set of links for this diagram on this plan. Use [] to attach without phase links.
+    phase_links: Vec<diagrams::DiagramPhaseLink>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -125,8 +153,8 @@ struct BatchEdit {
 }
 
 impl PlanTools {
-    pub(super) fn new(pool: Pool) -> Self {
-        Self { pool }
+    pub(super) fn new(pool: Pool, browser_url: reqwest::Url) -> Self {
+        Self { pool, browser_url }
     }
 
     async fn call(&self, request: CallToolRequestParams, subject: &str) -> anyhow::Result<Value> {
@@ -134,11 +162,29 @@ impl PlanTools {
             "list_plan_repositories" => {
                 let repositories: Vec<String> = sqlx::query_scalar(
                     "SELECT repo_name FROM repo_runtime_state WHERE exists = TRUE \
-                     UNION SELECT repo_name FROM plans ORDER BY repo_name",
+                     UNION SELECT repo_name FROM plans \
+                     UNION SELECT repo_name FROM repo_arconis_diagrams ORDER BY repo_name",
                 )
                 .fetch_all(&self.pool)
                 .await?;
                 Ok(json!({"repositories": repositories}))
+            }
+            "list_repo_arconis_diagrams" => {
+                let args: RepoDiagrams = arguments(request.arguments)?;
+                let diagrams = diagrams::list(&self.pool, &args.repo).await?;
+                Ok(json!({"diagrams": diagrams.iter().map(diagram_result).collect::<Vec<_>>()}))
+            }
+            "register_arconis_diagram" => {
+                let args: RegisterDiagram = arguments(request.arguments)?;
+                let diagram = diagrams::register(
+                    &self.pool,
+                    &args.repo,
+                    args.workspace_id,
+                    &args.room_id,
+                    &args.title,
+                )
+                .await?;
+                Ok(json!({"diagram": diagram_result(&diagram)}))
             }
             "list_plans" => {
                 let args: ListPlans = arguments(request.arguments)?;
@@ -158,10 +204,12 @@ impl PlanTools {
                 let plan = plans::get(&self.pool, args.plan_id).await?;
                 if args.review || args.phase_id.is_some() {
                     let mut review = plans::review::review(plan, args.phase_id)?;
-                    trim_attachment_data(&mut review["plan"]);
+                    self.decorate_plan(&mut review["plan"]);
                     Ok(review)
                 } else {
-                    Ok(json!({"plan": plan_result(plan), "guidance": plans::review::guidance()}))
+                    Ok(
+                        json!({"plan": self.plan_result(plan), "guidance": plans::review::guidance()}),
+                    )
                 }
             }
             "read_plan_history" => {
@@ -212,7 +260,7 @@ impl PlanTools {
                     Some(subject),
                 )
                 .await?;
-                Ok(json!({"plan": plan_result(plan)}))
+                Ok(json!({"plan": self.plan_result(plan)}))
             }
             "patch_plan" => {
                 let args: BatchEdit = arguments(request.arguments)?;
@@ -226,7 +274,7 @@ impl PlanTools {
                     None,
                 )
                 .await?;
-                Ok(json!({"plan": plan_result(plan)}))
+                Ok(json!({"plan": self.plan_result(plan)}))
             }
             name => {
                 let (id, edit) = direct_edit(name, request.arguments)?;
@@ -240,7 +288,32 @@ impl PlanTools {
                     None,
                 )
                 .await?;
-                Ok(json!({"plan": plan_result(plan)}))
+                Ok(json!({"plan": self.plan_result(plan)}))
+            }
+        }
+    }
+
+    fn plan_result(&self, plan: PlanView) -> Value {
+        let mut value = json!(plan);
+        self.decorate_plan(&mut value);
+        value
+    }
+
+    fn decorate_plan(&self, value: &mut Value) {
+        trim_attachment_data(value);
+        let Some(id) = value["id"].as_str() else {
+            return;
+        };
+        let mut url = self.browser_url.clone();
+        url.query_pairs_mut().append_pair("plan", id);
+        value["url"] = json!(url.as_str());
+        if let Some(phases) = value["phases"].as_array_mut() {
+            for phase in phases {
+                if let Some(id) = phase["id"].as_str() {
+                    let mut phase_url = url.clone();
+                    phase_url.query_pairs_mut().append_pair("phase", id);
+                    phase["url"] = json!(phase_url.as_str());
+                }
             }
         }
     }
@@ -250,7 +323,7 @@ impl ServerHandler for PlanTools {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(format!(
-                "Author and review Sulion plans. Read the current plan first. Edit the relevant plan, phase or entry fields directly. Use patch_plan for changes that must commit together. {} {}",
+                "Author and review Sulion plans. Read the current plan first. Edit the relevant plan, phase or entry fields directly. Use patch_plan for changes that must commit together. To reuse an Arconis diagram, list the repo's diagrams and open its workspace_id in Arconis. For a new diagram, save it in Arconis and register the returned workspace_id and room_id. Use phase URLs from read_plan as links on the associated canvas objects, save those edits in Arconis, and attach the diagram with the matching phase UUIDs and object IDs. {} {}",
                 plans::review::HYPOTHESIS, plans::review::EXAMPLE
             ))
     }
@@ -261,7 +334,11 @@ impl ServerHandler for PlanTools {
         _: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult::with_all_items(vec![
-            tool::<Empty>("list_plan_repositories", "List Sulion repositories and repositories with saved plans.", true, false),
+            tool::<Empty>("list_plan_repositories", "List Sulion repositories and repositories with saved plans or registered diagrams.", true, false),
+            tool::<RepoDiagrams>("list_repo_arconis_diagrams", "Find reusable Arconis diagrams in a repository, including diagrams without a plan attachment.", true, false),
+            tool::<RegisterDiagram>("register_arconis_diagram", "Register a saved Arconis workspace for future plans in this repository. Re-registering the same workspace and room updates its title.", false, false),
+            tool::<Edit<AttachDiagram>>("attach_arconis_diagram", "Attach a registered Arconis diagram to the plan and set its phase-to-object links. Give the linked objects the corresponding read_plan phase URLs in Arconis and save the workspace. Supply the current plan revision and preserve links you intend to keep.", false, false),
+            tool::<Edit<DiagramId>>("detach_arconis_diagram", "Remove a diagram attachment and its links from this plan. The repo registration and Arconis workspace remain available. Remove corresponding backlinks in Arconis.", false, true),
             tool::<ListPlans>("list_plans", "Find the existing plan by repository and title before creating one.", true, false),
             tool::<ReadPlan>("read_plan", "Read the full authored plan and revision by UUID. Optionally get a guided plan or phase review.", true, false),
             tool::<PlanHistory>("read_plan_history", "Explain changes since an authoring revision, including why an entry was superseded.", true, false),
@@ -360,6 +437,19 @@ fn direct_edit(name: &str, input: Option<JsonObject>) -> anyhow::Result<(Uuid, D
         "retire_plan_phase" => decode_edit(input, |RetireBlock { id, successors }| {
             PlanEdit::RetirePhase { id, successors }
         }),
+        "attach_arconis_diagram" => decode_edit(
+            input,
+            |AttachDiagram {
+                 workspace_id,
+                 phase_links,
+             }| PlanEdit::AttachDiagram {
+                workspace_id,
+                phase_links,
+            },
+        ),
+        "detach_arconis_diagram" => decode_edit(input, |DiagramId { workspace_id }| {
+            PlanEdit::DetachDiagram { workspace_id }
+        }),
         "record_plan_evidence" => decode_edit(
             input,
             |RecordEvidence {
@@ -397,10 +487,13 @@ fn decode_edit<T: DeserializeOwned>(
     ))
 }
 
-fn plan_result(plan: PlanView) -> Value {
-    let mut value = json!(plan);
-    trim_attachment_data(&mut value);
-    value
+fn diagram_result(diagram: &diagrams::Diagram) -> Value {
+    json!({
+        "workspace_id": diagram.workspace_id,
+        "room_id": diagram.room_id,
+        "title": diagram.title,
+        "url": diagram.url(),
+    })
 }
 
 fn trim_attachment_data(value: &mut Value) {

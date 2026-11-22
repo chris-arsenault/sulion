@@ -4,6 +4,11 @@ All notable user-visible changes to Sulion are recorded here.
 
 ## Unreleased
 
+### Plans
+
+- The plan connector can register Arconis diagrams for a repository and attach
+  them to plans with links between canvas objects and phases.
+
 ### Sessions and navigation
 
 - Added **Open**, **Sessions**, and **Full** sidebar views. Open lists live

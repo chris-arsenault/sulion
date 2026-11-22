@@ -269,6 +269,108 @@ async fn plan_connector_authenticates_and_shares_plans_across_repositories() {
     assert_eq!(read["phases"][0]["status"], "pending");
     assert_eq!(read["attachments"], json!([]));
     verify_terminal_handoff(&h, id, &read).await;
+    let call = |name: &str, arguments: Value| {
+        rpc(
+            json!({"jsonrpc": "2.0", "id": 20, "method": "tools/call", "params": {
+                "name": name, "arguments": arguments
+            }}),
+        )
+    };
+    let workspace_id = Uuid::new_v4();
+    let room_id = "a".repeat(48);
+    let registered = call("register_arconis_diagram", json!({
+        "repo": "alpha", "workspace_id": workspace_id, "room_id": room_id, "title": "City fabric"
+    })).await;
+    let diagram = &registered["result"]["structuredContent"]["diagram"];
+    assert_eq!(diagram["workspace_id"], json!(workspace_id), "{registered}");
+    assert_eq!(
+        diagram["url"],
+        format!("https://arconis.ahara.io/#room={room_id}")
+    );
+    let other_repo = call(
+        "attach_arconis_diagram",
+        json!({
+            "plan_id": second_repo_id, "workspace_id": workspace_id, "phase_links": []
+        }),
+    )
+    .await;
+    assert_eq!(other_repo["result"]["isError"], true);
+    let bad_phase = call("attach_arconis_diagram", json!({
+        "plan_id": id, "workspace_id": workspace_id,
+        "phase_links": [{"phase_id": second_repo_plan["phases"][0]["id"], "object_id": "streets"}]
+    })).await;
+    assert_eq!(bad_phase["result"]["isError"], true);
+    let linked = call(
+        "attach_arconis_diagram",
+        json!({
+            "plan_id": id, "workspace_id": workspace_id,
+            "phase_links": [{"phase_id": phase_id, "object_id": "streets"}]
+        }),
+    )
+    .await;
+    let linked_plan = &linked["result"]["structuredContent"]["plan"];
+    assert_eq!(
+        linked_plan["diagrams"][0]["phase_links"][0]["object_id"], "streets",
+        "{linked}"
+    );
+    assert_eq!(
+        linked_plan["phases"][0]["url"],
+        format!(
+            "https://sulion.test/?plan={id}&phase={}",
+            phase_id.as_str().unwrap()
+        )
+    );
+    assert_eq!(
+        linked_plan["diagrams"][0]["phase_links"][0]["url"],
+        format!("https://arconis.ahara.io/#room={room_id}&item=streets")
+    );
+    let rest_read: Value = h
+        .client
+        .get(format!("{}/api/plans/{id}", h.base))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(rest_read["diagrams"], linked_plan["diagrams"]);
+    let new_plan = call(
+        "create_plan",
+        json!({
+            "repo": "alpha", "title": "City drainage", "phases": [{"title": "Drain streets"}]
+        }),
+    )
+    .await;
+    let new_plan = &new_plan["result"]["structuredContent"]["plan"];
+    let discovered = call("list_repo_arconis_diagrams", json!({"repo": "alpha"})).await;
+    assert_eq!(
+        discovered["result"]["structuredContent"]["diagrams"],
+        json!([diagram])
+    );
+    let reused = call(
+        "attach_arconis_diagram",
+        json!({
+            "plan_id": new_plan["id"], "revision": 0, "workspace_id": workspace_id,
+            "phase_links": [{"phase_id": new_plan["phases"][0]["id"], "object_id": "streets"}]
+        }),
+    )
+    .await;
+    assert_eq!(reused["result"]["isError"], false, "{reused}");
+    let detached = call(
+        "detach_arconis_diagram",
+        json!({
+            "plan_id": new_plan["id"], "revision": 1, "workspace_id": workspace_id
+        }),
+    )
+    .await;
+    assert_eq!(detached["result"]["isError"], false, "{detached}");
+    let discovered_again = call("list_repo_arconis_diagrams", json!({"repo": "alpha"})).await;
+    assert_eq!(
+        discovered_again["result"]["structuredContent"]["diagrams"],
+        json!([diagram])
+    );
     let history = sulion::plans::events(&h.state.pool, id.parse().unwrap())
         .await
         .unwrap();

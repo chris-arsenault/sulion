@@ -46,3 +46,4 @@ real alternative gets a sentence in the topic doc instead.
 | [0029](0029-dora-metrics-from-deploy-pipeline-evidence.md) | DORA metrics are aggregated from the known deploy pipeline's evidence, portfolio-wide only | Accepted | 2026-10-15 |
 | [0030](0030-standalone-mobile-install-without-service-worker.md) | Home-screen installation without a service worker or offline cache | Accepted | 2026-10-16 |
 | [0031](0031-revisioned-plan-authoring.md) | One revisioned authored plan across terminal, browser, and scoped MCP | Accepted, amends 0014 | 2026-11-20 |
+| [0032](0032-arconis-plan-references.md) | Repository diagram registry and typed plan references to Arconis workspaces | Accepted | 2026-11-22 |

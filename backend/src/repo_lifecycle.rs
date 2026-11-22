@@ -365,6 +365,20 @@ async fn rename_repo_session_workspace_records(
     .bind(new_name)
     .execute(&mut **tx)
     .await?;
+    sqlx::query(
+        "DELETE FROM repo_arconis_diagrams AS original USING repo_arconis_diagrams AS destination \
+         WHERE original.repo_name = $1 AND destination.repo_name = $2 \
+         AND original.workspace_id = destination.workspace_id AND original.room_id = destination.room_id",
+    )
+    .bind(old_name)
+    .bind(new_name)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query("UPDATE repo_arconis_diagrams SET repo_name = $2 WHERE repo_name = $1")
+        .bind(old_name)
+        .bind(new_name)
+        .execute(&mut **tx)
+        .await?;
     crate::meta_repos::rename_repo_references(tx, old_name, new_name).await?;
     Ok(())
 }

@@ -426,6 +426,29 @@ Audit events use the authenticated Cognito subject. MCP can work with plans
 across Sulion repositories. In the web client, add `https://sulion.services.ahara.io/mcp`
 with the dedicated OAuth client credentials, then sign in as the owner.
 
+### Arconis diagrams
+
+Enable the Arconis and Sulion Plan connectors in the same conversation. Ask
+ChatGPT to use both with the plan and repository you name.
+
+1. Use `read_plan` to obtain the phase IDs, phase URLs, and authoring revision.
+2. Use `list_repo_arconis_diagrams` to find reusable diagrams. In Arconis,
+   use `open_workspace` with the workspace UUID, or use
+   `import_document` with `new_room: true` to create a diagram.
+3. Add each phase URL as a link on its canvas object. Use Markdown links in the
+   object's name when it references multiple phases. Use `save_workspace` to
+   persist the canvas and return its workspace UUID, room ID, and title.
+4. Use `register_arconis_diagram` in Sulion to add the saved workspace to the repo.
+   Then call `attach_arconis_diagram` with the workspace UUID and the complete
+   set of phase UUID and canvas object ID pairs for this plan.
+
+The plan shows the diagram link and each phase shows its linked canvas objects.
+The diagram's links open the corresponding phases directly. Detaching from one
+plan leaves the workspace registered for other plans. Update the Arconis
+backlinks in the same conversation when changing or removing phase links.
+Arconis opens saved workspaces using the connected account's access.
+
 See [ADR 0014](adrs/0014-published-plans-and-branch-plans.md) for plan trees and
 [ADR 0031](adrs/0031-revisioned-plan-authoring.md) for the authored record and
-its shared service boundary.
+its shared service boundary. [ADR 0032](adrs/0032-arconis-plan-references.md)
+covers diagram ownership and cross-app navigation.

@@ -5,6 +5,7 @@ use crate::db::Pool;
 
 mod authoring;
 mod branches;
+pub mod diagrams;
 mod guidance;
 mod model;
 mod patch;
@@ -148,6 +149,8 @@ pub(crate) async fn read_plan(
             authoring.needs_review.insert(*id, outdated);
         }
     }
+    view.diagrams =
+        diagrams::attachments(tx, &view.repo_name, &authoring.document.diagrams).await?;
     view.authoring = Some(authoring);
     Ok(Some(view))
 }
@@ -556,6 +559,7 @@ async fn hydrate(connection: &mut PgConnection, row: PlanRow) -> anyhow::Result<
         closed_at: row.closed_at,
         phases,
         attachments,
+        diagrams: Vec::new(),
         anchor_phase_ids,
         ancestors,
         branches,

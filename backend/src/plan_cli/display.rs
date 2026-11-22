@@ -67,6 +67,17 @@ pub(crate) fn print_plan_data(data: &Value, full_guidance: bool) {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let diagrams: &[_] = data["diagrams"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for diagram in diagrams {
+        println!(
+            "  Arconis diagram · {} · {}",
+            diagram["title"].as_str().unwrap_or(""),
+            diagram["url"].as_str().unwrap_or_default()
+        );
+    }
     if let Some(phases) = data.get("phases").and_then(Value::as_array) {
         for phase in phases {
             println!(
@@ -104,6 +115,16 @@ pub(crate) fn print_plan_data(data: &Value, full_guidance: bool) {
                             .join(", ")
                     );
                 }
+            }
+            for link in diagrams
+                .iter()
+                .flat_map(|diagram| diagram["phase_links"].as_array().into_iter().flatten())
+                .filter(|link| link["phase_id"].as_str() == Some(phase_id))
+            {
+                println!(
+                    "     Arconis object · {}",
+                    link["url"].as_str().unwrap_or_default()
+                );
             }
             for branch in branches.iter().filter(|branch| {
                 branch["anchor_phase_ids"]

@@ -51,6 +51,22 @@ function readInt(key: string, fallback: number): number {
   }
 }
 
+interface PlanTarget {
+  repo: string | null;
+  planId?: string;
+  phaseId?: string;
+}
+
+const planUuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+
+function linkedPlan(): PlanTarget | null {
+  const query = new URLSearchParams(window.location.search);
+  const planId = query.get("plan");
+  const phaseId = query.get("phase");
+  if (!planId || !planUuid.test(planId)) return null;
+  return { repo: null, planId, phaseId: phaseId && planUuid.test(phaseId) ? phaseId : undefined };
+}
+
 /** Root layout: rail + sidebar + work area. On mobile the rail disappears
  * and the sidebar becomes a drawer. The split / tab system lives inside
  * WorkArea. */
@@ -65,10 +81,15 @@ export function Layout() {
   const [submittedPromptsSessionId, setSubmittedPromptsSessionId] = useState<string | null>(
     null,
   );
-  const [planTarget, setPlanTarget] = useState<{
-    repo: string;
-    planId?: string;
-  } | null>(null);
+  const [planTarget, setPlanTarget] = useState<PlanTarget | null>(linkedPlan);
+  const closePlan = useCallback(() => {
+    setPlanTarget(null);
+    if (!linkedPlan()) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("plan");
+    url.searchParams.delete("phase");
+    window.history.replaceState(window.history.state, "", url);
+  }, []);
 
   const pinned = useDisplay((store) => store.sidebarPinned);
   const toggleSidebar = useDisplay((store) => store.toggleSidebar);
@@ -125,7 +146,7 @@ export function Layout() {
     setDrawerOpen(false);
     // Reveal the file behind any transient modal (e.g. the plan modal a
     // file:line reference was clicked from).
-    setPlanTarget(null);
+    closePlan();
   });
   useAppCommand("open-diff", ({ repo, path, workspaceId }) => {
     openTabRef.current({ kind: "diff", repo, path, workspaceId });
@@ -198,7 +219,6 @@ export function Layout() {
   const closeMonitorOverlay = useCallback(() => setMonitorOverlayOpen(false), []);
   const closeFuturePrompts = useCallback(() => setFuturePromptsSessionId(null), []);
   const closeSubmittedPrompts = useCallback(() => setSubmittedPromptsSessionId(null), []);
-  const closePlan = useCallback(() => setPlanTarget(null), []);
   const openDrawer = useCallback(() => setDrawerOpen(true), []);
   const closeDrawerLocal = useCallback(() => setDrawerOpen(false), []);
 
@@ -260,6 +280,7 @@ export function Layout() {
           open={planTarget !== null}
           repo={planTarget?.repo ?? null}
           planId={planTarget?.planId}
+          phaseId={planTarget?.phaseId}
           onClose={closePlan}
         />
       </div>
@@ -325,6 +346,7 @@ export function Layout() {
         open={planTarget !== null}
         repo={planTarget?.repo ?? null}
         planId={planTarget?.planId}
+        phaseId={planTarget?.phaseId}
         onClose={closePlan}
       />
     </div>

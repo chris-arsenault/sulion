@@ -14,6 +14,8 @@ pub struct AuthoredPlan {
     pub entries: Vec<PlanEntry>,
     #[serde(default)]
     pub phases: BTreeMap<Uuid, PhaseDetails>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub diagrams: BTreeMap<Uuid, Vec<super::diagrams::DiagramPhaseLink>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -256,6 +258,13 @@ pub enum PlanEdit {
         id: Uuid,
         #[serde(default)]
         successors: Vec<Uuid>,
+    },
+    AttachDiagram {
+        workspace_id: Uuid,
+        phase_links: Vec<super::diagrams::DiagramPhaseLink>,
+    },
+    DetachDiagram {
+        workspace_id: Uuid,
     },
     RecordEvidence {
         id: Uuid,

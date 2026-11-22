@@ -92,6 +92,32 @@ describe("PlanModal", () => {
     });
   });
 
+  it("opens the linked phase and shows the plan diagram and its exact object link", async () => {
+    const url = "https://arconis.ahara.io/#room=" + "a".repeat(48);
+    const linked = plan();
+    linked.diagrams = [
+      {
+        workspace_id: "workspace-1",
+        room_id: "a".repeat(48),
+        title: "Street network",
+        url,
+        phase_links: [{ phase_id: "phase-1", object_id: "street", url: url + "&item=street" }],
+      },
+    ];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo) => {
+      const path = typeof input === "string" ? input : input.url;
+      if (path.startsWith(PLANS_URL)) return jsonResponse([linked]);
+      if (path.endsWith("/events")) return jsonResponse([]);
+      return jsonResponse(linked);
+    }));
+    render(<PlanModal open repo={null} planId="plan-1" phaseId="phase-1" onClose={noop} />);
+    expect((await screen.findByRole("link", { name: "Street network" })).getAttribute("href")).toBe(url);
+    const object = screen.getByRole("link", { name: "Street network · street" });
+    expect(object.getAttribute("href")).toBe(url + "&item=street");
+    expect(document.activeElement).toBe(object.closest("li"));
+    expect(screen.getByText("alpha · plan")).toBeDefined();
+  });
+
   it("starts a plan with parsed phases and an optional terminal attachment", async () => {
     const requests: Array<{ url: string; method: string; body?: unknown }> = [];
     const created = plan();

@@ -344,6 +344,14 @@ export interface PlanAttachmentView {
   attached_at: string;
 }
 
+export interface PlanDiagram {
+  workspace_id: string;
+  room_id: string;
+  title: string;
+  url: string;
+  phase_links: { phase_id: string; object_id: string; url: string }[];
+}
+
 export interface PlanBoundary {
   source: "user_requirement" | "user_correction" | "agent_proposal";
   text: string;
@@ -405,6 +413,7 @@ export interface PlanView extends PlanGuidance {
   closed_at: string | null;
   phases: PlanPhaseView[];
   attachments: PlanAttachmentView[];
+  diagrams?: PlanDiagram[];
   /** Phases in the parent plan this plan covers; empty for a root. */
   anchor_phase_ids: string[];
   /** Root first, immediate parent last; empty for a root. */

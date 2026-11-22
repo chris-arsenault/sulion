@@ -319,6 +319,22 @@
   font-size: var(--t-meta);
 }
 
+.plan-modal__diagram-links a,
+.plan-modal__diagram-link {
+  color: var(--accent-hi);
+}
+
+.plan-modal__diagram-link {
+  display: block;
+  width: fit-content;
+  margin: 6px 0;
+}
+
+.plan-modal__phase-list > li:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 3px;
+}
+
 /* ---- Phases ---- */
 
 .plan-guidance,
