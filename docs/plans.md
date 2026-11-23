@@ -4,7 +4,7 @@ Sulion plans are durable, repo-scoped records for authoring and delivery. The
 sidebar and Overview carry a compact synopsis and progress. The selected plan
 also contains current requirements and decisions, open questions, hypotheses,
 examples, technical design, and phase implementation and evidence. An agent can
-resume the plan by UUID across terminal sessions and connected clients.
+resume the plan by title across terminal sessions and connected clients.
 
 The main sidebar's Plans section shows a collapsible tree with each sub-plan
 under its parent, plus progress and current-phase text. Plan titles wrap so
@@ -82,35 +82,35 @@ Record that behavior within the user's scope and link its plan entry when one
 exists. Keep both types distinct from commitments.
 
 ```sh
-sulion plan --json current
+sulion plan current
 sulion plan update --technical-details "Extend the existing refinement path."
 sulion plan entry add example "An inn seeds nearby development" \
   --generalization "Site conditions and the template determine the seed"
-sulion plan entry set "$entry_id" --rationale "Keep the source example with its interpretation"
+sulion plan entry set 1 --rationale "Keep the source example with its interpretation"
 sulion plan phase edit 2 --acceptance "The next round reads the updated fields"
 sulion plan help phase edit
-sulion plan patch --schema
+sulion plan patch update --summary "Requirements in Git" -- phase edit 2 --acceptance "Review the diff"
 sulion plan history
 sulion plan review
 ```
 
-CLI edits use the attached plan unless you select a plan explicitly. Use a
-phase number from `plan current` or a phase UUID. Numbers resolve to stable
-phase IDs under the plan lock for edits. Use `phase set` for status and progress
-notes, and `phase edit` for authored fields.
+CLI edits use the attached plan unless you select one by title. For duplicate
+titles, use the quoted list number, for example `sulion plan show '#2'`.
+Use the phase and entry numbers from `plan current`. In a branch, inherited
+entries follow local entries and can be referenced as the basis of a phase.
+Use `phase set` for progress and `phase edit` for authored fields.
 
-Use `plan patch -` to send multiple edits as one JSON transaction via stdin.
-Inline JSON is also supported. Batch references use stable UUIDs. CLI edits and
-batches can apply directly to current state. To compare against an earlier
-read, supply `--revision` or the batch's `revision` field using the value from
-`.authoring.revision`. After a conflict, reread the plan and inspect the
-intervening history before reapplying the intent. Terminal
+`plan patch` applies ordinary edit commands in sequence under one plan lock.
+Separate commands with `--`, or use `plan patch -` with one shell-quoted edit per
+line. The parser treats every argument as data. Entry and phase numbers refer to
+the order when each edit runs. A failed edit rolls back the whole batch.
+Existing clients can still submit the structured patch format. Terminal
 attachment and status updates do not advance
 the authoring revision. Changed execution state can still prevent a patch from
 moving or retiring work. Retired pending phases stay in history with their
 successors and carry no remaining workload.
 
-Near handoff, use `sulion plan review [plan-id] [--phase <uuid>]`. Trace each
+Near handoff, use `sulion plan review [title] [--phase <number>]`. Trace each
 affected phase through the existing entry point, owner, contracts, and
 consumers. Research patterns by the actual design problem and record the
 chosen idiom and its participants in Technical details. Keep implementation,
@@ -200,9 +200,8 @@ sulion plan history
 `--assumption`, and `--boundary "source|text"`. Boundary sources are `requirement`,
 `correction`, and `proposal`; the text may contain additional `|` characters.
 An update replaces each supplied list in order; omitted fields stay unchanged.
-Use an entry edit for a targeted change. When replacing a whole list, retain
-the boundaries still in effect. Supply an authoring revision if the replacement
-depends on a particular prior read.
+Use an entry edit for a targeted change. Before replacing a whole list, read
+the current plan and retain the boundaries still in effect.
 `--clear-principles`, `--clear-assumptions`, and `--clear-boundaries` clear lists
 and cannot be combined with entries for the same list. Use
 `--outcome ""` to clear the outcome. The API uses `outcome`, `principles`, and
@@ -295,7 +294,7 @@ sulion plan history
 ```
 
 `branch` opens a sub-plan under the current plan and moves the PTY onto it.
-`--from` takes a 1-based phase position or a phase UUID and repeats for a span;
+`--from` takes a 1-based phase position and repeats for a span;
 omitting it anchors to the parent's current phase. `return` closes the branch
 and puts the PTY back on the parent — it refuses on a root plan, so the verb
 can never quietly close the plan you branched from. `plan show` and `plan
@@ -303,8 +302,8 @@ current` print a branch's trail back to the root and list any sub-plans under
 the phase they cover; `plan tree` prints the whole tree indented by depth.
 
 `step` is accepted as an alias for `phase`. Most commands operate on the
-current PTY's attached plan; `--plan <uuid>` or an explicit plan id targets
-another plan. `sulion plan attach <uuid>` moves the PTY from any previous plan
+current PTY's attached plan; `--plan "Plan title"` or a positional plan title targets
+another plan. `sulion plan attach "Plan title"` moves the PTY from any previous plan
 to that plan. Add `--json` for stable machine-readable output.
 
 Phases carry an optional t-shirt size (`--size s|m|l`, or a third `|size`
@@ -409,10 +408,86 @@ stay separate.
 
 The Streamable HTTP connector serves `/mcp`. It lists Sulion repositories,
 reads plans and history, and creates unattached drafts with pending phases.
-Tools such as `update_plan_entry` and `update_plan_phase` edit named fields
-directly by UUID and accept an optional revision comparison. `patch_plan`
-commits JSON batches to the same records and requires `plan.authoring.revision`
-from `read_plan`. To continue from a terminal, attach the plan by UUID and read it.
+Select a plan by title, supplying its repository when needed. `read_plan` returns
+numbered entries and phases. `update_plan_entry` accepts `entry` and
+`update_plan_phase` accepts `phase`. For a batch, `patch_plan` accepts the same
+editing commands as the terminal, for example:
+
+```json
+{"plan":"City design","edits":["update --summary 'Review city requirements'","phase edit 2 --acceptance 'Review the diff'"]}
+```
+
+All edits share one transaction and one history event. A terminal can resume
+with `sulion plan attach "City design"`.
+
+### Requirements and inventory files
+
+Select a checkout with `repo` or `workspace_id`. A dataset is a UTF-8
+`*.dataset.json` document containing its schema and its ordered items. The
+development node reads the working copy on each call. Git stages and commits it
+through the repository's ordinary workflow.
+
+For example, call `define_data_set` with:
+
+```json
+{
+  "repo": "my-product",
+  "path": "docs/processes.dataset.json",
+  "schema": {
+    "keys": ["process", "map"],
+    "fields": {
+      "process": {"type": "string"},
+      "map": {"type": "string", "allowed": ["World", "Region"]},
+      "strategy": {"type": "string", "description": "How the process behaves at this scale"}
+    }
+  }
+}
+```
+
+Use the same repo and path with `fill_data_set_items`. Pass
+`"items":[{"process":"water","map":"Region"}]` to enumerate a row.
+Include `"strategy":"..."` in that row on a later call to fill one field.
+Omission preserves a value and an explicit null clears it. Key fields are
+mandatory. Other fields can remain incomplete. Fields support string, integer,
+number, boolean, array and object values. Invalid batches leave the file intact,
+and schema changes must accept the existing rows.
+
+`list_data_sets` discovers documents. `read_data_set` accepts `where` for
+exact matches, `missing` for gaps, `columns`, `offset` and `limit`. Set
+`limit` to zero to read just the schema and matching count. A read also returns
+row revisions in item order. A caller editing against that read can pass
+`expected` with the key and revision for each row it needs to guard.
+For a plan reference, record the repository, relative path and the same
+`where` object. A terminal agent can open that JSON document directly.
+
+`import_data_set` merges rows into a defined schema. Give it a `format` of
+`csv` or `jsonl` and either inline `data` or a checkout-relative
+`source_path` from a file upload. CSV uses a header, blank cells for omitted
+values, and JSON syntax for non-string cells. JSONL preserves explicit empty
+strings and nested values. `export_data_set` returns the schema and rows in
+either format. Use a new `destination_path` to write a large export directly
+in the checkout. The canonical JSON file itself is a portable typed export.
+
+### File transfers and request size
+
+In ChatGPT, select the attachment for `upload_file` and specify a repository
+or workspace, directory and destination name. The connector reads the
+provider-issued HTTPS reference, computes the checksum, stages the bytes in
+S3 and asks the owning node to install the verified object. Select the
+attachment again if its download reference expires.
+The tool advertises the `file` argument through `openai/fileParams`.
+[ChatGPT file inputs](https://developers.openai.com/plugins/reference#file-apis)
+
+Clients with raw file access can use `begin_file_upload` with the destination,
+byte count and base64 SHA-256 digest. PUT the raw file to the returned grant
+URL with the signed headers and the exact content length. Call
+`complete_file_upload` with the returned id and original metadata. The grant
+is bound to the authenticated user and destination. Both workflows share
+the existing 50 MiB limit and replace an existing destination on success.
+
+The public WAF size-label exception covers JSON POST requests to the exact
+Sulion host and `/mcp` path. The frontend proxy and MCP transport enforce a
+256 KiB request ceiling on the actual body. File bytes travel outside MCP.
 
 The MCP route and exact OAuth discovery paths follow the existing ALB, reverse
 proxy, and WireGuard route to the TrueNAS frontend. Like Tastebase, Sulion

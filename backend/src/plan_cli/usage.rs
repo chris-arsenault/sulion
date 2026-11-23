@@ -44,7 +44,7 @@ Start with `sulion plan current`. Writes default to the attached plan.");
         }
         ("phase", "", 1) => {
             println!("Usage: sulion plan phase <add|set|edit|move|retire|evidence> ...\n\n\
-Use a phase number from `plan current`, or a phase UUID.\n\
+Use a phase number from `plan current`, as displayed.\n\
   set   change status and add a progress note\n\
   edit  change the title, description, or implementation details\n\
 Use `sulion plan help phase edit` for an example.");
@@ -60,49 +60,49 @@ Use `sulion plan help entry add` to see entry kinds and fields.");
             r#"start "Improve plan editing" --phase "Simplify the CLI" --phase "Verify the workflow""#,
             "Guidance flags: --outcome, --boundary <requirement|correction|proposal>|<text>, --principle, --assumption. Repeat list flags as needed. The first phase starts immediately unless --all-pending is supplied.",
         ),
-        ("current", "", 1) => ("current", "current", "Read the attached plan with guidance, authoring details, and IDs."),
+        ("current", "", 1) => ("current", "current", "Read the attached plan with guidance, numbered phases and entries."),
         ("list", "", 1) => ("list [--all]", "list --all", "Include completed and canceled plans with --all."),
-        ("show", "", 1) => ("show [plan-id]", "show", "Read an explicit plan or the attached plan."),
-        ("review", "", 1) => ("review [plan-id] [--phase <number|uuid>]", "review --phase 2", "Read the plan with the design review checklist."),
-        ("tree", "", 1) => ("tree [plan-id]", "tree", "Show the plan's branch hierarchy."),
-        ("history", "", 1) => ("history [plan-id]", "history", "Show execution events and authored changes."),
+        ("show", "", 1) => ("show [title]", "show", "Read an explicit plan or the attached plan."),
+        ("review", "", 1) => ("review [title] [--phase <number>]", "review --phase 2", "Read the plan with the design review checklist."),
+        ("tree", "", 1) => ("tree [title]", "tree", "Show the plan's branch hierarchy."),
+        ("history", "", 1) => ("history [title]", "history", "Show execution events and authored changes."),
         ("update", "", 1) => (
             "update [--title <text>] [--summary <text>] [--outcome <text>] [--technical-details <text>] [--note <text>]",
             r#"update --summary "Support public registration and owner review""#,
-            "Use --plan to select another plan. To compare against an earlier read, pass its .authoring.revision with --revision. Repeat --boundary, --principle, or --assumption to replace the supplied list. Use --clear-boundaries, --clear-principles, or --clear-assumptions to empty a list. See `plan help entry set` to change one entry.",
+            "Use --plan to select another plan. Repeat --boundary, --principle, or --assumption to replace the supplied list. Use --clear-boundaries, --clear-principles, or --clear-assumptions to empty a list. See `plan help entry set` to change one entry.",
         ),
         ("patch", "", 1) => (
-            "patch <json|-> [--plan <uuid>] [--revision <n>]",
-            r#"printf '%s\n' '{"operations":[{"op":"edit_plan","summary":"Updated scope"}]}' | sulion plan patch -"#,
-            "Use - for stdin. All operations commit together. Batch references use UUIDs. To compare against a read, pass its .authoring.revision in JSON or with --revision. Run `sulion plan patch --schema` for the JSON schema.",
+            "patch <edit> [-- <edit> ...] | patch -",
+            r#"patch update --summary "Requirements in Git" -- phase edit 2 --acceptance "Review the diff""#,
+            "Use ordinary update, entry and phase authoring commands. Separate edits with -- or supply one command per line on stdin. Quote multiword arguments on stdin. Numbers refer to the order at each edit. All edits commit together.",
         ),
         ("status", "", 1) => ("status <active|paused> [--note <text>]", r#"status paused --note "Waiting for a decision""#, "Use --plan to select another plan."),
         ("close", "", 1) => ("close <--completed|--canceled> [--skip-remaining] [--note <text>]", "close --completed", "Completing a plan with unfinished phases requires --skip-remaining."),
         ("branch", "", 1) => (
-            "branch <title> --phase <title[|description[|size]]>... [--from <number|uuid>] [--all-pending]",
+            "branch <title> --phase <title[|description[|size]]>... [--from <number>] [--all-pending]",
             r#"branch "Repair CI" --from 2 --phase "Verify the build""#,
             "Uses the in-progress phase by default. Repeat --from for multiple anchors. Accepts the guidance flags from `plan help start`, plus --note and --plan.",
         ),
         ("return", "", 1) => ("return [--completed|--canceled] [--skip-remaining] [--note <text>]", "return", "Complete the branch and reattach its parent. Use --canceled to abandon the branch."),
-        ("attach", "", 1) => ("attach <plan-uuid>", r#"attach "$PLAN_ID""#, "Attach the selected plan to this terminal. Get its ID with `plan list`."),
-        ("detach", "", 1) => ("detach [plan-id]", "detach", "Detach the selected or current plan from this terminal."),
+        ("attach", "", 1) => ("attach <title>", r#"attach "Improve plan editing""#, "Use a plan title from plan list."),
+        ("detach", "", 1) => ("detach [title]", "detach", "Detach the selected or current plan from this terminal."),
         ("phase", "add", 2) => ("phase add <title> [--description <text>] [--status <status>] [--size <s|m|l>]", r#"phase add "Verify CI""#, "Use --plan to select another plan."),
         ("phase", "set" | "update", 2) => (
-            "phase set <number|uuid> [status] [--note <text>]",
+            "phase set <number> [status] [--note <text>]",
             r#"phase set 2 completed --note "CI passed""#,
             "Statuses: pending, in_progress, blocked, completed, skipped. Use --plan to select another plan. For authored fields see `plan help phase edit`.",
         ),
         ("phase", "edit", 2) => (
-            "phase edit <number|uuid> [--title <text>] [--description <text>] [--implementation <text>] [--acceptance <text>]",
+            "phase edit <number> [--title <text>] [--description <text>] [--implementation <text>] [--acceptance <text>]",
             r#"phase edit 5 --acceptance "Only approved trucks appear in public discovery""#,
-            "Use a phase number from `plan current`. Edits apply to current state by default. To compare against a read, pass its .authoring.revision with --revision. Also accepts --plan, --reason, --size, --basis (entry UUIDs), --depends-on, and --follows-up. Lists are comma-separated.",
+            "Use a phase number from plan current. Edits apply to current state by default. Also accepts --plan, --reason, --size, --basis (entry numbers), --depends-on, and --follows-up. Lists are comma-separated.",
         ),
-        ("phase", "move", 2) => ("phase move <number|uuid> [--after <number|uuid>]", "phase move 3 --after 1", "Omit --after to move to the beginning. Accepts --plan, --reason, and --revision."),
-        ("phase", "retire", 2) => ("phase retire <number|uuid> [--successors <phases>]", "phase retire 3 --successors 4,5", "Retire only unstarted phases without branch anchors. Accepts --plan, --reason, and --revision."),
+        ("phase", "move", 2) => ("phase move <number> [--after <number>]", "phase move 3 --after 1", "Omit --after to move to the beginning. Accepts --plan and --reason."),
+        ("phase", "retire", 2) => ("phase retire <number> [--successors <phases>]", "phase retire 3 --successors 4,5", "Retire only unstarted phases without branch anchors. Accepts --plan and --reason."),
         ("phase", "evidence", 2) => (
-            "phase evidence <number|uuid> <observation> --observed-revision <n> [--reference <text>] [--ancestor <plan-id>=<n>]",
-            r#"phase evidence 2 "CI built both apps" --observed-revision 3"#,
-            "Use .authoring.revision from the plan version you checked. Repeat --ancestor with the observed authoring revision of each governing plan. Accepts --plan, --reason, and --revision.",
+            "phase evidence <number> <observation> [--reference <text>]",
+            r#"phase evidence 2 "CI built both apps""#,
+            "Record the observation against the current plan and ancestor context.",
         ),
         ("entry", "add", 2) => (
             "entry add <kind> <text> [entry fields]",
@@ -110,19 +110,15 @@ Use `sulion plan help entry add` to see entry kinds and fields.");
             "Kinds: requirement, boundary, principle, assumption, decision, question, hypothesis, example. See `plan help entry set` for the fields.",
         ),
         ("entry", "set", 2) => (
-            "entry set <uuid> [--text <text>] [--source <text>] [--rationale <text>]",
-            r#"entry set "$ENTRY_ID" --text "Use shared public Auth0""#,
-            "Kind-specific fields:\n  boundary: --attribution user_requirement|user_correction|agent_proposal\n  decision: --provisional true|false\n  question: --answer <decision-id> or --reopen\n  hypothesis: --goal <id>, --test <text>, --result supported|contradicted|inconclusive|set_aside, --evidence <text>\n  example: --illustrates <id>, --generalization <text>\nAccepts --plan, --reason, and --revision. Get entry IDs with `plan current`.",
+            "entry set <number> [--text <text>] [--source <text>] [--rationale <text>]",
+            r#"entry set 1 --text "Use shared public Auth0""#,
+            "Kind-specific fields:\n  boundary: --attribution user_requirement|user_correction|agent_proposal\n  decision: --provisional true|false\n  question: --answer <number> or --reopen\n  hypothesis: --goal <number>, --test <text>, --result supported|contradicted|inconclusive|set_aside, --evidence <text>\n  example: --illustrates <number>, --generalization <text>\nAccepts --plan and --reason. Get entry numbers with `plan current`.",
         ),
-        ("entry", "move", 2) => ("entry move <uuid> [--after <uuid>]", r#"entry move "$ENTRY_ID" --after "$OTHER_ENTRY_ID""#, "Omit --after to move to the beginning. Accepts --plan, --reason, and --revision."),
-        ("entry", "retire", 2) => ("entry retire <uuid> [--successors <ids>]", r#"entry retire "$ENTRY_ID" --successors "$SUCCESSOR_ID""#, "Supply comma-separated successor UUIDs. Accepts --plan, --reason, and --revision."),
+        ("entry", "move", 2) => ("entry move <number> [--after <number>]", r#"entry move 2 --after 3"#, "Omit --after to move to the beginning. Accepts --plan and --reason."),
+        ("entry", "retire", 2) => ("entry retire <number> [--successors <numbers>]", r#"entry retire 2 --successors 3"#, "Supply comma-separated successor numbers. Accepts --plan and --reason."),
         _ => anyhow::bail!("unknown help topic: {}", topic.join(" ")),
     };
-    let example = if first == "patch" {
-        example.to_owned()
-    } else {
-        format!("sulion plan {example}")
-    };
+    let example = format!("sulion plan {example}");
     println!("Usage: sulion plan {usage}\n\n{detail}\n\n  {example}");
     Ok(())
 }

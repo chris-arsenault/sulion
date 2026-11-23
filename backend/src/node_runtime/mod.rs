@@ -26,6 +26,7 @@ use crate::repo_lifecycle::RepoLifecycleGate;
 use crate::repo_state::RepoStateManager;
 use crate::worktree::{WorkspaceManager, WorkspaceRecord};
 
+mod data_sets;
 mod host;
 mod maintenance;
 mod messages;

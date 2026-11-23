@@ -16,15 +16,18 @@ pub use authoring::{
     AuthoredPlanView, DirectEdit, EntryContent, EntryFields, EntryKind, HypothesisResult,
     PhaseFields, PlanEdit, PlanFields, PlanPatch,
 };
+use branches::inherited_entries;
 use branches::{ancestors, anchor_phase_ids, branch_views, close_branch_into_parent};
-pub use branches::{branch, tree};
+pub use branches::{branch, lookup, tree};
 use model::PlanRow;
 pub use model::{
     BoundarySource, BranchPlanInput, CreatePlanInput, NewPhase, PlanActor, PlanAncestorView,
     PlanAttachmentView, PlanBoundary, PlanBranchView, PlanEventView, PlanGuidance, PlanPhaseView,
     PlanSummaryView, PlanTreeNodeView, PlanView, UpdatePhaseInput, UpdatePlanInput,
 };
-pub use patch::{apply as apply_patch, apply_direct, AuthoringConflict};
+pub use patch::{
+    apply as apply_patch, apply_commands, apply_direct, AuthoringConflict, PlanCommands,
+};
 pub use phases::{add_phase, update_phase, PhaseReference};
 use phases::{initial_phase_status, skip_remaining_phases, validate_phase_size};
 
@@ -118,14 +121,7 @@ pub(crate) async fn read_plan(
     let Some(row) = row else { return Ok(None) };
     let (mut authoring, _) = patch::read_authoring(tx, plan_id, &row.guidance).await?;
     let mut view = hydrate(tx, row).await?;
-    for ancestor in &view.ancestors {
-        let (authored, _) = patch::read_authoring(tx, ancestor.id, &ancestor.guidance).await?;
-        view.inherited_authoring.push(model::InheritedAuthoring {
-            plan_id: ancestor.id,
-            revision: authored.revision,
-            entries: authored.document.entries,
-        });
-    }
+    view.inherited_authoring = inherited_entries(tx, &view.ancestors).await?;
     let active_entries = authoring
         .document
         .entries
@@ -178,7 +174,7 @@ pub async fn list_for_repo(
           WHERE repo_name = $1 \
             AND ($2 OR status IN ('active', 'paused')) \
           ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 ELSE 2 END, \
-                   updated_at DESC",
+                   updated_at DESC, id",
     ))
     .bind(repo_name)
     .bind(include_closed)

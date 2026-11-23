@@ -3731,6 +3731,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "shell-words",
  "similar",
  "sqlx",
  "syn 2.0.117",

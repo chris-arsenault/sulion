@@ -14,16 +14,22 @@ use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+mod data_sets;
+mod numbers;
+mod transfers;
+use numbers::{resolve_direct_numbers, NumberedPhase};
+
 use crate::{
     auth::AuthenticatedUser,
     db::Pool,
     plans::{
         self, diagrams, CreatePlanInput, DirectEdit, EntryContent, EntryFields, NewPhase,
-        PhaseFields, PlanActor, PlanEdit, PlanFields, PlanPatch, PlanView,
+        PlanActor, PlanEdit, PlanFields, PlanPatch, PlanView,
     },
 };
 
 pub(super) struct PlanTools {
+    state: std::sync::Arc<crate::AppState>,
     pool: Pool,
     browser_url: reqwest::Url,
 }
@@ -64,17 +70,20 @@ struct ListPlans {
 
 #[derive(Deserialize, JsonSchema)]
 struct ReadPlan {
-    plan_id: Uuid,
+    #[serde(flatten)]
+    target: PlanTarget,
     /// Include the guided design review with the current authored revision.
     #[serde(default)]
     review: bool,
     /// Focus a guided review on one phase while retaining surrounding context.
-    phase_id: Option<Uuid>,
+    #[serde(alias = "phase_id")]
+    phase: Option<plans::PhaseReference>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 struct PlanHistory {
-    plan_id: Uuid,
+    #[serde(flatten)]
+    target: PlanTarget,
     /// Return authored changes newer than this revision.
     after_revision: Option<i64>,
 }
@@ -106,8 +115,9 @@ struct NewPhaseContent {
 
 #[derive(Deserialize, JsonSchema)]
 struct Edit<T> {
-    plan_id: Uuid,
-    /// Omit for an ordinary field edit. Supply plan.authoring.revision from read_plan to compare against that read.
+    #[serde(flatten)]
+    target: PlanTarget,
+    #[schemars(skip)]
     revision: Option<i64>,
     reason: Option<String>,
     #[serde(flatten)]
@@ -116,49 +126,99 @@ struct Edit<T> {
 
 #[derive(Deserialize, JsonSchema)]
 struct UpdateEntry {
+    #[serde(rename = "entry", alias = "id")]
+    #[schemars(with = "plans::PhaseReference")]
     id: Uuid,
     #[serde(flatten)]
+    #[schemars(with = "EntryFields<plans::PhaseReference>")]
     fields: EntryFields,
 }
 
 #[derive(Deserialize, JsonSchema)]
 struct MoveBlock {
+    #[serde(rename = "number", alias = "id")]
+    #[schemars(with = "plans::PhaseReference")]
     id: Uuid,
     /// Target the beginning of the list by omitting after.
+    #[schemars(with = "Option<plans::PhaseReference>")]
     after: Option<Uuid>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 struct RetireBlock {
+    #[serde(rename = "number", alias = "id")]
+    #[schemars(with = "plans::PhaseReference")]
     id: Uuid,
     #[serde(default)]
+    #[schemars(with = "Vec<plans::PhaseReference>")]
     successors: Vec<Uuid>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 struct RecordEvidence {
+    #[serde(rename = "phase", alias = "id")]
+    #[schemars(with = "plans::PhaseReference")]
     id: Uuid,
     observation: String,
     reference: Option<String>,
+    #[schemars(skip)]
     observed_revision: i64,
     #[serde(default)]
+    #[schemars(skip)]
     ancestors: BTreeMap<Uuid, i64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 struct BatchEdit {
-    plan_id: Uuid,
     #[serde(flatten)]
-    patch: PlanPatch,
+    target: PlanTarget,
+    /// One ordinary plan edit per string, in execution order.
+    edits: Vec<String>,
+    #[schemars(skip)]
+    revision: Option<i64>,
+    reason: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct PlanTarget {
+    /// Plan title from list_plans.
+    #[serde(alias = "plan_id")]
+    plan: String,
+    /// Repository containing the plan. Supply it when titles overlap.
+    repo: Option<String>,
+}
+
+impl PlanTarget {
+    async fn resolve(&self, pool: &Pool) -> anyhow::Result<Uuid> {
+        if self.repo.is_none() {
+            if let Ok(id) = self.plan.parse() {
+                return Ok(id);
+            }
+        }
+        plans::lookup(pool, self.repo.as_deref(), &self.plan).await
+    }
 }
 
 impl PlanTools {
-    pub(super) fn new(pool: Pool, browser_url: reqwest::Url) -> Self {
-        Self { pool, browser_url }
+    pub(super) fn new(state: std::sync::Arc<crate::AppState>, browser_url: reqwest::Url) -> Self {
+        Self {
+            pool: state.pool.clone(),
+            state,
+            browser_url,
+        }
     }
 
     async fn call(&self, request: CallToolRequestParams, subject: &str) -> anyhow::Result<Value> {
         match request.name.as_ref() {
+            name @ ("list_data_sets"
+            | "define_data_set"
+            | "fill_data_set_items"
+            | "read_data_set"
+            | "import_data_set"
+            | "export_data_set") => data_sets::call(&self.state, name, request.arguments).await,
+            name @ ("begin_file_upload" | "complete_file_upload" | "upload_file") => {
+                transfers::call(&self.state, name, request.arguments, subject).await
+            }
             "list_plan_repositories" => {
                 let repositories: Vec<String> = sqlx::query_scalar(
                     "SELECT repo_name FROM repo_runtime_state WHERE exists = TRUE \
@@ -194,16 +254,31 @@ impl PlanTools {
                 );
                 let plans =
                     plans::list_for_repo(&self.pool, &args.repo, args.include_closed).await?;
-                Ok(json!({"plans": plans.into_iter().map(|plan| json!({
+                Ok(
+                    json!({"plans": plans.into_iter().enumerate().map(|(i, plan)| json!({
+                    "number": i + 1,
                     "id": plan.id, "title": plan.title, "summary": plan.summary, "status": plan.status,
                     "parent_plan_id": plan.parent_plan_id,
-                })).collect::<Vec<_>>()}))
+                })).collect::<Vec<_>>()}),
+                )
             }
             "read_plan" => {
                 let args: ReadPlan = arguments(request.arguments)?;
-                let plan = plans::get(&self.pool, args.plan_id).await?;
-                if args.review || args.phase_id.is_some() {
-                    let mut review = plans::review::review(plan, args.phase_id)?;
+                let plan = plans::get(&self.pool, args.target.resolve(&self.pool).await?).await?;
+                if args.review || args.phase.is_some() {
+                    let phase = args
+                        .phase
+                        .map(|reference| match reference {
+                            plans::PhaseReference::Id(id) => Ok(id),
+                            plans::PhaseReference::Position(n) => plan
+                                .phases
+                                .iter()
+                                .find(|p| p.position == n)
+                                .map(|p| p.id)
+                                .ok_or_else(|| anyhow::anyhow!("no phase at position {n}")),
+                        })
+                        .transpose()?;
+                    let mut review = plans::review::review(plan, phase)?;
                     self.decorate_plan(&mut review["plan"]);
                     Ok(review)
                 } else {
@@ -214,8 +289,9 @@ impl PlanTools {
             }
             "read_plan_history" => {
                 let args: PlanHistory = arguments(request.arguments)?;
-                plans::get(&self.pool, args.plan_id).await?;
-                let events = plans::events(&self.pool, args.plan_id).await?;
+                let id = args.target.resolve(&self.pool).await?;
+                plans::get(&self.pool, id).await?;
+                let events = plans::events(&self.pool, id).await?;
                 Ok(
                     json!({"events": events.into_iter().filter(|event| args.after_revision.is_none_or(|revision| event.authoring_revision.is_some_and(|current| current > revision))).map(|event| {
                     let mut event = json!(event);
@@ -263,34 +339,71 @@ impl PlanTools {
                 Ok(json!({"plan": self.plan_result(plan)}))
             }
             "patch_plan" => {
-                let args: BatchEdit = arguments(request.arguments)?;
-                let plan = plans::apply_patch(
-                    &self.pool,
-                    args.plan_id,
-                    args.patch,
-                    &PlanActor::user(),
-                    "mcp",
-                    Some(subject),
-                    None,
-                )
-                .await?;
-                Ok(json!({"plan": self.plan_result(plan)}))
+                self.patch_plan(request.arguments.unwrap_or_default(), subject)
+                    .await
             }
-            name => {
-                let (id, edit) = direct_edit(name, request.arguments)?;
-                let plan = plans::apply_direct(
-                    &self.pool,
-                    id,
-                    edit,
-                    &PlanActor::user(),
-                    "mcp",
-                    Some(subject),
-                    None,
-                )
-                .await?;
-                Ok(json!({"plan": self.plan_result(plan)}))
-            }
+            name => self.edit(name, request.arguments, subject).await,
         }
+    }
+
+    async fn edit(
+        &self,
+        name: &str,
+        params: Option<JsonObject>,
+        subject: &str,
+    ) -> anyhow::Result<Value> {
+        let mut input = params.unwrap_or_default();
+        let target: PlanTarget = arguments(Some(input.clone()))?;
+        let id = target.resolve(&self.pool).await?;
+        resolve_direct_numbers(&self.pool, id, name, &mut input).await?;
+        let (_, edit) = direct_edit(name, Some(input))?;
+        let plan = plans::apply_direct(
+            &self.pool,
+            id,
+            edit,
+            &PlanActor::user(),
+            "mcp",
+            Some(subject),
+            None,
+        )
+        .await?;
+        Ok(json!({"plan": self.plan_result(plan)}))
+    }
+
+    async fn patch_plan(&self, input: JsonObject, subject: &str) -> anyhow::Result<Value> {
+        let plan = if input.contains_key("operations") {
+            anyhow::ensure!(!input.contains_key("edits"), "supply one batch format");
+            let target: PlanTarget = arguments(Some(input.clone()))?;
+            let patch: PlanPatch<Option<i64>> = arguments(Some(input))?;
+            plans::apply_patch(
+                &self.pool,
+                target.resolve(&self.pool).await?,
+                patch,
+                &PlanActor::user(),
+                "mcp",
+                Some(subject),
+                None,
+            )
+            .await?
+        } else {
+            let args: BatchEdit = arguments(Some(input))?;
+            let commands = crate::plan_cli::split_edits(args.edits.iter().map(String::as_str))?;
+            plans::apply_commands(
+                &self.pool,
+                args.target.resolve(&self.pool).await?,
+                plans::PlanCommands {
+                    commands,
+                    reason: args.reason,
+                    revision: args.revision,
+                },
+                &PlanActor::user(),
+                "mcp",
+                Some(subject),
+                None,
+            )
+            .await?
+        };
+        Ok(json!({"plan": self.plan_result(plan)}))
     }
 
     fn plan_result(&self, plan: PlanView) -> Value {
@@ -301,6 +414,27 @@ impl PlanTools {
 
     fn decorate_plan(&self, value: &mut Value) {
         trim_attachment_data(value);
+        let mut number = 0;
+        let mut number_entries = |entries: &mut Value| {
+            for entry in entries
+                .as_array_mut()
+                .into_iter()
+                .flatten()
+                .filter(|e| e["retired"] != true)
+            {
+                number += 1;
+                entry["number"] = json!(number);
+            }
+        };
+        number_entries(&mut value["authoring"]["entries"]);
+        if let Some(inherited) = value
+            .get_mut("inherited_authoring")
+            .and_then(Value::as_array_mut)
+        {
+            for ancestor in inherited {
+                number_entries(&mut ancestor["entries"]);
+            }
+        }
         let Some(id) = value["id"].as_str() else {
             return;
         };
@@ -323,7 +457,7 @@ impl ServerHandler for PlanTools {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(
-                "Read the existing plan with read_plan. Use direct tools to edit only the affected fields by UUID. Direct edits can omit revision. Use patch_plan for changes that must commit together and supply plan.authoring.revision from read_plan. For a design review, use read_plan with review enabled. To reuse an Arconis diagram, list the repo's registered diagrams and open its workspace in Arconis.",
+                "Select a plan by title. Read its numbered phases and entries with read_plan. Use patch_plan with ordinary edits when they must commit together. For design review, use read_plan with review enabled. For diagrams, list the repository's registered diagrams. For inventories, use list_data_sets or define_data_set in the owning checkout, then fill_data_set_items by key. Use upload_file for a chat attachment, or begin_file_upload and complete_file_upload for a client that can PUT bytes.",
             )
     }
 
@@ -332,28 +466,31 @@ impl ServerHandler for PlanTools {
         _: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(vec![
+        let mut tools = vec![
             tool::<Empty>("list_plan_repositories", "List Sulion repositories and repositories with saved plans or registered diagrams.", true, false),
             tool::<RepoDiagrams>("list_repo_arconis_diagrams", "Find reusable Arconis diagrams in a repository, including diagrams without a plan attachment.", true, false),
             tool::<RegisterDiagram>("register_arconis_diagram", "Register a diagram with the workspace and room IDs returned by Arconis save_workspace. Re-registering the same workspace and room updates its title.", false, false),
-            tool::<Edit<AttachDiagram>>("attach_arconis_diagram", "Attach the diagram and supply its complete set of phase UUID and object ID pairs. Save the linked objects in Arconis with their read_plan phase URLs. When replacing links from an earlier read, pass its plan.authoring.revision.", false, false),
+            tool::<Edit<AttachDiagram>>("attach_arconis_diagram", "Attach the diagram and supply its complete set of phase UUID and object ID pairs. Save the linked objects in Arconis with their read_plan phase URLs.", false, false),
             tool::<Edit<DiagramId>>("detach_arconis_diagram", "Remove a diagram attachment and its links from this plan. The repo registration and Arconis workspace remain available. Remove corresponding backlinks in Arconis.", false, true),
             tool::<ListPlans>("list_plans", "Find the existing plan by repository and title before creating one.", true, false),
-            tool::<ReadPlan>("read_plan", "Read the full authored plan and revision by UUID. Optionally get a guided plan or phase review.", true, false),
+            tool::<ReadPlan>("read_plan", "Read the full plan by title, optionally reviewing one numbered phase.", true, false),
             tool::<PlanHistory>("read_plan_history", "Explain changes since an authoring revision, including why an entry was superseded.", true, false),
             tool::<CreatePlan>("create_plan", "Create an unattached plan with pending phases.", false, false),
             tool::<Edit<PlanFields>>("update_plan", "Update the title, synopsis, outcome or technical details.", false, false),
-            tool::<Edit<EntryContent>>("add_plan_entry", "Add a typed entry and let Sulion assign its ID.", false, false),
-            tool::<Edit<UpdateEntry>>("update_plan_entry", "Change supplied fields on the entry with this ID.", false, false),
+            tool::<Edit<EntryContent<plans::PhaseReference>>>("add_plan_entry", "Add a typed entry. Use entry numbers for links to other entries.", false, false),
+            tool::<Edit<UpdateEntry>>("update_plan_entry", "Change supplied fields on a numbered entry.", false, false),
             tool::<Edit<MoveBlock>>("move_plan_entry", "Move an entry after a neighboring entry or to the start.", false, false),
             tool::<Edit<RetireBlock>>("retire_plan_entry", "Retire an entry and optionally link its successors.", false, true),
             tool::<Edit<NewPhaseContent>>("add_plan_phase", "Add a pending phase and let Sulion assign its ID.", false, false),
-            tool::<Edit<PhaseFields>>("update_plan_phase", "Edit the supplied phase fields using plan_id and the phase UUID as id. Omit revision for ordinary edits.", false, false),
+            tool::<Edit<NumberedPhase>>("update_plan_phase", "Edit the supplied fields on a numbered phase.", false, false),
             tool::<Edit<MoveBlock>>("move_plan_phase", "Move a phase after a neighboring phase or to the start.", false, false),
             tool::<Edit<RetireBlock>>("retire_plan_phase", "Retire an unstarted phase and optionally link its successors.", false, true),
-            tool::<Edit<RecordEvidence>>("record_plan_evidence", "Record a phase observation with the authoring revision of the plan and each governing ancestor you checked.", false, false),
-            tool::<BatchEdit>("patch_plan", "Commit the related edits together. Supply revision from plan.authoring.revision in read_plan.", false, true),
-        ]))
+            tool::<Edit<RecordEvidence>>("record_plan_evidence", "Record an observation for a numbered phase against its current plan context.", false, false),
+            tool::<BatchEdit>("patch_plan", "Apply one or more edits together. Example: edits=[\"update --summary 'New scope'\", \"entry set 1 --text 'Support offline use'\", \"phase edit 2 --acceptance 'Works offline'\"]. Use entry add/set/move/retire or phase add/edit/move/retire/evidence. Numbers follow the current order after each edit.", false, true),
+        ];
+        tools.extend(data_sets::tools());
+        tools.extend(transfers::tools());
+        Ok(ListToolsResult::with_all_items(tools))
     }
 
     async fn call_tool(
@@ -406,7 +543,7 @@ fn arguments<T: DeserializeOwned>(arguments: Option<JsonObject>) -> anyhow::Resu
     ))?)
 }
 
-fn direct_edit(name: &str, input: Option<JsonObject>) -> anyhow::Result<(Uuid, DirectEdit)> {
+fn direct_edit(name: &str, input: Option<JsonObject>) -> anyhow::Result<(PlanTarget, DirectEdit)> {
     match name {
         "update_plan" => decode_edit(input, PlanEdit::EditPlan),
         "add_plan_entry" => decode_edit(input, |entry| PlanEdit::AddEntry { entry }),
@@ -474,10 +611,10 @@ fn direct_edit(name: &str, input: Option<JsonObject>) -> anyhow::Result<(Uuid, D
 fn decode_edit<T: DeserializeOwned>(
     input: Option<JsonObject>,
     operation: impl FnOnce(T) -> PlanEdit,
-) -> anyhow::Result<(Uuid, DirectEdit)> {
+) -> anyhow::Result<(PlanTarget, DirectEdit)> {
     let args: Edit<T> = arguments(input)?;
     Ok((
-        args.plan_id,
+        args.target,
         DirectEdit {
             revision: args.revision,
             reason: args.reason,

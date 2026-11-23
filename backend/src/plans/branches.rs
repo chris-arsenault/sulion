@@ -135,6 +135,40 @@ pub async fn branch(
     tx.commit().await?;
     get(pool, plan_id).await
 }
+pub(super) async fn inherited_entries(
+    tx: &mut Transaction<'_, Postgres>,
+    ancestors: &[PlanAncestorView],
+) -> anyhow::Result<Vec<super::model::InheritedAuthoring>> {
+    let mut inherited = Vec::with_capacity(ancestors.len());
+    for ancestor in ancestors {
+        let (view, _) = super::patch::read_authoring(tx, ancestor.id, &ancestor.guidance).await?;
+        inherited.push(super::model::InheritedAuthoring {
+            plan_id: ancestor.id,
+            revision: view.revision,
+            entries: view.document.entries,
+        });
+    }
+    Ok(inherited)
+}
+
+pub async fn lookup(pool: &Pool, repo: Option<&str>, title: &str) -> anyhow::Result<Uuid> {
+    if let Some(index) = title.strip_prefix('#').and_then(|n| n.parse::<i64>().ok()) {
+        let repo =
+            repo.ok_or_else(|| anyhow::anyhow!("select a repository to use a list number"))?;
+        anyhow::ensure!(index > 0, "plan numbers start at 1");
+        return sqlx::query_scalar("SELECT id FROM plans WHERE repo_name = $1 ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 ELSE 2 END, updated_at DESC, id LIMIT 1 OFFSET $2")
+            .bind(repo).bind(index-1).fetch_optional(pool).await?.ok_or_else(|| anyhow::anyhow!("no plan at position {index}"));
+    }
+    let ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM plans WHERE (title = $1 OR id::text = $1) AND ($2::text IS NULL OR repo_name = $2) LIMIT 2")
+        .bind(title).bind(repo).fetch_all(pool).await?;
+    match ids.as_slice() {
+        [id] => Ok(*id),
+        [] => anyhow::bail!("plan not found: {title}"),
+        _ => anyhow::bail!(
+            "ambiguous plan title: {title}. Use the repository and #number from its plan list"
+        ),
+    }
+}
 
 /// Every plan in the tree containing `plan_id`, root first. Ordered so a
 /// caller can indent by depth without re-sorting.

@@ -134,6 +134,18 @@ async fn every_plan_command_recovers_boundaries_and_preserves_json_output() {
     .await;
     let branch: Value = serde_json::from_str(&out).unwrap();
     let branch_id = branch["id"].as_str().unwrap();
+    let (out, _) = cli_with_input(
+        &sock,
+        pty,
+        &["--json", "patch", "-"],
+        0,
+        "phase edit 1 --basis 2\nphase evidence 1 'Checked parent requirements'",
+    )
+    .await;
+    let checked: Value = serde_json::from_str(&out).unwrap();
+    let details = &checked["authoring"]["phases"][checked["phases"][0]["id"].as_str().unwrap()];
+    assert_eq!(details["basis"][0], root["authoring"]["entries"][0]["id"]);
+    assert!(details["evidence"][0]["ancestors"][root_id].is_number());
     for args in [
         vec!["current"],
         vec!["list"],
@@ -301,7 +313,7 @@ async fn cli_patches_full_plan_atomically_and_rejects_stale_edits() {
     assert_eq!(help, same_help);
     assert!(help.contains("sulion plan phase edit 5 --acceptance"));
     assert!(help.contains("Edits apply to current state by default"));
-    assert!(help.contains(".authoring.revision"));
+    assert!(!help.contains("--revision"));
     assert!(!help.contains("phase retire"));
     let (_, error) = cli(&sock, pty, &["phase", "edit"], 64).await;
     assert!(error.contains("next: sulion plan help phase edit"));
@@ -386,6 +398,66 @@ async fn cli_patches_full_plan_atomically_and_rejects_stale_edits() {
     assert_eq!(
         current["authoring"]["phases"][moved["id"].as_str().unwrap()]["depends_on"],
         json!([phase])
+    );
+    cli(
+        &sock,
+        pty,
+        &[
+            "patch",
+            "update",
+            "--summary",
+            "Requirements in Git",
+            "--",
+            "phase",
+            "edit",
+            "1",
+            "--acceptance",
+            "Review the diff",
+        ],
+        0,
+    )
+    .await;
+    cli(
+        &sock,
+        pty,
+        &[
+            "patch",
+            "update --summary 'Must roll back'\nentry retire 9999",
+        ],
+        66,
+    )
+    .await;
+    cli(
+        &sock,
+        pty,
+        &["entry", "set", "1", "--rationale", "Product documentation"],
+        0,
+    )
+    .await;
+    cli_with_input(
+        &sock,
+        pty,
+        &["patch", "-"],
+        0,
+        "entry add decision 'Check in the file'\nphase evidence 1 'Verified the working-tree diff'",
+    )
+    .await;
+    let (plan, _) = cli(
+        &sock,
+        pty,
+        &["--json", "show", current["title"].as_str().unwrap()],
+        0,
+    )
+    .await;
+    let plan: Value = serde_json::from_str(&plan).unwrap();
+    assert_eq!(plan["summary"], "Requirements in Git");
+    assert_eq!(
+        plan["authoring"]["entries"][0]["rationale"],
+        "Product documentation"
+    );
+    assert_eq!(
+        plan["authoring"]["phases"][moved["id"].as_str().unwrap()]["acceptance"],
+        "Review the diff"
     );
     listener.abort();
 }

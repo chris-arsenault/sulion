@@ -211,7 +211,9 @@ async fn bump_authored_phase_revision(
     Ok(revision)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 #[serde(untagged)]
 pub enum PhaseReference {
     Id(Uuid),

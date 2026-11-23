@@ -31,8 +31,12 @@ impl NodeRuntime {
         Ok(self.install_staged_file(input, fixture_url).await?)
     }
 
-    async fn upload_root(&self, input: &UploadInput) -> Result<PathBuf, RuntimeError> {
-        match (&input.repo, input.workspace_id) {
+    pub(super) async fn document_root(
+        &self,
+        repo: Option<&str>,
+        workspace_id: Option<uuid::Uuid>,
+    ) -> Result<PathBuf, RuntimeError> {
+        match (repo, workspace_id) {
             (Some(repo), None) => self.repo_root(repo),
             (None, Some(id)) => {
                 let workspace = self.load_workspace(id).await?;
@@ -84,13 +88,17 @@ impl NodeRuntime {
         url: &str,
     ) -> Result<Value, RuntimeError> {
         let _guard = self.repo_lifecycle_gate.read().await;
-        let root = self.upload_root(input).await?;
+        let root = self
+            .document_root(input.repo.as_deref(), input.workspace_id)
+            .await?;
         let directory = Directory::root(&root)?.descend(&input.directory, true)?;
         let mut temporary = directory.temporary()?;
         download(url, temporary.take_file(), input.size, &input.checksum)
             .await
             .map_err(|message| RuntimeError::BadRequest(message.into()))?;
-        let current_root = self.upload_root(input).await?;
+        let current_root = self
+            .document_root(input.repo.as_deref(), input.workspace_id)
+            .await?;
         // No await between replacement and returning the result: cancellation
         // during download drops the temporary without exposing partial content.
         temporary.install_at(&current_root, &input.directory, &input.filename)?;

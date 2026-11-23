@@ -34,6 +34,7 @@ impl NodeRuntime {
     ) -> Result<Value, RuntimeError> {
         match kind {
             NodeRequestKind::UploadImport => self.install_upload(decode(request)?).await,
+            NodeRequestKind::DataSet => self.data_set(request).await,
             NodeRequestKind::ProbeEcho => Ok(json!({ "echo": request })),
             NodeRequestKind::SessionCreate => {
                 let _lifecycle_guard = self.repo_lifecycle_gate.read().await;

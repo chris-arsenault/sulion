@@ -338,6 +338,7 @@ pub enum NodeWireMessage {
 #[serde(rename_all = "snake_case")]
 pub enum NodeRequestKind {
     UploadImport,
+    DataSet,
     ProbeEcho,
     SessionCreate,
     SessionDelete,
@@ -377,6 +378,7 @@ impl NodeRequestKind {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::UploadImport => "upload_import",
+            Self::DataSet => "data_set",
             Self::ProbeEcho => "probe_echo",
             Self::SessionCreate => "session_create",
             Self::SessionDelete => "session_delete",
@@ -411,6 +413,7 @@ impl NodeRequestKind {
     pub fn parse(value: &str) -> Option<Self> {
         Some(match value {
             "upload_import" => Self::UploadImport,
+            "data_set" => Self::DataSet,
             "probe_echo" => Self::ProbeEcho,
             "session_create" => Self::SessionCreate,
             "session_delete" => Self::SessionDelete,

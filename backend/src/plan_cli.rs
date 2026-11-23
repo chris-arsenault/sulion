@@ -13,6 +13,8 @@ use crate::plans::{
 };
 
 mod archive;
+mod batch;
+pub(crate) use batch::{authored_command, split_edits};
 mod display;
 mod guidance;
 mod nested;
@@ -54,22 +56,68 @@ pub async fn run_plan(args: &[OsString]) -> anyhow::Result<i32> {
     }
     let topic = usage::command_topic(&args).join(" ");
     args.remove(0);
-    if command == "patch" {
-        if let Some(index) = args.iter().position(|arg| arg == "-") {
-            // Drop the stdin lock before reporting any error through the socket.
-            let payload = std::io::read_to_string(std::io::stdin().lock());
-            match payload {
-                Ok(payload) => args[index] = payload,
-                Err(error) => return Ok(plan_usage_failure(&topic, &error.into()).await),
-            }
+    if let Err(error) = resolve_plan_title(&command, &mut args).await {
+        return Ok(plan_usage_failure(&topic, &error).await);
+    }
+    if command == "patch" && args.first().is_some_and(|arg| arg == "-") {
+        // Drop the stdin lock before reporting any error through the socket.
+        let payload = std::io::read_to_string(std::io::stdin().lock());
+        match payload {
+            Ok(payload) => args[0] = payload,
+            Err(error) => return Ok(plan_usage_failure(&topic, &error.into()).await),
         }
     }
-    let request = match parse_plan_request(&command, &mut args) {
+    let request = match parse_plan_request(&command, &mut args.clone()) {
         Ok(request) => request,
+        Err(err) if err.is::<nested::NeedsPlan>() => {
+            let plan_id = take_uuid_option(&mut args, "--plan")?;
+            let revision = nested::revision(&mut args)?;
+            let reason = take_option(&mut args, "--reason")?;
+            args.insert(0, command.clone());
+            ControlRequest::PlanCommands {
+                plan_id,
+                input: crate::plans::PlanCommands {
+                    commands: vec![args],
+                    reason,
+                    revision,
+                },
+            }
+        }
         Err(err) => return Ok(plan_usage_failure(&topic, &err).await),
     };
     let full = matches!(command.as_str(), "current" | "show");
     reminder::run(request, json, full).await
+}
+
+async fn resolve_plan_title(command: &str, args: &mut [String]) -> anyhow::Result<()> {
+    let target = if let Some(index) = args.iter().position(|arg| arg == "--plan") {
+        args.get_mut(index + 1)
+    } else if matches!(
+        command,
+        "attach" | "detach" | "show" | "review" | "tree" | "history"
+    ) {
+        let index = (0..args.len())
+            .find(|&i| !args[i].starts_with('-') && (i == 0 || args[i - 1] != "--phase"));
+        index.and_then(|i| args.get_mut(i))
+    } else {
+        None
+    };
+    if let Some(title) = target {
+        if Uuid::parse_str(title).is_err() {
+            let result = call(ControlRequest::PlanLookup {
+                title: title.clone(),
+            })
+            .await?;
+            anyhow::ensure!(result.ok, "{}", result.error.unwrap_or_default());
+            *title = result
+                .data
+                .unwrap_or_default()
+                .as_str()
+                .ok_or_else(|| anyhow!("missing plan in listing"))?
+                .to_owned();
+        }
+    }
+    Ok(())
 }
 
 async fn plan_usage_failure(topic: &str, error: &anyhow::Error) -> i32 {
@@ -266,24 +314,9 @@ pub(crate) fn parse_plan_request(
             })
         }
         "update" => parse_plan_update(args),
-        "patch" => {
-            let plan_id = take_uuid_option(args, "--plan")?;
-            let revision = nested::revision(args)?;
-            let payload = take_positional(args)
-                .ok_or_else(|| anyhow!("provide inline JSON or use plan patch - to read stdin"))?;
-            let mut input: crate::plans::PlanPatch<Option<i64>> = serde_json::from_str(&payload)?;
-            if revision.is_some() {
-                anyhow::ensure!(
-                    input.revision.is_none(),
-                    "provide the revision in JSON or with --revision"
-                );
-                input.revision = revision;
-            }
-            reject_unknown_options(args)?;
-            Ok(ControlRequest::PlanPatch { plan_id, input })
-        }
+        "patch" => batch::request(args),
         "phase" | "step" => parse_phase_request(args),
-        "entry" => nested::entry(args),
+        "entry" => nested::entry(args, None),
         "attach" => {
             let raw = take_positional(args).ok_or_else(|| anyhow!("plan id is required"))?;
             reject_unknown_options(args)?;
@@ -451,7 +484,7 @@ fn parse_phase_request(args: &mut Vec<String>) -> anyhow::Result<ControlRequest>
                 },
             })
         }
-        other => nested::phase(other, args),
+        other => nested::phase(other, args, None),
     }
 }
 

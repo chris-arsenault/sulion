@@ -31,9 +31,9 @@ struct Connector {
     owner: String,
 }
 
-pub(super) fn router(state: &AppState) -> Router<Arc<AppState>> {
+pub(super) fn router(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     match Connector::from_env(state) {
-        Ok(Some(connector)) => connected_router(state.pool.clone(), Arc::new(connector)),
+        Ok(Some(connector)) => connected_router(state.clone(), Arc::new(connector)),
         Ok(None) => Router::new(),
         Err(error) => {
             tracing::error!(%error, "plan MCP endpoint disabled");
@@ -45,7 +45,7 @@ pub(super) fn router(state: &AppState) -> Router<Arc<AppState>> {
 #[cfg(feature = "integration-tests")]
 pub fn test_plan_mcp_router(state: Arc<AppState>, auth: Arc<AuthState>) -> Router {
     connected_router(
-        state.pool.clone(),
+        state.clone(),
         Arc::new(Connector {
             auth,
             resource: "https://sulion.test/mcp".parse().unwrap(),
@@ -102,7 +102,7 @@ fn https_url(key: &str, path: &str) -> anyhow::Result<reqwest::Url> {
     Ok(url)
 }
 
-fn connected_router(pool: crate::db::Pool, connector: Arc<Connector>) -> Router<Arc<AppState>> {
+fn connected_router(state: Arc<AppState>, connector: Arc<Connector>) -> Router<Arc<AppState>> {
     let host = connector
         .resource
         .host_str()
@@ -113,9 +113,10 @@ fn connected_router(pool: crate::db::Pool, connector: Arc<Connector>) -> Router<
     };
     let browser_url = connector.resource.join("/").expect("same HTTPS origin");
     let service = StreamableHttpService::new(
-        move || Ok(tools::PlanTools::new(pool.clone(), browser_url.clone())),
+        move || Ok(tools::PlanTools::new(state.clone(), browser_url.clone())),
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default()
+            .with_max_request_body_bytes(256 * 1024)
             .with_legacy_session_mode(false)
             .with_json_response(true)
             .with_allowed_hosts([host])
@@ -199,7 +200,11 @@ async fn authenticate(
         };
     }
     request.extensions_mut().insert(user);
-    next.run(request).await
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 fn challenge(connector: &Connector) -> Response {

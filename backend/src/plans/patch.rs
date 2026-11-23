@@ -88,12 +88,99 @@ pub async fn apply(
     subject: Option<&str>,
     expected_repo: Option<&str>,
 ) -> anyhow::Result<PlanView> {
+    let operations = input
+        .operations
+        .into_iter()
+        .map(PendingEdit::Typed)
+        .collect();
+    apply_edits(
+        pool,
+        id,
+        EditBatch {
+            edits: operations,
+            revision: input.revision.into(),
+            reason: input.reason,
+            source: input.source,
+        },
+        actor,
+        client,
+        subject,
+        expected_repo,
+    )
+    .await
+}
+
+enum PendingEdit<P> {
+    Typed(PlanEdit<P>),
+    Command(Vec<String>),
+}
+
+struct EditBatch<P> {
+    edits: Vec<PendingEdit<P>>,
+    revision: Option<i64>,
+    reason: Option<String>,
+    source: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PlanCommands {
+    pub commands: Vec<Vec<String>>,
+    pub reason: Option<String>,
+    pub revision: Option<i64>,
+}
+
+pub async fn apply_commands(
+    pool: &Pool,
+    id: Uuid,
+    input: PlanCommands,
+    actor: &PlanActor,
+    client: &str,
+    subject: Option<&str>,
+    expected_repo: Option<&str>,
+) -> anyhow::Result<PlanView> {
+    let edits = input
+        .commands
+        .into_iter()
+        .map(PendingEdit::<PhaseReference>::Command)
+        .collect();
+    apply_edits(
+        pool,
+        id,
+        EditBatch {
+            edits,
+            revision: input.revision,
+            reason: input.reason,
+            source: None,
+        },
+        actor,
+        client,
+        subject,
+        expected_repo,
+    )
+    .await
+}
+
+async fn apply_edits<P: Into<PhaseReference> + Send>(
+    pool: &Pool,
+    id: Uuid,
+    batch: EditBatch<P>,
+    actor: &PlanActor,
+    client: &str,
+    subject: Option<&str>,
+    expected_repo: Option<&str>,
+) -> anyhow::Result<PlanView> {
     validate_actor(actor)?;
-    if input.operations.is_empty() {
+    let EditBatch {
+        edits,
+        revision,
+        reason,
+        source,
+    } = batch;
+    if edits.is_empty() {
         anyhow::bail!("plan patch needs at least one operation");
     }
-    let reason = clean_note(input.reason.as_deref())?;
-    let source = clean_note(input.source.as_deref())?;
+    let reason = clean_note(reason.as_deref())?;
+    let source = clean_note(source.as_deref())?;
     let mut tx = pool.begin().await?;
     let mut row: PlanRow = sqlx::query_as(&format!(
         "SELECT {PLAN_COLUMNS} FROM plans WHERE id = $1 FOR UPDATE"
@@ -109,16 +196,47 @@ pub async fn apply(
         anyhow::bail!("plan is closed with status {}", row.status);
     }
     let (authored, _) = read_authoring(&mut tx, id, &row.guidance).await?;
-    if let Some(expected) = input.revision.into() {
+    if let Some(expected) = revision {
         check_revision(expected, authored.revision)?;
     }
     let mut document = authored.document;
     let old_guidance = row.guidance.clone();
-    let mut changes = Vec::with_capacity(input.operations.len());
+    let mut changes = Vec::with_capacity(edits.len());
     let mut entry_successors = Vec::new();
     let mut phase_successors = Vec::new();
-    for operation in input.operations {
-        let operation = operation.resolve_phases(&mut tx, id).await?;
+    let inherited = if row.parent_plan_id.is_some()
+        && edits.iter().any(|e| matches!(e, PendingEdit::Command(_)))
+    {
+        let chain = ancestors(&mut tx, id).await?;
+        super::inherited_entries(&mut tx, &chain).await?
+    } else {
+        Vec::new()
+    };
+    for edit in edits {
+        let operation = match edit {
+            PendingEdit::Typed(edit) => edit.resolve_phases(&mut tx, id).await?,
+            PendingEdit::Command(args) => {
+                let numbers = document
+                    .entries
+                    .iter()
+                    .chain(inherited.iter().flat_map(|a| &a.entries))
+                    .filter(|e| !e.retired)
+                    .map(|e| e.id)
+                    .collect::<Vec<_>>();
+                let mut edit =
+                    crate::plan_cli::authored_command(args, &numbers, authored.revision)?;
+                if let PlanEdit::RecordEvidence {
+                    ancestors: observed,
+                    ..
+                } = &mut edit
+                {
+                    if observed.is_empty() {
+                        observed.extend(inherited.iter().map(|a| (a.plan_id, a.revision)));
+                    }
+                }
+                edit.resolve_phases(&mut tx, id).await?
+            }
+        };
         match &operation {
             PlanEdit::RetireEntry { successors, .. } => {
                 entry_successors.extend_from_slice(successors)
@@ -285,57 +403,7 @@ async fn apply_edit(
             entry.successors = successors;
             json!({"op": "retire_entry", "id": id, "before": before, "after": entry})
         }
-        PlanEdit::EditPhase(PhaseFields {
-            id,
-            title,
-            description,
-            implementation,
-            acceptance,
-            basis,
-            depends_on,
-            follows_up,
-            size,
-        }) => {
-            let (old_title, old_description, old_size): (String, String, Option<String>) = sqlx::query_as(
-                "SELECT title, description, size FROM plan_phases WHERE id = $1 AND plan_id = $2 AND retired_at IS NULL",
-            ).bind(id).bind(row.id).fetch_optional(&mut **tx).await?
-                .ok_or_else(|| anyhow::anyhow!("phase not found: {id}"))?;
-            let details = document.phases.entry(id).or_default();
-            let before = json!({"title": old_title, "description": old_description, "size": old_size, "details": details});
-            let title = title
-                .as_deref()
-                .map(|value| required_text(value, "phase title", MAX_TITLE_CHARS))
-                .transpose()?
-                .unwrap_or(old_title);
-            let description = description
-                .as_deref()
-                .map(|value| limited_text(value, "phase description", MAX_DESCRIPTION_CHARS))
-                .transpose()?
-                .unwrap_or(old_description);
-            let size = if size.is_some() {
-                super::validate_phase_size(size.as_deref())?
-            } else {
-                old_size
-            };
-            if let Some(implementation) = implementation {
-                details.implementation = implementation;
-            }
-            if let Some(acceptance) = acceptance {
-                details.acceptance = acceptance;
-            }
-            if let Some(basis) = basis {
-                details.basis = basis;
-            }
-            if let Some(depends_on) = depends_on {
-                details.depends_on = depends_on;
-            }
-            if let Some(follows_up) = follows_up {
-                details.follows_up = follows_up;
-            }
-            sqlx::query("UPDATE plan_phases SET title = $3, description = $4, size = $5, updated_at = NOW() WHERE id = $1 AND plan_id = $2")
-                .bind(id).bind(row.id).bind(&title).bind(&description).bind(&size).execute(&mut **tx).await?;
-            json!({"op": "edit_phase", "id": id, "before": before, "after": {"title": title, "description": description, "size": size, "details": details}})
-        }
+        PlanEdit::EditPhase(fields) => edit_phase_fields(tx, row.id, document, fields).await?,
         PlanEdit::AddPhase {
             id,
             title,
@@ -413,6 +481,66 @@ async fn apply_edit(
         }
     };
     Ok(change)
+}
+
+async fn edit_phase_fields(
+    tx: &mut Transaction<'_, Postgres>,
+    plan_id: Uuid,
+    document: &mut AuthoredPlan,
+    fields: PhaseFields,
+) -> anyhow::Result<Value> {
+    let PhaseFields {
+        id,
+        title,
+        description,
+        implementation,
+        acceptance,
+        basis,
+        depends_on,
+        follows_up,
+        size,
+    } = fields;
+    let (old_title, old_description, old_size): (String, String, Option<String>) = sqlx::query_as(
+        "SELECT title, description, size FROM plan_phases WHERE id = $1 AND plan_id = $2 AND retired_at IS NULL",
+    ).bind(id).bind(plan_id).fetch_optional(&mut **tx).await?
+        .ok_or_else(|| anyhow::anyhow!("phase not found: {id}"))?;
+    let details = document.phases.entry(id).or_default();
+    let before = json!({"title": old_title, "description": old_description, "size": old_size, "details": details});
+    let title = title
+        .as_deref()
+        .map(|value| required_text(value, "phase title", MAX_TITLE_CHARS))
+        .transpose()?
+        .unwrap_or(old_title);
+    let description = description
+        .as_deref()
+        .map(|value| limited_text(value, "phase description", MAX_DESCRIPTION_CHARS))
+        .transpose()?
+        .unwrap_or(old_description);
+    let size = if size.is_some() {
+        super::validate_phase_size(size.as_deref())?
+    } else {
+        old_size
+    };
+    if let Some(implementation) = implementation {
+        details.implementation = implementation;
+    }
+    if let Some(acceptance) = acceptance {
+        details.acceptance = acceptance;
+    }
+    if let Some(basis) = basis {
+        details.basis = basis;
+    }
+    if let Some(depends_on) = depends_on {
+        details.depends_on = depends_on;
+    }
+    if let Some(follows_up) = follows_up {
+        details.follows_up = follows_up;
+    }
+    sqlx::query("UPDATE plan_phases SET title = $3, description = $4, size = $5, updated_at = NOW() WHERE id = $1 AND plan_id = $2")
+        .bind(id).bind(plan_id).bind(&title).bind(&description).bind(&size).execute(&mut **tx).await?;
+    Ok(
+        json!({"op": "edit_phase", "id": id, "before": before, "after": {"title": title, "description": description, "size": size, "details": details}}),
+    )
 }
 
 fn edit_plan_details(

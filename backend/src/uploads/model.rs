@@ -2,11 +2,12 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UploadInput {
     pub repo: Option<String>,
     pub workspace_id: Option<Uuid>,
+    #[serde(default)]
     pub directory: String,
     pub filename: String,
     pub size: i64,

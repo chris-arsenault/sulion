@@ -39,19 +39,21 @@ pub struct PlanEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct EntryContent {
+#[serde(bound(deserialize = "E: Deserialize<'de>"))]
+pub struct EntryContent<E = Uuid> {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rationale: Option<String>,
     #[serde(flatten)]
-    pub kind: EntryKind,
+    pub kind: EntryKind<E>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum EntryKind {
+#[serde(bound(deserialize = "E: Deserialize<'de>"))]
+pub enum EntryKind<E = Uuid> {
     Requirement,
     Boundary {
         attribution: BoundarySource,
@@ -64,12 +66,12 @@ pub enum EntryKind {
     },
     Question {
         #[serde(default)]
-        answer: Option<Uuid>,
+        answer: Option<E>,
     },
     /// Link a testable explanation or approach to its goal. Record the test and what it establishes separately from outcome acceptance.
     Hypothesis {
         #[serde(default)]
-        goal: Option<Uuid>,
+        goal: Option<E>,
         #[serde(default)]
         test: String,
         #[serde(default)]
@@ -80,7 +82,7 @@ pub enum EntryKind {
     /// Preserve a concrete case and extract its general mechanism. Identify what varies and what behavior must hold when it varies.
     Example {
         #[serde(default)]
-        illustrates: Option<Uuid>,
+        illustrates: Option<E>,
         #[serde(default)]
         generalization: String,
     },
@@ -161,21 +163,21 @@ pub struct PhaseFields<P = Uuid> {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct EntryFields {
+pub struct EntryFields<E = Uuid> {
     pub text: Option<String>,
     pub source: Option<String>,
     pub rationale: Option<String>,
     pub attribution: Option<BoundarySource>,
     pub provisional: Option<bool>,
-    pub answer: Option<Uuid>,
+    pub answer: Option<E>,
     /// Clear the answer and make the question open again.
     #[serde(default)]
     pub reopen: bool,
-    pub goal: Option<Uuid>,
+    pub goal: Option<E>,
     pub test: Option<String>,
     pub result: Option<HypothesisResult>,
     pub evidence: Option<String>,
-    pub illustrates: Option<Uuid>,
+    pub illustrates: Option<E>,
     pub generalization: Option<String>,
 }
 

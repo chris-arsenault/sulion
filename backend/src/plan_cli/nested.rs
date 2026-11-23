@@ -34,14 +34,17 @@ pub(super) fn request(
     }
 }
 
-pub(super) fn entry(args: &mut Vec<String>) -> anyhow::Result<ControlRequest> {
+pub(super) fn entry(
+    args: &mut Vec<String>,
+    entries: Option<&[Uuid]>,
+) -> anyhow::Result<ControlRequest> {
     let command = take_positional(args).ok_or_else(|| anyhow!("entry command is required"))?;
     let plan_id = take_uuid_option(args, "--plan")?;
     let revision = revision(args)?;
     let reason = take_option(args, "--reason")?;
     let operation = match command.as_str() {
         "add" => {
-            let fields = entry_fields(args)?;
+            let fields = entry_fields(args, entries)?;
             let kind = take_positional(args).ok_or_else(|| anyhow!("entry kind is required"))?;
             let text = take_positional(args)
                 .or_else(|| fields.text.clone())
@@ -54,19 +57,19 @@ pub(super) fn entry(args: &mut Vec<String>) -> anyhow::Result<ControlRequest> {
             }
         }
         "set" => {
-            let fields = entry_fields(args)?;
+            let fields = entry_fields(args, entries)?;
             PlanEdit::EditEntry {
-                id: id(args, "entry ID")?,
+                id: entry_id(args, entries)?,
                 fields,
             }
         }
         "move" => PlanEdit::MoveEntry {
-            after: take_uuid_option(args, "--after")?,
-            id: id(args, "entry ID")?,
+            after: entry_option(args, "--after", entries)?,
+            id: entry_id(args, entries)?,
         },
         "retire" => PlanEdit::RetireEntry {
-            successors: ids(args, "--successors")?.unwrap_or_default(),
-            id: id(args, "entry ID")?,
+            successors: ids(args, "--successors", entries)?.unwrap_or_default(),
+            id: entry_id(args, entries)?,
         },
         other => bail!("unknown entry command: {other}"),
     };
@@ -74,7 +77,11 @@ pub(super) fn entry(args: &mut Vec<String>) -> anyhow::Result<ControlRequest> {
     Ok(request(plan_id, revision, reason, operation))
 }
 
-pub(super) fn phase(command: &str, args: &mut Vec<String>) -> anyhow::Result<ControlRequest> {
+pub(super) fn phase(
+    command: &str,
+    args: &mut Vec<String>,
+    entries: Option<&[Uuid]>,
+) -> anyhow::Result<ControlRequest> {
     let plan_id = take_uuid_option(args, "--plan")?;
     let revision = revision(args)?;
     let reason = take_option(args, "--reason")?;
@@ -84,7 +91,7 @@ pub(super) fn phase(command: &str, args: &mut Vec<String>) -> anyhow::Result<Con
             let description = take_option(args, "--description")?;
             let implementation = take_option(args, "--implementation")?;
             let acceptance = take_option(args, "--acceptance")?;
-            let basis = ids(args, "--basis")?;
+            let basis = ids(args, "--basis", entries)?;
             let depends_on = phase_refs(args, "--depends-on")?;
             let follows_up = phase_refs(args, "--follows-up")?;
             let size = take_option(args, "--size")?;
@@ -118,7 +125,7 @@ pub(super) fn phase(command: &str, args: &mut Vec<String>) -> anyhow::Result<Con
 fn phase_evidence(args: &mut Vec<String>) -> anyhow::Result<PlanEdit<PhaseReference>> {
     let reference = take_option(args, "--reference")?;
     let revision = take_option(args, "--observed-revision")?
-        .ok_or_else(|| anyhow!("evidence requires its --observed-revision"))?
+        .ok_or(NeedsPlan)?
         .parse()?;
     let mut ancestors = BTreeMap::new();
     while let Some(value) = take_option(args, "--ancestor")? {
@@ -137,7 +144,7 @@ fn phase_evidence(args: &mut Vec<String>) -> anyhow::Result<PlanEdit<PhaseRefere
     })
 }
 
-fn entry_fields(args: &mut Vec<String>) -> anyhow::Result<EntryFields> {
+fn entry_fields(args: &mut Vec<String>, entries: Option<&[Uuid]>) -> anyhow::Result<EntryFields> {
     Ok(EntryFields {
         text: take_option(args, "--text")?,
         source: take_option(args, "--source")?,
@@ -146,13 +153,13 @@ fn entry_fields(args: &mut Vec<String>) -> anyhow::Result<EntryFields> {
         provisional: take_option(args, "--provisional")?
             .map(|value| value.parse())
             .transpose()?,
-        answer: take_uuid_option(args, "--answer")?,
+        answer: entry_option(args, "--answer", entries)?,
         reopen: take_flag(args, "--reopen"),
-        goal: take_uuid_option(args, "--goal")?,
+        goal: entry_option(args, "--goal", entries)?,
         test: take_option(args, "--test")?,
         result: keyword(args, "--result")?,
         evidence: take_option(args, "--evidence")?,
-        illustrates: take_uuid_option(args, "--illustrates")?,
+        illustrates: entry_option(args, "--illustrates", entries)?,
         generalization: take_option(args, "--generalization")?,
     })
 }
@@ -165,9 +172,39 @@ fn keyword<T: DeserializeOwned>(args: &mut Vec<String>, flag: &str) -> anyhow::R
         .transpose()
 }
 
-fn id(args: &mut Vec<String>, label: &str) -> anyhow::Result<Uuid> {
-    let value = take_positional(args).ok_or_else(|| anyhow!("{label} is required"))?;
-    parse_uuid(&value, label)
+#[derive(Debug, thiserror::Error)]
+#[error("resolve the reference against the current plan")]
+pub(super) struct NeedsPlan;
+
+fn entry_id(args: &mut Vec<String>, entries: Option<&[Uuid]>) -> anyhow::Result<Uuid> {
+    let value = take_positional(args).ok_or_else(|| anyhow!("entry number is required"))?;
+    resolve_entry(&value, entries)
+}
+
+fn entry_option(
+    args: &mut Vec<String>,
+    flag: &str,
+    entries: Option<&[Uuid]>,
+) -> anyhow::Result<Option<Uuid>> {
+    take_option(args, flag)?
+        .map(|value| resolve_entry(&value, entries))
+        .transpose()
+}
+
+fn resolve_entry(value: &str, entries: Option<&[Uuid]>) -> anyhow::Result<Uuid> {
+    if let Ok(id) = Uuid::parse_str(value) {
+        return Ok(id);
+    }
+    let index = value
+        .parse::<usize>()
+        .ok()
+        .and_then(|n| n.checked_sub(1))
+        .ok_or_else(|| anyhow!("expected an entry number from plan current, got {value}"))?;
+    entries
+        .ok_or(NeedsPlan)?
+        .get(index)
+        .copied()
+        .ok_or_else(|| anyhow!("no active entry at position {value}"))
 }
 
 fn phase_ref(args: &mut Vec<String>) -> anyhow::Result<PhaseReference> {
@@ -198,14 +235,18 @@ fn phase_refs(args: &mut Vec<String>, flag: &str) -> anyhow::Result<Option<Vec<P
         .transpose()
 }
 
-fn ids(args: &mut Vec<String>, flag: &str) -> anyhow::Result<Option<Vec<Uuid>>> {
+fn ids(
+    args: &mut Vec<String>,
+    flag: &str,
+    entries: Option<&[Uuid]>,
+) -> anyhow::Result<Option<Vec<Uuid>>> {
     take_option(args, flag)?
         .map(|value| {
             value
                 .split(',')
                 .map(str::trim)
                 .filter(|id| !id.is_empty())
-                .map(|id| parse_uuid(id, flag))
+                .map(|id| resolve_entry(id, entries))
                 .collect()
         })
         .transpose()

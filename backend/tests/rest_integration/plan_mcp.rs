@@ -151,8 +151,7 @@ async fn plan_connector_authenticates_and_shares_plans_across_repositories() {
         "{initialize}"
     );
     let instructions = initialize["result"]["instructions"].as_str().unwrap();
-    assert!(instructions.contains("Direct edits can omit revision"));
-    assert!(instructions.contains("plan.authoring.revision from read_plan"));
+    assert!(instructions.contains("numbered phases and entries"));
     let rpc = |body: Value| {
         let request = request()
             .bearer_auth(&token)
@@ -180,10 +179,12 @@ async fn plan_connector_authenticates_and_shares_plans_across_repositories() {
         .as_array()
         .unwrap()
         .contains(&json!("revision")));
-    assert!(schema("patch_plan")["required"]
-        .as_array()
-        .unwrap()
-        .contains(&json!("revision")));
+    let required = schema("patch_plan")["required"].as_array().unwrap();
+    assert_eq!(required.len(), 2);
+    assert!(required.contains(&json!("plan")) && required.contains(&json!("edits")));
+    assert!(schema("patch_plan")["properties"]
+        .get("operations")
+        .is_none());
     let denied = rpc(json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "list_plans", "arguments": {"repo": "../alpha"}}})).await;
     assert_eq!(denied["result"]["isError"], true);
     sqlx::query(
@@ -215,7 +216,7 @@ async fn plan_connector_authenticates_and_shares_plans_across_repositories() {
         plans["result"]["structuredContent"]["plans"][0]["id"],
         *second_repo_id
     );
-    let read = rpc(json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "read_plan", "arguments": {"plan_id": second_repo_id}}})).await;
+    let read = rpc(json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "read_plan", "arguments": {"repo":"second-repo","plan":"Second project"}}})).await;
     assert_eq!(
         read["result"]["structuredContent"]["plan"]["id"],
         *second_repo_id
@@ -237,7 +238,7 @@ async fn plan_connector_authenticates_and_shares_plans_across_repositories() {
     let example = &edited["result"]["structuredContent"]["plan"]["authoring"]["entries"][0]["id"];
     assert!(example.is_string());
     let phase_update = rpc(json!({"jsonrpc": "2.0", "id": 10, "method": "tools/call", "params": {"name": "update_plan_phase", "arguments": {
-        "plan_id": id, "id": phase_id, "implementation": "Extend the current field producer",
+        "plan": "City design", "phase": 1, "implementation": "Extend the current field producer",
         "acceptance": "The next round consumes the updated fields"
     }}})).await;
     assert_eq!(phase_update["result"]["isError"], false, "{phase_update}");
@@ -251,6 +252,27 @@ async fn plan_connector_authenticates_and_shares_plans_across_repositories() {
     assert_eq!(batched["result"]["isError"], false, "{batched}");
     let stale = rpc(patch).await;
     assert_eq!(stale["result"]["isError"], true);
+    let edit_batch = |edits: Value| {
+        rpc(
+            json!({"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"patch_plan","arguments":{"plan":"Second project","edits":edits}}}),
+        )
+    };
+    let rejected = edit_batch(json!([
+        "update --summary 'Uncommitted'",
+        "entry set 9 --text 'Missing'"
+    ]))
+    .await;
+    assert_eq!(rejected["result"]["isError"], true, "{rejected}");
+    let applied = edit_batch(json!([
+        "entry add decision 'Product files'",
+        "entry set 1 --rationale 'Git diff'",
+        "phase edit 1 --basis 1 --acceptance 'Diff the document'"
+    ]))
+    .await;
+    let updated = &applied["result"]["structuredContent"]["plan"];
+    assert_eq!(updated["summary"], "Edited from MCP", "{applied}");
+    assert_eq!(updated["authoring"]["entries"][0]["number"], 1);
+    assert_eq!(updated["authoring"]["entries"][0]["rationale"], "Git diff");
     let review = rpc(json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "read_plan", "arguments": {"plan_id": id, "phase_id": phase_id}}})).await;
     let reviewed = &review["result"]["structuredContent"];
     assert_eq!(reviewed["focus_phase"], *phase_id);
@@ -395,10 +417,148 @@ async fn plan_connector_authenticates_and_shares_plans_across_repositories() {
         creation.authoring_change.as_ref().unwrap()["subject"],
         "fixture-user"
     );
+    let upload = tools.iter().find(|t| t["name"] == "upload_file").unwrap();
+    assert_eq!(upload["_meta"]["openai/fileParams"], json!(["file"]));
+    let file_schema = &upload["inputSchema"]["$defs"]["ChatFile"];
+    for field in ["file_id", "download_url", "file_name", "mime_type"] {
+        assert!(
+            file_schema["properties"].get(field).is_some(),
+            "{file_schema}"
+        );
+    }
+    assert_eq!(file_schema["required"].as_array().unwrap().len(), 2);
+    let oversize = request()
+        .bearer_auth(&token)
+        .json(&json!({"jsonrpc":"2.0","id":21,
+        "method":"tools/call","params":{"name":"create_plan","arguments":{"repo":"alpha",
+        "title":"must not be created","summary":"x".repeat(256 * 1024),"phases":[]}}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(oversize.status(), 413);
+    let edits: Vec<_> = (0..12)
+        .map(|_| format!("phase edit 1 --implementation '{}'", "x".repeat(6000)))
+        .collect();
+    let larger = call("patch_plan", json!({"plan":"City design","edits":edits})).await;
+    assert_eq!(larger["result"]["isError"], false, "{larger}");
+    verify_documents_and_transfer(&h, call).await;
     server.abort();
     issuer_task.abort();
     restore_env("SULION_SECRET_BROKER_URL", broker_url);
     restore_env("SULION_SECRET_BROKER_REGISTRATION_TOKEN", broker_token);
+}
+
+async fn verify_documents_and_transfer<F, R>(h: &Harness, rpc: F)
+where
+    F: Fn(&str, Value) -> R,
+    R: std::future::Future<Output = Value>,
+{
+    let root = h.repos_root().join("product");
+    std::fs::create_dir(&root).unwrap();
+    let path = "docs/process.dataset.json";
+    let doc = |mut args: Value| {
+        args["repo"] = json!("product");
+        args["path"] = json!(path);
+        args
+    };
+    let success = |reply: Value| {
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+        reply["result"]["structuredContent"].clone()
+    };
+    let schema = json!({"keys":["process","map"],"fields":{
+        "process":{"type":"string"},"map":{"type":"string","allowed":["World","Region"]},
+        "strategy":{"type":"string"},"priority":{"type":"integer"}}});
+    success(rpc("define_data_set", doc(json!({"schema":schema}))).await);
+    success(
+        rpc(
+            "fill_data_set_items",
+            doc(json!({"items":[{"process":"water","map":"Region"},
+        {"process":"water","map":"World","strategy":"x".repeat(70_000)}]})),
+        )
+        .await,
+    );
+    assert_eq!(
+        success(rpc("list_data_sets", json!({"repo":"product"})).await)["paths"],
+        json!([path])
+    );
+    let gaps = success(rpc("read_data_set", doc(json!({"missing":["strategy"]}))).await);
+    assert_eq!(gaps["total"], 1);
+    let stale = gaps["revisions"][0].clone();
+    let current = std::fs::read_to_string(root.join(path)).unwrap();
+    let mut document: Value = serde_json::from_str(&current).unwrap();
+    document["items"][0]["strategy"] = json!("An editor's manual change");
+    std::fs::write(
+        root.join(path),
+        serde_json::to_vec_pretty(&document).unwrap(),
+    )
+    .unwrap();
+    let reject = rpc(
+        "fill_data_set_items",
+        doc(
+            json!({"expected":[{"key":{"process":"water","map":"Region"},"revision":stale}],
+        "items":[{"process":"water","map":"Region","priority":3}]}),
+        ),
+    )
+    .await;
+    assert_eq!(reject["result"]["isError"], true);
+    let failed = rpc(
+        "fill_data_set_items",
+        doc(
+            json!({"items":[{"process":"water","map":"World","priority":2},
+        {"process":"water","map":"Region","priority":"urgent"}]}),
+        ),
+    )
+    .await;
+    assert_eq!(failed["result"]["isError"], true);
+    let saved = success(
+        rpc(
+            "read_data_set",
+            doc(json!({"where":{"map":"World"},"columns":["priority"]})),
+        )
+        .await,
+    );
+    assert!(saved["items"][0].get("priority").is_none());
+    success(
+        rpc(
+            "import_data_set",
+            doc(json!({"format":"csv","data":"process,map,priority\nwater,Region,3\n"})),
+        )
+        .await,
+    );
+    let saved = success(
+        rpc(
+            "export_data_set",
+            doc(json!({"format":"jsonl","where":{"map":"Region"}})),
+        )
+        .await,
+    );
+    let row: Value = serde_json::from_str(saved["data"].as_str().unwrap()).unwrap();
+    assert_eq!(row["strategy"], "An editor's manual change");
+    assert_eq!(row["priority"], 3);
+    assert!(h
+        .state
+        .upload_store
+        .set(sulion::uploads::store::StagingStore::for_test())
+        .is_ok());
+    let grant = success(
+        rpc(
+            "begin_file_upload",
+            json!({"repo":"product","directory":"docs","filename":"table.csv",
+        "size":65536,"checksum":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}),
+        )
+        .await,
+    );
+    assert!(grant["grant"]["url"]
+        .as_str()
+        .unwrap()
+        .contains("X-Amz-Signature"));
+    let refused = rpc(
+        "upload_file",
+        json!({"repo":"product","file":{"file_name":"a.csv","file_id":"fixture",
+        "download_url":"https://example.org/file"}}),
+    )
+    .await;
+    assert_eq!(refused["result"]["isError"], true);
 }
 
 async fn verify_terminal_handoff(h: &Harness, id: &str, expected: &Value) {
@@ -430,7 +590,7 @@ async fn verify_terminal_handoff(h: &Harness, id: &str, expected: &Value) {
             serde_json::from_slice::<Value>(&output.stdout).unwrap()
         }
     };
-    cli(&["attach", id]).await;
+    cli(&["attach", "City design"]).await;
     let resumed = cli(&["current"]).await;
     assert_eq!(resumed["id"], id);
     assert_eq!(resumed["authoring"]["revision"], 3);
@@ -440,7 +600,7 @@ async fn verify_terminal_handoff(h: &Harness, id: &str, expected: &Value) {
     let saved = cli(&[
         "entry",
         "set",
-        example,
+        "1",
         "--text",
         "An inn can seed development on a suitable site",
     ])

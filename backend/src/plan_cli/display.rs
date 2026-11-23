@@ -28,6 +28,9 @@ pub(super) fn plan_confirmation(request: &ControlRequest) -> Option<String> {
             Some(status) => format!("Set plan to {status}"),
             None => "Updated plan".into(),
         },
+        ControlRequest::PlanCommands { input, .. } => {
+            format!("Applied {} plan edits", input.commands.len())
+        }
         ControlRequest::PlanPatch { input, .. } if input.operations.len() == 1 => {
             "Applied 1 plan edit".into()
         }
@@ -114,20 +117,7 @@ pub(crate) fn print_plan_data(data: &Value, full_guidance: bool) {
                 println!("  Technical details: {details}");
             }
             if let Some(entries) = authoring["entries"].as_array() {
-                for entry in entries.iter().filter(|entry| entry["retired"] != true) {
-                    print_entry(entry);
-                }
-                for (kind, hint) in [
-                    ("hypothesis", crate::plans::review::HYPOTHESIS),
-                    ("example", crate::plans::review::EXAMPLE),
-                ] {
-                    if entries
-                        .iter()
-                        .any(|entry| entry["kind"] == kind && entry["retired"] != true)
-                    {
-                        println!("    {kind}: {hint}");
-                    }
-                }
+                print_entries(entries, &data["inherited_authoring"]);
             }
         }
     }
@@ -213,11 +203,44 @@ pub(crate) fn print_plan_data(data: &Value, full_guidance: bool) {
     }
 }
 
-fn print_entry(entry: &Value) {
+fn print_entries(entries: &[Value], inherited: &Value) {
+    for (index, entry) in entries
+        .iter()
+        .filter(|entry| entry["retired"] != true)
+        .enumerate()
+    {
+        print_entry(index + 1, entry);
+    }
+    let mut offset = entries.iter().filter(|e| e["retired"] != true).count();
+    for ancestor in inherited.as_array().into_iter().flatten() {
+        for entry in ancestor["entries"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|e| e["retired"] != true)
+        {
+            offset += 1;
+            print!("    inherited ");
+            print_entry(offset, entry);
+        }
+    }
+    for (kind, hint) in [
+        ("hypothesis", crate::plans::review::HYPOTHESIS),
+        ("example", crate::plans::review::EXAMPLE),
+    ] {
+        if entries
+            .iter()
+            .any(|entry| entry["kind"] == kind && entry["retired"] != true)
+        {
+            println!("    {kind}: {hint}");
+        }
+    }
+}
+
+fn print_entry(number: usize, entry: &Value) {
     println!(
-        "    [{}] {} {}",
+        "    {number}. [{}] {}",
         entry["kind"].as_str().unwrap_or("entry"),
-        entry["id"].as_str().unwrap_or(""),
         entry["text"].as_str().unwrap_or("")
     );
     for field in [
@@ -326,7 +349,8 @@ fn print_plan_list(items: &[Value]) {
         }
         return;
     }
-    for item in items {
+    for (index, item) in items.iter().enumerate() {
+        print!("#{} ", index + 1);
         print_plan_header(item);
     }
 }

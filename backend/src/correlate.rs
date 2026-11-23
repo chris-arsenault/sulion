@@ -93,6 +93,9 @@ pub enum ControlRequest {
     PlanList {
         include_closed: bool,
     },
+    PlanLookup {
+        title: String,
+    },
     PlanShow {
         plan_id: Option<Uuid>,
     },
@@ -111,6 +114,10 @@ pub enum ControlRequest {
     PlanPatch {
         plan_id: Option<Uuid>,
         input: crate::plans::PlanPatch<Option<i64>>,
+    },
+    PlanCommands {
+        plan_id: Option<Uuid>,
+        input: crate::plans::PlanCommands,
     },
     PlanAddPhase {
         plan_id: Option<Uuid>,
@@ -318,6 +325,9 @@ async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value>
         ControlRequest::PlanList { include_closed } => Ok(serde_json::to_value(
             plans::list_for_repo(pool, &repo_name, include_closed).await?,
         )?),
+        ControlRequest::PlanLookup { title } => Ok(serde_json::to_value(
+            plans::lookup(pool, Some(&repo_name), &title).await?,
+        )?),
         request @ (ControlRequest::PlanShow { .. } | ControlRequest::PlanReview { .. }) => {
             dispatch_plan_read(pool, msg.pty_id, &repo_name, request).await
         }
@@ -338,6 +348,13 @@ async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value>
             let id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
             Ok(serde_json::to_value(
                 plans::apply_patch(pool, id, input, &actor, "pty", None, Some(&repo_name)).await?,
+            )?)
+        }
+        ControlRequest::PlanCommands { plan_id, input } => {
+            let id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
+            Ok(serde_json::to_value(
+                plans::apply_commands(pool, id, input, &actor, "pty", None, Some(&repo_name))
+                    .await?,
             )?)
         }
         ControlRequest::PlanAddPhase { plan_id, phase } => {

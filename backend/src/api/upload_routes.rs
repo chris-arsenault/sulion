@@ -21,7 +21,7 @@ use crate::{
     node_protocol::NodeRequestKind,
     uploads::{
         model::{ImportUpload, UploadInput},
-        store::StagingStore,
+        store::{StagingStore, UploadGrant},
     },
     AppState,
 };
@@ -54,7 +54,7 @@ async fn bounded_metadata(request: Request, next: Next) -> Response {
     response
 }
 
-async fn store(state: &AppState) -> ApiResult<&StagingStore> {
+pub(super) async fn store(state: &AppState) -> ApiResult<&StagingStore> {
     state
         .upload_store
         .get_or_try_init(|| async {
@@ -81,16 +81,25 @@ async fn create(
     Extension(user): Extension<AuthenticatedUser>,
     Json(input): Json<UploadInput>,
 ) -> ApiResult<Json<Value>> {
-    destination(&state, &input).await?;
+    let (id, grant) = begin_upload(&state, &user.sub, &input).await?;
+    Ok(Json(json!({"id": id, "grant": grant})))
+}
+
+pub(super) async fn begin_upload(
+    state: &AppState,
+    subject: &str,
+    input: &UploadInput,
+) -> ApiResult<(Uuid, UploadGrant)> {
+    destination(state, input).await?;
     let id = Uuid::new_v4();
-    let grant = store(&state)
+    let grant = store(state)
         .await?
-        .put_grant(id, input.size, &input.checksum, &input.binding(&user.sub))
+        .put_grant(id, input.size, &input.checksum, &input.binding(subject))
         .await
         .map_err(|_| {
             ApiError::Unavailable("Could not authorize file storage. Try again.".into())
         })?;
-    Ok(Json(json!({"id": id, "grant": grant})))
+    Ok((id, grant))
 }
 
 async fn complete(
@@ -99,10 +108,19 @@ async fn complete(
     Path(id): Path<Uuid>,
     Json(input): Json<UploadInput>,
 ) -> ApiResult<Json<Value>> {
-    let node = destination(&state, &input).await?;
-    let store = store(&state).await?;
+    Ok(Json(finish_upload(&state, &user.sub, id, input).await?))
+}
+
+pub(super) async fn finish_upload(
+    state: &AppState,
+    subject: &str,
+    id: Uuid,
+    input: UploadInput,
+) -> ApiResult<Value> {
+    let node = destination(state, &input).await?;
+    let store = store(state).await?;
     let valid = store
-        .verify(id, input.size, &input.checksum, &input.binding(&user.sub))
+        .verify(id, input.size, &input.checksum, &input.binding(subject))
         .await
         .map_err(|_| ApiError::Unavailable("Could not verify file storage. Try again.".into()))?;
     if !valid {
@@ -120,7 +138,5 @@ async fn complete(
         bucket: store.bucket().into(),
         region: store.region().into(),
     };
-    let result =
-        node_proxy::request(&state, node, NodeRequestKind::UploadImport, json!(payload)).await?;
-    Ok(Json(result))
+    node_proxy::request(state, node, NodeRequestKind::UploadImport, json!(payload)).await
 }

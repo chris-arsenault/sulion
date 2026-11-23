@@ -43,6 +43,7 @@ fn context_request(request: &ControlRequest) -> ControlRequest {
         | ControlRequest::PlanReview { plan_id, .. }
         | ControlRequest::PlanUpdate { plan_id, .. }
         | ControlRequest::PlanPatch { plan_id, .. }
+        | ControlRequest::PlanCommands { plan_id, .. }
         | ControlRequest::PlanAddPhase { plan_id, .. }
         | ControlRequest::PlanUpdatePhase { plan_id, .. }
         | ControlRequest::PlanDetach { plan_id }
