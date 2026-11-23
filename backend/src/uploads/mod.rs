@@ -1,4 +1,5 @@
 //! Foreground S3 transfers: control authorizes requests; the node installs bytes.
+pub mod cli;
 pub mod install;
 pub mod model;
 pub mod store;

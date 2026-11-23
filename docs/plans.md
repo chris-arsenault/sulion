@@ -427,6 +427,38 @@ Select a checkout with `repo` or `workspace_id`. A dataset is a UTF-8
 development node reads the working copy on each call. Git stages and commits it
 through the repository's ordinary workflow.
 
+From a terminal, use `sulion dataset` in the product checkout. Paths are
+relative to its Git root. Use `sulion dataset -C CHECKOUT ...` to select
+another working copy. Both interfaces use the same document engine.
+
+```bash
+doc=docs/processes.dataset.json
+sulion dataset list
+sulion dataset define "$doc" --key process --key map \
+  --field process=string --field map=string --field strategy=string \
+  --allow map=World --allow map=Region --description 'strategy=Behavior at this scale'
+sulion dataset schema "$doc"
+sulion dataset set "$doc" process=water map=Region --row process=water map=World
+sulion dataset read "$doc" --missing strategy --column map
+sulion dataset set "$doc" process=water map=Region 'strategy=Follow the drainage network'
+sulion dataset read "$doc" --where process=water --where map=Region
+sulion dataset export "$doc" --format csv
+sulion dataset import "$doc" docs/agent-updates.csv
+```
+
+On `set`, supply the full row key and just the fields to change. A bare field
+name clears it. `field=` stores an empty string for a string field. Quote
+arguments containing spaces, including names such as `'Process ID=runoff'`.
+Arrays and objects accept JSON values. Each `--row` starts another item in
+the same atomic edit. For a conditional edit, save `read --json` output and
+pass that file to `set --if-unchanged`. The CLI checks the edited rows.
+
+Read defaults to 25 rows. Export includes all matching rows unless you give it
+`--limit`. Both accept `--where`, `--missing`, `--column`, `--offset`
+and `--limit`. Export to a new checkout-relative file or stdout. Import a
+checkout file or pipe data to `import "$doc" --format csv`. Use
+`sulion dataset help COMMAND` for the full syntax.
+
 For example, call `define_data_set` with:
 
 ```json
@@ -458,7 +490,7 @@ exact matches, `missing` for gaps, `columns`, `offset` and `limit`. Set
 row revisions in item order. A caller editing against that read can pass
 `expected` with the key and revision for each row it needs to guard.
 For a plan reference, record the repository, relative path and the same
-`where` object. A terminal agent can open that JSON document directly.
+`where` object. A terminal agent can use the same fields with `read --where`.
 
 `import_data_set` merges rows into a defined schema. Give it a `format` of
 `csv` or `jsonl` and either inline `data` or a checkout-relative
@@ -468,7 +500,18 @@ strings and nested values. `export_data_set` returns the schema and rows in
 either format. Use a new `destination_path` to write a large export directly
 in the checkout. The canonical JSON file itself is a portable typed export.
 
+`sulion dataset delete "$doc"` and MCP `delete_data_set` remove the named
+`.dataset.json` file with its schema and all rows. On MCP, pass the checkout
+and relative path. For a tracked document, Git shows the deletion in the
+working tree for review and commit.
+
 ### File transfers and request size
+
+In a terminal, `sulion upload SOURCE DESTINATION` installs a local file at
+a checkout-relative path. For example, `sulion upload /tmp/processes.csv
+docs/processes.csv` makes the file available to a subsequent dataset import.
+Use `-C CHECKOUT` before the source to select a different checkout. The CLI
+uses the same atomic destination installer and 50 MiB limit as MCP.
 
 In ChatGPT, select the attachment for `upload_file` and specify a repository
 or workspace, directory and destination name. The connector reads the
@@ -510,6 +553,14 @@ across Sulion repositories. In the web client, add `https://sulion.services.ahar
 with the dedicated OAuth client credentials, then sign in as the owner.
 
 ### Arconis diagrams
+
+In a terminal, use `sulion plan diagram list` for registered titles and room
+links. Register a saved Arconis workspace with `sulion plan diagram register
+saved-workspace.json`, or pass its save/open result on stdin with `register -`.
+Use `sulion plan diagram attach "City design"` on the current plan. To set
+phase links, include one `--link "2=OBJECT_URL"` per diagram object, using its
+Arconis deep link. Each attach replaces that diagram's links on the selected
+plan. `sulion plan diagram detach "City design"` removes the attachment.
 
 Enable the Arconis and Sulion Plan connectors in the same conversation. Ask
 ChatGPT to use both with the plan and repository you name.

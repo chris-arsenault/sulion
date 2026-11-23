@@ -122,7 +122,7 @@ def fill(schema, rows, changes, expected):
                 row[name] = value
 
 
-def select(schema, rows, args):
+def select(schema, rows, args, include_revisions=True):
     where, missing = args.get("where", {}), args.get("missing", [])
     columns = args.get("columns", list(schema["fields"]))
     require(isinstance(where, dict) and isinstance(missing, list) and isinstance(columns, list),
@@ -138,7 +138,7 @@ def select(schema, rows, args):
     page = matches[offset:offset + limit]
     fields = dict.fromkeys([*schema["keys"], *columns])
     return ([{k: row[k] for k in fields if k in row} for row in page],
-            [revision(row) for row in page], len(matches))
+            [revision(row) for row in page] if include_revisions else [], len(matches))
 
 
 def parts(path):
@@ -269,12 +269,12 @@ def edited_text(text, old, new):
     return "".join(chunks)
 
 
-def export_rows(schema, rows, fmt):
+def export_rows(fields, rows, fmt):
     if fmt == "jsonl":
         return "".join(encode(row) + "\n" for row in rows)
     require(fmt == "csv", "format must be csv or jsonl")
     out = io.StringIO(newline="")
-    writer = csv.DictWriter(out, fieldnames=list(schema["fields"]))
+    writer = csv.DictWriter(out, fieldnames=fields)
     writer.writeheader()
     for row in rows:
         writer.writerow({k: (v if isinstance(v, str) else encode(v)) for k, v in row.items()})
@@ -304,7 +304,7 @@ def import_rows(schema, source, fmt):
     return rows
 
 
-def operate(root, op, args):
+def operate(root, op, args, prepare=None):
     args = {k: v for k, v in args.items() if v is not None}
     require(not os.path.islink(root), "checkout root cannot be a symlink")
     if op == "list_data_sets":
@@ -326,8 +326,17 @@ def operate(root, op, args):
     path = args["path"]
     require(path.endswith(".dataset.json"), "dataset path must end in .dataset.json")
     with parent(root, path, op == "define_data_set") as (fd, name):
-        fcntl.flock(fd, fcntl.LOCK_EX if op in ("define_data_set", "fill_data_set_items", "import_data_set")
-                    else fcntl.LOCK_SH)
+        mutating = op in ("define_data_set", "fill_data_set_items", "import_data_set", "delete_data_set")
+        fcntl.flock(fd, fcntl.LOCK_EX if mutating else fcntl.LOCK_SH)
+        if op == "delete_data_set":
+            with parent(root, path) as (current, _):
+                require(os.path.samestat(os.fstat(fd), os.fstat(current)),
+                        "dataset directory changed during delete")
+                info = os.stat(name, dir_fd=current, follow_symlinks=False)
+                require(stat.S_ISREG(info.st_mode), "expected a regular dataset file")
+                os.unlink(name, dir_fd=current)
+                os.fsync(current)
+            return dict(path=path, deleted=True)
         before = read(fd, name)
         require(before is not None or op == "define_data_set", f"dataset not found: {path}")
         old = decoder.decode(before) if before is not None else {"schema": {}, "items": []}
@@ -341,13 +350,19 @@ def operate(root, op, args):
                             field.pop(optional, None)
         rows = [r.copy() for r in old["items"]]
         validate_rows(schema, rows)
+        if prepare is not None:
+            prepare(schema, args)
         if op == "read_data_set":
             items, revisions, count = select(schema, rows, args)
             return dict(path=path, schema=schema, total=count, items=items, revisions=revisions)
         if op == "export_data_set":
-            with_page = any(k in args for k in ("where", "columns", "missing", "offset", "limit"))
-            selected = select(schema, rows, args)[0] if with_page else rows
-            data = export_rows(schema, selected, args["format"])
+            selected = rows
+            if any(k in args for k in ("where", "columns", "missing", "offset", "limit")):
+                args.setdefault("limit", len(rows))
+                selected = select(schema, rows, args, include_revisions=False)[0]
+            fields = (dict.fromkeys([*schema["keys"], *args["columns"]])
+                      if "columns" in args else schema["fields"])
+            data = export_rows(fields, selected, args["format"])
             if "destination_path" in args:
                 dest = args["destination_path"]
                 require(dest.endswith("." + args["format"]), "destination extension must match format")
@@ -377,7 +392,7 @@ def operate(root, op, args):
         return dict(path=path, count=len(rows))
 
 
-if __name__ == "__main__":
+def run_node_request():
     try:
         request = json.load(sys.stdin)
         print(encode(operate(sys.argv[1], request["tool"], request["arguments"])))

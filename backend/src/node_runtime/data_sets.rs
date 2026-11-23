@@ -23,7 +23,11 @@ impl NodeRuntime {
             .document_root(target.repo.as_deref(), target.workspace_id)
             .await?;
         let mut child = tokio::process::Command::new("python3")
-            .args(["-I", "-c", include_str!("data_set.py")])
+            .args([
+                "-I",
+                "-c",
+                concat!(include_str!("data_set.py"), "\nrun_node_request()"),
+            ])
             .arg(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -45,7 +49,7 @@ impl NodeRuntime {
         }
         if matches!(
             request["tool"].as_str(),
-            Some("define_data_set" | "fill_data_set_items" | "import_data_set")
+            Some("define_data_set" | "fill_data_set_items" | "import_data_set" | "delete_data_set")
         ) || request["arguments"]["destination_path"].is_string()
         {
             if let Some(id) = target.workspace_id {

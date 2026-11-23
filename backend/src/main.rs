@@ -240,6 +240,25 @@ async fn dispatch_cli(argv: &[std::ffi::OsString]) -> anyhow::Result<Option<i32>
         "retrieve" => sulion::retrieval_cli::run(args).await?,
         "code" => sulion::code_cli::run(args).await?,
         "plan" => sulion::plan_cli::run_plan(args).await?,
+        "dataset" => std::process::Command::new("python3")
+            .args([
+                "-I",
+                "-c",
+                concat!(
+                    include_str!("node_runtime/data_set.py"),
+                    "\n",
+                    include_str!("node_runtime/data_set_cli.py")
+                ),
+            ])
+            .args(args)
+            .status()?
+            .code()
+            .unwrap_or(1),
+        "upload" => sulion::uploads::cli::run(args)?,
+        "help" | "--help" | "-h" => {
+            println!("Sulion commands: plan, dataset, upload, workspace, retrieve, code, activity, name, archive, postgres\nUse sulion dataset help for repository-owned requirements and design inventories.");
+            0
+        }
         "activity" => sulion::plan_cli::run_activity(args).await?,
         "name" => sulion::plan_cli::run_name(args).await?,
         "archive" => sulion::plan_cli::run_archive(args).await?,

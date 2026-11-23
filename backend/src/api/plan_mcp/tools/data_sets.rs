@@ -118,6 +118,12 @@ pub(super) fn tools() -> Vec<Tool> {
             false,
             false,
         ),
+        tool::<Document>(
+            "delete_data_set",
+            "Delete the named .dataset.json file, including its schema and all rows, from the selected checkout.",
+            false,
+            true,
+        ),
         tool::<Fill>(
             "fill_data_set_items",
             "Enumerate keys or patch one or more typed rows. The entire batch commits together.",

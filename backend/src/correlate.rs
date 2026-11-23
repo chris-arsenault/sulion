@@ -21,6 +21,8 @@
 //! `current_session_agent` so the UI can show "this PTY is running
 //! agent session X."
 
+mod plan_reads;
+
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -90,6 +92,10 @@ pub enum ControlRequest {
         plan_id: Option<Uuid>,
     },
     PlanCurrent,
+    PlanDiagramList,
+    PlanDiagramRegister {
+        diagram: plans::diagrams::Diagram,
+    },
     PlanList {
         include_closed: bool,
     },
@@ -319,17 +325,14 @@ async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value>
             let id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
             Ok(serde_json::to_value(plans::tree(pool, id).await?)?)
         }
-        ControlRequest::PlanCurrent => Ok(serde_json::to_value(
-            plans::current_for_pty(pool, msg.pty_id).await?,
-        )?),
-        ControlRequest::PlanList { include_closed } => Ok(serde_json::to_value(
-            plans::list_for_repo(pool, &repo_name, include_closed).await?,
-        )?),
-        ControlRequest::PlanLookup { title } => Ok(serde_json::to_value(
-            plans::lookup(pool, Some(&repo_name), &title).await?,
-        )?),
-        request @ (ControlRequest::PlanShow { .. } | ControlRequest::PlanReview { .. }) => {
-            dispatch_plan_read(pool, msg.pty_id, &repo_name, request).await
+        request @ (ControlRequest::PlanCurrent
+        | ControlRequest::PlanDiagramList
+        | ControlRequest::PlanDiagramRegister { .. }
+        | ControlRequest::PlanList { .. }
+        | ControlRequest::PlanLookup { .. }
+        | ControlRequest::PlanShow { .. }
+        | ControlRequest::PlanReview { .. }) => {
+            plan_reads::dispatch(pool, msg.pty_id, &repo_name, request).await
         }
         ControlRequest::PlanEdit { plan_id, input } => {
             let id = plans::resolve_plan_id(pool, msg.pty_id, plan_id, &repo_name).await?;
@@ -423,40 +426,6 @@ async fn dispatch_control(pool: &Pool, msg: ControlMsg) -> anyhow::Result<Value>
         // Every remaining variant is an archive command; the helper refuses
         // anything else, so a new non-archive variant cannot fall through.
         archive => dispatch_archive(pool, msg.pty_id, archive).await,
-    }
-}
-
-async fn dispatch_plan_read(
-    pool: &Pool,
-    pty_id: Uuid,
-    repo_name: &str,
-    request: ControlRequest,
-) -> anyhow::Result<Value> {
-    let plan_id = match &request {
-        ControlRequest::PlanShow { plan_id } | ControlRequest::PlanReview { plan_id, .. } => {
-            *plan_id
-        }
-        _ => unreachable!("called for plan reads"),
-    };
-    let id = plans::resolve_plan_id(pool, pty_id, plan_id, repo_name).await?;
-    let plan = plans::get(pool, id).await?;
-    match request {
-        ControlRequest::PlanReview { phase_id, .. } => {
-            use plans::PhaseReference;
-            let phase_id = match phase_id {
-                Some(PhaseReference::Id(id)) => Some(id),
-                Some(PhaseReference::Position(position)) => Some(
-                    plan.phases
-                        .iter()
-                        .find(|phase| phase.position == position)
-                        .ok_or_else(|| anyhow::anyhow!("phase not found at position {position}"))?
-                        .id,
-                ),
-                None => None,
-            };
-            plans::review::review(plan, phase_id)
-        }
-        _ => Ok(serde_json::to_value(plan)?),
     }
 }
 

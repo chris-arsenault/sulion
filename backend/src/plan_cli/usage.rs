@@ -17,7 +17,7 @@ pub(super) fn help_topic(args: &[String]) -> Option<&[String]> {
 pub(super) fn command_topic(args: &[String]) -> &[String] {
     let depth = match args {
         [group, command, ..]
-            if matches!(group.as_str(), "phase" | "step" | "entry")
+            if matches!(group.as_str(), "phase" | "step" | "entry" | "diagram")
                 && !command.starts_with('-') =>
         {
             2
@@ -37,11 +37,17 @@ pub(super) fn print_plan_help(topic: &[String]) -> anyhow::Result<()> {
 Usage: sulion plan [--json] <command> ...\n\n\
   Read:    current, list, show, review, tree, history\n\
   Write:   start, update, phase, entry, patch, status, close\n\
-  Context: attach, detach, branch, return\n\n\
+  Context: attach, detach, branch, return\n\
+  Design:  diagram (Arconis), sulion dataset (repository-owned tables)\n\n\
 Use `sulion plan help <command>` for syntax and an example.\n\
 Start with `sulion plan current`. Writes default to the attached plan.");
             return Ok(());
         }
+        ("diagram", "", 1) => ("diagram <list|register|attach|detach>", "diagram list", "Register saved Arconis workspaces in the repository and attach them to plans by title."),
+        ("diagram", "list", 2) => ("diagram list", "diagram list", "Show registered diagram titles and their room links."),
+        ("diagram", "register", 2) => ("diagram register <saved-workspace.json|->", "diagram register saved-workspace.json", "Read the result of Arconis save_workspace or open_workspace from a file or stdin."),
+        ("diagram", "attach", 2) => ("diagram attach <title or room URL> [--link <phase=object URL>]... [--plan <title>]", r#"diagram attach "City design" --link "2=https://arconis.ahara.io/#room=…&item=roads""#, "Set the complete collection of phase links. Omit --link to attach just the diagram."),
+        ("diagram", "detach", 2) => ("diagram detach <title or room URL> [--plan <title>]", r#"diagram detach "City design""#, "Remove the diagram from the selected plan. It stays registered in the repo."),
         ("phase", "", 1) => {
             println!("Usage: sulion plan phase <add|set|edit|move|retire|evidence> ...\n\n\
 Use a phase number from `plan current`, as displayed.\n\

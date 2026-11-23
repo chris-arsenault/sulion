@@ -114,8 +114,18 @@ sulion plan close --completed
 ```
 
 The new plan attaches to the current PTY. Most later commands infer that
-attachment. Run `sulion plan help` for attach/detach, pause, history, explicit
-plan ids, and JSON output.
+attachment. Run `sulion plan help` for attach/detach, pause, history, selecting
+plans by title, and JSON output. Use `sulion plan diagram list` to find saved
+Arconis diagrams and `sulion plan help diagram` to register or attach them.
+
+Use `sulion dataset list` in a product checkout to find structured design
+documents. `sulion dataset schema PATH` shows fields and keys.
+`sulion dataset read PATH --missing FIELD` finds gaps, and
+`sulion dataset set PATH 'key=value' 'field=value'` edits one row. Repeat
+`--row` to edit several together. See `sulion dataset help` for schema
+definition, CSV/JSONL import and export, and filters. Use
+`sulion dataset delete PATH` to remove a document and its rows. Use
+`sulion upload SOURCE DESTINATION` to install a local file in the checkout.
 
 Write short guidance from the request with `--outcome`, repeatable `--principle`,
 and repeatable `--assumption` on `start`, `branch`, or `update`. State the user

@@ -296,7 +296,11 @@ async fn plan_connector_authenticates_and_shares_plans_across_repositories() {
     assert_eq!(read["summary"], "Refine city fabric");
     assert_eq!(read["phases"][0]["status"], "pending");
     assert_eq!(read["attachments"], json!([]));
-    verify_terminal_handoff(&h, id, &read).await;
+    let mcp_url = std::env::var_os("SULION_PLAN_MCP_URL");
+    std::env::set_var("SULION_PLAN_MCP_URL", "https://sulion.test/mcp");
+    let terminal_diagram =
+        verify_terminal_handoff(&h, id, &read, &reviewed["plan"]["phases"]).await;
+    restore_env("SULION_PLAN_MCP_URL", mcp_url);
     let call = |name: &str, arguments: Value| {
         rpc(
             json!({"jsonrpc": "2.0", "id": 20, "method": "tools/call", "params": {
@@ -375,7 +379,7 @@ async fn plan_connector_authenticates_and_shares_plans_across_repositories() {
     let discovered = call("list_repo_arconis_diagrams", json!({"repo": "alpha"})).await;
     assert_eq!(
         discovered["result"]["structuredContent"]["diagrams"],
-        json!([diagram])
+        json!([diagram, terminal_diagram])
     );
     let reused = call(
         "attach_arconis_diagram",
@@ -397,7 +401,7 @@ async fn plan_connector_authenticates_and_shares_plans_across_repositories() {
     let discovered_again = call("list_repo_arconis_diagrams", json!({"repo": "alpha"})).await;
     assert_eq!(
         discovered_again["result"]["structuredContent"]["diagrams"],
-        json!([diagram])
+        json!([diagram, terminal_diagram])
     );
     let history = sulion::plans::events(&h.state.pool, id.parse().unwrap())
         .await
@@ -418,6 +422,12 @@ async fn plan_connector_authenticates_and_shares_plans_across_repositories() {
         "fixture-user"
     );
     let upload = tools.iter().find(|t| t["name"] == "upload_file").unwrap();
+    let delete = tools
+        .iter()
+        .find(|t| t["name"] == "delete_data_set")
+        .unwrap();
+    assert_eq!(delete["annotations"]["destructiveHint"], true);
+    assert_eq!(delete["annotations"]["readOnlyHint"], false);
     assert_eq!(upload["_meta"]["openai/fileParams"], json!(["file"]));
     let file_schema = &upload["inputSchema"]["$defs"]["ChatFile"];
     for field in ["file_id", "download_url", "file_name", "mime_type"] {
@@ -535,6 +545,61 @@ where
     let row: Value = serde_json::from_str(saved["data"].as_str().unwrap()).unwrap();
     assert_eq!(row["strategy"], "An editor's manual change");
     assert_eq!(row["priority"], 3);
+    let dataset_cli = |args: &[&str]| {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_sulion"))
+            .arg("dataset")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    assert!(dataset_cli(&["read", path, "--where", "map=Region"]).contains("priority: 3"));
+    dataset_cli(&[
+        "set",
+        path,
+        "map=Region",
+        "process=water",
+        "priority=4",
+        "--row",
+        "map=World",
+        "process=water",
+        "strategy",
+    ]);
+    let cross_read = success(rpc("read_data_set", doc(json!({"missing":["strategy"]}))).await);
+    assert_eq!(
+        cross_read["items"],
+        json!([{"process":"water","map":"World"}])
+    );
+    let csv = dataset_cli(&[
+        "export",
+        path,
+        "--format",
+        "csv",
+        "--where",
+        "map=Region",
+        "--column",
+        "priority",
+    ]);
+    assert_eq!(
+        csv.lines().collect::<Vec<_>>(),
+        ["process,map,priority", "water,Region,4"]
+    );
+    let deleted = success(rpc("delete_data_set", doc(json!({}))).await);
+    assert_eq!(deleted, json!({"path":path,"deleted":true}));
+    assert!(dataset_cli(&["list"]).is_empty());
+    success(rpc("define_data_set", doc(json!({"schema":schema}))).await);
+    dataset_cli(&["delete", path]);
+    assert_eq!(
+        success(rpc("list_data_sets", json!({"repo":"product"})).await)["paths"],
+        json!([])
+    );
     assert!(h
         .state
         .upload_store
@@ -561,7 +626,135 @@ where
     assert_eq!(refused["result"]["isError"], true);
 }
 
-async fn verify_terminal_handoff(h: &Harness, id: &str, expected: &Value) {
+#[test]
+fn terminal_dataset_batches_and_filtered_exports_preserve_requirements() {
+    let checkout = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let run = |command: &str, args: &[&str], ok: bool| {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_sulion"))
+            .current_dir(checkout.path())
+            .arg(command)
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.success(),
+            ok,
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let path = "docs/process.dataset.json";
+    run(
+        "dataset",
+        &[
+            "define",
+            path,
+            "--key",
+            "Process ID",
+            "--field",
+            "Process ID=string",
+            "--field",
+            "Priority=integer",
+            "--field",
+            "Map=string",
+            "--allow",
+            "Map=World",
+        ],
+        true,
+    );
+    let input = source.path().join("rows.csv");
+    let mut csv = String::from("Process ID,Priority,Map\n");
+    for i in 0..30 {
+        csv.push_str(&format!("{i:03},1,World\n"));
+    }
+    std::fs::write(&input, csv).unwrap();
+    run(
+        "upload",
+        &[input.to_str().unwrap(), "docs/source.csv"],
+        true,
+    );
+    run("dataset", &["import", path, "docs/source.csv"], true);
+    let exported = run(
+        "dataset",
+        &[
+            "export",
+            path,
+            "--format",
+            "csv",
+            "--where",
+            "Map=World",
+            "--column",
+            "Priority",
+        ],
+        true,
+    );
+    assert_eq!(exported.lines().count(), 31);
+    assert!(exported.starts_with("Process ID,Priority\r\n000,1\r\n"));
+    let baseline = run(
+        "dataset",
+        &["read", path, "--where", "Process ID=001", "--json"],
+        true,
+    );
+    std::fs::write(checkout.path().join("baseline.json"), baseline).unwrap();
+    run(
+        "dataset",
+        &[
+            "set",
+            path,
+            "Process ID=001",
+            "Priority=2",
+            "--if-unchanged",
+            "baseline.json",
+        ],
+        true,
+    );
+    let before = std::fs::read(checkout.path().join(path)).unwrap();
+    run(
+        "dataset",
+        &[
+            "set",
+            path,
+            "Process ID=001",
+            "Priority=3",
+            "--if-unchanged",
+            "baseline.json",
+        ],
+        false,
+    );
+    run(
+        "dataset",
+        &[
+            "set",
+            path,
+            "Process ID=001",
+            "Priority=3",
+            "--row",
+            "Process ID=002",
+            "Map=Ocean",
+        ],
+        false,
+    );
+    assert_eq!(before, std::fs::read(checkout.path().join(path)).unwrap());
+    let link = "linked.dataset.json";
+    std::os::unix::fs::symlink(checkout.path().join(path), checkout.path().join(link)).unwrap();
+    run("dataset", &["delete", link], false);
+    run("dataset", &["delete", "../outside.dataset.json"], false);
+    run("dataset", &["delete", "docs/source.csv"], false);
+    assert_eq!(before, std::fs::read(checkout.path().join(path)).unwrap());
+    run("dataset", &["delete", path], true);
+    run("dataset", &["delete", path], false);
+    assert!(!checkout.path().join(path).exists());
+    assert!(checkout.path().join("docs/source.csv").is_file());
+}
+
+async fn verify_terminal_handoff(
+    h: &Harness,
+    id: &str,
+    expected: &Value,
+    mcp_phases: &Value,
+) -> Value {
     let directory = tempfile::tempdir().unwrap();
     let pty = insert_test_pty(&h.state.pool, "alpha", directory.path()).await;
     let socket = directory.path().join("correlate.sock");
@@ -595,7 +788,7 @@ async fn verify_terminal_handoff(h: &Harness, id: &str, expected: &Value) {
     assert_eq!(resumed["id"], id);
     assert_eq!(resumed["authoring"]["revision"], 3);
     assert_eq!(resumed["authoring"], expected["authoring"]);
-    assert_eq!(resumed["phases"], expected["phases"]);
+    assert_eq!(&resumed["phases"], mcp_phases);
     let example = expected["authoring"]["entries"][0]["id"].as_str().unwrap();
     let saved = cli(&[
         "entry",
@@ -633,5 +826,28 @@ async fn verify_terminal_handoff(h: &Harness, id: &str, expected: &Value) {
         detail["implementation"],
         "Extend the current producer and consume the field"
     );
+    let workspace = directory.path().join("workspace.json");
+    let room = "b".repeat(48);
+    let diagram = json!({"workspace_id":Uuid::new_v4(),"room_id":room,"title":"Road network"});
+    std::fs::write(&workspace, json!({"structuredContent":diagram}).to_string()).unwrap();
+    let registered = cli(&["diagram", "register", workspace.to_str().unwrap()]).await;
+    let url = registered["diagram"]["url"].as_str().unwrap();
+    let registry = cli(&["diagram", "list"]).await;
+    assert!(registry["diagrams"]
+        .as_array()
+        .unwrap()
+        .contains(&registered["diagram"]));
+    let linked = cli(&[
+        "diagram",
+        "attach",
+        "Road network",
+        "--link",
+        &format!("1={url}&item=roads"),
+    ])
+    .await;
+    assert_eq!(linked["diagrams"][0]["phase_links"][0]["phase_id"], phase);
+    let detached = cli(&["diagram", "detach", url]).await;
+    assert!(detached.get("diagrams").is_none());
     server.abort();
+    registered["diagram"].clone()
 }

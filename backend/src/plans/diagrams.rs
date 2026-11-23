@@ -4,11 +4,29 @@ use sqlx::PgConnection;
 use std::collections::{BTreeMap, HashSet};
 use uuid::Uuid;
 
-use crate::db::Pool;
-
 use super::{required_text, MAX_TITLE_CHARS};
+use crate::db::Pool;
+use serde_json::{json, Value};
 
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub fn add_plan_urls(value: &mut Value, base: &url::Url) {
+    let Some(id) = value["id"].as_str() else {
+        return;
+    };
+    let mut url = base.clone();
+    url.query_pairs_mut().append_pair("plan", id);
+    value["url"] = json!(url.as_str());
+    if let Some(phases) = value["phases"].as_array_mut() {
+        for phase in phases {
+            if let Some(id) = phase["id"].as_str() {
+                let mut phase_url = url.clone();
+                phase_url.query_pairs_mut().append_pair("phase", id);
+                phase["url"] = json!(phase_url.as_str());
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, sqlx::FromRow)]
 pub struct Diagram {
     pub workspace_id: Uuid,
     pub room_id: String,
@@ -16,6 +34,13 @@ pub struct Diagram {
 }
 
 impl Diagram {
+    pub fn result(&self) -> serde_json::Value {
+        serde_json::json!({
+            "workspace_id": self.workspace_id, "room_id": self.room_id,
+            "title": self.title, "url": self.url()
+        })
+    }
+
     pub fn url(&self) -> String {
         format!("https://arconis.ahara.io/#room={}", self.room_id)
     }

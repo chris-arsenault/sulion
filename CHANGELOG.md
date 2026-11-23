@@ -6,8 +6,13 @@ All notable user-visible changes to Sulion are recorded here.
 
 ### Plans
 
-- The plan connector can register Arconis diagrams for a repository and attach
-  them to plans with links between canvas objects and phases.
+- The plan connector and `sulion plan diagram` can register Arconis diagrams
+  for a repository and attach them to plans with links between canvas objects
+  and phases.
+- `sulion dataset` and the plan connector share typed, Git-tracked design
+  documents. Agents can define a schema, patch individual fields, batch row
+  edits, import or export CSV and JSONL, and delete a dataset. `sulion upload` installs a
+  local file in the selected checkout.
 
 ### Sessions and navigation
 

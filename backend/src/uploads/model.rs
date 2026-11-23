@@ -64,7 +64,7 @@ impl UploadInput {
 
 pub fn valid_component(value: &str) -> bool {
     !value.is_empty()
-        && !matches!(value, "." | "..")
+        && !matches!(value, "." | ".." | ".git")
         && !value
             .chars()
             .any(|c| c.is_control() || matches!(c, '/' | '\\'))

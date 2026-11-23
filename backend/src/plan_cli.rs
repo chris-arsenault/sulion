@@ -15,6 +15,7 @@ use crate::plans::{
 mod archive;
 mod batch;
 pub(crate) use batch::{authored_command, split_edits};
+mod diagrams;
 mod display;
 mod guidance;
 mod nested;
@@ -58,6 +59,12 @@ pub async fn run_plan(args: &[OsString]) -> anyhow::Result<i32> {
     args.remove(0);
     if let Err(error) = resolve_plan_title(&command, &mut args).await {
         return Ok(plan_usage_failure(&topic, &error).await);
+    }
+    if command == "diagram" {
+        return match diagrams::run(args, json).await {
+            Ok(code) => Ok(code),
+            Err(error) => Ok(plan_usage_failure(&topic, &error).await),
+        };
     }
     if command == "patch" && args.first().is_some_and(|arg| arg == "-") {
         // Drop the stdin lock before reporting any error through the socket.

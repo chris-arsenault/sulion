@@ -212,6 +212,7 @@ impl PlanTools {
         match request.name.as_ref() {
             name @ ("list_data_sets"
             | "define_data_set"
+            | "delete_data_set"
             | "fill_data_set_items"
             | "read_data_set"
             | "import_data_set"
@@ -232,7 +233,9 @@ impl PlanTools {
             "list_repo_arconis_diagrams" => {
                 let args: RepoDiagrams = arguments(request.arguments)?;
                 let diagrams = diagrams::list(&self.pool, &args.repo).await?;
-                Ok(json!({"diagrams": diagrams.iter().map(diagram_result).collect::<Vec<_>>()}))
+                Ok(
+                    json!({"diagrams": diagrams.iter().map(diagrams::Diagram::result).collect::<Vec<_>>()}),
+                )
             }
             "register_arconis_diagram" => {
                 let args: RegisterDiagram = arguments(request.arguments)?;
@@ -244,7 +247,7 @@ impl PlanTools {
                     &args.title,
                 )
                 .await?;
-                Ok(json!({"diagram": diagram_result(&diagram)}))
+                Ok(json!({"diagram": diagram.result()}))
             }
             "list_plans" => {
                 let args: ListPlans = arguments(request.arguments)?;
@@ -435,21 +438,7 @@ impl PlanTools {
                 number_entries(&mut ancestor["entries"]);
             }
         }
-        let Some(id) = value["id"].as_str() else {
-            return;
-        };
-        let mut url = self.browser_url.clone();
-        url.query_pairs_mut().append_pair("plan", id);
-        value["url"] = json!(url.as_str());
-        if let Some(phases) = value["phases"].as_array_mut() {
-            for phase in phases {
-                if let Some(id) = phase["id"].as_str() {
-                    let mut phase_url = url.clone();
-                    phase_url.query_pairs_mut().append_pair("phase", id);
-                    phase["url"] = json!(phase_url.as_str());
-                }
-            }
-        }
+        diagrams::add_plan_urls(value, &self.browser_url);
     }
 }
 
@@ -621,15 +610,6 @@ fn decode_edit<T: DeserializeOwned>(
             operation: operation(args.fields),
         },
     ))
-}
-
-fn diagram_result(diagram: &diagrams::Diagram) -> Value {
-    json!({
-        "workspace_id": diagram.workspace_id,
-        "room_id": diagram.room_id,
-        "title": diagram.title,
-        "url": diagram.url(),
-    })
 }
 
 fn trim_attachment_data(value: &mut Value) {

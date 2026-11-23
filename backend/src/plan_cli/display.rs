@@ -151,7 +151,11 @@ pub(crate) fn print_plan_data(data: &Value, full_guidance: bool) {
             );
             let phase_id = phase["id"].as_str().unwrap_or("");
             if full_guidance {
-                println!("     ID {phase_id}");
+                if let Some(url) = phase["url"].as_str() {
+                    println!("     {url}");
+                } else {
+                    println!("     ID {phase_id}");
+                }
                 if let Some(description) = phase["description"]
                     .as_str()
                     .filter(|text| !text.is_empty())
