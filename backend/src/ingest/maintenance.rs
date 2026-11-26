@@ -12,7 +12,8 @@ const CANONICAL_BLOCKS_KEY: &str = "canonical_blocks";
 // v5: queued/pasted Claude input and Codex inheritance, collaboration and runtime items.
 // v6: Codex Code Mode results whose envelope reports `Script failed` are errors.
 // v7: Claude compaction summaries, boundaries and idle notices are maintenance.
-const CANONICAL_BLOCKS_VERSION: i32 = 7;
+// v8: delivered Codex async messages carry assistant text.
+const CANONICAL_BLOCKS_VERSION: i32 = 8;
 const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // v3: sessions with codex `exec` operations reprojected after their
 // inputs were re-canonicalized into the {command, code} shape.
@@ -42,7 +43,8 @@ const TIMELINE_PROJECTION_KEY: &str = "timeline_projection";
 // v15: structured agent messages and API/collaboration bookkeeping classification.
 // v16: compaction preserves turns/activity; maintenance no longer advances turn time.
 // v17: content-free non-conversation records are bookkeeping regardless of kind.
-const TIMELINE_PROJECTION_VERSION: i32 = 17;
+// v18: show delivered Codex async messages in retained turns.
+const TIMELINE_PROJECTION_VERSION: i32 = 18;
 const USAGE_PROJECTION_KEY: &str = "usage_projection";
 // v2: include Codex per-response usage, including compaction, and retain the
 // legacy prefix before a session first supplies response records.
@@ -110,7 +112,7 @@ async fn repair_canonical_blocks_if_behind(
     .await
     .ok();
     let result = if current >= 6 {
-        super::ingester::backfill_claude_compaction(pool, job.as_ref()).await
+        super::ingester::backfill_conversation_blocks(pool, job.as_ref(), current < 7).await
     } else {
         super::ingester::backfill_canonical_blocks(pool, job.as_ref()).await
     };
@@ -185,16 +187,15 @@ async fn repair_timeline_projection_if_behind(
             0
         };
         let conversation_sessions =
-            super::projection::backfill_conversation_events(pool, job.as_ref(), current < 16)
-                .await?;
+            super::projection::backfill_conversation_events(pool, job.as_ref(), current).await?;
         Ok(plan_sessions + conversation_sessions)
     }
     .await;
     let result = match result {
-        Ok(rebuilt) => super::activity_projection::repair_compaction_activity(pool)
+        Ok(rebuilt) if current < 17 => super::activity_projection::repair_compaction_activity(pool)
             .await
             .map(|()| rebuilt),
-        Err(err) => Err(err),
+        result => result,
     };
     match result {
         Ok(rebuilt) => {

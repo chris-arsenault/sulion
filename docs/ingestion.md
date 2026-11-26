@@ -193,6 +193,11 @@ as separate fields. The display collapses them by default and removes complete
 harness envelopes from their bodies. API request records, API request blobs and
 inter-agent communication metadata hide with bookkeeping; source records remain
 available. Timeline version 15 rebuilds affected retained sessions into this shape.
+
+Codex records an asynchronously delivered reply in an `AgentMessage` completion
+with `delivery: "async"`. Its text appears in the turn alongside the sending
+tool call. Ordinary replies get their text from the assistant response item.
+
 `SubAgentActivity` start records link spawning operations to the child session.
 Completed runtime items enrich an existing operation by ID or a unique enclosing
 code-mode execution, including yielded executions resumed by `wait`. Commands,

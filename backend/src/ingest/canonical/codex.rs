@@ -196,6 +196,23 @@ fn parse_codex_event_msg(value: &Value) -> CanonicalEvent {
     let mut blocks = Vec::new();
     if subtype == "item_completed" {
         if let Some(item) = payload.get("item") {
+            // Ordinary AgentMessage completions mirror a response_item. Async
+            // delivery has only this receipt and the tool call that sent it.
+            if item["type"] == "AgentMessage" && item["delivery"] == "async" {
+                if let Some(content) = item["content"].as_array() {
+                    let blocks: Vec<_> = content
+                        .iter()
+                        .filter(|part| part["type"] == "Text")
+                        .filter_map(|part| part["text"].as_str())
+                        .filter(|text| !text.is_empty())
+                        .enumerate()
+                        .map(|(ord, text)| Block::text(ord as i32, text.to_owned()))
+                        .collect();
+                    if !blocks.is_empty() {
+                        return codex_event(Speaker::Assistant, "async_agent_message", blocks);
+                    }
+                }
+            }
             if matches!(
                 item.get("type").and_then(Value::as_str),
                 Some("CommandExecution" | "FileChange" | "Extension" | "ImageView")

@@ -37,7 +37,7 @@ mod replay;
 pub use replay::{replay_session_lines, ReplayLine, ReplayStats};
 
 pub use canonical_backfill::backfill_canonical_blocks;
-pub(super) use canonical_backfill::backfill_claude_compaction;
+pub(super) use canonical_backfill::backfill_conversation_blocks;
 use canonical_backfill::set_parent_session;
 use codex_lineage::load_codex_context;
 use insert::{insert_event, InsertError};

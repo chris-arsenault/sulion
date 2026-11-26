@@ -260,6 +260,133 @@ fn codex(fx: &CodexFixture, ordinal: u64, kind: &str, payload: Value) {
 }
 
 #[tokio::test]
+async fn codex_async_delivery_appears_once_in_live_and_repaired_turns() {
+    use sulion::ingest::{load_timeline_response, run_required_startup_maintenance};
+
+    let pool = fresh_pool().await;
+    let fx = CodexFixture::new();
+    let normal = "Checking the maps.";
+    let update = "Four Street maps have published.";
+    codex(&fx, 0, "turn_context", json!({"turn_id":"map-turn"}));
+    codex(
+        &fx,
+        1,
+        "response_item",
+        json!({"type":"message","role":"user",
+        "content":[{"type":"input_text","text":"Any updates?"}]}),
+    );
+    codex(
+        &fx,
+        2,
+        "event_msg",
+        json!({"type":"item_completed","item":{
+        "id":"msg_1","type":"AgentMessage","phase":"commentary","content":[{"type":"Text","text":normal}]}}),
+    );
+    codex(
+        &fx,
+        3,
+        "response_item",
+        json!({"type":"message","id":"msg_1","role":"assistant",
+        "content":[{"type":"output_text","text":normal}]}),
+    );
+    codex(
+        &fx,
+        4,
+        "response_item",
+        json!({"type":"function_call","name":"send_message_to_user_async",
+        "call_id":"call_1","arguments":json!({"message":update}).to_string()}),
+    );
+    codex(
+        &fx,
+        5,
+        "event_msg",
+        json!({"type":"item_completed","item":{
+        "id":"call_1","type":"AgentMessage","phase":"final_answer","delivery":"async",
+        "content":[{"type":"Text","text":update}]}}),
+    );
+    codex(
+        &fx,
+        6,
+        "response_item",
+        json!({"type":"function_call_output","call_id":"call_1","output":"delivered"}),
+    );
+    Ingester::new().tick(&pool, &fx.config()).await.unwrap();
+
+    let live = load_timeline_response(&pool, fx.session_uuid, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(live.turns.len(), 1);
+    assert_eq!(live.turns[0].markdown.matches(normal).count(), 1);
+    assert_eq!(live.turns[0].markdown.matches(update).count(), 1);
+    let items = serde_json::to_value(&live.turns[0].items).unwrap();
+    assert!(items
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["kind"] == "assistant"
+            && item["items"] == json!([{"kind":"text","text":update}])));
+    assert_eq!(live.turns[0].tool_pairs.len(), 1);
+    assert!(!live.turns[0].tool_pairs[0].is_pending);
+
+    // Restore the old representation and project it before running the upgrade.
+    let offset: i64 = sqlx::query_scalar(
+        "UPDATE events SET speaker='system', is_meta=true,
+        subtype='item_completed', content_kind='none', search_text='system item_completed'
+        WHERE session_uuid=$1 AND subtype='async_agent_message' RETURNING byte_offset",
+    )
+    .bind(fx.session_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM event_blocks WHERE session_uuid=$1 AND byte_offset=$2")
+        .bind(fx.session_uuid)
+        .bind(offset)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sulion::ingest::rebuild_session_projection(&pool, fx.session_uuid)
+        .await
+        .unwrap();
+    let old = load_timeline_response(&pool, fx.session_uuid, &Default::default())
+        .await
+        .unwrap();
+    assert!(!old.turns[0].markdown.contains(update));
+    sulion::ingest::mark_projection_versions_current(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE ingest_projection_versions SET version=CASE name
+        WHEN 'canonical_blocks' THEN 7 WHEN 'timeline_projection' THEN 17 ELSE version END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let stats = run_required_startup_maintenance(&pool).await.unwrap();
+    assert_eq!(stats.canonical_events_backfilled, 1);
+    assert_eq!(stats.timeline_sessions_backfilled, 1);
+    let repaired = load_timeline_response(&pool, fx.session_uuid, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(repaired.turns[0].markdown, live.turns[0].markdown);
+    assert_eq!(
+        serde_json::to_value(&repaired.turns[0].items).unwrap(),
+        items
+    );
+    let parent: String = sqlx::query_scalar(
+        "SELECT parent_event_uuid FROM events WHERE session_uuid=$1 AND byte_offset=$2",
+    )
+    .bind(fx.session_uuid)
+    .bind(offset)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(parent, "map-turn");
+    let repeated = run_required_startup_maintenance(&pool).await.unwrap();
+    assert_eq!(repeated.canonical_events_backfilled, 0);
+    assert_eq!(repeated.timeline_sessions_backfilled, 0);
+}
+
+#[tokio::test]
 async fn metadata_classification_covers_live_legacy_streamed_and_repaired_turns() {
     use sulion::ingest::{load_timeline_response, turn_stream, ProjectionFilters};
 

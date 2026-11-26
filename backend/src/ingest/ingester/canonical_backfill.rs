@@ -63,31 +63,63 @@ pub struct CanonicalBackfillOutcome {
     pub failed: usize,
 }
 
-pub(crate) async fn backfill_claude_compaction(
+pub(crate) async fn backfill_conversation_blocks(
     pool: &Pool,
     job: Option<&super::super::jobs::JobHandle>,
+    include_compaction: bool,
 ) -> anyhow::Result<CanonicalBackfillOutcome> {
-    let rows: Vec<(Uuid, i64, serde_json::Value)> = sqlx::query_as(
-        "SELECT e.session_uuid, e.byte_offset, e.payload FROM events e \
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        session_uuid: Uuid,
+        byte_offset: i64,
+        agent: String,
+        payload: serde_json::Value,
+        event_uuid: Option<String>,
+        parent_event_uuid: Option<String>,
+        related_tool_use_id: Option<String>,
+        is_sidechain: bool,
+    }
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT e.session_uuid, e.byte_offset, e.agent, e.payload, e.event_uuid, \
+                e.parent_event_uuid, e.related_tool_use_id, e.is_sidechain FROM events e \
          JOIN claude_sessions cs ON cs.session_uuid = e.session_uuid \
-         WHERE cs.purged_at IS NULL AND e.agent = 'claude-code' AND ( \
+         WHERE cs.purged_at IS NULL AND (($1 AND e.agent = 'claude-code' AND ( \
              e.payload ->> 'isCompactSummary' = 'true' OR \
              e.payload ->> 'subtype' = 'compact_boundary' OR \
              (e.payload ->> 'subtype' = 'informational' \
               AND e.payload ->> 'content' LIKE 'Compacted while idle,%') \
          ) AND (NOT e.is_meta OR e.speaker IS DISTINCT FROM 'system' \
-             OR e.subtype IS NULL OR e.subtype = 'informational')",
+             OR e.subtype IS NULL OR e.subtype = 'informational')) \
+         OR (e.agent = 'codex' AND e.kind = 'item_completed' AND e.subtype = 'item_completed' \
+             AND e.payload #>> '{payload,item,type}' = 'AgentMessage' \
+             AND e.payload #>> '{payload,item,delivery}' = 'async'))",
     )
+    .bind(include_compaction)
     .fetch_all(pool)
     .await?;
     if let Some(job) = job {
         job.set_total(rows.len() as i64).await;
     }
-    for (session, offset, payload) in &rows {
-        let parsed = parse_canonical_event("claude-code", payload, *session, *offset, None);
-        rewrite_canonical_event(pool, *session, *offset, &parsed).await?;
+    for row in &rows {
+        let mut parsed = parse_canonical_event(
+            &row.agent,
+            &row.payload,
+            row.session_uuid,
+            row.byte_offset,
+            None,
+        );
+        if row.agent == "codex" {
+            // These rows were already attributed in transcript order.
+            parsed.event_uuid.clone_from(&row.event_uuid);
+            parsed.parent_event_uuid.clone_from(&row.parent_event_uuid);
+            parsed
+                .related_tool_use_id
+                .clone_from(&row.related_tool_use_id);
+            parsed.is_sidechain = row.is_sidechain;
+        }
+        rewrite_canonical_event(pool, row.session_uuid, row.byte_offset, &parsed).await?;
         if let Some(job) = job {
-            job.advance(Some(&session.to_string())).await;
+            job.advance(Some(&row.session_uuid.to_string())).await;
         }
     }
     Ok(CanonicalBackfillOutcome {

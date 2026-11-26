@@ -109,6 +109,8 @@ All notable user-visible changes to Sulion are recorded here.
 
 ### Timeline
 
+- Fixed missing Codex replies sent during ongoing work. The timeline displays
+  each delivered update as assistant text and restores it in retained sessions.
 - Changed turn details to arrive in batches and resume interrupted loads.
   Cached turns show immediately on revisit, and display filters no longer
   reload the full turn.
